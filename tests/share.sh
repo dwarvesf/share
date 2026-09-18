@@ -9,6 +9,8 @@ SH="$(cd "$(dirname "$0")/.." && pwd)/bin/share"
 WORK=$(mktemp -d)
 export SHARE_ROOT="$WORK/root" SHARE_CONFIG_DIR="$WORK/config" SHARE_PORT=18787
 export SHARE_TUNNEL=0 SHARE_CLIPBOARD=0 SHARE_HOSTNAME=s.example.test
+# A label no machine has, so an installed share service is never started or stopped by the test.
+export SHARE_SERVICE_LABEL="share-selftest-$$"
 h="$(uname -n)"; export SHARE_HOSTS="${h%%.*}"
 trap 'bash "$SH" stop >/dev/null 2>&1; rm -rf "$WORK"' EXIT
 

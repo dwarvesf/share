@@ -46,4 +46,4 @@ esac
 for c in $extras; do
   command -v "$c" >/dev/null || echo "optional: $c is not installed (./install.sh --with-extras)"
 done
-echo "next: share setup <hostname>   (see docs/setup.md for the Cloudflare token)"
+echo "next: share setup <hostname>   (a browser opens for the Cloudflare login)"

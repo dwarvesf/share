@@ -1,9 +1,7 @@
 name: CI
 
-# Private dwarvesf repo: runs on the Mac Mini pr-shared pool (the org Actions
-# budget is $0). The pool image is Debian slim with bash, curl, jq, and coreutils;
-# caddy and shellcheck come from pinned release tarballs. pandoc is absent, so the
-# self-test skips the markdown checks here and runs them on a dev machine.
+# Public repo: GitHub-hosted runners are free here. Never move a public repo onto
+# the self-hosted pool, since a fork PR would run its code on that machine.
 
 on:
   pull_request:
@@ -18,40 +16,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: shellcheck bin/share install.sh tests/share.sh
+
   test:
-    runs-on: [self-hosted, pr-shared]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     env:
       CADDY_VERSION: 2.11.4
-      SHELLCHECK_VERSION: v0.10.0
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
-      - name: Fetch caddy and shellcheck
+      - name: Install caddy and pandoc (Linux)
+        if: runner.os == 'Linux'
         run: |
-          case "$(uname -m)" in
-            aarch64|arm64) caddy_arch=arm64; sc_arch=aarch64 ;;
-            x86_64) caddy_arch=amd64; sc_arch=x86_64 ;;
-            *) echo "unsupported arch $(uname -m)"; exit 1 ;;
-          esac
-          curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${caddy_arch}.tar.gz" \
+          curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_amd64.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP" caddy
-          # The pool image has no xz binary; python3's tarfile reads .tar.xz itself.
-          curl -fsSL -o "$RUNNER_TEMP/sc.tar.xz" \
-            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.${sc_arch}.tar.xz"
-          python3 - "$RUNNER_TEMP" "$SHELLCHECK_VERSION" <<'PY'
-          import sys, tarfile
-          dest, version = sys.argv[1], sys.argv[2]
-          with tarfile.open(f"{dest}/sc.tar.xz") as t:
-              member = t.getmember(f"shellcheck-{version}/shellcheck")
-              member.name = "shellcheck"
-              t.extract(member, dest)
-          PY
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          sudo apt-get install -y --no-install-recommends pandoc >/dev/null
 
-      - name: Lint
-        run: shellcheck bin/share install.sh tests/share.sh
+      - name: Install caddy and pandoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install caddy pandoc
 
       - name: Self-test
         run: bash tests/share.sh
