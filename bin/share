@@ -417,18 +417,20 @@ cmd_start() {
 
 # The tunnel reports ready before caddy may listen, and the Cloudflare edge keeps routing to an
 # old connection for a few seconds after a restart. Only a public fetch proves a link works.
-live_check() { # live_check <seconds>: a probe file answers 200 through the public hostname
-  local probe code=000 _
+live_check() { # live_check <seconds>: a probe file answers 200 through the public hostname, 3 times in a row
+  # One 200 is not enough: during a handover the edge still sends some requests to the old connection.
+  local probe code streak=0 _
   probe="_probe-$(rand_id).txt"
   mkdir -p "$pub" && echo ok >"$pub/$probe"
   for _ in $(seq 1 "$1"); do
     code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 --doh-url https://1.1.1.1/dns-query "https://$host_name/$probe" 2>/dev/null ||
       curl -s -o /dev/null -w '%{http_code}' --max-time 5 "https://$host_name/$probe" || true)"
-    [[ $code == 200 ]] && break
+    if [[ $code == 200 ]]; then streak=$((streak + 1)); else streak=0; fi
+    [[ $streak -ge 3 ]] && break
     sleep 1
   done
   rm -f "$pub/$probe"
-  [[ $code == 200 ]]
+  [[ $streak -ge 3 ]]
 }
 warn_not_live() {
   [[ $tunnel == 1 && -n $host_name ]] || return 0
