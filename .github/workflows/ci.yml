@@ -1,0 +1,53 @@
+name: CI
+
+# Public repo: GitHub-hosted runners are free here. Never move a public repo onto
+# the self-hosted pool, since a fork PR would run its code on that machine.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: shellcheck bin/share install.sh tests/share.sh
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CADDY_VERSION: 2.11.4
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install caddy and pandoc (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" caddy
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          sudo apt-get install -y --no-install-recommends pandoc >/dev/null
+
+      - name: Install caddy and pandoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install caddy pandoc
+
+      - name: Self-test
+        run: bash tests/share.sh

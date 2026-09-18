@@ -1,0 +1,663 @@
+#!/bin/bash
+# share: publish snapshots of local files or folders at https://<your-host>/<id>/<name>.
+#
+#   share setup [hostname]    log in to Cloudflare, create the tunnel + DNS, install the service, verify
+#   share add [--ttl 7d|12h|never] <file|dir>   copy it in, print + copy the link, auto-start
+#   share ls                  list shares: link, size, source, expiry
+#   share refresh <id>        re-copy from the source path (same link)
+#   share rm <id>             unpublish (moves the copy to the Trash)
+#   share hits <id>           requests and unique visitors for one share
+#   share prune               unpublish expired shares now (also hourly while serving)
+#   share start | stop        start or stop serving (links live while this machine is awake)
+#   share service install|uninstall|status   the login service that keeps serving
+#   share [status]            server state plus the share list
+#   share serve               serve in the foreground until Ctrl-C
+#   share teardown [--yes]    delete the tunnel, DNS record, service, and stored token
+#
+# Docs: https://github.com/dwarvesf/share
+set -euo pipefail
+
+config_dir="${SHARE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/share}"
+config="$config_dir/config"
+cfg() { [[ -f $config ]] && awk -v k="$1" 'index($0, k "=") == 1 {print substr($0, length(k) + 2); exit}' "$config"; }
+
+root="${SHARE_ROOT:-$HOME/share}"
+pub="$root/pub"            # served tree; nothing else is reachable from the tunnel
+index="$root/index.tsv"    # id, name, source, added date, expiry epoch (0 = never)
+pidfile="$root/serve.pid"
+host_name="${SHARE_HOSTNAME:-$(cfg hostname || true)}"
+port="${SHARE_PORT:-$(cfg port || true)}"; port="${port:-8787}"
+metrics_port=$((port + 1))   # cloudflared /ready, polled so `start` returns once links work
+hosts="${SHARE_HOSTS:-$(cfg hosts || true)}"
+tunnel="${SHARE_TUNNEL:-1}"  # 0 = local-only (tests)
+api="https://api.cloudflare.com/client/v4"
+
+die() { echo "share: $*" >&2; exit 1; }
+this_host() { local h; h="$(uname -n)"; echo "${h%%.*}"; }
+host_ok() { case " $hosts " in *" $(this_host) "*) return 0 ;; esac; return 1; }
+running() { [[ -f $pidfile ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; }
+row() { [[ -f $index ]] && awk -F'\t' -v id="$1" '$1 == id' "$index"; }
+rand_id() { od -An -N3 -tx1 /dev/urandom | tr -d ' \n'; }
+day_of() { date -r "$1" +%F 2>/dev/null || date -d "@$1" +%F; }
+to_trash() {
+  if command -v trash >/dev/null; then trash "$1"; return; fi
+  mkdir -p "$root/trash" && mv -f "$1" "$root/trash/$(basename "$1").$(date +%s)"
+}
+need_host() { [[ -n $host_name ]] || die "no hostname configured: run 'share setup <hostname>' first"; }
+
+share_url() { # share_url <id> <name>
+  local path="$2"
+  if [[ -d $pub/$1/$2 ]]; then path="$2/"
+  elif [[ $2 == *.md && -f $pub/$1/${2%.md}.html ]]; then path="${2%.md}.html"
+  fi
+  printf 'https://%s/%s/%s\n' "${host_name:-<no-hostname>}" "$1" "$(printf '%s' "$path" | sed 's/ /%20/g')"
+}
+
+ttl_secs() {
+  local n="${1%[dh]}"
+  case $1 in never|0) echo 0; return ;; esac
+  [[ $n =~ ^[0-9]+$ ]] || die "bad --ttl '$1' (use 12h, 7d, or never)"
+  case $1 in
+    *d) echo $((n * 86400)) ;;
+    *h) echo $((n * 3600)) ;;
+    *) die "bad --ttl '$1' (use 12h, 7d, or never)" ;;
+  esac
+}
+
+# --- tunnel token storage: token_cmd in config > macOS Keychain > 0600 file ---
+
+token_file="$config_dir/tunnel-token"
+token_read() {
+  local cmd; cmd="$(cfg token_cmd || true)"
+  if [[ -n $cmd ]]; then eval "$cmd"; return; fi
+  if command -v security >/dev/null; then
+    security find-generic-password -a share -s "share-tunnel:$host_name" -w 2>/dev/null && return
+  fi
+  [[ -f $token_file ]] && cat "$token_file"
+}
+token_store() { # token_store <token>; stdin only, so the token never shows in ps
+  if command -v security >/dev/null; then
+    printf 'add-generic-password -U -a share -s "share-tunnel:%s" -w "%s"\n' "$host_name" "$1" | security -i >/dev/null
+    echo "keychain (service share-tunnel:$host_name)"
+  else
+    (umask 077 && printf '%s' "$1" >"$token_file")
+    echo "$token_file (mode 600)"
+  fi
+}
+token_forget() {
+  if command -v security >/dev/null; then
+    security delete-generic-password -a share -s "share-tunnel:$host_name" >/dev/null 2>&1 || true
+  fi
+  [[ -f $token_file ]] && to_trash "$token_file"
+  return 0
+}
+
+# --- snapshots ---
+
+render_md() { # render every .md under <dir> to a sibling .html; .md links become .html
+  command -v pandoc >/dev/null || return 0
+  local filter="$root/md-links.lua" f out
+  cat >"$filter" <<'LUA'
+function Link(el)
+  if not el.target:match("^%a+:") then
+    el.target = el.target:gsub("%.md$", ".html"):gsub("%.md#", ".html#")
+  end
+  return el
+end
+LUA
+  find "$1" -type f -name '*.md' | while IFS= read -r f; do
+    out="${f%.md}.html"
+    [[ -e $out ]] && continue
+    pandoc --quiet -s "$f" -o "$out" --lua-filter "$filter" \
+      --metadata pagetitle="$(basename "$f" .md)" || echo "share: could not render $f" >&2
+  done
+}
+
+copy() { # copy <src> <id>: regular files only, so dotfiles (.git, .env) and symlinks (to ~/.ssh) never ship
+  local parent name stage skipped
+  parent="$(dirname "$1")"; name="$(basename "$1")"
+  mkdir -p "$pub"
+  stage="$(mktemp -d "$root/.stage.XXXXXX")"
+  (cd "$parent" && find "$name" -name '.*' -prune -o -type f -print | while IFS= read -r f; do
+    mkdir -p "$stage/$(dirname "$f")" && cp -p "$f" "$stage/$f"
+  done)
+  skipped="$(cd "$parent" && find "$name" -name '.*' -prune -o -type l -print | wc -l | tr -d ' ')"
+  [[ $skipped -gt 0 ]] && echo "share: skipped $skipped symlink(s)" >&2
+  if [[ -z "$(find "$stage" -type f | head -1)" ]]; then
+    rm -rf "$stage"; die "nothing to share in $1 (dotfiles and symlinks are skipped)"
+  fi
+  render_md "$stage"
+  [[ -d $pub/$2 ]] && mv "$pub/$2" "$stage.old"
+  mv "$stage" "$pub/$2"
+  rm -rf "$stage.old"
+}
+
+warn_private() { # a share out of a private GitHub repo is almost always a mistake
+  command -v gh >/dev/null || return 0
+  local d="$1" top repo
+  [[ -d $d ]] || d="$(dirname "$d")"
+  top="$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)" || return 0
+  repo="$(git -C "$top" remote get-url origin 2>/dev/null)" || return 0
+  repo="$(sed -E 's#^(git@github\.com:|https://github\.com/)##; s#\.git$##' <<<"$repo")"
+  [[ $repo == */* && $repo != *:* ]] || return 0
+  if [[ "$(gh repo view "$repo" --json isPrivate -q .isPrivate 2>/dev/null)" == true ]]; then
+    echo "share: WARNING: this comes from the PRIVATE repo $repo and is now public to anyone with the link (share rm $2 to undo)" >&2
+  fi
+}
+
+cmd_add() {
+  local ttl="${SHARE_TTL:-$(cfg ttl || true)}"; ttl="${ttl:-30d}"
+  if [[ ${1:-} == --ttl ]]; then ttl="${2:-}"; shift 2 || die "usage: share add [--ttl 7d] <file|dir>"; fi
+  [[ -e ${1:-} ]] || die "usage: share add [--ttl 7d] <file|dir>"
+  need_host
+  local secs src name id exp=0 url
+  secs="$(ttl_secs "$ttl")"
+  src="$(realpath "$1")"
+  name="$(basename "$src")"
+  id="$(rand_id)"
+  [[ $secs -gt 0 ]] && exp=$(($(date +%s) + secs))
+  mkdir -p "$root"
+  copy "$src" "$id"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$src" "$(date +%F)" "$exp" >>"$index"
+  url="$(share_url "$id" "$name")"
+  echo "$url"
+  if [[ ${SHARE_CLIPBOARD:-1} == 1 ]] && command -v pbcopy >/dev/null; then
+    printf '%s' "$url" | pbcopy && echo "  (link copied)"
+  fi
+  warn_private "$src" "$id"
+  if ! running; then
+    if host_ok; then cmd_start; else echo "  (not serving: $(this_host) is not in hosts=$hosts)"; fi
+  fi
+}
+
+cmd_ls() {
+  [[ -s $index ]] || { echo "no shares"; return 0; }
+  local id name src date exp size until gone
+  while IFS=$'\t' read -r id name src date exp; do
+    size="$(du -sh "$pub/$id" 2>/dev/null | cut -f1 | tr -d ' ')"
+    until="never"; [[ ${exp:-0} -gt 0 ]] && until="$(day_of "$exp")"
+    gone=""; [[ -e $src ]] || gone="  (source gone, snapshot still served)"
+    share_url "$id" "$name"
+    echo "    id=$id  size=${size:-?}  added=$date  expires=$until  from=$src$gone"
+  done <"$index"
+}
+
+cmd_refresh() {
+  local r src
+  r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
+  src="$(cut -f3 <<<"$r")"
+  [[ -e $src ]] || die "source is gone: $src (the snapshot keeps serving; share rm $1 to unpublish)"
+  copy "$src" "$1"
+  echo "refreshed $1 from $src"
+}
+
+cmd_rm() {
+  [[ -n "$(row "${1:-}")" ]] || die "no share with id '${1:-}'"
+  [[ -d $pub/$1 ]] && to_trash "$pub/$1"
+  awk -F'\t' -v id="$1" '$1 != id' "$index" >"$index.tmp" && mv -f "$index.tmp" "$index"
+  echo "unpublished $1"
+}
+
+cmd_prune() { # unpublish every share past its expiry
+  [[ -s $index ]] || return 0
+  local now id
+  now="$(date +%s)"
+  awk -F'\t' -v now="$now" '$5 > 0 && $5 < now {print $1}' "$index" | while IFS= read -r id; do
+    cmd_rm "$id" | sed 's/$/ (expired)/'
+  done
+}
+
+cmd_hits() {
+  [[ -n "$(row "${1:-}")" ]] || die "no share with id '${1:-}'"
+  local log="$root/access.log"
+  [[ -s $log ]] || { echo "0 hits"; return 0; }
+  jq -rs --arg p "/$1/" '
+    map(select((.request.uri | startswith($p)) and .status < 400)) as $h
+    | "\($h | length) hits, \($h | map(.request.headers["Cf-Connecting-Ip"][0] // .request.remote_ip) | unique | length) visitors"
+      + (if ($h | length) > 0 then ", last \($h[-1].ts | floor | strflocaltime("%F %H:%M"))" else "" end)' "$log"
+}
+
+# --- serving ---
+
+write_caddyfile() { # no-store: without it Cloudflare caches assets and serves them after rm or stop
+  cat >"$root/Caddyfile" <<EOF
+{
+	admin off
+	auto_https off
+}
+http://:$port {
+	bind 127.0.0.1
+	root * "$pub"
+	header Cache-Control "no-store"
+	header X-Robots-Tag "noindex, nofollow"
+	log {
+		output file "$root/access.log"
+		format json
+	}
+	file_server {
+		index index.html README.html
+	}
+}
+EOF
+}
+
+cmd_serve() {
+  host_ok || die "$(this_host) is not in hosts=$hosts; serve from one machine only (a second one splits requests)"
+  running && die "already serving (pid $(cat "$pidfile"))"
+  mkdir -p "$pub"
+  write_caddyfile
+  local token="" caddy_pid loop_pid tunnel_pid=""
+  if [[ $tunnel == 1 ]]; then
+    need_host
+    token="$(token_read || true)"
+    [[ -n $token ]] || die "no tunnel token for $host_name: run 'share setup $host_name'"
+  fi
+  echo $$ >"$pidfile"
+  caddy run --config "$root/Caddyfile" --adapter caddyfile >>"$root/caddy.log" 2>&1 &
+  caddy_pid=$!
+  (while sleep 3600; do bash "$0" prune || true; done) &
+  loop_pid=$!
+  if [[ $tunnel == 1 ]]; then
+    TUNNEL_TOKEN="$token" cloudflared tunnel --no-autoupdate --loglevel warn --metrics "127.0.0.1:$metrics_port" run &
+    tunnel_pid=$!
+  fi
+  trap 'kill '"$caddy_pid $loop_pid $tunnel_pid"' 2>/dev/null; rm -f "$pidfile"' EXIT
+  trap 'exit 0' INT TERM
+  sleep 1
+  kill -0 "$caddy_pid" 2>/dev/null || die "caddy failed to start, see $root/caddy.log"
+  cmd_prune
+  echo "serving $pub on ${host_name:-127.0.0.1:$port} (pid $$)"
+  wait "${tunnel_pid:-$caddy_pid}"
+}
+
+
+# --- background service: launchd on macOS, systemd --user on Linux ---
+
+svc_label="${SHARE_SERVICE_LABEL:-foundation.d.share}"
+svc_plist="$HOME/Library/LaunchAgents/$svc_label.plist"
+svc_unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$svc_label.service"
+svc_installed() { [[ -f $svc_plist || -f $svc_unit ]]; }
+
+self_path() { # the stable path to this script: the PATH entry when it resolves here
+  local s; s="$(command -v share 2>/dev/null || true)"
+  if [[ -n $s && "$(realpath "$s")" == "$(realpath "$0")" ]]; then echo "$s"; else realpath "$0"; fi
+}
+svc_path() { # PATH for the service: the directories of every tool share calls
+  local p="" c d
+  for c in caddy cloudflared jq curl pandoc gh trash security; do
+    d="$(dirname "$(command -v "$c" 2>/dev/null || echo /usr/bin/x)")"
+    case ":$p:" in *":$d:"*) ;; *) p="${p:+$p:}$d" ;; esac
+  done
+  echo "$p:/usr/bin:/bin:/usr/sbin:/sbin"
+}
+xml() { sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' <<<"$1"; }
+
+svc_install() {
+  local self; self="$(self_path)"
+  running && ! svc_installed && cmd_stop >/dev/null
+  mkdir -p "$root"
+  if [[ $(uname -s) == Darwin ]]; then
+    mkdir -p "$(dirname "$svc_plist")"
+    cat >"$svc_plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>$svc_label</string>
+	<key>ProgramArguments</key><array><string>$(xml "$self")</string><string>serve</string></array>
+	<key>RunAtLoad</key><true/>
+	<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+	<key>ThrottleInterval</key><integer>30</integer>
+	<key>EnvironmentVariables</key><dict>
+		<key>PATH</key><string>$(xml "$(svc_path)")</string>
+		<key>SHARE_CONFIG_DIR</key><string>$(xml "$config_dir")</string>
+		<key>SHARE_ROOT</key><string>$(xml "$root")</string>
+	</dict>
+	<key>StandardOutPath</key><string>$(xml "$root/serve.log")</string>
+	<key>StandardErrorPath</key><string>$(xml "$root/serve.log")</string>
+</dict>
+</plist>
+EOF
+    launchctl bootout "gui/$(id -u)/$svc_label" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$svc_plist"
+  elif command -v systemctl >/dev/null; then
+    mkdir -p "$(dirname "$svc_unit")"
+    cat >"$svc_unit" <<EOF
+[Unit]
+Description=share: publish local snapshots through a Cloudflare Tunnel
+After=network-online.target
+
+[Service]
+ExecStart="$self" serve
+Environment="PATH=$(svc_path)" "SHARE_CONFIG_DIR=$config_dir" "SHARE_ROOT=$root"
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target
+EOF
+    systemctl --user daemon-reload
+    systemctl --user enable --now "$svc_label.service" >/dev/null
+  else
+    die "no launchd or systemd here; use 'share start' instead"
+  fi
+}
+
+svc_uninstall() {
+  if [[ -f $svc_plist ]]; then
+    launchctl bootout "gui/$(id -u)/$svc_label" 2>/dev/null || true
+    to_trash "$svc_plist"
+  fi
+  if [[ -f $svc_unit ]]; then
+    systemctl --user disable --now "$svc_label.service" >/dev/null 2>&1 || true
+    to_trash "$svc_unit"
+    systemctl --user daemon-reload 2>/dev/null || true
+  fi
+  return 0
+}
+
+wait_running() { # wait_running <seconds>: the server is up and, with the tunnel, connected to Cloudflare
+  local i
+  for ((i = 0; i < $1 * 2; i++)); do
+    if running && { [[ $tunnel != 1 ]] || curl -sf -o /dev/null "http://127.0.0.1:$metrics_port/ready"; }; then return 0; fi
+    sleep 0.5
+  done
+  return 1
+}
+
+cmd_service() {
+  case "${1:-status}" in
+    install)
+      host_ok || die "$(this_host) is not in hosts=$hosts"
+      svc_install
+      wait_running 10 || die "the service did not start, see $root/serve.log"
+      echo "service installed ($svc_label): serving now and at every login" ;;
+    uninstall)
+      svc_uninstall; echo "service removed; links are down until 'share start'" ;;
+    status)
+      if svc_installed; then echo "service: installed ($svc_label)"; else echo "service: not installed"; fi ;;
+    *) die "usage: share service install|uninstall|status" ;;
+  esac
+}
+
+cmd_start() {
+  running && { echo "already serving (pid $(cat "$pidfile"))"; return 0; }
+  host_ok || die "$(this_host) is not in hosts=$hosts; serve from one machine only (a second one splits requests)"
+  mkdir -p "$root"
+  if svc_installed; then
+    if [[ -f $svc_plist ]]; then
+      launchctl bootstrap "gui/$(id -u)" "$svc_plist" 2>/dev/null || launchctl kickstart "gui/$(id -u)/$svc_label"
+    else
+      systemctl --user start "$svc_label.service"
+    fi
+  else
+    nohup bash "$0" serve >>"$root/serve.log" 2>&1 &
+  fi
+  wait_running 10 || die "server did not start, see $root/serve.log"
+  echo "  serving in the background (pid $(cat "$pidfile")); share stop to end"
+}
+
+cmd_stop() {
+  running || { echo "not serving"; return 0; }
+  local pid; pid="$(cat "$pidfile")"
+  if [[ -f $svc_plist ]]; then launchctl bootout "gui/$(id -u)/$svc_label" 2>/dev/null || kill "$pid"
+  elif [[ -f $svc_unit ]]; then systemctl --user stop "$svc_label.service"
+  else kill "$pid"; fi
+  while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
+  if svc_installed; then echo "stopped (all links down; the service starts again at next login)"
+  else echo "stopped (all links down)"; fi
+}
+
+cmd_status() {
+  cmd_prune
+  if running; then echo "serving (pid $(cat "$pidfile")) on $host_name: links are live"
+  elif [[ -z $host_name ]]; then echo "not set up: share setup"
+  else echo "not serving: share start"; fi
+  svc_installed && echo "service: installed ($svc_label)"
+  cmd_ls
+}
+
+# --- Cloudflare setup / teardown ---
+#
+# Two ways to authorize. With CLOUDFLARE_API_TOKEN set, share uses the API for
+# everything. Without it, share runs `cloudflared tunnel login`: the user picks
+# the zone in a browser and Cloudflare hands back a cert.pem whose token may
+# manage tunnels but not DNS records. That path creates DNS through
+# `cloudflared tunnel route dns` and checks the hostname through public DNS.
+
+cf_token="" account="" auth=""
+cf() { # cf METHOD PATH [JSON]; the token goes through a header file, never argv
+  local out
+  out="$(curl -sS -X "$1" "$api$2" -H @<(printf 'Authorization: Bearer %s\n' "$cf_token") \
+    -H 'Content-Type: application/json' ${3:+--data "$3"})" || die "Cloudflare API $1 $2: request failed"
+  if [[ "$(jq -r '.success' <<<"$out" 2>/dev/null)" != true ]]; then
+    die "Cloudflare API $1 $2 failed: $(jq -c '.errors' <<<"$out" 2>/dev/null || head -c 300 <<<"$out")"
+  fi
+  printf '%s' "$out"
+}
+doh() { curl -s --max-time 10 -H 'accept: application/dns-json' "https://cloudflare-dns.com/dns-query?name=$1&type=$2"; }
+public_zone() { # the zone apex that owns $1, from public DNS
+  doh "$1" SOA | jq -r '[(.Answer // [])[], (.Authority // [])[]] | map(select(.type == 6)) | .[0].name // empty' | sed 's/\.$//'
+}
+resolves() { [[ "$(doh "$1" A | jq '(.Answer // []) | length')" -gt 0 ]]; }
+
+cert="$config_dir/cert.pem"
+cert_field() { sed -n '/BEGIN ARGO TUNNEL TOKEN/,/END ARGO TUNNEL TOKEN/p' "$cert" | grep -v 'ARGO TUNNEL TOKEN' | base64 -d | jq -r ".$1 // empty"; }
+
+auth_api() {
+  cf_token="$CLOUDFLARE_API_TOKEN"; auth=api
+  local status; status="$(cf GET /user/tokens/verify | jq -r .result.status)"
+  echo "auth:       API token ($status)"
+}
+auth_login() { # auth_login <zone>: browser login unless a cert for this zone exists
+  auth=login
+  if [[ ! -f $cert || "$(cat "$config_dir/cert.zone" 2>/dev/null)" != "$1" ]]; then
+    echo "auth:       opening Cloudflare in your browser. Pick $1, then click Authorize."
+    local tmp; tmp="$(mktemp -d)"
+    HOME="$tmp" cloudflared tunnel login >&2 || die "cloudflared login failed"
+    [[ -f $tmp/.cloudflared/cert.pem ]] || die "the login returned no certificate"
+    mkdir -p "$config_dir"
+    mv -f "$tmp/.cloudflared/cert.pem" "$cert" && chmod 600 "$cert"
+    echo "$1" >"$config_dir/cert.zone"
+    rm -rf "$tmp"
+  fi
+  cf_token="$(cert_field apiToken)"; account="$(cf_token_account)"
+  [[ -n $cf_token && -n $account ]] || die "cannot read $cert; delete it and rerun setup"
+  echo "auth:       browser login ($cert)"
+}
+cf_token_account() { cert_field accountID; }
+
+cf_zone() { # API mode: prints "<zone_id> <account_id> <zone_name>" for the zone owning $host_name
+  local cand="$host_name" r
+  while [[ $cand == *.* ]]; do
+    r="$(cf GET "/zones?name=$cand")"
+    if [[ "$(jq '.result | length' <<<"$r")" -gt 0 ]]; then
+      jq -r '.result[0] | "\(.id) \(.account.id) \(.name)"' <<<"$r"; return
+    fi
+    [[ $cand == *.*.* ]] || break
+    cand="${cand#*.}"
+  done
+  die "no Cloudflare zone for $host_name in this token's accounts"
+}
+
+write_config() { # write_config <tunnel_id> <tunnel_name>; keeps a token_cmd line if there was one
+  local keep; keep="$(cfg token_cmd || true)"
+  hosts="${hosts:-$(this_host)}"
+  mkdir -p "$config_dir"
+  {
+    echo "hostname=$host_name"
+    echo "tunnel_id=$1"
+    echo "tunnel_name=$2"
+    echo "auth=$auth"
+    echo "hosts=$hosts"
+    echo "port=$port"
+    [[ -n $keep ]] && echo "token_cmd=$keep"
+  } >"$config.tmp"
+  mv -f "$config.tmp" "$config"
+}
+
+cmd_setup() {
+  local tunnel_name="" force=0 service=1 login=0
+  [[ -n ${1:-} && ${1:-} != --* ]] && { host_name="$1"; shift; }
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --tunnel-name) tunnel_name="${2:-}"; shift 2 ;;
+      --force) force=1; shift ;;
+      --no-service) service=0; shift ;;
+      --login) login=1; shift ;;
+      *) die "usage: share setup [hostname] [--tunnel-name N] [--force] [--no-service] [--login]" ;;
+    esac
+  done
+  if [[ -z $host_name && -t 0 ]]; then read -rp "Hostname for your links (for example s.example.com): " host_name; fi
+  [[ $host_name =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$ ]] || die "usage: share setup <hostname>, for example s.example.com"
+  tunnel_name="${tunnel_name:-share-${host_name//./-}}"
+
+  local missing="" c
+  for c in caddy cloudflared jq curl; do command -v "$c" >/dev/null || missing="$missing $c"; done
+  [[ -z $missing ]] || die "missing:$missing (brew install$missing)"
+
+  local zone="" zone_name za
+  if [[ -n ${CLOUDFLARE_API_TOKEN:-} && $login == 0 ]]; then
+    auth_api
+    za="$(cf_zone)"; read -r zone account zone_name <<<"$za"
+  else
+    zone_name="$(public_zone "$host_name")"
+    [[ -n $zone_name ]] || die "cannot find the DNS zone of $host_name; is the domain on Cloudflare?"
+    auth_login "$zone_name"
+  fi
+  echo "zone:       $zone_name"
+
+  local t tid created=0
+  t="$(cf GET "/accounts/$account/cfd_tunnel?name=$tunnel_name&is_deleted=false")"
+  tid="$(jq -r '.result[0].id // empty' <<<"$t")"
+
+  # Check the hostname before creating anything, so a taken name leaves no orphan tunnel.
+  local rec="" rid="" rtype="" rcontent=""
+  if [[ $auth == api ]]; then
+    rec="$(cf GET "/zones/$zone/dns_records?name=$host_name")"
+    rid="$(jq -r '.result[0].id // empty' <<<"$rec")"
+    rtype="$(jq -r '.result[0].type // empty' <<<"$rec")"
+    rcontent="$(jq -r '.result[0].content // empty' <<<"$rec")"
+    if [[ -n $rid && $force == 0 && ( -z $tid || $rcontent != "$tid.cfargotunnel.com" ) ]]; then
+      die "$host_name already has a $rtype record ($rcontent); pick another hostname or rerun with --force"
+    fi
+  elif [[ -z $tid && $force == 0 ]] && resolves "$host_name"; then
+    die "$host_name already resolves in public DNS; pick another hostname or rerun with --force"
+  fi
+
+  if [[ -n $tid ]]; then
+    echo "tunnel:     reusing $tunnel_name"
+  else
+    tid="$(cf POST "/accounts/$account/cfd_tunnel" "{\"name\":\"$tunnel_name\",\"config_src\":\"cloudflare\"}" | jq -r .result.id)"
+    created=1
+    echo "tunnel:     created $tunnel_name"
+  fi
+  cf PUT "/accounts/$account/cfd_tunnel/$tid/configurations" \
+    "{\"config\":{\"ingress\":[{\"hostname\":\"$host_name\",\"service\":\"http://127.0.0.1:$port\"},{\"service\":\"http_status:404\"}]}}" >/dev/null
+  echo "route:      $host_name -> 127.0.0.1:$port"
+
+  local target="$tid.cfargotunnel.com" body out
+  if [[ $auth == api ]]; then
+    body="{\"type\":\"CNAME\",\"name\":\"$host_name\",\"content\":\"$target\",\"proxied\":true,\"comment\":\"share tunnel $tunnel_name\"}"
+    if [[ -z $rid ]]; then
+      cf POST "/zones/$zone/dns_records" "$body" >/dev/null; echo "dns:        created CNAME $host_name"
+    elif [[ $rtype == CNAME && $rcontent == "$target" ]]; then
+      echo "dns:        CNAME $host_name already points at the tunnel"
+    else
+      cf PUT "/zones/$zone/dns_records/$rid" "$body" >/dev/null; echo "dns:        replaced $rtype $host_name (--force)"
+    fi
+  else
+    local overwrite=""
+    [[ $force == 1 || $created == 0 ]] && overwrite="--overwrite-dns"
+    # shellcheck disable=SC2086
+    out="$(cloudflared tunnel --origincert "$cert" --loglevel info route dns $overwrite "$tid" "$host_name" 2>&1)" || true
+    if ! grep -qE "CNAME $host_name which|$host_name is already configured" <<<"$out"; then
+      [[ $created == 1 ]] && cf DELETE "/accounts/$account/cfd_tunnel/$tid" >/dev/null
+      rm -f "$config_dir/cert.zone"
+      die "DNS route failed (did you pick $zone_name in the browser?): $(grep -E 'ERR|Added' <<<"$out" | tail -2)"
+    fi
+    echo "dns:        CNAME $host_name -> tunnel"
+  fi
+
+  local tok where
+  tok="$(cf GET "/accounts/$account/cfd_tunnel/$tid/token" | jq -r .result)"
+  if [[ -n $(cfg token_cmd || true) ]]; then
+    echo "token:      config has token_cmd; store this tunnel's token there yourself"
+  else
+    where="$(token_store "$tok")"; echo "token:      stored in $where"
+  fi
+  tok=""
+  write_config "$tid" "$tunnel_name"
+
+  host_ok || { echo "this host ($(this_host)) is not in hosts=$hosts; skipping the service and the live check"; return 0; }
+  if [[ $service == 1 ]] && { [[ $(uname -s) == Darwin ]] || command -v systemctl >/dev/null; }; then
+    svc_install; echo "service:    runs at login ($svc_label)"
+  fi
+
+  local probe started=0 code=000 _
+  probe="_probe-$(rand_id).txt"
+  mkdir -p "$pub" && echo ok >"$pub/$probe"
+  running || { cmd_start >/dev/null; [[ $service == 1 ]] || started=1; }
+  for _ in $(seq 1 30); do
+    code="$(curl -s -o /dev/null -w '%{http_code}' --doh-url https://1.1.1.1/dns-query "https://$host_name/$probe" || true)"
+    [[ $code == 200 ]] && break
+    sleep 2
+  done
+  rm -f "$pub/$probe"
+  [[ $started == 1 ]] && cmd_stop >/dev/null
+  [[ $code == 200 ]] || die "live check failed: https://$host_name/$probe returned $code (see $root/serve.log)"
+  echo "ready:      https://$host_name/ is live. Next: share add <file|dir>"
+}
+
+cmd_teardown() {
+  need_host
+  local tid; tid="$(cfg tunnel_id || true)"
+  [[ -n $tid ]] || die "no tunnel_id in $config"
+  if [[ ${1:-} != --yes ]]; then
+    [[ -t 0 ]] || die "rerun with --yes to confirm"
+    local a; read -rp "Delete the tunnel and DNS record for $host_name? Shares in $root stay. [y/N] " a
+    [[ $a == y* || $a == Y* ]] || die "aborted"
+  fi
+  svc_uninstall
+  cmd_stop >/dev/null
+  local zone za rec rid _zn
+  if [[ -n ${CLOUDFLARE_API_TOKEN:-} ]]; then
+    auth_api >/dev/null
+    za="$(cf_zone)"; read -r zone account _zn <<<"$za"
+    rec="$(cf GET "/zones/$zone/dns_records?name=$host_name")"
+    rid="$(jq -r --arg t "$tid.cfargotunnel.com" '.result[] | select(.content == $t) | .id' <<<"$rec" | head -1)"
+    if [[ -n $rid ]]; then cf DELETE "/zones/$zone/dns_records/$rid" >/dev/null; echo "dns:     deleted $host_name"
+    else echo "dns:     no record for $host_name points at this tunnel, left alone"; fi
+  elif [[ -f $cert ]]; then
+    cf_token="$(cert_field apiToken)"; account="$(cf_token_account)"
+    echo "dns:     the login token cannot delete DNS records. Delete the CNAME $host_name in the Cloudflare dashboard, or rerun with CLOUDFLARE_API_TOKEN."
+  else
+    die "set CLOUDFLARE_API_TOKEN, or run 'share setup $host_name' once to log in again"
+  fi
+  cf DELETE "/accounts/$account/cfd_tunnel/$tid/connections" >/dev/null 2>&1 || true
+  cf DELETE "/accounts/$account/cfd_tunnel/$tid" >/dev/null
+  echo "tunnel:  deleted"
+  token_forget; echo "token:   removed"
+  echo "service: removed"
+  [[ -f $cert ]] && to_trash "$cert"
+  rm -f "$config_dir/cert.zone"
+  to_trash "$config"; echo "config:  moved to the Trash"
+}
+
+case "${1:-status}" in
+  setup) shift; cmd_setup "$@" ;;
+  teardown) cmd_teardown "${2:-}" ;;
+  service) cmd_service "${2:-}" ;;
+  add) shift; cmd_add "$@" ;;
+  ls) cmd_prune; cmd_ls ;;
+  refresh) cmd_refresh "${2:-}" ;;
+  rm) cmd_rm "${2:-}" ;;
+  hits) cmd_hits "${2:-}" ;;
+  prune) cmd_prune ;;
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  status) cmd_status ;;
+  serve) cmd_serve ;;
+  -h|--help|help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac
