@@ -37,8 +37,17 @@ jobs:
           esac
           curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_${caddy_arch}.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP" caddy
-          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.${sc_arch}.tar.xz" \
-            | tar -xJ -C "$RUNNER_TEMP" --strip-components=1 "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
+          # The pool image has no xz binary; python3's tarfile reads .tar.xz itself.
+          curl -fsSL -o "$RUNNER_TEMP/sc.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.${sc_arch}.tar.xz"
+          python3 - "$RUNNER_TEMP" "$SHELLCHECK_VERSION" <<'PY'
+          import sys, tarfile
+          dest, version = sys.argv[1], sys.argv[2]
+          with tarfile.open(f"{dest}/sc.tar.xz") as t:
+              member = t.getmember(f"shellcheck-{version}/shellcheck")
+              member.name = "shellcheck"
+              t.extract(member, dest)
+          PY
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
       - name: Lint
