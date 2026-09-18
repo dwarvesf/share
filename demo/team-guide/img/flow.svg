@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="90" font-family="Helvetica" font-size="15">
+  <rect x="5" y="20" width="150" height="50" rx="8" fill="#61afef"/><text x="80" y="50" text-anchor="middle" fill="#fff">Open recorder</text>
+  <rect x="205" y="20" width="150" height="50" rx="8" fill="#98c379"/><text x="280" y="50" text-anchor="middle" fill="#fff">Pick microphone</text>
+  <rect x="405" y="20" width="150" height="50" rx="8" fill="#c678dd"/><text x="480" y="50" text-anchor="middle" fill="#fff">Stop and upload</text>
+  <path d="M158 45 H200 M358 45 H400" stroke="#555" stroke-width="2"/>
+</svg>

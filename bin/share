@@ -218,8 +218,10 @@ cmd_hits() {
   local log="$root/access.log"
   [[ -s $log ]] || { echo "0 hits"; return 0; }
   jq -rs --arg p "/$1/" '
+    def n($k; $w): "\($k) \($w)\(if $k == 1 then "" else "s" end)";
     map(select((.request.uri | startswith($p)) and .status < 400)) as $h
-    | "\($h | length) hits, \($h | map(.request.headers["Cf-Connecting-Ip"][0] // .request.remote_ip) | unique | length) visitors"
+    | n($h | length; "hit") + ", "
+      + n($h | map(.request.headers["Cf-Connecting-Ip"][0] // .request.remote_ip) | unique | length; "visitor")
       + (if ($h | length) > 0 then ", last \($h[-1].ts | floor | strflocaltime("%F %H:%M"))" else "" end)' "$log"
 }
 
