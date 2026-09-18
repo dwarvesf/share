@@ -103,7 +103,7 @@ token_forget() {
 
 render_md() { # render every .md under <dir> to a sibling .html; .md links become .html
   command -v pandoc >/dev/null || return 0
-  local filter="$root/md-links.lua" f out
+  local filter="$root/md-links.lua" style="$root/md-style.html" f out extra
   cat >"$filter" <<'LUA'
 function Link(el)
   if not el.target:match("^%a+:") then
@@ -112,11 +112,39 @@ function Link(el)
   return el
 end
 LUA
+  cat >"$style" <<'CSS'
+<style>
+:root { --bg:#fcfcfc; --fg:#1a1a1a; --muted:#6b6b6b; --line:#d9d9d9; --code-bg:rgba(36,36,36,.055); --link:#0b57d0; }
+@media (prefers-color-scheme: dark) { :root { --bg:#1a1a1a; --fg:#d4d4d4; --muted:#9a9a9a; --line:#3a3a3a; --code-bg:rgba(255,255,255,.08); --link:#8ab4f8; } }
+html { background:var(--bg); color:var(--fg); -webkit-text-size-adjust:100%; }
+body { max-width:42em; margin:0 auto; padding:3rem 1.25rem 5rem; font:17px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; font-kerning:normal; }
+h1,h2,h3,h4,h5,h6 { line-height:1.25; margin:2em 0 .6em; font-weight:650; }
+h1 { font-size:1.7em; margin-top:0; } h2 { font-size:1.35em; padding-bottom:.25em; border-bottom:1px solid var(--line); } h3 { font-size:1.1em; } h4,h5,h6 { font-size:1em; }
+p, ul, ol, dl, blockquote, pre, table, figure { margin:0 0 1.1em; }
+a { color:var(--link); text-decoration:underline; text-decoration-thickness:1px; text-underline-offset:2px; }
+li + li { margin-top:.25em; }
+blockquote { margin-left:0; padding:.1em 1em; border-left:3px solid var(--line); color:var(--muted); }
+code, kbd, samp, pre { font-family:ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; font-size:.88em; }
+code { background:var(--code-bg); padding:.12em .35em; border-radius:4px; }
+pre { background:var(--code-bg); padding:.9em 1em; border-radius:6px; overflow-x:auto; line-height:1.5; }
+pre code { background:none; padding:0; font-size:inherit; }
+table { display:block; width:max-content; max-width:100%; overflow-x:auto; border-collapse:collapse; border-top:1px solid var(--fg); border-bottom:1px solid var(--fg); }
+th, td { padding:.45em .9em .45em 0; text-align:left; vertical-align:top; }
+th { border-bottom:1px solid var(--fg); font-weight:650; }
+tbody tr + tr td { border-top:1px solid var(--line); }
+img, video, svg { max-width:100%; height:auto; }
+figure { text-align:center; } figcaption { color:var(--muted); font-size:.9em; margin-top:.4em; }
+hr { border:0; border-top:1px solid var(--line); margin:2.5em 0; }
+</style>
+CSS
   find "$1" -type f -name '*.md' | while IFS= read -r f; do
     out="${f%.md}.html"
     [[ -e $out ]] && continue
-    pandoc --quiet -s "$f" -o "$out" --lua-filter "$filter" \
-      --metadata pagetitle="$(basename "$f" .md)" || echo "share: could not render $f" >&2
+    extra=()
+    grep -q '\$' "$f" && extra+=(--katex) # KaTeX from the CDN, only for pages with math
+    pandoc --quiet -s "$f" -o "$out" --lua-filter "$filter" --include-in-header "$style" \
+      --from=markdown-smart --metadata pagetitle="$(basename "$f" .md)" "${extra[@]}" \
+      || echo "share: could not render $f" >&2
   done
 }
 
@@ -417,18 +445,20 @@ cmd_start() {
 
 # The tunnel reports ready before caddy may listen, and the Cloudflare edge keeps routing to an
 # old connection for a few seconds after a restart. Only a public fetch proves a link works.
-live_check() { # live_check <seconds>: a probe file answers 200 through the public hostname
-  local probe code=000 _
+live_check() { # live_check <seconds>: a probe file answers 200 through the public hostname, 3 times in a row
+  # One 200 is not enough: during a handover the edge still sends some requests to the old connection.
+  local probe code streak=0 _
   probe="_probe-$(rand_id).txt"
   mkdir -p "$pub" && echo ok >"$pub/$probe"
   for _ in $(seq 1 "$1"); do
     code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 --doh-url https://1.1.1.1/dns-query "https://$host_name/$probe" 2>/dev/null ||
       curl -s -o /dev/null -w '%{http_code}' --max-time 5 "https://$host_name/$probe" || true)"
-    [[ $code == 200 ]] && break
+    if [[ $code == 200 ]]; then streak=$((streak + 1)); else streak=0; fi
+    [[ $streak -ge 3 ]] && break
     sleep 1
   done
   rm -f "$pub/$probe"
-  [[ $code == 200 ]]
+  [[ $streak -ge 3 ]]
 }
 warn_not_live() {
   [[ $tunnel == 1 && -n $host_name ]] || return 0

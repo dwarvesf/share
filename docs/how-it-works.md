@@ -55,6 +55,7 @@ share add ./guide
   find guide -name '.*' -prune -o -type f -print  →  cp -p each file into stage
                                     only regular files: dotfiles and symlinks never ship
   pandoc every *.md → sibling .html (skipped when pandoc is absent or the .html exists)
+                                    an inline reading stylesheet (light and dark); KaTeX from the CDN only for pages with $ math
   mv stage → pub/<id>               an atomic swap, so a refresh never serves half a copy
   append the row to index.tsv
   print + pbcopy the link, warn if the source repo is private on GitHub
