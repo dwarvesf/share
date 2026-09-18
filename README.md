@@ -84,6 +84,7 @@ Setup creates the tunnel, its route, and the DNS record, stores the tunnel token
 | `share refresh <id>` | Re-copy from the source path. The link stays the same. |
 | `share rm <id>` | Unpublish now. The copy goes to the Trash. |
 | `share hits <id>` | Requests and unique visitors for one share. |
+| `share prune` | Unpublish every expired share now. It also runs every hour while serving, and before `ls` and `status`. |
 | `share start` / `share stop` | Serve in the background / stop serving (every link goes down). |
 | `share` | Server state plus the share list. |
 | `share serve` | Serve in the foreground until Ctrl-C. |

@@ -7,7 +7,8 @@
 #   share refresh <id>        re-copy from the source path (same link)
 #   share rm <id>             unpublish (moves the copy to the Trash)
 #   share hits <id>           requests and unique visitors for one share
-#   share start | stop        serve in the background (links live while this machine is awake)
+#   share prune               unpublish expired shares now (also hourly while serving)
+#   share start | stop       serve in the background (links live while this machine is awake)
 #   share [status]            server state plus the share list
 #   share serve               serve in the foreground until Ctrl-C
 #   share teardown [--yes]    delete the tunnel, DNS record, and stored token
