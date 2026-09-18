@@ -12,6 +12,12 @@ share add ./team-guide          # https://s.example.com/62cb50/team-guide/  (cop
 
 ![Share a folder, then check who opened it](demo/use.gif)
 
+What the visitor sees (a shared folder's `README.md`, rendered):
+
+<img src="demo/visitor.png" alt="A shared folder rendered in the browser" width="600">
+
+These are real recordings of the Homebrew build against a live domain; [demo/](demo/) reproduces them. The setup recording uses an API token; without one, setup first opens the Cloudflare login in your browser.
+
 ## What you get
 
 | Behavior | Detail |

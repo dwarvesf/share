@@ -80,7 +80,7 @@ bash "$SH" refresh "$dir_id" >/dev/null 2>&1
 check "refreshed content, same link" "1" "$(curl -s "$(local_url "$dir_url")" | grep -c 'v2')"
 
 echo "=== hits, ttl, rm ==="
-check "hits by link" "1" "$(bash "$SH" hits "$dir_url" | grep -cE '^[1-9][0-9]* hits, 1 visitors')"
+check "hits by link" "1" "$(bash "$SH" hits "$dir_url" | grep -cE '^[1-9][0-9]* hits?, 1 visitor(,|$)')"
 bash "$SH" add --ttl 3x "$WORK/wt/one.md" >/dev/null 2>&1
 check "bad ttl rejected" 1 "$?"
 docs_id=$(cut -d/ -f4 <<<"$docs_url")
