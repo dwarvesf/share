@@ -387,6 +387,7 @@ cmd_service() {
       host_ok || die "$(this_host) is not in hosts=$hosts"
       svc_install
       wait_running 10 || die "the service did not start, see $root/serve.log"
+      warn_not_live
       echo "service installed ($svc_label): serving now and at every login" ;;
     uninstall)
       svc_uninstall; echo "service removed; links are down until 'share start'" ;;
@@ -410,7 +411,28 @@ cmd_start() {
     nohup bash "$0" serve >>"$root/serve.log" 2>&1 &
   fi
   wait_running 10 || die "server did not start, see $root/serve.log"
+  warn_not_live
   echo "  serving in the background (pid $(cat "$pidfile")); share stop to end"
+}
+
+# The tunnel reports ready before caddy may listen, and the Cloudflare edge keeps routing to an
+# old connection for a few seconds after a restart. Only a public fetch proves a link works.
+live_check() { # live_check <seconds>: a probe file answers 200 through the public hostname
+  local probe code=000 _
+  probe="_probe-$(rand_id).txt"
+  mkdir -p "$pub" && echo ok >"$pub/$probe"
+  for _ in $(seq 1 "$1"); do
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 --doh-url https://1.1.1.1/dns-query "https://$host_name/$probe" 2>/dev/null ||
+      curl -s -o /dev/null -w '%{http_code}' --max-time 5 "https://$host_name/$probe" || true)"
+    [[ $code == 200 ]] && break
+    sleep 1
+  done
+  rm -f "$pub/$probe"
+  [[ $code == 200 ]]
+}
+warn_not_live() {
+  [[ $tunnel == 1 && -n $host_name ]] || return 0
+  live_check 20 || echo "  share: https://$host_name/ is not answering yet; see $root/serve.log" >&2
 }
 
 cmd_stop() {
@@ -610,18 +632,11 @@ cmd_setup() {
     svc_install; echo "service:    runs at login ($svc_label)"
   fi
 
-  local probe started=0 code=000 _
-  probe="_probe-$(rand_id).txt"
-  mkdir -p "$pub" && echo ok >"$pub/$probe"
-  running || { cmd_start >/dev/null; [[ $service == 1 ]] || started=1; }
-  for _ in $(seq 1 30); do
-    code="$(curl -s -o /dev/null -w '%{http_code}' --doh-url https://1.1.1.1/dns-query "https://$host_name/$probe" || true)"
-    [[ $code == 200 ]] && break
-    sleep 2
-  done
-  rm -f "$pub/$probe"
+  local started=0 live=0
+  running || { cmd_start >/dev/null 2>&1; [[ $service == 1 ]] || started=1; }
+  live_check 60 && live=1
   [[ $started == 1 ]] && cmd_stop >/dev/null
-  [[ $code == 200 ]] || die "live check failed: https://$host_name/$probe returned $code (see $root/serve.log)"
+  [[ $live == 1 ]] || die "live check failed: https://$host_name/ does not answer (see $root/serve.log)"
   echo "ready:      https://$host_name/ is live. Next: share add <file|dir>"
 }
 
