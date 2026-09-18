@@ -1,0 +1,110 @@
+{
+  "hooks": {
+    "Notification": [],
+    "PermissionRequest": [],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "bash $HOME/.claude/dwarves-kit/hooks/output-offload.sh",
+            "timeout": 10,
+            "type": "command"
+          }
+        ],
+        "matcher": "*"
+      },
+      {
+        "hooks": [
+          {
+            "command": "bash $HOME/.claude/dwarves-kit/hooks/post-compact-reinject.sh",
+            "timeout": 10,
+            "type": "command"
+          }
+        ],
+        "matcher": "compact"
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "command": "bash $HOME/.claude/dwarves-kit/hooks/pre-compact-backup.sh",
+            "timeout": 15,
+            "type": "command"
+          },
+          {
+            "command": "bash $HOME/.claude/dwarves-kit/hooks/harvest.sh",
+            "timeout": 30,
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "command": "bash $HOME/.claude/dwarves-kit/hooks/backlog-stage.sh",
+            "timeout": 30,
+            "type": "command"
+          },
+          {
+            "command": "bash $HOME/.claude/dwarves-kit/hooks/harvest.sh --lab-log",
+            "timeout": 30,
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "bash $HOME/.claude/dwarves-kit/hooks/context-readiness.sh",
+            "timeout": 10,
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "bash $HOME/.claude/dwarves-kit/hooks/session-state-save.sh",
+            "timeout": 5,
+            "type": "command"
+          },
+          {
+            "command": "bash $HOME/.claude/dwarves-kit/hooks/citation-guard.sh",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "command": "bash $HOME/.claude/dwarves-kit/hooks/session-state-save.sh",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "command": "bash $HOME/.claude/dwarves-kit/hooks/context-hints.sh",
+            "timeout": 5,
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}
