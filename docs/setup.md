@@ -32,8 +32,9 @@ CLOUDFLARE_API_TOKEN=... share setup s.example.com
 ```
 share setup s.example.com
    │
-   ├─ authorize (browser login, or the API token)
-   ├─ find the zone that owns s.example.com
+   ├─ find the zone that owns s.example.com, and authorize:
+   │    browser path: public DNS finds the zone, then the login picks it
+   │    API-token path: the token is checked, then the API finds the zone
    ├─ check the hostname: a record that is not this tunnel's stops setup here,
    │  before anything is created (override with --force)
    ├─ reuse the tunnel named share-s-example-com, or create it (remotely managed)
@@ -75,7 +76,7 @@ Setup installs a per-user service that runs `share serve`, so links come back by
 |---|---|---|
 | Kind | launchd agent `foundation.d.share` | systemd user unit `foundation.d.share.service` |
 | Restarts | after a crash (30 s throttle) | after a failure (30 s) |
-| Log | `~/share/serve.log` | `~/share/serve.log` |
+| Log | `~/share/serve.log` | the user journal: `journalctl --user -u foundation.d.share` |
 
 `share stop` stops it until the next login; `share start` brings it back now. `share service uninstall` removes it, and `share service install` adds it again. On Linux, the service runs only while you are logged in unless you enable lingering (`loginctl enable-linger`).
 
