@@ -135,7 +135,14 @@ bash tests/share.sh      # every behavior except the tunnel; no credentials need
 shellcheck bin/share install.sh tests/share.sh
 ```
 
-CI runs both on Ubuntu and macOS. The Cloudflare side needs a real zone, so it is tested by hand; [docs/how-it-works.md](docs/how-it-works.md) records the procedure. The GIFs are real recordings; `demo/*.tape` reproduces them with [vhs](https://github.com/charmbracelet/vhs).
+CI runs both on Ubuntu and macOS. The Cloudflare side needs a real zone and token, so `tests/e2e.sh` runs it by hand before a release: setup, a setup rerun, publish and fetch, restart, remove, and teardown, then an API check that nothing is left behind.
+
+```sh
+SHARE_E2E_HOST=share-e2e.example.com CLOUDFLARE_API_TOKEN=... tests/e2e.sh           # API-token setup
+SHARE_E2E_HOST=share-e2e.example.com CLOUDFLARE_API_TOKEN=... tests/e2e.sh --login   # browser-login setup (one click)
+```
+
+The GIFs are real recordings; `demo/*.tape` reproduces them with [vhs](https://github.com/charmbracelet/vhs).
 
 ## Docs
 
