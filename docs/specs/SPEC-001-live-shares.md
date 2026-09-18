@@ -1,6 +1,6 @@
 # Spec: live shares, own hostnames, folder index
 Generated: 2026-09-19
-Status: DRAFT
+Status: VALIDATED
 Lane: full
 References: `bin/share` `cmd_setup` (the ingress PUT shape and the DNS collision guard to reuse for `--host`); `bin/share` `cf()` (the only way a Cloudflare token may travel: header file, never argv); `tests/share.sh` (the local harness every new behavior lands in: `SHARE_TUNNEL=0`, spare port, throwaway root).
 
@@ -103,9 +103,11 @@ Live-target rules, checked before any write: port is in `1024..65535`, is not `$
 
 **Link**: `share_url` prints `https://<fqdn>/` for a host share, `https://<host>/<id>/` for a prefix live share, and the existing `https://<host>/<id>/<name>` for a snapshot.
 
-**`--host FQDN`**: must match `^[a-z0-9]([a-z0-9-]*[a-z0-9])?\.<zone>$` where `<zone>` is the setup zone name (`cfg zone`, added to config by this spec; for configs without it, resolve the zone as `cmd_setup` does and write it back). One label only: `dev.example.com` yes, `dev.s.example.com` no, with the message `one label under example.com (Universal SSL stops at one level)`. Credential: `CLOUDFLARE_API_TOKEN`, else `cert.pem` via the existing `cf_auth` path; neither: `die "--host needs CLOUDFLARE_API_TOKEN or a browser login (share setup --login)"` before any write. Collision guard as in `cmd_setup`: an existing record is accepted only if it is a CNAME to this tunnel; anything else refuses (no `--force` on add).
+**`--host FQDN`**: must match `^[a-z0-9]([a-z0-9-]*[a-z0-9])?\.<zone>$` where `<zone>` is the setup zone name (`cfg zone`, added to config by this spec; for configs without it, resolve the zone as `cmd_setup` does and write it back). One label only: `dev.example.com` yes, `dev.s.example.com` no, with the message `one label under example.com (Universal SSL stops at one level)`. Credential: `CLOUDFLARE_API_TOKEN`, else `cert.pem` via the existing `cf_auth` path; neither: `die "--host needs CLOUDFLARE_API_TOKEN or a browser login (share setup --login)"` before any write. Collision guard as in `cmd_setup`: an existing record is accepted only if it is a CNAME to this tunnel; anything else refuses (no `--force` on add). DNS record create/delete goes through `cf()` in both modes (the `cert.pem` apiToken carries the zone it was authorized for; if the API answers an auth error, `die "the login cert cannot edit DNS records directly: export CLOUDFLARE_API_TOKEN with DNS Edit, or run share setup with the token"`).
 
 **Ingress edit** (`host_add` / `host_rm`): under a `mkdir "$root/.lock-host"` mutex (removed on exit, stale after 60 s), GET the current config, assert the last rule is `http_status:404` and the first rule's hostname is the primary `hostname`, else `die "tunnel ingress was edited outside share; fix it in the dashboard or rerun share setup --force"`. Insert the new rule `{hostname, service: http://127.0.0.1:$port, originRequest: {httpHostHeader: <fqdn>}}` before the catch-all, or drop the one matching rule, PUT. All calls through `cf()`; no new place the token appears.
+
+**Test seams:** `SHARE_HOST_DRY=1` skips every Cloudflare call, reads and writes included: `host_add`/`host_rm` get the "current" ingress config from a canned fixture under `$root/host-fixture.json` when present, else the minimal `{primary rule, catch-all}` shape, and append each intended call (`PUT ingress +1`, `POST CNAME`, `DELETE CNAME`, `PUT ingress -1`) to `$root/host-calls.log`, one per line. `SHARE_HOST_LOCK_TIMEOUT=<secs>` overrides the 60 s mutex wait so tests stay fast.
 
 **Caddyfile** (`write_caddyfile`, rendered from `index.tsv`):
 
@@ -140,7 +142,7 @@ http://<fqdn>:$port {                # one per host share
 }
 ```
 
-`$root` is created `mkdir -p -m 700`, so the admin socket is reachable by the owner only. `caddy_reload` runs `caddy reload --config "$root/Caddyfile" --adapter caddyfile --address "unix//$root/admin.sock"` when `running`, else nothing. Called at the end of `cmd_add`, `cmd_rm`, `cmd_refresh` (a refresh can add or remove `index.html`, which flips `try_files`), and once after `cmd_prune` removed anything.
+`$root` is created `mkdir -p -m 700`, so the admin socket is reachable by the owner only. `caddy_reload` runs `caddy reload --config "$root/Caddyfile" --adapter caddyfile` when `running`, else nothing (the admin address comes from the config's global block). Bash is 3.2-compatible: `case` patterns over `=~`, no arrays, `${var:+...}` for optional flags, no `mapfile`/`read -a`/`local -n`. Called at the end of `cmd_add`, `cmd_rm`, `cmd_refresh` (a refresh can add or remove `index.html`, which flips `try_files`), and once after `cmd_prune` removed anything.
 
 **Folder index** (`gen_index <stage>`), inside `copy()` after `render_md` and before the `mv`: when the stage root has neither `index.html` nor `README.html`, and `opts` lacks `noindex`, write `index.html` with the same `<style>` block as the markdown render and a `<ul>` of every regular file under the stage (relative href, percent-encoded, sorted, `.md` listed by its `.html` render when one exists). Nested folders are not listed separately; the site root `/` still 404s. Because it runs inside `copy()`, `refresh` keeps the listing.
 
@@ -210,28 +212,33 @@ Caddy admin on a unix socket under `$root` (0700 dir). No new TCP listener.
 
 ## Test plan
 
-Coverage matrix, one row per case; the local harness is `tests/share.sh` unless marked e2e.
+Coverage matrix, one row per case; the local harness is `tests/share.sh` unless marked e2e. Conventions the writer must follow: stderr is captured separately (`out=$(... 2>&1 1>/dev/null)`) for every row whose Assert names a message; hit counts anchor at `^`; call-order asserts compare line numbers in `host-calls.log`, not independent greps; the live-share fixture is a second `caddy file_server` on a spare port (already installed for the suite, no `python3` dependency) with a `wait_for_port` helper and a cleanup trap; rows 6 and 7 use different live shares so a removal never eats the hits fixture; the host share used by row 20 is a fresh one created after row 14's `rm`.
 
 | # | Category | Case | Assert |
 |---|---|---|---|
 | 1 | compat | five-column row written by hand | `ls` shows it, `rm` removes it |
-| 2 | live | `add <port>` to `python3 -m http.server` on a spare port | `GET /<id>/hello.txt` returns the file body (prefix stripped) |
-| 3 | live | `add <port>` output | link ends in `/<id>/`, warning line and caveat line present on stderr |
-| 4 | live-refuse | `add 80`, `add $SHARE_PORT`, `add $((SHARE_PORT+1))`, `add 99999` | exit 1, no row |
-| 5 | live | `refresh <live id>` | exit 0, message, no error |
+| 2 | live | `add <fixture port>` | `GET /<id>/hello.txt` returns the fixture file body (prefix stripped) |
+| 3 | live | `add <fixture port>` output | link ends in `/<id>/`; stderr carries the live warning and the absolute-paths caveat |
+| 4 | live-refuse | `add 80`, `add $SHARE_PORT`, `add $((SHARE_PORT+1))`, `add 99999` | exit 1, stderr names the reason, no row |
+| 5 | live | `refresh <live id>` | exit 0, "nothing to refresh" on stderr |
 | 6 | live | `rm <live id>` while serving | `GET /<id>/` is 404 without a restart |
-| 7 | live | `hits <live id>` after two GETs | `2 hits` |
-| 8 | index | folder of `.txt` + `.md`, no index | root lists both, `.md` linked as `.html` |
-| 9 | index | `--no-index` | root 404 |
-| 10 | index | folder with `README.md` | root is the render, no generated list |
+| 7 | live | `hits <live id>` after two GETs | matches `^2 hits, [0-9]+ visitors?$` |
+| 8 | index | folder of `.txt` + `.md`, no index | root 200; `href="other.html"` present; the `.txt` file linked by name |
+| 9 | index | same fixture with `--no-index` | root 404 |
+| 10 | index | folder with `README.md` | root is the render (`max-width:42em` marker), no `<ul` |
 | 11 | index | `refresh` of the listed folder | listing still there |
-| 12 | host (dry) | `add ./dist --host app.example.test` with `SHARE_HOST_DRY=1` | `curl -H 'Host: app.example.test' /deep/link` returns `index.html`; `host-calls.log` has PUT then POST |
-| 13 | host (dry) | `rm` of that share | `host-calls.log` has DELETE then PUT; `curl -H Host` now 404 |
-| 14 | host-refuse | `--host dev.s.example.test` (two labels), `--host other.zone` | exit 1 with the one-label message |
-| 15 | host-refuse | no credential, `SHARE_HOST_DRY` unset | exit 1, no row |
-| 16 | serve | restart `serve` with live + host rows present | Caddyfile carries both blocks, no `admin off` |
-| 17 | negative | existing host-guard control at the end of the suite | still last, still refuses |
-| 18 | e2e | `tests/e2e.sh` `--host` leg | public hostname answers, `rm` deletes record + rule, teardown clean |
+| 12 | index | folder with a nested subfolder | root listing names the subfolder's files only via their paths; no separate subfolder entry |
+| 13 | host (dry) | `add ./dist --host app.example.test` with `SHARE_HOST_DRY=1` | `curl -H 'Host: app.example.test' /deep/link` returns `index.html`; in `host-calls.log` the `PUT ingress` line precedes `POST CNAME` (compare line numbers) |
+| 14 | host (dry) | `rm` of that share | `DELETE CNAME` precedes `PUT ingress -1`; the same curl now 404s |
+| 15 | host-refuse | `--host dev.s.example.test` (two labels), `--host other.zone` | exit 1, stderr has the one-label message |
+| 16 | host-refuse | `env -u CLOUDFLARE_API_TOKEN`, `SHARE_HOST_DRY` unset, no cert | exit 1, no row |
+| 17 | host-fail (dry) | ingress fixture with the catch-all NOT last | exit 1, dashboard-hint message, `host-calls.log` has no `PUT` |
+| 18 | host-fail (dry) | pre-create `$root/.lock-host`, `SHARE_HOST_LOCK_TIMEOUT=1` | second `add --host` dies "another share command holds the host lock" |
+| 19 | live-fail | `add <port>` with nothing listening | exit 0, row created, stderr has `nothing answers on 127.0.0.1:<port> yet`; `GET /<id>/` is 502 |
+| 20 | serve | restart `serve` with a live row and a fresh host row present | Caddyfile carries `handle_path` and the hostname site block; no `admin off` |
+| 21 | serve-fail | `caddy` off `PATH`, then `add` a live share | stderr surfaces the reload error and names `$root/caddy.log`; the row stays in `index.tsv` |
+| 22 | negative | machine-allowlist control (existing end-of-suite check) | still last, still refuses |
+| 23 | e2e | `tests/e2e.sh` `--host` leg | public hostname answers, `rm` deletes record + rule, teardown clean |
 
 ## Verification
 
