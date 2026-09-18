@@ -99,5 +99,11 @@ SHARE_HOSTS=not-this-host bash "$SH" start >/dev/null 2>&1
 check "start refused on another host" 1 "$?"
 
 echo
-if [[ $fails -gt 0 ]]; then echo "$fails FAILED"; exit 1; fi
+if [[ $fails -gt 0 ]]; then
+  echo "$fails FAILED"
+  for log in serve.log caddy.log; do
+    echo "--- $log"; tail -20 "$SHARE_ROOT/$log" 2>/dev/null
+  done
+  exit 1
+fi
 echo "PASS"

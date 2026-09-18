@@ -267,10 +267,11 @@ cmd_serve() {
   (while sleep 3600; do bash "$0" prune || true; done) &
   loop_pid=$!
   if [[ $tunnel == 1 ]]; then
-    TUNNEL_TOKEN="$token" cloudflared tunnel --no-autoupdate --loglevel warn --metrics "127.0.0.1:$metrics_port" run &
+    TUNNEL_TOKEN="$token" cloudflared tunnel --no-autoupdate --loglevel warn --grace-period 2s --metrics "127.0.0.1:$metrics_port" run &
     tunnel_pid=$!
   fi
-  trap 'kill '"$caddy_pid $loop_pid $tunnel_pid"' 2>/dev/null; rm -f "$pidfile"' EXIT
+  # Wait for the children, so the next serve never meets a dying cloudflared still answering /ready.
+  trap 'kill '"$caddy_pid $loop_pid $tunnel_pid"' 2>/dev/null; wait 2>/dev/null; rm -f "$pidfile"' EXIT
   trap 'exit 0' INT TERM
   sleep 1
   kill -0 "$caddy_pid" 2>/dev/null || die "caddy failed to start, see $root/caddy.log"
