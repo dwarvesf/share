@@ -103,7 +103,7 @@ token_forget() {
 
 render_md() { # render every .md under <dir> to a sibling .html; .md links become .html
   command -v pandoc >/dev/null || return 0
-  local filter="$root/md-links.lua" style="$root/md-style.html" f out extra
+  local filter="$root/md-links.lua" style="$root/md-style.html" f out katex
   cat >"$filter" <<'LUA'
 function Link(el)
   if not el.target:match("^%a+:") then
@@ -140,10 +140,10 @@ CSS
   find "$1" -type f -name '*.md' | while IFS= read -r f; do
     out="${f%.md}.html"
     [[ -e $out ]] && continue
-    extra=()
-    grep -q '\$' "$f" && extra+=(--katex) # KaTeX from the CDN, only for pages with math
+    katex=""; grep -q '\$' "$f" && katex="--katex" # KaTeX from the CDN, only for pages with math
+    # shellcheck disable=SC2086
     pandoc --quiet -s "$f" -o "$out" --lua-filter "$filter" --include-in-header "$style" \
-      --from=markdown-smart --metadata pagetitle="$(basename "$f" .md)" "${extra[@]}" \
+      --from=markdown-smart --metadata pagetitle="$(basename "$f" .md)" $katex \
       || echo "share: could not render $f" >&2
   done
 }
