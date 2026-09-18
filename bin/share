@@ -4,9 +4,9 @@
 #   share setup [hostname]    log in to Cloudflare, create the tunnel + DNS, install the service, verify
 #   share add [--ttl 7d|12h|never] <file|dir>   copy it in, print + copy the link, auto-start
 #   share ls                  list shares: link, size, source, expiry
-#   share refresh <id>        re-copy from the source path (same link)
-#   share rm <id>             unpublish (moves the copy to the Trash)
-#   share hits <id>           requests and unique visitors for one share
+#   share refresh <id|link>   re-copy from the source path (same link)
+#   share rm <id|link>        unpublish (moves the copy to the Trash)
+#   share hits <id|link>      requests and unique visitors for one share
 #   share prune               unpublish expired shares now (also hourly while serving)
 #   share start | stop        start or stop serving (links live while this machine is awake)
 #   share service install|uninstall|status   the login service that keeps serving
@@ -37,6 +37,12 @@ this_host() { local h; h="$(uname -n)"; echo "${h%%.*}"; }
 host_ok() { case " $hosts " in *" $(this_host) "*) return 0 ;; esac; return 1; }
 running() { [[ -f $pidfile ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; }
 row() { [[ -f $index ]] && awk -F'\t' -v id="$1" '$1 == id' "$index"; }
+id_of() { # accept an id or a pasted share link: https://host/<id>/name -> <id>
+  case ${1:-} in
+    *://*) local p="${1#*://}"; p="${p#*/}"; echo "${p%%/*}" ;;
+    *) echo "${1:-}" ;;
+  esac
+}
 rand_id() { od -An -N3 -tx1 /dev/urandom | tr -d ' \n'; }
 day_of() { date -r "$1" +%F 2>/dev/null || date -d "@$1" +%F; }
 to_trash() {
@@ -650,9 +656,9 @@ case "${1:-status}" in
   service) cmd_service "${2:-}" ;;
   add) shift; cmd_add "$@" ;;
   ls) cmd_prune; cmd_ls ;;
-  refresh) cmd_refresh "${2:-}" ;;
-  rm) cmd_rm "${2:-}" ;;
-  hits) cmd_hits "${2:-}" ;;
+  refresh) cmd_refresh "$(id_of "${2:-}")" ;;
+  rm) cmd_rm "$(id_of "${2:-}")" ;;
+  hits) cmd_hits "$(id_of "${2:-}")" ;;
   prune) cmd_prune ;;
   start) cmd_start ;;
   stop) cmd_stop ;;

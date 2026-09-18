@@ -80,15 +80,15 @@ bash "$SH" refresh "$dir_id" >/dev/null 2>&1
 check "refreshed content, same link" "1" "$(curl -s "$(local_url "$dir_url")" | grep -c 'v2')"
 
 echo "=== hits, ttl, rm ==="
-check "hits counted" "1" "$(bash "$SH" hits "$dir_id" | grep -cE '^[1-9][0-9]* hits, 1 visitors')"
+check "hits by link" "1" "$(bash "$SH" hits "$dir_url" | grep -cE '^[1-9][0-9]* hits, 1 visitors')"
 bash "$SH" add --ttl 3x "$WORK/wt/one.md" >/dev/null 2>&1
 check "bad ttl rejected" 1 "$?"
 docs_id=$(cut -d/ -f4 <<<"$docs_url")
 awk -F'\t' -v OFS='\t' -v id="$docs_id" '$1 == id {$5 = 1} {print}' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
 bash "$SH" prune >/dev/null
 check "expired share pruned" 404 "$(code "$docs_url")"
-bash "$SH" rm "$dir_id" >/dev/null
-check "rm unpublishes" 404 "$(code "$dir_url")"
+bash "$SH" rm "$dir_url" >/dev/null
+check "rm by link unpublishes" 404 "$(code "$dir_url")"
 
 echo "=== stop ==="
 bash "$SH" stop >/dev/null

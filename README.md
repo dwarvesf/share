@@ -84,9 +84,9 @@ It checks that the hostname is free before it creates anything, then proves the 
 |---|---|
 | `share add [--ttl 7d] <file\|dir>` | Copy it in, print the link, copy it to the clipboard, start serving if needed. |
 | `share ls` | List shares with link, size, source, and expiry. Flags shares whose source is gone. |
-| `share refresh <id>` | Re-copy from the source path. The link stays the same. |
-| `share rm <id>` | Unpublish now. The copy goes to the Trash. |
-| `share hits <id>` | Requests and unique visitors for one share. |
+| `share refresh <id\|link>` | Re-copy from the source path. The link stays the same. |
+| `share rm <id\|link>` | Unpublish now. The copy goes to the Trash. |
+| `share hits <id\|link>` | Requests and unique visitors for one share. |
 | `share prune` | Unpublish every expired share now. It also runs every hour while serving, and before `ls` and `status`. |
 | `share` | Server state, service state, and the share list. |
 | `share stop` / `share start` | Take every link down / bring them back. With the service installed, `stop` lasts until the next login. |
