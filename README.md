@@ -61,7 +61,7 @@ This pulls in `caddy`, `cloudflared`, and `jq`. For markdown rendering and the p
 git clone https://github.com/dwarvesf/share.git && cd share && ./install.sh
 ```
 
-`install.sh` installs missing dependencies with Homebrew when it is present and symlinks `bin/share` into `~/.local/bin`, so `git pull` updates it.
+`install.sh` installs missing dependencies with Homebrew when it is present and symlinks `bin/share` into `~/.local/bin`, so `git pull` updates it. `./install.sh --with-extras` also installs pandoc and gh; `PREFIX=/usr/local/bin ./install.sh` changes where the symlink goes.
 
 ## Set up
 
@@ -72,7 +72,7 @@ share setup s.example.com
 Setup opens Cloudflare in your browser. Pick the domain and click **Authorize**. share then does everything else:
 
 ```
-auth:       browser login
+auth:       browser login (~/.config/share/cert.pem)
 zone:       example.com
 tunnel:     created share-s-example-com
 route:      s.example.com -> 127.0.0.1:8787
@@ -99,7 +99,7 @@ It checks that the hostname is free before it creates anything, then proves the 
 | `share service install\|uninstall\|status` | Manage the login service. Setup installs it; `--no-service` skips that. |
 | `share serve` | Serve in the foreground until Ctrl-C. |
 | `share setup [hostname]` | Create or repair the Cloudflare side. |
-| `share teardown [--yes]` | Delete the tunnel, DNS record, service, stored token, and config. Shares on disk stay. |
+| `share teardown [--yes]` | Delete the tunnel, service, stored token, and config, plus the DNS record when `CLOUDFLARE_API_TOKEN` is set (the browser-login token cannot delete DNS records). Shares on disk stay. |
 
 A share from a private GitHub repo prints a warning, because the content is now public to anyone with the link.
 

@@ -40,7 +40,9 @@ The launchd agent's first program argument is the `share` script itself, so the 
 
 ~/.config/share/            SHARE_CONFIG_DIR
 ├── config                  key=value, written by setup
-└── tunnel-token            Linux only, mode 600 (macOS uses the Keychain)
+├── tunnel-token            Linux only, mode 600 (macOS uses the Keychain)
+├── cert.pem                browser-login path only, mode 600
+└── cert.zone               the zone that cert.pem was issued for
 ```
 
 ## Lifecycle of a share
@@ -78,7 +80,7 @@ share add ./guide
 | `start` waits for a public fetch | cloudflared reports ready before caddy may listen, and the Cloudflare edge keeps routing to the old connection for a few seconds after a restart. Measured: links answered 502 right after `start` returned on cloudflared's readiness alone. `start` now places a probe file and returns once it answers 200 through the public hostname (2 to 3 seconds). |
 | Wait for launchd to unload | `launchctl bootout` returns before the job has stopped, so an immediate `bootstrap` fails with "Bootstrap failed: 5". Reproduced with a dummy agent that takes 2 seconds to exit. |
 | DNS check before creating the tunnel | A taken hostname stops setup with nothing created, so a failed run leaves no orphan tunnel. |
-| API token through `-H @file`, run token through stdin | Neither token appears in `ps` output while share runs. |
+| API token through `-H @file`; run token stored through stdin and passed as `TUNNEL_TOKEN` | Neither token appears in a process's arguments, so `ps` output never shows one. |
 | caddy, not `python -m http.server` | caddy sets headers, disables listings, writes a JSON access log, and ships as one static binary for CI. |
 | Bash | The tool is glue around caddy, cloudflared, and the Cloudflare API. A single binary in Go becomes the better choice if share needs Windows or a distribution without a git checkout. |
 
@@ -87,6 +89,6 @@ share add ./guide
 | Layer | How | Where |
 |---|---|---|
 | Lint | `shellcheck` | CI and local |
-| Behavior | `tests/share.sh` runs a local server (`SHARE_TUNNEL=0`, port 18787) and covers add, auto-start, headers, dotfile and symlink exclusion, markdown, a deleted source, refresh, hits, expiry, rm, and stop. It ends with a negative control: a host outside `hosts` must not serve. | CI (markdown checks skipped, no pandoc) and local |
+| Behavior | `tests/share.sh` runs a local server (`SHARE_TUNNEL=0`, port 18787) and covers add, auto-start, headers, dotfile and symlink exclusion, markdown, a deleted source, refresh, hits, expiry, rm, and stop. It ends with a negative control: a host outside `hosts` must not serve. | CI (Ubuntu and macOS, with pandoc) and local |
 | Cloudflare | By hand against a throwaway hostname: `setup` on a taken hostname must refuse and create no tunnel; a fresh `setup` must pass its live check; a second `setup` must reuse the tunnel and the record; `add` must fetch publicly; `teardown` must leave zero tunnels, zero records, and no Keychain item. | Local, with a real zone and token |
 | Service | By hand on macOS: after `setup`, `launchctl print` shows the agent running with `program` set to the `share` script, and the probe link answers through it. | Local |
