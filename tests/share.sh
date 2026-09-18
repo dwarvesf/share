@@ -32,6 +32,7 @@ echo outside >"$WORK/outside.txt"
 ln -s "$WORK/outside.txt" "$src/leak.txt"
 printf '# Notes\n\nSee [other](other.md).\n' >"$src/notes.md"
 echo '# Other' >"$src/other.md"
+printf '# Math\n\nArea %sx^2%s.\n' '$' '$' >"$src/math.md"
 mkdir -p "$WORK/wt/docs" && echo '# Readme' >"$WORK/wt/docs/README.md" && echo '<p>docs</p>' >"$WORK/wt/docs/index.html"
 echo 'single' >"$WORK/wt/one.md"
 
@@ -60,6 +61,9 @@ if command -v pandoc >/dev/null; then
   check "single .md renders" 200 "$(code "$md_url")"
   check ".md link rewritten to .html" "1" "$(curl -s "$(local_url "${dir_url}notes.html")" | grep -c 'href="other.html"')"
   check "README.html renders" 200 "$(code "${docs_url}README.html")"
+  check "render carries the stylesheet" "1" "$(curl -s "$(local_url "${dir_url}notes.html")" | grep -c 'max-width:42em')"
+  check "no math, no KaTeX" "0" "$(curl -s "$(local_url "${dir_url}notes.html")" | grep -c 'katex')"
+  check "math loads KaTeX" "1" "$(curl -s "$(local_url "${dir_url}math.html")" | grep -c 'katex.min.js')"
 else
   echo "  skip  pandoc not installed"
   check "single .md served raw" 200 "$(code "$md_url")"
