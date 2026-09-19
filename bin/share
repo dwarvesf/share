@@ -205,9 +205,11 @@ cmd_add() {
   name="$(basename "$src")"
   id="$(rand_id)"
   [[ $secs -gt 0 ]] && exp=$(($(date +%s) + secs))
-  mkdir -p "$root"
+  # shellcheck disable=SC2174 # the leaf ($root) is what needs 700: it holds the admin socket
+  mkdir -p -m 700 "$root"; mkdir -p "$pub"
   copy "$src" "$id"
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$src" "$(date +%F)" "$exp" "$opts" >>"$index"
+  write_caddyfile
   url="$(share_url "$id" "$name" "$opts")"
   echo "$url"
   if [[ ${SHARE_CLIPBOARD:-1} == 1 ]] && command -v pbcopy >/dev/null; then
@@ -216,6 +218,8 @@ cmd_add() {
   warn_private "$src" "$id"
   if ! running; then
     if host_ok; then cmd_start; else echo "  (not serving: $(this_host) is not in hosts=$hosts)"; fi
+  else
+    caddy_reload
   fi
 }
 
@@ -241,6 +245,8 @@ cmd_refresh() {
   src="$(cut -f3 <<<"$r")"
   [[ -e $src ]] || die "source is gone: $src (the snapshot keeps serving; share rm $1 to unpublish)"
   copy "$src" "$1"
+  write_caddyfile   # a refresh can add or remove index.html, which flips try_files
+  caddy_reload
   echo "refreshed $1 from $src"
 }
 
@@ -248,6 +254,8 @@ cmd_rm() {
   [[ -n "$(row "${1:-}")" ]] || die "no share with id '${1:-}'"
   [[ -d $pub/$1 ]] && to_trash "$pub/$1"
   awk -F'\t' -v id="$1" '$1 != id' "$index" >"$index.tmp" && mv -f "$index.tmp" "$index"
+  write_caddyfile
+  caddy_reload
   echo "unpublished $1"
 }
 
@@ -274,32 +282,81 @@ cmd_hits() {
 
 # --- serving ---
 
-write_caddyfile() { # no-store: without it Cloudflare caches assets and serves them after rm or stop
-  cat >"$root/Caddyfile" <<EOF
+write_caddyfile() { # rendered from index.tsv; no-store: Cloudflare must not cache past rm or stop
+  local id name src date exp opts fqdn
+  {
+    cat <<EOF
 {
-	admin off
+	admin unix//$root/admin.sock
 	auto_https off
 }
 http://:$port {
 	bind 127.0.0.1
-	root * "$pub"
 	header Cache-Control "no-store"
 	header X-Robots-Tag "noindex, nofollow"
 	log {
 		output file "$root/access.log"
 		format json
 	}
-	file_server {
-		index index.html README.html
+EOF
+    if [[ -s $index ]]; then
+      while IFS=$'\t' read -r id name src date exp opts; do
+        fqdn="$(opt_val host "$opts" || true)"
+        if has_opt live "$opts" && [[ -z $fqdn ]]; then
+          printf '\thandle_path /%s/* {\n\t\treverse_proxy http://127.0.0.1:%s\n\t}\n' "$id" "${src##*:}"
+        fi
+      done <"$index"
+    fi
+    cat <<EOF
+	handle {
+		root * "$pub"
+		file_server {
+			index index.html README.html
+		}
 	}
 }
 EOF
+    if [[ -s $index ]]; then
+      while IFS=$'\t' read -r id name src date exp opts; do
+        fqdn="$(opt_val host "$opts" || true)"
+        [[ -n $fqdn ]] || continue
+        cat <<EOF
+http://$fqdn:$port {
+	bind 127.0.0.1
+	header Cache-Control "no-store"
+	header X-Robots-Tag "noindex, nofollow"
+	log {
+		output file "$root/access.log"
+		format json
+	}
+EOF
+        if has_opt live "$opts"; then
+          printf '\treverse_proxy http://127.0.0.1:%s\n' "${src##*:}"
+        else
+          printf '\troot * "%s"\n' "$pub/$id"
+          [[ -f $pub/$id/index.html ]] && printf '\ttry_files {path} /index.html\n'
+          printf '\tfile_server {\n\t\tindex index.html README.html\n\t}\n'
+        fi
+        printf '}\n'
+      done <"$index"
+    fi
+  } >"$root/Caddyfile"
+}
+
+caddy_reload() { # apply Caddyfile changes over the admin socket; a failure warns, never kills
+  running || return 0
+  local err
+  if ! err="$(caddy reload --config "$root/Caddyfile" --adapter caddyfile 2>&1)"; then
+    echo "share: caddy reload failed: $err; see $root/caddy.log" >&2
+  fi
 }
 
 cmd_serve() {
   host_ok || die "$(this_host) is not in hosts=$hosts; serve from one machine only (a second one splits requests)"
   running && die "already serving (pid $(cat "$pidfile"))"
-  mkdir -p "$pub"
+  # shellcheck disable=SC2174 # the leaf ($root) is what needs 700: it holds the admin socket
+  mkdir -p -m 700 "$root"; mkdir -p "$pub"
+  cmd_prune   # before the render, so the Caddyfile never carries expired rows
   write_caddyfile
   local token="" caddy_pid loop_pid tunnel_pid=""
   if [[ $tunnel == 1 ]]; then
@@ -321,7 +378,6 @@ cmd_serve() {
   trap 'exit 0' INT TERM
   sleep 1
   kill -0 "$caddy_pid" 2>/dev/null || die "caddy failed to start, see $root/caddy.log"
-  cmd_prune
   echo "serving $pub on ${host_name:-127.0.0.1:$port} (pid $$)"
   wait "${tunnel_pid:-$caddy_pid}"
 }

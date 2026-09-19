@@ -60,6 +60,8 @@ check "root has no listing" 404 "$(code "https://$SHARE_HOSTNAME/")"
 check "index.tsv not served" 404 "$(code "https://$SHARE_HOSTNAME/index.tsv")"
 check "Cache-Control" "no-store" "$(header "$dir_url" Cache-Control)"
 check "X-Robots-Tag" "noindex, nofollow" "$(header "$dir_url" X-Robots-Tag)"
+check "admin socket, not admin off" "0" "$(grep -c 'admin off' "$SHARE_ROOT/Caddyfile")"
+check "admin socket exists" "1" "$([[ -S $SHARE_ROOT/admin.sock ]] && echo 1 || echo 0)"
 
 echo "=== markdown ==="
 if command -v pandoc >/dev/null; then
