@@ -29,6 +29,8 @@
      └─ prune loop: every hour, unpublish expired shares
 ```
 
+`share setup --quick` writes `mode=quick` instead of a hostname and tunnel id. In that mode `share serve` runs `cloudflared tunnel --url http://127.0.0.1:<port>` (no token, no DNS, no account) and scrapes the random `https://<x>.trycloudflare.com` URL out of `cloudflared.log` into `quick.url`; links and `status` read the hostname from there. The URL is new on every serve start, so `--host` is refused and old links die. Caddy, `index.tsv`, live shares, and the folder index behave identically.
+
 With the service installed, launchd (macOS) or systemd (Linux) starts `share serve` at login and restarts it after a crash. `share start` and `share stop` load and unload the service. Without it, `share start` runs `share serve` under `nohup`, and `share stop` sends it SIGTERM. Either way, the exit trap stops caddy, cloudflared, and the prune loop together.
 
 The launchd agent's first program argument is the `share` script itself, so the macOS Login Items list shows "share" rather than a generic shell. Its `PATH` holds the directories of caddy, cloudflared, and the other tools, because launchd starts agents with a minimal `PATH`.
@@ -46,7 +48,8 @@ The launchd agent's first program argument is the `share` script itself, so the 
 ├── admin.sock              caddy admin API, unix socket inside the 0700 share root
 ├── .lock-host/             mkdir mutex serializing Cloudflare ingress edits
 ├── access.log              caddy JSON log, read by `share hits`
-├── serve.pid  serve.log  caddy.log
+├── serve.pid  serve.log  caddy.log  cloudflared.log
+├── quick.url               quick mode only: the trycloudflare fqdn cloudflared printed last start
 ├── md-links.lua            pandoc filter that rewrites .md links to .html
 └── md-style.html           the reading stylesheet, shared by renders and generated indexes
 
@@ -105,6 +108,7 @@ share add 3000
 | Copy only regular files | A symlink inside a shared folder could point at `~/.ssh`. The copy uses `find -type f` rather than rsync: macOS ships openrsync, which accepts `--safe-links` but copies outside-pointing links anyway. |
 | One serving host (`hosts`) | Cloudflare load-balances between every connector on a tunnel. Two machines with different `~/share` folders would give random 404s. |
 | Remotely managed tunnel | The route lives in Cloudflare, so a machine needs only the tunnel's run token to serve. |
+| Quick mode reuses the same caddy and index | TryCloudflare cannot route hostnames, so quick links keep the `/<id>/` path shape and every command works unchanged. The price is a new random hostname per start; stable names stay behind `share setup <hostname>`. |
 | Browser login by default | Nobody has to create an API token by hand. The login certificate's token may manage tunnels (tested: create, configure, read the token, delete) but gets an authorization error on DNS records, so DNS goes through `cloudflared tunnel route dns` and the hostname check goes through public DNS. The trade-off: teardown cannot delete the DNS record on this path. |
 | Login service | Links should be live whenever the machine is awake, with no command to remember after a restart. |
 | `start` waits for a public fetch | cloudflared reports ready before caddy may listen, and the Cloudflare edge keeps routing to the old connection for a few seconds after a restart. Measured: links answered 502 right after `start` returned on cloudflared's readiness alone. `start` now places a probe file and returns once it answers 200 through the public hostname (2 to 3 seconds). |
