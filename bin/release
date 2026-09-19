@@ -1,0 +1,70 @@
+#!/bin/bash
+# release: cut the next release. One command, run on a clean main.
+#
+#   bin/release            compute the next semver, tag it, push, bump the tap formula
+#
+# Semver comes from the conventional-commit subjects since the last tag:
+#   feat -> minor, fix/perf/refactor/revert -> patch, docs/test/chore -> patch,
+#   any `!` or `BREAKING` -> major. Nothing since the last tag -> refuses.
+# The tag push triggers release.yml, which creates the GitHub release with
+# generated notes. The tap formula is bumped through gh on a throwaway clone.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+die() { echo "release: $*" >&2; exit 1; }
+
+[[ $(git branch --show-current) == main ]] || die "run on main"
+[[ -z $(git status --porcelain) ]] || die "main is dirty"
+git fetch --quiet https://github.com/dwarvesf/share.git main:refs/remotes/origin/main
+[[ $(git rev-parse HEAD) == "$(git rev-parse origin/main)" ]] || die "main is not in sync with origin"
+
+last="$(git tag --sort=-v:refname | head -1)"
+[[ -n $last ]] || die "no tags yet"
+commits="$(git log --format='%s' "$last"..HEAD)"
+[[ -n $commits ]] || die "nothing since $last"
+
+major=0 minor=0
+while IFS= read -r s; do
+  case $s in
+    feat*!*|fix*!*|*BREAKING*) major=1 ;;
+    feat*:|feat*\(*) minor=1 ;;
+  esac
+done <<<"$commits"
+
+ver="${last#v}"; IFS=. read -r x y z <<<"$ver"
+if [[ $major == 1 ]]; then x=$((x + 1)); y=0; z=0
+elif [[ $minor == 1 ]]; then y=$((y + 1)); z=0
+else z=$((z + 1)); fi
+next="v$x.$y.$z"
+
+echo "$last -> $next"
+while IFS= read -r s; do echo "  $s"; done <<<"$commits"
+[[ ${1:-} == --yes ]] || read -rp "tag and release $next? [y/N] " a
+[[ ${1:-} == --yes || ${a:-} == y* || ${a:-} == Y* ]] || die "aborted"
+
+git tag -a "$next" -m "$next"
+git push https://github.com/dwarvesf/share.git "$next"
+echo "tagged $next (release.yml publishes the GitHub release)"
+
+# tap formula: url + sha256 of the tag tarball, bumped through a throwaway clone
+work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+tarball="https://github.com/dwarvesf/share/archive/refs/tags/$next.tar.gz"
+for _ in 1 2 3 4 5; do
+  curl -fsSL "$tarball" -o "$work/t.tar.gz" && break
+  sleep 2   # the archive takes a second to materialize on a fresh tag
+done
+[[ -s $work/t.tar.gz ]] || die "could not fetch $tarball"
+sha="$(shasum -a 256 "$work/t.tar.gz" | cut -d' ' -f1)"
+
+git clone --quiet --depth 1 https://github.com/dwarvesf/homebrew-tools.git "$work/tap"
+f="$work/tap/Formula/share.rb"
+sed -i.bak -e "s|refs/tags/v[0-9.]*\.tar\.gz|refs/tags/$next.tar.gz|" \
+           -e "s|sha256 \"[0-9a-f]*\"|sha256 \"$sha\"|" "$f" && rm "$f.bak"
+(cd "$work/tap" && git checkout -q -b "chore/share-$next" \
+  && git add Formula/share.rb && git commit -q -m "chore: share ${next#v}" \
+  && git push -q https://github.com/dwarvesf/homebrew-tools.git "chore/share-$next")
+pr="$(gh pr create --repo dwarvesf/homebrew-tools --title "chore: share ${next#v}" \
+      --head "chore/share-$next" --body "Bumps share to $next." 2>&1 | tail -1)"
+echo "tap bump: $pr"
+gh pr merge --repo dwarvesf/homebrew-tools "$pr" --squash --delete-branch >/dev/null
+echo "formula bumped to $next"
