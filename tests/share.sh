@@ -372,6 +372,23 @@ echo "=== NEGATIVE CONTROL: a host outside hosts must not serve ==="
 SHARE_HOSTS=not-this-host bash "$SH" start >/dev/null 2>&1
 check "start refused on another host" 1 "$?"
 
+echo "=== process leaks ==="
+# The live-share backend fixture is the last suite-spawned process left; kill it
+# now (the EXIT trap would) so the checks below can assert NOTHING is alive.
+kill "$fix_pid" 2>/dev/null; wait "$fix_pid" 2>/dev/null
+# Every serve path above ends in stop, die, or teardown: after all of them,
+# nothing the suite spawned may still be alive. A leaked caddy holds the port
+# (SO_REUSEPORT lets the next run bind anyway, so this is the only check that
+# sees it); a leaked prune loop leaves a `sleep 3600` its subshell never reaped.
+check "no listener on the share port" "0" "$(lsof -nP -iTCP:"$SHARE_PORT" -sTCP:LISTEN 2>/dev/null | grep -c .)"
+check "no stray suite processes" "0" "$(pgrep -f "$WORK" | grep -vc $$ || true)"
+check "no suite serve still running" "0" "$(pgrep -f "$SH serve" | grep -vc $$ || true)"
+check "no cloudflared on the suite ports" "0" "$(pgrep -f "cloudflared.*$SHARE_PORT\|cloudflared.*$((SHARE_PORT + 1))" | grep -c . || true)"
+check "no fake tunnel idlers" "0" "$(pgrep -f "sleep 600" | grep -c . || true)"
+# only an ORPHANED sleep counts: a live service's prune loop keeps its own
+check "no orphaned prune sleeps" "0" "$(ps -eo ppid,command | awk '$1==1 && $2=="sleep" && $3=="3600"' | grep -c . || true)"
+check "serve.pid removed" "0" "$([[ -f $SHARE_ROOT/serve.pid ]] && echo 1 || echo 0)"
+
 echo
 if [[ $fails -gt 0 ]]; then
   echo "$fails FAILED"
