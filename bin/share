@@ -1,8 +1,11 @@
 #!/bin/bash
-# share: publish snapshots of local files or folders at https://<your-host>/<id>/<name>.
+# share: publish snapshots of local files or folders at https://<your-host>/<id>/<name>,
+#        or proxy a running dev server on localhost:<port>.
 #
 #   share setup [hostname]    log in to Cloudflare, create the tunnel + DNS, install the service, verify
-#   share add [--ttl 7d|12h|never] <file|dir>   copy it in, print + copy the link, auto-start
+#   share add [--ttl 7d|12h|never] [--no-index] <file|dir>   copy it in, print + copy the link, auto-start
+#   share add <port|localhost:port|http://localhost:port>    live proxy at https://<host>/<id>/
+#   share add ... --host <name>.<zone>                       give the share its own hostname
 #   share ls                  list shares: link, size, source, expiry
 #   share refresh <id|link>   re-copy from the source path (same link)
 #   share rm <id|link>        unpublish (moves the copy to the Trash)

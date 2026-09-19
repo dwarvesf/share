@@ -90,6 +90,12 @@ token_cmd=op read "op://Private/share tunnel token/credential"
 
 When `token_cmd` is set, setup does not store the token. Save it in 1Password yourself (the dashboard shows it in the tunnel's install command), then rerun setup to verify.
 
+## 4b. Own hostnames with `share add --host`
+
+`share add <target> --host dev.example.com` publishes that share at `https://dev.example.com`. The name must be a single label under the zone the setup hostname belongs to (`dev.example.com` yes, `dev.s.example.com` no): Universal SSL stops at one level.
+
+Each `--host` share creates one CNAME and one tunnel ingress rule; `share rm` deletes both. This needs a credential that can edit DNS records. The browser-login certificate cannot, so on that path the DNS write fails, share puts the ingress back, and the error says to export `CLOUDFLARE_API_TOKEN` or rerun `share setup` with the token. With `CLOUDFLARE_API_TOKEN` set, both live shares (`share add 3000 --host ...`) and snapshots (`share add ./dist --host ...`) work; a snapshot on its own hostname also serves deep links from `index.html`, which is what a SPA build needs.
+
 ## 5. Serve from a different machine
 
 Only machines listed in `hosts` serve. Two machines on one tunnel would split requests between two different `~/share` folders, so links would fail at random.

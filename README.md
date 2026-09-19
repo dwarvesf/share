@@ -24,6 +24,9 @@ These are real recordings of the Homebrew build against a live domain; [demo/](d
 |---|---|
 | Short, stable link | `https://<your-host>/<id>/<name>`. The random 6-hex `id` keeps links unguessable. |
 | Snapshot, not a live mount | `share add` copies the file or folder. The link keeps working after the source is deleted, for example a removed git worktree. `share refresh <id>` updates the copy under the same link. |
+| Live dev server | `share add 3000` proxies `https://<host>/<id>/` to `127.0.0.1:3000` while the server runs. Ports below 1024 and share's own ports are refused: a live link exposes whatever answers on that port to anyone who has it. |
+| Own hostname | `share add <...> --host dev.example.com` gives the share `https://dev.example.com` itself (one CNAME + one tunnel rule, removed by `share rm`). Apps that emit absolute paths (`/static/...`), which break under a path prefix, work here. Needs a credential that can edit DNS. |
+| Folder index | A shared folder without `index.html`/`README.html` lists its files at the link. `--no-index` keeps the old 404. |
 | Safe copy | Dotfiles (`.git`, `.env`) and symlinks are never copied, so a shared folder cannot leak secrets or point at `~/.ssh`. |
 | Markdown | With pandoc installed, every `.md` also gets an `.html` render, styled for reading (light and dark, math via KaTeX); links between `.md` files point at the renders. |
 | Expiry | Shares expire after 30 days by default (`--ttl 12h`, `--ttl 7d`, `--ttl never`). |
