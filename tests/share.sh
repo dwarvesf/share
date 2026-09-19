@@ -12,7 +12,8 @@ export SHARE_TUNNEL=0 SHARE_CLIPBOARD=0 SHARE_HOSTNAME=s.example.test
 # A label no machine has, so an installed share service is never started or stopped by the test.
 export SHARE_SERVICE_LABEL="share-selftest-$$"
 h="$(uname -n)"; export SHARE_HOSTS="${h%%.*}"
-trap 'bash "$SH" stop >/dev/null 2>&1; rm -rf "$WORK"' EXIT
+fix_pid=""
+trap 'bash "$SH" stop >/dev/null 2>&1; [[ -n $fix_pid ]] && kill "$fix_pid" 2>/dev/null; rm -rf "$WORK"' EXIT
 
 fails=0
 check() { # check <label> <expected> <actual>
@@ -20,7 +21,22 @@ check() { # check <label> <expected> <actual>
 }
 local_url() { echo "${1/https:\/\/$SHARE_HOSTNAME/http://127.0.0.1:$SHARE_PORT}"; }
 code() { curl -s -o /dev/null -w '%{http_code}' "$(local_url "$1")"; }
+hcode() { curl -s -o /dev/null -w '%{http_code}' -H "Host: $2" "$(local_url "$1")"; }
 header() { curl -s -D - -o /dev/null "$(local_url "$1")" | tr -d '\r' | awk -v h="$2" 'tolower($0) ~ "^"tolower(h)":" {sub(/^[^:]*: /, ""); print}'; }
+wait_for_port() { # wait_for_port <port>: poll until something answers, 10s cap
+  local _
+  for _ in $(seq 1 100); do curl -s -o /dev/null "http://127.0.0.1:$1/" && return 0; sleep 0.1; done
+  return 1
+}
+wait_code() { # wait_code <expected> <url> [host]: poll the status for 5s, print the last one
+  local c="" _
+  for _ in $(seq 1 50); do
+    if [[ -n ${3:-} ]]; then c="$(hcode "$2" "$3")"; else c="$(code "$2")"; fi
+    [[ $c == "$1" ]] && break
+    sleep 0.1
+  done
+  echo "$c"
+}
 
 # Fixture: a folder with an asset, a dotfile, a symlink out, and markdown.
 src="$WORK/wt/guide"
@@ -101,6 +117,69 @@ bash "$SH" prune >/dev/null
 check "expired share pruned" 404 "$(code "$docs_url")"
 bash "$SH" rm "$dir_url" >/dev/null
 check "rm by link unpublishes" 404 "$(code "$dir_url")"
+
+echo "=== live shares ==="
+FIX_PORT=18991
+mkdir -p "$WORK/backend" && echo "hello fixture" >"$WORK/backend/hello.txt"
+cat >"$WORK/BackendCaddyfile" <<EOF
+{
+	admin off
+	auto_https off
+}
+http://127.0.0.1:$FIX_PORT {
+	bind 127.0.0.1
+	root * "$WORK/backend"
+	file_server
+}
+EOF
+caddy run --config "$WORK/BackendCaddyfile" --adapter caddyfile >"$WORK/backend.log" 2>&1 &
+fix_pid=$!
+check "backend fixture answers" "0" "$(wait_for_port "$FIX_PORT"; echo $?)"
+
+live_url=$(bash "$SH" add "$FIX_PORT" 2>"$WORK/err" | head -1)
+live_id=$(cut -d/ -f4 <<<"$live_url")
+check "live link ends /<id>/" "1" "$(grep -cE "^https://$SHARE_HOSTNAME/[0-9a-f]{6}/\$" <<<"$live_url")"
+check "live warning on stderr" "1" "$(grep -c 'live share: anyone with the link reaches 127.0.0.1' "$WORK/err")"
+check "absolute-paths caveat" "1" "$(grep -c 'absolute asset paths' "$WORK/err")"
+check "live proxies, prefix stripped" "hello fixture" "$(wait_code 200 "${live_url}hello.txt" >/dev/null; curl -s "$(local_url "${live_url}hello.txt")")"
+check "live row in ls" "1" "$(bash "$SH" ls | grep -c "live -> http://127.0.0.1:$FIX_PORT")"
+
+out=$(bash "$SH" add 80 2>&1 1>/dev/null); rc=$?
+check "add 80 refused" "1" "$rc"
+check "80 reason named" "1" "$(grep -c 'below 1024' <<<"$out")"
+out=$(bash "$SH" add "$SHARE_PORT" 2>&1 1>/dev/null); rc=$?
+check "add caddy port refused" "1" "$rc"
+check "caddy port reason" "1" "$(grep -c 'own port' <<<"$out")"
+out=$(bash "$SH" add $((SHARE_PORT + 1)) 2>&1 1>/dev/null); rc=$?
+check "add metrics port refused" "1" "$rc"
+check "metrics port reason" "1" "$(grep -c 'metrics' <<<"$out")"
+out=$(bash "$SH" add 99999 2>&1 1>/dev/null); rc=$?
+check "add 99999 refused" "1" "$rc"
+check "99999 reason" "1" "$(grep -c '65535' <<<"$out")"
+check "refused adds left no rows" "1" "$(awk -F'\t' '$6 ~ /live/' "$SHARE_ROOT/index.tsv" | wc -l | tr -d ' ')"
+
+out=$(bash "$SH" refresh "$live_id" 2>&1 1>/dev/null); rc=$?
+check "refresh live exits 0" "0" "$rc"
+check "nothing to refresh" "1" "$(grep -c 'nothing to refresh' <<<"$out")"
+
+rm_url=$(bash "$SH" add "$FIX_PORT" 2>/dev/null | head -1)
+rm_id=$(cut -d/ -f4 <<<"$rm_url")
+check "second live share answers" "200" "$(wait_code 200 "${rm_url}hello.txt")"
+bash "$SH" rm "$rm_id" >/dev/null
+check "rm reloads caddy, prefix 404s" "404" "$(wait_code 404 "${rm_url}hello.txt")"
+
+hits_url=$(bash "$SH" add "$FIX_PORT" 2>/dev/null | head -1)
+hits_id=$(cut -d/ -f4 <<<"$hits_url")
+curl -s -o /dev/null "$(local_url "${hits_url}hello.txt")"
+curl -s -o /dev/null "$(local_url "${hits_url}hello.txt")"
+sleep 0.3
+check "hits counts live share" "1" "$(bash "$SH" hits "$hits_id" | grep -cE '^2 hits, [0-9]+ visitors?')"
+
+bash "$SH" add 19991 >"$WORK/o19" 2>"$WORK/e19"; rc=$?
+dead_url=$(head -1 "$WORK/o19")
+check "dead backend still adds" "0" "$rc"
+check "warns nothing answers" "1" "$(grep -c 'nothing answers on 127.0.0.1:19991 yet' "$WORK/e19")"
+check "dead share returns 502" "502" "$(wait_code 502 "${dead_url}hello.txt")"
 
 echo "=== stop ==="
 bash "$SH" stop >/dev/null

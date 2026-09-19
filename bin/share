@@ -194,20 +194,57 @@ warn_private() { # a share out of a private GitHub repo is almost always a mista
   fi
 }
 
+parse_target() { # parse_target <arg>: "live <port>" for a port/localhost shape, "snapshot" for a path
+  local p=""
+  case $1 in
+    http://localhost:*|http://127.0.0.1:*) p="${1#http://*:}"; p="${p%/}" ;;
+    localhost:*|127.0.0.1:*) p="${1#*:}" ;;
+    *[!0-9]*|""|?|??????*) [[ -e $1 ]] && { echo snapshot; return 0; }; return 1 ;;
+    *) p="$1" ;;   # two to five digits: a bare port, never a path
+  esac
+  case $p in *[!0-9]*|"") return 1 ;; esac
+  echo "live $p"
+}
+
 cmd_add() {
   local ttl="${SHARE_TTL:-$(cfg ttl || true)}"; ttl="${ttl:-30d}"
-  if [[ ${1:-} == --ttl ]]; then ttl="${2:-}"; shift 2 || die "usage: share add [--ttl 7d] <file|dir>"; fi
-  [[ -e ${1:-} ]] || die "usage: share add [--ttl 7d] <file|dir>"
+  local usage="usage: share add [--ttl 7d] <file|dir|port|localhost:port|http://localhost:port>"
+  while [[ ${1:-} == --* ]]; do
+    case $1 in
+      --ttl) ttl="${2:-}"; shift 2 || die "$usage" ;;
+      *) die "$usage" ;;
+    esac
+  done
+  local pt kind tport="" src name id exp=0 url opts="" secs
+  pt="$(parse_target "${1:-}")" || die "$usage"
+  if [[ $pt == snapshot ]]; then
+    kind=snapshot
+  else
+    kind=live; tport="${pt#live }"
+    [[ $tport -ge 1024 ]] || die "$tport is below 1024; a share of a system service is never a dev server"
+    [[ $tport -le 65535 ]] || die "$tport is above 65535; no such port"
+    [[ $tport != "$port" ]] || die "$tport is this share server's own port"
+    [[ $tport != "$metrics_port" ]] || die "$tport is the tunnel metrics port"
+  fi
   need_host
-  local secs src name id exp=0 url opts=""
   secs="$(ttl_secs "$ttl")"
-  src="$(realpath "$1")"
-  name="$(basename "$src")"
+  if [[ $kind == live ]]; then
+    name="localhost:$tport"; src="http://127.0.0.1:$tport"; opts="live"
+  else
+    src="$(realpath "$1")"; name="$(basename "$src")"
+  fi
   id="$(rand_id)"
   [[ $secs -gt 0 ]] && exp=$(($(date +%s) + secs))
   # shellcheck disable=SC2174 # the leaf ($root) is what needs 700: it holds the admin socket
   mkdir -p -m 700 "$root"; mkdir -p "$pub"
-  copy "$src" "$id"
+  if [[ $kind == live ]]; then
+    echo "share: live share: anyone with the link reaches 127.0.0.1:$tport while this machine is awake" >&2
+    echo "share: apps that use absolute asset paths (/static/...) break under a path prefix; use --host <name>.<zone>" >&2
+    curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$tport/" || echo "share: nothing answers on 127.0.0.1:$tport yet" >&2
+  else
+    copy "$src" "$id"
+    warn_private "$src" "$id"
+  fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$src" "$(date +%F)" "$exp" "$opts" >>"$index"
   write_caddyfile
   url="$(share_url "$id" "$name" "$opts")"
@@ -215,7 +252,6 @@ cmd_add() {
   if [[ ${SHARE_CLIPBOARD:-1} == 1 ]] && command -v pbcopy >/dev/null; then
     printf '%s' "$url" | pbcopy && echo "  (link copied)"
   fi
-  warn_private "$src" "$id"
   if ! running; then
     if host_ok; then cmd_start; else echo "  (not serving: $(this_host) is not in hosts=$hosts)"; fi
   else
@@ -240,8 +276,10 @@ cmd_ls() {
 }
 
 cmd_refresh() {
-  local r src
+  local r src opts
   r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
+  opts="$(awk -F'\t' '{print $6}' <<<"$r")"
+  if has_opt live "$opts"; then echo "live share, nothing to refresh" >&2; return 0; fi
   src="$(cut -f3 <<<"$r")"
   [[ -e $src ]] || die "source is gone: $src (the snapshot keeps serving; share rm $1 to unpublish)"
   copy "$src" "$1"
