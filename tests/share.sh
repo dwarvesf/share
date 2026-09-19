@@ -12,7 +12,8 @@ export SHARE_TUNNEL=0 SHARE_CLIPBOARD=0 SHARE_HOSTNAME=s.example.test
 # A label no machine has, so an installed share service is never started or stopped by the test.
 export SHARE_SERVICE_LABEL="share-selftest-$$"
 h="$(uname -n)"; export SHARE_HOSTS="${h%%.*}"
-trap 'bash "$SH" stop >/dev/null 2>&1; rm -rf "$WORK"' EXIT
+fix_pid=""
+trap 'bash "$SH" stop >/dev/null 2>&1; [[ -n $fix_pid ]] && kill "$fix_pid" 2>/dev/null; rm -rf "$WORK"' EXIT
 
 fails=0
 check() { # check <label> <expected> <actual>
@@ -20,7 +21,22 @@ check() { # check <label> <expected> <actual>
 }
 local_url() { echo "${1/https:\/\/$SHARE_HOSTNAME/http://127.0.0.1:$SHARE_PORT}"; }
 code() { curl -s -o /dev/null -w '%{http_code}' "$(local_url "$1")"; }
+hcode() { curl -s -o /dev/null -w '%{http_code}' -H "Host: $2" "$(local_url "$1")"; }
 header() { curl -s -D - -o /dev/null "$(local_url "$1")" | tr -d '\r' | awk -v h="$2" 'tolower($0) ~ "^"tolower(h)":" {sub(/^[^:]*: /, ""); print}'; }
+wait_for_port() { # wait_for_port <port>: poll until something answers, 10s cap
+  local _
+  for _ in $(seq 1 100); do curl -s -o /dev/null "http://127.0.0.1:$1/" && return 0; sleep 0.1; done
+  return 1
+}
+wait_code() { # wait_code <expected> <url> [host]: poll the status for 5s, print the last one
+  local c="" _
+  for _ in $(seq 1 50); do
+    if [[ -n ${3:-} ]]; then c="$(hcode "$2" "$3")"; else c="$(code "$2")"; fi
+    [[ $c == "$1" ]] && break
+    sleep 0.1
+  done
+  echo "$c"
+}
 
 # Fixture: a folder with an asset, a dotfile, a symlink out, and markdown.
 src="$WORK/wt/guide"
@@ -45,6 +61,12 @@ check "link carries a 6-hex id" "1" "$(grep -cE "^https://$SHARE_HOSTNAME/[0-9a-
 bash "$SH" add "$src/.env" >/dev/null 2>&1
 check "a bare dotfile is refused" 1 "$?"
 
+echo "=== compat: a five-column row still lists and removes ==="
+printf 'aa11bb\toldsnap\t%s\t2026-01-01\t0\n' "$WORK" >>"$SHARE_ROOT/index.tsv"
+check "five-column row lists" "1" "$(bash "$SH" ls | grep -c aa11bb)"
+bash "$SH" rm aa11bb >/dev/null
+check "five-column row removes" "0" "$(grep -c aa11bb "$SHARE_ROOT/index.tsv")"
+
 echo "=== serving ==="
 check "folder page" 200 "$(code "$dir_url")"
 check "asset" 200 "$(code "${dir_url}img/a.txt")"
@@ -54,6 +76,8 @@ check "root has no listing" 404 "$(code "https://$SHARE_HOSTNAME/")"
 check "index.tsv not served" 404 "$(code "https://$SHARE_HOSTNAME/index.tsv")"
 check "Cache-Control" "no-store" "$(header "$dir_url" Cache-Control)"
 check "X-Robots-Tag" "noindex, nofollow" "$(header "$dir_url" X-Robots-Tag)"
+check "admin socket, not admin off" "0" "$(grep -c 'admin off' "$SHARE_ROOT/Caddyfile")"
+check "admin socket exists" "1" "$([[ -S $SHARE_ROOT/admin.sock ]] && echo 1 || echo 0)"
 
 echo "=== markdown ==="
 if command -v pandoc >/dev/null; then
@@ -93,6 +117,168 @@ bash "$SH" prune >/dev/null
 check "expired share pruned" 404 "$(code "$docs_url")"
 bash "$SH" rm "$dir_url" >/dev/null
 check "rm by link unpublishes" 404 "$(code "$dir_url")"
+
+echo "=== live shares ==="
+FIX_PORT=18991
+mkdir -p "$WORK/backend" && echo "hello fixture" >"$WORK/backend/hello.txt"
+cat >"$WORK/BackendCaddyfile" <<EOF
+{
+	admin off
+	auto_https off
+}
+http://127.0.0.1:$FIX_PORT {
+	bind 127.0.0.1
+	root * "$WORK/backend"
+	file_server
+}
+EOF
+caddy run --config "$WORK/BackendCaddyfile" --adapter caddyfile >"$WORK/backend.log" 2>&1 &
+fix_pid=$!
+check "backend fixture answers" "0" "$(wait_for_port "$FIX_PORT"; echo $?)"
+
+live_url=$(bash "$SH" add "$FIX_PORT" 2>"$WORK/err" | head -1)
+live_id=$(cut -d/ -f4 <<<"$live_url")
+check "live link ends /<id>/" "1" "$(grep -cE "^https://$SHARE_HOSTNAME/[0-9a-f]{6}/\$" <<<"$live_url")"
+check "live warning on stderr" "1" "$(grep -c 'live share: anyone with the link reaches 127.0.0.1' "$WORK/err")"
+check "absolute-paths caveat" "1" "$(grep -c 'absolute asset paths' "$WORK/err")"
+check "live proxies, prefix stripped" "hello fixture" "$(wait_code 200 "${live_url}hello.txt" >/dev/null; curl -s "$(local_url "${live_url}hello.txt")")"
+check "live row in ls" "1" "$(bash "$SH" ls | grep -c "live -> http://127.0.0.1:$FIX_PORT")"
+
+out=$(bash "$SH" add 80 2>&1 1>/dev/null); rc=$?
+check "add 80 refused" "1" "$rc"
+check "80 reason named" "1" "$(grep -c 'below 1024' <<<"$out")"
+out=$(bash "$SH" add "$SHARE_PORT" 2>&1 1>/dev/null); rc=$?
+check "add caddy port refused" "1" "$rc"
+check "caddy port reason" "1" "$(grep -c 'own port' <<<"$out")"
+out=$(bash "$SH" add $((SHARE_PORT + 1)) 2>&1 1>/dev/null); rc=$?
+check "add metrics port refused" "1" "$rc"
+check "metrics port reason" "1" "$(grep -c 'metrics' <<<"$out")"
+out=$(bash "$SH" add 99999 2>&1 1>/dev/null); rc=$?
+check "add 99999 refused" "1" "$rc"
+check "99999 reason" "1" "$(grep -c '65535' <<<"$out")"
+check "refused adds left no rows" "1" "$(awk -F'\t' '$6 ~ /live/' "$SHARE_ROOT/index.tsv" | wc -l | tr -d ' ')"
+
+out=$(bash "$SH" refresh "$live_id" 2>&1 1>/dev/null); rc=$?
+check "refresh live exits 0" "0" "$rc"
+check "nothing to refresh" "1" "$(grep -c 'nothing to refresh' <<<"$out")"
+
+rm_url=$(bash "$SH" add "$FIX_PORT" 2>/dev/null | head -1)
+rm_id=$(cut -d/ -f4 <<<"$rm_url")
+check "second live share answers" "200" "$(wait_code 200 "${rm_url}hello.txt")"
+bash "$SH" rm "$rm_id" >/dev/null
+check "rm reloads caddy, prefix 404s" "404" "$(wait_code 404 "${rm_url}hello.txt")"
+
+hits_url=$(bash "$SH" add "$FIX_PORT" 2>/dev/null | head -1)
+hits_id=$(cut -d/ -f4 <<<"$hits_url")
+curl -s -o /dev/null "$(local_url "${hits_url}hello.txt")"
+curl -s -o /dev/null "$(local_url "${hits_url}hello.txt")"
+sleep 0.3
+check "hits counts live share" "1" "$(bash "$SH" hits "$hits_id" | grep -cE '^2 hits, [0-9]+ visitors?')"
+
+bash "$SH" add 19991 >"$WORK/o19" 2>"$WORK/e19"; rc=$?
+dead_url=$(head -1 "$WORK/o19")
+check "dead backend still adds" "0" "$rc"
+check "warns nothing answers" "1" "$(grep -c 'nothing answers on 127.0.0.1:19991 yet' "$WORK/e19")"
+check "dead share returns 502" "502" "$(wait_code 502 "${dead_url}hello.txt")"
+
+echo "=== folder index ==="
+mkdir -p "$WORK/listme" && echo data >"$WORK/listme/file.txt" && printf '# Doc\n' >"$WORK/listme/other.md"
+list_url=$(bash "$SH" add "$WORK/listme" 2>/dev/null | head -1)
+list_id=$(cut -d/ -f4 <<<"$list_url")
+check "folder without index gets a listing" "200" "$(wait_code 200 "$list_url")"
+list_body=$(curl -s "$(local_url "$list_url")")
+check "txt linked by name" "1" "$(grep -c 'file.txt' <<<"$list_body")"
+if command -v pandoc >/dev/null; then
+  check ".md listed by its render" "1" "$(grep -c 'href="other.html"' <<<"$list_body")"
+fi
+
+noidx_url=$(bash "$SH" add --no-index "$WORK/listme" 2>/dev/null | head -1)
+check "--no-index keeps the 404" "404" "$(wait_code 404 "$noidx_url")"
+
+mkdir -p "$WORK/withreadme" && printf '# Readme\n' >"$WORK/withreadme/README.md" && echo x >"$WORK/withreadme/x.txt"
+wr_url=$(bash "$SH" add "$WORK/withreadme" 2>/dev/null | head -1)
+check "README folder answers" "200" "$(wait_code 200 "$wr_url")"
+wr_body=$(curl -s "$(local_url "$wr_url")")
+if command -v pandoc >/dev/null; then
+  check "README render is the index" "1" "$(grep -c 'max-width:42em' <<<"$wr_body")"
+  check "no generated list under a README" "0" "$(grep -c '<ul' <<<"$wr_body")"
+fi
+
+bash "$SH" refresh "$list_id" >/dev/null
+list_body=$(curl -s "$(local_url "$list_url")")
+check "refresh keeps the listing" "1" "$(grep -c 'file.txt' <<<"$list_body")"
+
+mkdir -p "$WORK/nested/sub" && echo top >"$WORK/nested/top.txt" && echo deep >"$WORK/nested/sub/deep.txt"
+nested_url=$(bash "$SH" add "$WORK/nested" 2>/dev/null | head -1)
+check "nested folder answers" "200" "$(wait_code 200 "$nested_url")"
+nested_body=$(curl -s "$(local_url "$nested_url")")
+check "nested file listed by path" "1" "$(grep -c 'href="sub/deep.txt"' <<<"$nested_body")"
+check "no subfolder entry" "0" "$(grep -cE 'href="sub/?"' <<<"$nested_body")"
+
+echo "=== own hostname (dry) ==="
+mkdir -p "$WORK/dist" && echo '<h1>spa</h1>' >"$WORK/dist/index.html"
+: >"$SHARE_ROOT/host-calls.log"
+host_url=$(SHARE_HOST_DRY=1 bash "$SH" add "$WORK/dist" --host app.example.test 2>/dev/null | head -1)
+host_id=$(awk -F'\t' '$6 ~ /host=app\.example\.test/ {print $1}' "$SHARE_ROOT/index.tsv")
+check "host link is the fqdn" "https://app.example.test/" "$host_url"
+check "host row in ls" "1" "$(bash "$SH" ls | grep -c 'https://app.example.test/')"
+check "deep link serves index.html" "<h1>spa</h1>" "$(wait_code 200 "http://127.0.0.1:$SHARE_PORT/deep/link" app.example.test >/dev/null; curl -s -H 'Host: app.example.test' "http://127.0.0.1:$SHARE_PORT/deep/link")"
+put_ln=$(grep -n 'PUT ingress +1' "$SHARE_ROOT/host-calls.log" | cut -d: -f1)
+post_ln=$(grep -n 'POST CNAME' "$SHARE_ROOT/host-calls.log" | cut -d: -f1)
+check "ingress PUT before CNAME POST" "1" "$([[ -n $put_ln && -n $post_ln && $put_ln -lt $post_ln ]] && echo 1 || echo 0)"
+
+SHARE_HOST_DRY=1 bash "$SH" rm "$host_id" >/dev/null
+del_ln=$(grep -n 'DELETE CNAME' "$SHARE_ROOT/host-calls.log" | cut -d: -f1)
+prm_ln=$(grep -n 'PUT ingress -1' "$SHARE_ROOT/host-calls.log" | cut -d: -f1)
+check "DELETE CNAME before ingress PUT" "1" "$([[ -n $del_ln && -n $prm_ln && $del_ln -lt $prm_ln ]] && echo 1 || echo 0)"
+check "host share 404 after rm" "404" "$(wait_code 404 "http://127.0.0.1:$SHARE_PORT/deep/link" app.example.test)"
+
+out=$(SHARE_HOST_DRY=1 bash "$SH" add --host dev.s.example.test "$WORK/dist" 2>&1 1>/dev/null); rc=$?
+check "two-label host refused" "1" "$rc"
+check "one-label message" "1" "$(grep -c 'one label under' <<<"$out")"
+out=$(SHARE_HOST_DRY=1 bash "$SH" add --host other.zone "$WORK/dist" 2>&1 1>/dev/null); rc=$?
+check "foreign zone refused" "1" "$rc"
+check "one-label message again" "1" "$(grep -c 'one label under' <<<"$out")"
+
+out=$(env -u CLOUDFLARE_API_TOKEN bash "$SH" add --host nope.example.test "$WORK/dist" 2>&1 1>/dev/null); rc=$?
+check "no credential refused" "1" "$rc"
+check "no row for refused host" "0" "$(grep -c 'nope.example.test' "$SHARE_ROOT/index.tsv")"
+
+cat >"$SHARE_ROOT/host-fixture.json" <<'EOF'
+{"config":{"ingress":[{"service":"http_status:404"},{"hostname":"s.example.test","service":"http://127.0.0.1:18787"}]}}
+EOF
+: >"$SHARE_ROOT/host-calls.log"
+out=$(SHARE_HOST_DRY=1 bash "$SH" add "$WORK/dist" --host broken.example.test 2>&1 1>/dev/null); rc=$?
+check "tampered ingress refused" "1" "$rc"
+check "dashboard hint" "1" "$(grep -c 'dashboard' <<<"$out")"
+check "no PUT logged" "0" "$(grep -c PUT "$SHARE_ROOT/host-calls.log")"
+rm -f "$SHARE_ROOT/host-fixture.json"
+
+mkdir "$SHARE_ROOT/.lock-host"
+out=$(SHARE_HOST_DRY=1 SHARE_HOST_LOCK_TIMEOUT=1 bash "$SH" add "$WORK/dist" --host locked.example.test 2>&1 1>/dev/null); rc=$?
+check "held lock refuses" "1" "$rc"
+check "lock message" "1" "$(grep -c 'another share command holds the host lock' <<<"$out")"
+rmdir "$SHARE_ROOT/.lock-host"
+
+echo "=== serve restart renders live and host rows ==="
+SHARE_HOST_DRY=1 bash "$SH" add "$WORK/dist" --host fresh.example.test >/dev/null 2>&1
+bash "$SH" stop >/dev/null
+bash "$SH" start >/dev/null
+check "Caddyfile has handle_path" "1" "$(grep -q 'handle_path' "$SHARE_ROOT/Caddyfile" && echo 1 || echo 0)"
+check "Caddyfile has the host block" "1" "$(grep -c 'http://fresh.example.test:' "$SHARE_ROOT/Caddyfile")"
+check "no admin off" "0" "$(grep -c 'admin off' "$SHARE_ROOT/Caddyfile")"
+check "fresh host answers after restart" "200" "$(wait_code 200 "http://127.0.0.1:$SHARE_PORT/deep/link" fresh.example.test)"
+
+echo "=== reload failure keeps the row ==="
+out=$(PATH=/usr/bin:/bin bash "$SH" add 19992 2>&1 1>/dev/null); rc=$?
+check "add still exits 0" "0" "$rc"
+check "reload error names caddy.log" "1" "$(grep -c 'caddy.log' <<<"$out")"
+check "row survives reload failure" "1" "$(grep -c 'localhost:19992' "$SHARE_ROOT/index.tsv")"
+
+echo "=== skill ==="
+check "skill prints a SKILL.md" "1" "$(bash "$SH" skill | grep -c '^name: share')"
+SHARE_SKILL_DIR="$WORK/skilldir" bash "$SH" skill --install >/dev/null
+check "skill --install writes SKILL.md" "share" "$(sed -n 's/^name: //p' "$WORK/skilldir/SKILL.md")"
 
 echo "=== stop ==="
 bash "$SH" stop >/dev/null

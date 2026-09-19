@@ -1,5 +1,9 @@
 # share
 
+[![CI](https://github.com/dwarvesf/share/actions/workflows/ci.yml/badge.svg)](https://github.com/dwarvesf/share/actions/workflows/ci.yml)
+[![Cloudflare Tunnel](https://img.shields.io/badge/tunnel-Cloudflare-F38020?logo=cloudflare&logoColor=white)](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+[![built by webuild](https://raw.githubusercontent.com/webuild-community/badge/master/svg/love.svg)](https://webuild.community)
+
 Publish a snapshot of a local file or folder at a short link on your own domain. It works like ngrok, but the hostname is yours and stays the same. Anyone with the link can open it while your machine is awake.
 
 ```sh
@@ -24,11 +28,15 @@ These are real recordings of the Homebrew build against a live domain; [demo/](d
 |---|---|
 | Short, stable link | `https://<your-host>/<id>/<name>`. The random 6-hex `id` keeps links unguessable. |
 | Snapshot, not a live mount | `share add` copies the file or folder. The link keeps working after the source is deleted, for example a removed git worktree. `share refresh <id>` updates the copy under the same link. |
+| Live dev server | `share add 3000` proxies `https://<host>/<id>/` to `127.0.0.1:3000` while the server runs. Ports below 1024 and share's own ports are refused: a live link exposes whatever answers on that port to anyone who has it. |
+| Own hostname | `share add <...> --host dev.example.com` gives the share `https://dev.example.com` itself (one CNAME + one tunnel rule, removed by `share rm`). Apps that emit absolute paths (`/static/...`), which break under a path prefix, work here. Needs a credential that can edit DNS. |
+| Folder index | A shared folder without `index.html`/`README.html` lists its files at the link. `--no-index` keeps the old 404. |
 | Safe copy | Dotfiles (`.git`, `.env`) and symlinks are never copied, so a shared folder cannot leak secrets or point at `~/.ssh`. |
 | Markdown | With pandoc installed, every `.md` also gets an `.html` render, styled for reading (light and dark, math via KaTeX); links between `.md` files point at the renders. |
 | Expiry | Shares expire after 30 days by default (`--ttl 12h`, `--ttl 7d`, `--ttl never`). |
 | No caching, no indexing | Every response carries `Cache-Control: no-store` and `X-Robots-Tag: noindex, nofollow`. `share rm` takes effect at once. |
 | Visitor count | `share hits <id>` counts requests and unique visitor IPs. |
+| Agent-native | `share skill` prints a SKILL.md teaching an agent when and how to use share (including the port-refusal and live-link rules); `share skill --install` writes it to `~/.claude/skills/share/`. |
 | Always on while awake | Setup installs a login service (launchd on macOS, systemd on Linux). Links come back by themselves after a reboot. |
 
 Links are live only while the machine is awake. When it sleeps, visitors get Cloudflare error 530.
@@ -54,6 +62,14 @@ brew install dwarvesf/tools/share
 ```
 
 This pulls in `caddy`, `cloudflared`, and `jq`. For markdown rendering and the private-repo warning, also `brew install pandoc gh`.
+
+**One-liner (no clone, no tap):**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dwarvesf/share/main/install.sh | bash
+```
+
+Downloads `bin/share` into `~/.local/bin` and installs missing dependencies with Homebrew when it is present.
 
 **From a clone:**
 

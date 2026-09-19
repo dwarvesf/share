@@ -1,8 +1,11 @@
 #!/bin/bash
-# share: publish snapshots of local files or folders at https://<your-host>/<id>/<name>.
+# share: publish snapshots of local files or folders at https://<your-host>/<id>/<name>,
+#        or proxy a running dev server on localhost:<port>.
 #
 #   share setup [hostname]    log in to Cloudflare, create the tunnel + DNS, install the service, verify
-#   share add [--ttl 7d|12h|never] <file|dir>   copy it in, print + copy the link, auto-start
+#   share add [--ttl 7d|12h|never] [--no-index] <file|dir>   copy it in, print + copy the link, auto-start
+#   share add <port|localhost:port|http://localhost:port>    live proxy at https://<host>/<id>/
+#   share add ... --host <name>.<zone>                       give the share its own hostname
 #   share ls                  list shares: link, size, source, expiry
 #   share refresh <id|link>   re-copy from the source path (same link)
 #   share rm <id|link>        unpublish (moves the copy to the Trash)
@@ -12,6 +15,7 @@
 #   share service install|uninstall|status   the login service that keeps serving
 #   share [status]            server state plus the share list
 #   share serve               serve in the foreground until Ctrl-C
+#   share skill [--install]   the SKILL.md that teaches an agent to use share
 #   share teardown [--yes]    delete the tunnel, DNS record, service, and stored token
 #
 # Docs: https://github.com/dwarvesf/share
@@ -37,13 +41,25 @@ this_host() { local h; h="$(uname -n)"; echo "${h%%.*}"; }
 host_ok() { case " $hosts " in *" $(this_host) "*) return 0 ;; esac; return 1; }
 running() { [[ -f $pidfile ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; }
 row() { [[ -f $index ]] && awk -F'\t' -v id="$1" '$1 == id' "$index"; }
-id_of() { # accept an id or a pasted share link: https://host/<id>/name -> <id>
+id_of() { # accept an id or a pasted share link: https://host/<id>/name -> <id>; a bare https://<fqdn>/ resolves to the host row
   case ${1:-} in
-    *://*) local p="${1#*://}"; p="${p#*/}"; echo "${p%%/*}" ;;
+    *://*)
+      local p="${1#*://}"; local h="${p%%/*}" rest="${p#*/}"
+      if [[ $p == "$h" || -z $rest ]] && [[ -f $index ]]; then
+        awk -F'\t' -v h="$h" '{n=split($6,a," "); for(i=1;i<=n;i++) if(a[i]=="host=" h){print $1; exit}}' "$index"
+      else
+        echo "${rest%%/*}"
+      fi ;;
     *) echo "${1:-}" ;;
   esac
 }
 rand_id() { od -An -N3 -tx1 /dev/urandom | tr -d ' \n'; }
+has_opt() { case " $2 " in *" $1 "*) return 0 ;; esac; return 1; }
+opt_val() { # opt_val <key> <opts>: the value of a key=value token, nothing when absent
+  local rest="${2#*"$1"=}"
+  [[ $rest == "$2" ]] && return 1
+  echo "${rest%% *}"
+}
 day_of() { date -r "$1" +%F 2>/dev/null || date -d "@$1" +%F; }
 to_trash() { # an empty path would make `trash` move the current directory
   [[ -n ${1:-} && -e $1 ]] || return 0
@@ -52,8 +68,16 @@ to_trash() { # an empty path would make `trash` move the current directory
 }
 need_host() { [[ -n $host_name ]] || die "no hostname configured: run 'share setup <hostname>' first"; }
 
-share_url() { # share_url <id> <name>
-  local path="$2"
+share_url() { # share_url <id> <name> [opts]: the link depends on the share kind
+  local fqdn path
+  fqdn="$(opt_val host "${3:-}" || true)"
+  if [[ -n $fqdn ]]; then
+    printf 'https://%s/\n' "$fqdn"; return
+  fi
+  if has_opt live "${3:-}"; then
+    printf 'https://%s/%s/\n' "${host_name:-<no-hostname>}" "$1"; return
+  fi
+  path="$2"
   if [[ -d $pub/$1/$2 ]]; then path="$2/"
   elif [[ $2 == *.md && -f $pub/$1/${2%.md}.html ]]; then path="${2%.md}.html"
   fi
@@ -101,18 +125,8 @@ token_forget() {
 
 # --- snapshots ---
 
-render_md() { # render every .md under <dir> to a sibling .html; .md links become .html
-  command -v pandoc >/dev/null || return 0
-  local filter="$root/md-links.lua" style="$root/md-style.html" f out katex
-  cat >"$filter" <<'LUA'
-function Link(el)
-  if not el.target:match("^%a+:") then
-    el.target = el.target:gsub("%.md$", ".html"):gsub("%.md#", ".html#")
-  end
-  return el
-end
-LUA
-  cat >"$style" <<'CSS'
+write_md_style() { # the reading stylesheet, shared by pandoc renders and gen_index
+  cat >"$root/md-style.html" <<'CSS'
 <style>
 :root { --bg:#fcfcfc; --fg:#1a1a1a; --muted:#6b6b6b; --line:#d9d9d9; --code-bg:rgba(36,36,36,.055); --link:#0b57d0; }
 @media (prefers-color-scheme: dark) { :root { --bg:#1a1a1a; --fg:#d4d4d4; --muted:#9a9a9a; --line:#3a3a3a; --code-bg:rgba(255,255,255,.08); --link:#8ab4f8; } }
@@ -137,6 +151,20 @@ figure { text-align:center; } figcaption { color:var(--muted); font-size:.9em; m
 hr { border:0; border-top:1px solid var(--line); margin:2.5em 0; }
 </style>
 CSS
+}
+
+render_md() { # render every .md under <dir> to a sibling .html; .md links become .html
+  command -v pandoc >/dev/null || return 0
+  local filter="$root/md-links.lua" style="$root/md-style.html" f out katex
+  cat >"$filter" <<'LUA'
+function Link(el)
+  if not el.target:match("^%a+:") then
+    el.target = el.target:gsub("%.md$", ".html"):gsub("%.md#", ".html#")
+  end
+  return el
+end
+LUA
+  write_md_style
   find "$1" -type f -name '*.md' | while IFS= read -r f; do
     out="${f%.md}.html"
     [[ -e $out ]] && continue
@@ -148,7 +176,31 @@ CSS
   done
 }
 
-copy() { # copy <src> <id>: regular files only, so dotfiles (.git, .env) and symlinks (to ~/.ssh) never ship
+urlenc() { # percent-encode each path segment; the slashes between them stay
+  jq -rn --arg p "$1" '[$p | split("/")[] | @uri] | join("/")'
+}
+
+gen_index() { # gen_index <stage>: a folder with no index of its own gets a generated listing
+  [[ -f $1/index.html || -f $1/README.html ]] && return 0
+  local files f enc label
+  files="$(cd "$1" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)"
+  write_md_style
+  {
+    echo '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>index</title>'
+    cat "$root/md-style.html"
+    echo '</head><body><ul>'
+    while IFS= read -r f; do
+      [[ -n $f ]] || continue
+      if [[ $f == *.md && -f $1/${f%.md}.html ]]; then continue; fi  # listed by its render below
+      enc="$(urlenc "$f")"
+      label="$(sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' <<<"$f")"
+      printf '<li><a href="%s">%s</a></li>\n' "$enc" "$label"
+    done <<<"$files"
+    echo '</ul></body></html>'
+  } >"$1/index.html"
+}
+
+copy() { # copy <src> <id> [opts]: regular files only, so dotfiles (.git, .env) and symlinks (to ~/.ssh) never ship
   local parent name stage skipped
   parent="$(dirname "$1")"; name="$(basename "$1")"
   mkdir -p "$pub"
@@ -161,7 +213,10 @@ copy() { # copy <src> <id>: regular files only, so dotfiles (.git, .env) and sym
   if [[ -z "$(find "$stage" -type f | head -1)" ]]; then
     rm -rf "$stage"; die "nothing to share in $1 (dotfiles and symlinks are skipped)"
   fi
-  render_md "$stage"
+  render_md "$stage"          # a rendered README.md makes README.html, which suppresses gen_index
+  local payload="$stage"      # a folder is listed at its own root; a bare file lists under <id>
+  [[ -d $stage/$name ]] && payload="$stage/$name"
+  has_opt noindex "${3:-}" || gen_index "$payload"
   [[ -d $pub/$2 ]] && mv "$pub/$2" "$stage.old"
   mv "$stage" "$pub/$2"
   rm -rf "$stage.old"
@@ -180,56 +235,121 @@ warn_private() { # a share out of a private GitHub repo is almost always a mista
   fi
 }
 
+parse_target() { # parse_target <arg>: "live <port>" for a port/localhost shape, "snapshot" for a path
+  local p=""
+  case $1 in
+    http://localhost:*|http://127.0.0.1:*) p="${1#http://*:}"; p="${p%/}" ;;
+    localhost:*|127.0.0.1:*) p="${1#*:}" ;;
+    *[!0-9]*|""|?|??????*) [[ -e $1 ]] && { echo snapshot; return 0; }; return 1 ;;
+    *) p="$1" ;;   # two to five digits: a bare port, never a path
+  esac
+  case $p in *[!0-9]*|"") return 1 ;; esac
+  echo "live $p"
+}
+
 cmd_add() {
-  local ttl="${SHARE_TTL:-$(cfg ttl || true)}"; ttl="${ttl:-30d}"
-  if [[ ${1:-} == --ttl ]]; then ttl="${2:-}"; shift 2 || die "usage: share add [--ttl 7d] <file|dir>"; fi
-  [[ -e ${1:-} ]] || die "usage: share add [--ttl 7d] <file|dir>"
+  local ttl="${SHARE_TTL:-$(cfg ttl || true)}"; ttl="${ttl:-30d}" noindex="" host_fqdn="" target="" ntargets=0
+  local usage="usage: share add [--ttl 7d] [--host <name>.<zone>] [--no-index] <file|dir|port|localhost:port|http://localhost:port>"
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --ttl) ttl="${2:-}"; shift 2 || die "$usage" ;;
+      --host) host_fqdn="${2:-}"; shift 2 || die "$usage" ;;
+      --no-index) noindex=1; shift ;;
+      --*) die "$usage" ;;
+      *) target="$1"; ntargets=$((ntargets + 1)); shift ;;
+    esac
+  done
+  [[ $ntargets == 1 ]] || die "$usage"
+  local pt kind tport="" src name id exp=0 url opts="" secs
+  pt="$(parse_target "$target")" || die "$usage"
+  if [[ $pt == snapshot ]]; then
+    kind=snapshot
+  else
+    kind=live; tport="${pt#live }"
+    [[ $tport -ge 1024 ]] || die "$tport is below 1024; a share of a system service is never a dev server"
+    [[ $tport -le 65535 ]] || die "$tport is above 65535; no such port"
+    [[ $tport != "$port" ]] || die "$tport is this share server's own port"
+    [[ $tport != "$metrics_port" ]] || die "$tport is the tunnel metrics port"
+  fi
   need_host
-  local secs src name id exp=0 url
   secs="$(ttl_secs "$ttl")"
-  src="$(realpath "$1")"
-  name="$(basename "$src")"
+  if [[ $kind == live ]]; then
+    name="localhost:$tport"; src="http://127.0.0.1:$tport"; opts="live"
+  else
+    src="$(realpath "$target")"; name="$(basename "$src")"
+  fi
+  [[ -n $noindex ]] && opts="${opts:+$opts }noindex"
+  if [[ -n $host_fqdn ]]; then
+    host_check "$host_fqdn"
+    opts="${opts:+$opts }host=$host_fqdn"
+  fi
   id="$(rand_id)"
   [[ $secs -gt 0 ]] && exp=$(($(date +%s) + secs))
-  mkdir -p "$root"
-  copy "$src" "$id"
-  printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$src" "$(date +%F)" "$exp" >>"$index"
-  url="$(share_url "$id" "$name")"
+  # shellcheck disable=SC2174 # the leaf ($root) is what needs 700: it holds the admin socket
+  mkdir -p -m 700 "$root"; mkdir -p "$pub"
+  # stage the payload before any Cloudflare write: a copy failure must not orphan DNS or ingress
+  if [[ $kind == live ]]; then
+    echo "share: live share: anyone with the link reaches 127.0.0.1:$tport while this machine is awake" >&2
+    [[ -z $host_fqdn ]] && echo "share: apps that use absolute asset paths (/static/...) break under a path prefix; use --host <name>.<zone>" >&2
+    curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$tport/" || echo "share: nothing answers on 127.0.0.1:$tport yet" >&2
+  else
+    copy "$src" "$id" "$opts"
+    warn_private "$src" "$id"
+  fi
+  [[ -n $host_fqdn ]] && host_add "$host_fqdn"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$src" "$(date +%F)" "$exp" "$opts" >>"$index"
+  write_caddyfile
+  url="$(share_url "$id" "$name" "$opts")"
   echo "$url"
   if [[ ${SHARE_CLIPBOARD:-1} == 1 ]] && command -v pbcopy >/dev/null; then
     printf '%s' "$url" | pbcopy && echo "  (link copied)"
   fi
-  warn_private "$src" "$id"
   if ! running; then
     if host_ok; then cmd_start; else echo "  (not serving: $(this_host) is not in hosts=$hosts)"; fi
+  else
+    caddy_reload
   fi
 }
 
 cmd_ls() {
   [[ -s $index ]] || { echo "no shares"; return 0; }
-  local id name src date exp size until gone
-  while IFS=$'\t' read -r id name src date exp; do
-    size="$(du -sh "$pub/$id" 2>/dev/null | cut -f1 | tr -d ' ')"
+  local id name src date exp opts size until gone
+  while IFS=$'\t' read -r id name src date exp opts; do
     until="never"; [[ ${exp:-0} -gt 0 ]] && until="$(day_of "$exp")"
-    gone=""; [[ -e $src ]] || gone="  (source gone, snapshot still served)"
-    share_url "$id" "$name"
-    echo "    id=$id  size=${size:-?}  added=$date  expires=$until  from=$src$gone"
+    share_url "$id" "$name" "$opts"
+    if has_opt live "$opts"; then
+      echo "    id=$id  live -> $src  added=$date  expires=$until"
+    else
+      size="$(du -sh "$pub/$id" 2>/dev/null | cut -f1 | tr -d ' ')"
+      gone=""; [[ -e $src ]] || gone="  (source gone, snapshot still served)"
+      echo "    id=$id  size=${size:-?}  added=$date  expires=$until  from=$src$gone"
+    fi
   done <"$index"
 }
 
 cmd_refresh() {
-  local r src
+  local r src opts
   r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
+  opts="$(awk -F'\t' '{print $6}' <<<"$r")"
+  if has_opt live "$opts"; then echo "live share, nothing to refresh" >&2; return 0; fi
   src="$(cut -f3 <<<"$r")"
   [[ -e $src ]] || die "source is gone: $src (the snapshot keeps serving; share rm $1 to unpublish)"
-  copy "$src" "$1"
+  copy "$src" "$1" "$opts"
+  write_caddyfile   # a refresh can add or remove index.html, which flips try_files
+  caddy_reload
   echo "refreshed $1 from $src"
 }
 
 cmd_rm() {
-  [[ -n "$(row "${1:-}")" ]] || die "no share with id '${1:-}'"
+  local r opts fqdn=""
+  r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
+  opts="$(awk -F'\t' '{print $6}' <<<"$r")"
+  fqdn="$(opt_val host "$opts" || true)"
+  [[ -n $fqdn ]] && host_rm "$fqdn"
   [[ -d $pub/$1 ]] && to_trash "$pub/$1"
   awk -F'\t' -v id="$1" '$1 != id' "$index" >"$index.tmp" && mv -f "$index.tmp" "$index"
+  write_caddyfile
+  caddy_reload
   echo "unpublished $1"
 }
 
@@ -243,12 +363,14 @@ cmd_prune() { # unpublish every share past its expiry
 }
 
 cmd_hits() {
-  [[ -n "$(row "${1:-}")" ]] || die "no share with id '${1:-}'"
-  local log="$root/access.log"
+  local r opts fqdn="" log="$root/access.log"
+  r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
+  opts="$(awk -F'\t' '{print $6}' <<<"$r")"
+  fqdn="$(opt_val host "$opts" || true)"
   [[ -s $log ]] || { echo "0 hits"; return 0; }
-  jq -rs --arg p "/$1/" '
+  jq -rs --arg p "/$1/" --arg h "$fqdn" '
     def n($k; $w): "\($k) \($w)\(if $k == 1 then "" else "s" end)";
-    map(select((.request.uri | startswith($p)) and .status < 400)) as $h
+    map(select((if $h == "" then (.request.uri | startswith($p)) else .request.host == $h end) and .status < 400)) as $h
     | n($h | length; "hit") + ", "
       + n($h | map(.request.headers["Cf-Connecting-Ip"][0] // .request.remote_ip) | unique | length; "visitor")
       + (if ($h | length) > 0 then ", last \($h[-1].ts | floor | strflocaltime("%F %H:%M"))" else "" end)' "$log"
@@ -256,32 +378,84 @@ cmd_hits() {
 
 # --- serving ---
 
-write_caddyfile() { # no-store: without it Cloudflare caches assets and serves them after rm or stop
-  cat >"$root/Caddyfile" <<EOF
+write_caddyfile() { # rendered from index.tsv; no-store: Cloudflare must not cache past rm or stop
+  local id name src date exp opts fqdn sroot
+  {
+    cat <<EOF
 {
-	admin off
+	admin unix//$root/admin.sock
 	auto_https off
 }
 http://:$port {
 	bind 127.0.0.1
-	root * "$pub"
 	header Cache-Control "no-store"
 	header X-Robots-Tag "noindex, nofollow"
 	log {
 		output file "$root/access.log"
 		format json
 	}
-	file_server {
-		index index.html README.html
+EOF
+    if [[ -s $index ]]; then
+      while IFS=$'\t' read -r id name src date exp opts; do
+        fqdn="$(opt_val host "$opts" || true)"
+        if has_opt live "$opts" && [[ -z $fqdn ]]; then
+          printf '\thandle_path /%s/* {\n\t\treverse_proxy http://127.0.0.1:%s\n\t}\n' "$id" "${src##*:}"
+        fi
+      done <"$index"
+    fi
+    cat <<EOF
+	handle {
+		root * "$pub"
+		file_server {
+			index index.html README.html
+		}
 	}
 }
 EOF
+    if [[ -s $index ]]; then
+      while IFS=$'\t' read -r id name src date exp opts; do
+        fqdn="$(opt_val host "$opts" || true)"
+        [[ -n $fqdn ]] || continue
+        cat <<EOF
+http://$fqdn:$port {
+	bind 127.0.0.1
+	header Cache-Control "no-store"
+	header X-Robots-Tag "noindex, nofollow"
+	log {
+		output file "$root/access.log"
+		format json
+	}
+EOF
+        if has_opt live "$opts"; then
+          printf '\treverse_proxy http://127.0.0.1:%s\n' "${src##*:}"
+        else
+          # folder payloads sit at pub/<id>/<name>; files sit directly under pub/<id>
+          sroot="$pub/$id"
+          [[ -d $pub/$id/$name ]] && sroot="$pub/$id/$name"
+          printf '\troot * "%s"\n' "$sroot"
+          [[ -f $sroot/index.html ]] && printf '\ttry_files {path} /index.html\n'
+          printf '\tfile_server {\n\t\tindex index.html README.html\n\t}\n'
+        fi
+        printf '}\n'
+      done <"$index"
+    fi
+  } >"$root/Caddyfile"
+}
+
+caddy_reload() { # apply Caddyfile changes over the admin socket; a failure warns, never kills
+  running || return 0
+  local err
+  if ! err="$(caddy reload --config "$root/Caddyfile" --adapter caddyfile 2>&1)"; then
+    echo "share: caddy reload failed: $err; see $root/caddy.log" >&2
+  fi
 }
 
 cmd_serve() {
   host_ok || die "$(this_host) is not in hosts=$hosts; serve from one machine only (a second one splits requests)"
   running && die "already serving (pid $(cat "$pidfile"))"
-  mkdir -p "$pub"
+  # shellcheck disable=SC2174 # the leaf ($root) is what needs 700: it holds the admin socket
+  mkdir -p -m 700 "$root"; mkdir -p "$pub"
+  cmd_prune   # before the render, so the Caddyfile never carries expired rows
   write_caddyfile
   local token="" caddy_pid loop_pid tunnel_pid=""
   if [[ $tunnel == 1 ]]; then
@@ -303,7 +477,6 @@ cmd_serve() {
   trap 'exit 0' INT TERM
   sleep 1
   kill -0 "$caddy_pid" 2>/dev/null || die "caddy failed to start, see $root/caddy.log"
-  cmd_prune
   echo "serving $pub on ${host_name:-127.0.0.1:$port} (pid $$)"
   wait "${tunnel_pid:-$caddy_pid}"
 }
@@ -493,7 +666,7 @@ cmd_status() {
 # manage tunnels but not DNS records. That path creates DNS through
 # `cloudflared tunnel route dns` and checks the hostname through public DNS.
 
-cf_token="" account="" auth=""
+cf_token="" account="" auth="" zone_name="" zone_id="" tun_id=""
 cf() { # cf METHOD PATH [JSON]; the token goes through a header file, never argv
   local out
   out="$(curl -sS -X "$1" "$api$2" -H @<(printf 'Authorization: Bearer %s\n' "$cf_token") \
@@ -559,9 +732,162 @@ write_config() { # write_config <tunnel_id> <tunnel_name>; keeps a token_cmd lin
     echo "auth=$auth"
     echo "hosts=$hosts"
     echo "port=$port"
+    [[ -n $zone_name ]] && echo "zone=$zone_name"
     [[ -n $keep ]] && echo "token_cmd=$keep"
   } >"$config.tmp"
   mv -f "$config.tmp" "$config"
+}
+
+# --- own hostnames: one CNAME + one ingress rule per --host share ---
+#
+# Create order is ingress, DNS, then the index row; delete order is DNS,
+# ingress, then the row. SHARE_HOST_DRY=1 skips every Cloudflare call and
+# records the intended calls, one per line, in $root/host-calls.log.
+
+host_zone() { # the zone every --host name lives under; learned once, kept in config
+  [[ -n $zone_name ]] && return 0
+  zone_name="$(cfg zone || true)"
+  if [[ -z $zone_name ]]; then
+    if [[ ${SHARE_HOST_DRY:-0} == 1 ]]; then zone_name="${host_name#*.}"
+    else zone_name="$(public_zone "$host_name")"; fi
+    [[ -n $zone_name ]] || die "cannot find the DNS zone of $host_name; is the domain on Cloudflare?"
+    mkdir -p "$config_dir"; grep -q '^zone=' "$config" 2>/dev/null || echo "zone=$zone_name" >>"$config"
+  fi
+}
+
+host_check() { # host_check <fqdn>: credential and name are settled before any write
+  local fqdn="$1" label
+  if [[ ${SHARE_HOST_DRY:-0} != 1 && -z ${CLOUDFLARE_API_TOKEN:-} && ! -f $cert ]]; then
+    die "--host needs CLOUDFLARE_API_TOKEN or a browser login (share setup --login)"
+  fi
+  host_zone
+  case $fqdn in
+    *."$zone_name") label="${fqdn%."$zone_name"}" ;;
+    *) die "--host must be one label under $zone_name (Universal SSL stops at one level)" ;;
+  esac
+  case $label in
+    ""|*.*|*[!a-z0-9-]*|-*|*-)
+      die "--host must be one label under $zone_name (Universal SSL stops at one level)" ;;
+  esac
+}
+
+host_auth() { # cf_token, account, zone_id, tun_id for Cloudflare-side host work
+  [[ -n $cf_token && -n $account && -n $zone_id && -n $tun_id ]] && return 0
+  if [[ -n ${CLOUDFLARE_API_TOKEN:-} ]]; then
+    cf_token="$CLOUDFLARE_API_TOKEN"; auth=api
+  elif [[ -f $cert ]]; then
+    cf_token="$(cert_field apiToken)"; account="$(cf_token_account)"; auth=login
+  else
+    die "--host needs CLOUDFLARE_API_TOKEN or a browser login (share setup --login)"
+  fi
+  [[ -n $cf_token ]] || die "--host needs CLOUDFLARE_API_TOKEN or a browser login (share setup --login)"
+  local z; z="$(cf GET "/zones?name=$zone_name")"
+  zone_id="$(jq -r '.result[0].id // empty' <<<"$z")"
+  account="${account:-$(jq -r '.result[0].account.id // empty' <<<"$z")}"
+  [[ -n $zone_id && -n $account ]] || die "the credential cannot see the $zone_name zone"
+  tun_id="$(cfg tunnel_id || true)"
+  [[ -n $tun_id ]] || die "no tunnel_id in $config; run 'share setup' first"
+}
+
+host_lock() { # one Cloudflare-side edit at a time; stale after SHARE_HOST_LOCK_TIMEOUT seconds
+  local i=0 max=$(( ${SHARE_HOST_LOCK_TIMEOUT:-60} * 5 ))
+  while ! mkdir "$root/.lock-host" 2>/dev/null; do
+    i=$((i + 1)); [[ $i -gt $max ]] && die "another share command holds the host lock"
+    sleep 0.2
+  done
+  trap 'rmdir "$root/.lock-host" 2>/dev/null || true' EXIT
+}
+
+host_unlock() { # release as soon as the edit lands; the EXIT trap stays as the die-path backstop
+  rmdir "$root/.lock-host" 2>/dev/null || true
+}
+
+ingress_get() { # the tunnel config as {"config":{"ingress":[...]}}; dry mode reads a fixture
+  if [[ ${SHARE_HOST_DRY:-0} == 1 ]]; then
+    if [[ -f $root/host-fixture.json ]]; then cat "$root/host-fixture.json"
+    else printf '{"config":{"ingress":[{"hostname":"%s","service":"http://127.0.0.1:%s"},{"service":"http_status:404"}]}}' "$host_name" "$port"; fi
+    return 0
+  fi
+  cf GET "/accounts/$account/cfd_tunnel/$tun_id/configurations" | jq -c '.result'
+}
+
+ingress_check() { # the catch-all stays last and the primary hostname first, else hands off
+  jq -e --arg h "$host_name" '
+    (.config.ingress | length) >= 2
+    and (.config.ingress[-1].service == "http_status:404")
+    and (.config.ingress[0].hostname == $h)' <<<"$1" >/dev/null \
+    || die "tunnel ingress was edited outside share; fix it in the dashboard or rerun share setup --force"
+}
+
+ingress_put() { # ingress_put <config-json> <dry-log-word>
+  if [[ ${SHARE_HOST_DRY:-0} == 1 ]]; then
+    echo "PUT ingress $2" >>"$root/host-calls.log"; return 0
+  fi
+  cf PUT "/accounts/$account/cfd_tunnel/$tun_id/configurations" "$(jq -c '{config:.config}' <<<"$1")" >/dev/null
+}
+
+host_add() { # host_add <fqdn>: collision guard, ingress rule, then the CNAME
+  local fqdn="$1" rec="" rid="" rtype="" rcontent="" cfg_json new out
+  if [[ ${SHARE_HOST_DRY:-0} != 1 ]]; then
+    host_auth
+    rec="$(cf GET "/zones/$zone_id/dns_records?name=$fqdn")"
+    rid="$(jq -r '.result[0].id // empty' <<<"$rec")"
+    rtype="$(jq -r '.result[0].type // empty' <<<"$rec")"
+    rcontent="$(jq -r '.result[0].content // empty' <<<"$rec")"
+    if [[ -n $rid && $rcontent != "$tun_id.cfargotunnel.com" ]]; then
+      die "$fqdn already has a $rtype record ($rcontent); pick another hostname"
+    fi
+  fi
+  host_lock
+  cfg_json="$(ingress_get)"
+  ingress_check "$cfg_json"
+  new="$(jq -c --arg h "$fqdn" --arg s "http://127.0.0.1:$port" \
+    '.config.ingress |= (.[:-1] + [{hostname:$h, service:$s, originRequest:{httpHostHeader:$h}}] + [.[-1]])' <<<"$cfg_json")"
+  ingress_put "$new" "+1"
+  if [[ ${SHARE_HOST_DRY:-0} == 1 ]]; then
+    echo "POST CNAME" >>"$root/host-calls.log"
+  elif [[ -z $rid ]]; then
+    # DNS comes after ingress; a POST failure puts the ingress back before dying
+    if ! out="$(cf POST "/zones/$zone_id/dns_records" \
+        "{\"type\":\"CNAME\",\"name\":\"$fqdn\",\"content\":\"$tun_id.cfargotunnel.com\",\"proxied\":true,\"comment\":\"share host\"}" 2>&1)"; then
+      (ingress_put "$cfg_json" revert) || true
+      if [[ $auth == login ]]; then
+        die "the login cert cannot edit DNS records directly: export CLOUDFLARE_API_TOKEN with DNS Edit, or run share setup with the token"
+      fi
+      die "could not create the DNS record for $fqdn (the ingress change was reverted): $out"
+    fi
+  fi
+  host_unlock
+}
+
+host_rm() { # host_rm <fqdn>: delete the CNAME, then the ingress rule; missing counts as done
+  local fqdn="$1" cfg_json rec="" rid="" out
+  host_lock
+  if [[ ${SHARE_HOST_DRY:-0} == 1 ]]; then
+    echo "DELETE CNAME" >>"$root/host-calls.log"
+  else
+    if [[ -z ${CLOUDFLARE_API_TOKEN:-} && ! -f $cert ]]; then
+      echo "share: no Cloudflare credential; DNS and ingress for $fqdn stay behind" >&2
+      host_unlock; return 0
+    fi
+    host_zone
+    host_auth
+    rec="$(cf GET "/zones/$zone_id/dns_records?name=$fqdn")"
+    rid="$(jq -r '.result[0].id // empty' <<<"$rec")"
+    if [[ -n $rid ]]; then
+      if ! out="$(cf DELETE "/zones/$zone_id/dns_records/$rid" 2>&1)"; then
+        if [[ $auth == login ]]; then
+          die "the login cert cannot edit DNS records directly: export CLOUDFLARE_API_TOKEN with DNS Edit, or run share setup with the token"
+        fi
+        die "could not delete the DNS record for $fqdn: $out"
+      fi
+    fi
+  fi
+  cfg_json="$(ingress_get)"
+  ingress_check "$cfg_json"
+  cfg_json="$(jq -c --arg h "$fqdn" '.config.ingress |= map(select(.hostname != $h))' <<<"$cfg_json")"
+  ingress_put "$cfg_json" "-1"
+  host_unlock
 }
 
 cmd_setup() {
@@ -689,9 +1015,21 @@ cmd_teardown() {
     rid="$(jq -r --arg t "$tid.cfargotunnel.com" '.result[] | select(.content == $t) | .id' <<<"$rec" | head -1)"
     if [[ -n $rid ]]; then cf DELETE "/zones/$zone/dns_records/$rid" >/dev/null; echo "dns:     deleted $host_name"
     else echo "dns:     no record for $host_name points at this tunnel, left alone"; fi
+    # every host share loses its DNS record and ingress rule before the tunnel goes
+    zone_id="$zone"; zone_name="${zone_name:-$_zn}"; tun_id="$tid"; auth=api
+    if [[ -s $index ]]; then
+      local _hn _hs _hd _he hopts hfqdn
+      while IFS=$'\t' read -r _ _hn _hs _hd _he hopts; do
+        hfqdn="$(opt_val host "$hopts" || true)"
+        [[ -n $hfqdn ]] && host_rm "$hfqdn" && echo "dns:     deleted $hfqdn"
+      done <"$index"
+    fi
   elif [[ -f $cert ]]; then
     cf_token="$(cert_field apiToken)"; account="$(cf_token_account)"
     echo "dns:     the login token cannot delete DNS records. Delete the CNAME $host_name in the Cloudflare dashboard, or rerun with CLOUDFLARE_API_TOKEN."
+    if [[ -s $index ]] && awk -F'\t' '$6 ~ /host=/ {f=1} END {exit !f}' "$index"; then
+      echo "dns:     host shares in $index keep their records; remove them in the dashboard or rerun with CLOUDFLARE_API_TOKEN."
+    fi
   else
     die "set CLOUDFLARE_API_TOKEN, or run 'share setup $host_name' once to log in again"
   fi
@@ -705,12 +1043,58 @@ cmd_teardown() {
   to_trash "$config"; echo "config:  moved to the Trash"
 }
 
+cmd_skill() { # cmd_skill [--install]: the skill file that makes share agent-native
+  local out="/dev/stdout" d=""
+  if [[ ${1:-} == --install ]]; then
+    d="${SHARE_SKILL_DIR:-$HOME/.claude/skills/share}"
+    mkdir -p "$d"; out="$d/SKILL.md"
+  fi
+  cat >"$out" <<'EOF'
+---
+name: share
+description: Publish a local file, folder, or running dev server at a public link on the user's own domain. Use when the user asks to share, publish, demo, or hand someone a link to something local ("share this file", "let them see my dev server", "publish these notes").
+---
+
+# share
+
+Publish snapshots of local files/folders, or proxy a running `localhost` server, at `https://<host>/...`. The host is the user's own domain on Cloudflare; links live while the machine is awake.
+
+## Before anything
+
+`share status` shows whether setup ran, whether it is serving, and every share. If setup never ran, stop and tell the user: `share setup <hostname>` needs a browser login or `CLOUDFLARE_API_TOKEN`.
+
+## Commands
+
+| Command | Effect |
+|---|---|
+| `share add <file\|dir>` | Snapshot copy; prints the link and copies it to the clipboard |
+| `share add <port>` | Live proxy `https://<host>/<id>/` -> `127.0.0.1:<port>` (also `localhost:port`, `http://localhost:port`) |
+| `share add ... --host <name>.<zone>` | Own hostname, e.g. `dev.example.com`; needed for apps that emit absolute asset paths, and for SPA deep links |
+| `share add <dir> --no-index` | No generated file listing at the folder link |
+| `share ls` / `share hits <id>` | List shares / request + unique-visitor counts |
+| `share refresh <id>` | Re-copy a snapshot from its source (no-op for live shares) |
+| `share rm <id>` | Unpublish; for `--host` shares also deletes the CNAME and tunnel rule |
+| `share start` / `share stop` | Serving on or off |
+
+## Rules for agents
+
+- Always surface the printed link to the user; never share something else "to test it".
+- Live shares expose whatever answers on that port to anyone with the link. Ports below 1024 and share's own ports are refused; do not try to work around that.
+- A shared folder gets a generated file listing unless `--no-index`; check for sensitive names first. Dotfiles and symlinks are never copied.
+- A file whose name is 2-5 digits (e.g. `8080`) reads as a port; use `./8080` to share the file.
+- Links die when the machine sleeps. If a link 404s or the visitor sees Cloudflare 530, run `share status`.
+- `rm`/`hits`/`refresh` accept the pasted link as well as the bare id.
+EOF
+  [[ -n $d ]] && echo "installed $out"
+}
+
 case "${1:-status}" in
   setup) shift; cmd_setup "$@" ;;
   teardown) cmd_teardown "${2:-}" ;;
   service) cmd_service "${2:-}" ;;
   add) shift; cmd_add "$@" ;;
   ls) cmd_prune; cmd_ls ;;
+  skill) cmd_skill "${2:-}" ;;
   refresh) cmd_refresh "$(id_of "${2:-}")" ;;
   rm) cmd_rm "$(id_of "${2:-}")" ;;
   hits) cmd_hits "$(id_of "${2:-}")" ;;
