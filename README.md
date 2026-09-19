@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/dwarvesf/share/actions/workflows/ci.yml/badge.svg)](https://github.com/dwarvesf/share/actions/workflows/ci.yml)
 [![Cloudflare Tunnel](https://img.shields.io/badge/tunnel-Cloudflare-F38020?logo=cloudflare&logoColor=white)](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+[![built by webuild](https://raw.githubusercontent.com/webuild-community/badge/master/svg/love.svg)](https://webuild.community)
 
 Publish a snapshot of a local file or folder at a short link on your own domain. It works like ngrok, but the hostname is yours and stays the same. Anyone with the link can open it while your machine is awake.
 
