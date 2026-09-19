@@ -275,6 +275,11 @@ check "add still exits 0" "0" "$rc"
 check "reload error names caddy.log" "1" "$(grep -c 'caddy.log' <<<"$out")"
 check "row survives reload failure" "1" "$(grep -c 'localhost:19992' "$SHARE_ROOT/index.tsv")"
 
+echo "=== skill ==="
+check "skill prints a SKILL.md" "1" "$(bash "$SH" skill | grep -c '^name: share')"
+SHARE_SKILL_DIR="$WORK/skilldir" bash "$SH" skill --install >/dev/null
+check "skill --install writes SKILL.md" "share" "$(sed -n 's/^name: //p' "$WORK/skilldir/SKILL.md")"
+
 echo "=== stop ==="
 bash "$SH" stop >/dev/null
 check "stop takes links down" 000 "$(code "$md_url")"

@@ -32,6 +32,7 @@ These are real recordings of the Homebrew build against a live domain; [demo/](d
 | Expiry | Shares expire after 30 days by default (`--ttl 12h`, `--ttl 7d`, `--ttl never`). |
 | No caching, no indexing | Every response carries `Cache-Control: no-store` and `X-Robots-Tag: noindex, nofollow`. `share rm` takes effect at once. |
 | Visitor count | `share hits <id>` counts requests and unique visitor IPs. |
+| Agent-native | `share skill` prints a SKILL.md teaching an agent when and how to use share (including the port-refusal and live-link rules); `share skill --install` writes it to `~/.claude/skills/share/`. |
 | Always on while awake | Setup installs a login service (launchd on macOS, systemd on Linux). Links come back by themselves after a reboot. |
 
 Links are live only while the machine is awake. When it sleeps, visitors get Cloudflare error 530.

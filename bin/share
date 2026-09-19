@@ -15,6 +15,7 @@
 #   share service install|uninstall|status   the login service that keeps serving
 #   share [status]            server state plus the share list
 #   share serve               serve in the foreground until Ctrl-C
+#   share skill [--install]   the SKILL.md that teaches an agent to use share
 #   share teardown [--yes]    delete the tunnel, DNS record, service, and stored token
 #
 # Docs: https://github.com/dwarvesf/share
@@ -1042,12 +1043,58 @@ cmd_teardown() {
   to_trash "$config"; echo "config:  moved to the Trash"
 }
 
+cmd_skill() { # cmd_skill [--install]: the skill file that makes share agent-native
+  local out="/dev/stdout" d=""
+  if [[ ${1:-} == --install ]]; then
+    d="${SHARE_SKILL_DIR:-$HOME/.claude/skills/share}"
+    mkdir -p "$d"; out="$d/SKILL.md"
+  fi
+  cat >"$out" <<'EOF'
+---
+name: share
+description: Publish a local file, folder, or running dev server at a public link on the user's own domain. Use when the user asks to share, publish, demo, or hand someone a link to something local ("share this file", "let them see my dev server", "publish these notes").
+---
+
+# share
+
+Publish snapshots of local files/folders, or proxy a running `localhost` server, at `https://<host>/...`. The host is the user's own domain on Cloudflare; links live while the machine is awake.
+
+## Before anything
+
+`share status` shows whether setup ran, whether it is serving, and every share. If setup never ran, stop and tell the user: `share setup <hostname>` needs a browser login or `CLOUDFLARE_API_TOKEN`.
+
+## Commands
+
+| Command | Effect |
+|---|---|
+| `share add <file\|dir>` | Snapshot copy; prints the link and copies it to the clipboard |
+| `share add <port>` | Live proxy `https://<host>/<id>/` -> `127.0.0.1:<port>` (also `localhost:port`, `http://localhost:port`) |
+| `share add ... --host <name>.<zone>` | Own hostname, e.g. `dev.example.com`; needed for apps that emit absolute asset paths, and for SPA deep links |
+| `share add <dir> --no-index` | No generated file listing at the folder link |
+| `share ls` / `share hits <id>` | List shares / request + unique-visitor counts |
+| `share refresh <id>` | Re-copy a snapshot from its source (no-op for live shares) |
+| `share rm <id>` | Unpublish; for `--host` shares also deletes the CNAME and tunnel rule |
+| `share start` / `share stop` | Serving on or off |
+
+## Rules for agents
+
+- Always surface the printed link to the user; never share something else "to test it".
+- Live shares expose whatever answers on that port to anyone with the link. Ports below 1024 and share's own ports are refused; do not try to work around that.
+- A shared folder gets a generated file listing unless `--no-index`; check for sensitive names first. Dotfiles and symlinks are never copied.
+- A file whose name is 2-5 digits (e.g. `8080`) reads as a port; use `./8080` to share the file.
+- Links die when the machine sleeps. If a link 404s or the visitor sees Cloudflare 530, run `share status`.
+- `rm`/`hits`/`refresh` accept the pasted link as well as the bare id.
+EOF
+  [[ -n $d ]] && echo "installed $out"
+}
+
 case "${1:-status}" in
   setup) shift; cmd_setup "$@" ;;
   teardown) cmd_teardown "${2:-}" ;;
   service) cmd_service "${2:-}" ;;
   add) shift; cmd_add "$@" ;;
   ls) cmd_prune; cmd_ls ;;
+  skill) cmd_skill "${2:-}" ;;
   refresh) cmd_refresh "$(id_of "${2:-}")" ;;
   rm) cmd_rm "$(id_of "${2:-}")" ;;
   hits) cmd_hits "$(id_of "${2:-}")" ;;
