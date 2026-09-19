@@ -1,0 +1,105 @@
+#!/bin/bash
+# changelog: regenerate CHANGELOG.md from tag history and conventional-commit
+# subjects. Idempotent: the whole file is derived, never hand-edited.
+#
+#   bin/changelog            print the changelog to stdout
+#   bin/changelog --next vX  label the top section vX (today) instead of
+#                            "Unreleased"; bin/release calls it this way so the
+#                            tag always carries its own section
+#
+# Grouping: feat -> Features, fix -> Fixes, perf -> Performance,
+# refactor -> Refactoring, docs -> Documentation, test -> Tests,
+# everything else conventional -> Maintenance, non-conventional -> Other.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+die() { echo "changelog: $*" >&2; exit 1; }
+
+next=""
+if [[ ${1:-} == --next ]]; then
+  [[ -n ${2:-} ]] || die "usage: bin/changelog [--next vX]"
+  next="$2"
+elif [[ -n ${1:-} ]]; then
+  die "usage: bin/changelog [--next vX]"
+fi
+
+# entry <subject>: print one "- ..." line with the type prefix stripped
+entry() {
+  sed -E -e 's/^[a-z]+\(([^)]*)\)!?: */- **\1:** /' \
+         -e 's/^[a-z]+!?: */- /' <<<"$1"
+}
+
+# section <range>: accumulate conventional subjects into the group vars
+feats="" fixes="" perfs="" refactors="" docs_="" tests="" maint="" other=""
+collect() { # $1 = git range
+  local s
+  while IFS= read -r s; do
+    [[ -z $s ]] && continue
+    case $s in
+      feat:*|feat\(*\):*|feat!:*|feat\(*\)!:*) feats="$feats$(entry "$s")
+" ;;
+      fix:*|fix\(*\):*|fix!:*|fix\(*\)!:*) fixes="$fixes$(entry "$s")
+" ;;
+      perf:*|perf\(*\):*|perf!:*|perf\(*\)!:*) perfs="$perfs$(entry "$s")
+" ;;
+      refactor:*|refactor\(*\):*|refactor!:*|refactor\(*\)!:*) refactors="$refactors$(entry "$s")
+" ;;
+      docs:*|docs\(*\):*|docs!:*|docs\(*\)!:*) docs_="$docs_$(entry "$s")
+" ;;
+      test:*|test\(*\):*|test!:*|test\(*\)!:*) tests="$tests$(entry "$s")
+" ;;
+      build:*|build\(*\):*|chore:*|chore\(*\):*|ci:*|ci\(*\):*|style:*|style\(*\):*|revert:*|revert\(*\):*) maint="$maint$(entry "$s")
+" ;;
+      *) other="$other- $s
+" ;;
+    esac
+  done <<<"$(git log --format='%s' --no-merges "$1")"
+}
+
+emit() { # $1 = title, $2 = body
+  if [[ -n $2 ]]; then printf '### %s\n\n%s\n' "$1" "$2"; fi
+}
+
+emit_range() { # $1 = section heading line
+  feats="" fixes="" perfs="" refactors="" docs_="" tests="" maint="" other=""
+  collect "$2"
+  # emit only when the range produced at least one entry
+  if [[ -n $feats$fixes$perfs$refactors$docs_$tests$maint$other ]]; then
+    printf '## %s\n\n' "$1"
+    emit "Features" "$feats"
+    emit "Fixes" "$fixes"
+    emit "Performance" "$perfs"
+    emit "Refactoring" "$refactors"
+    emit "Documentation" "$docs_"
+    emit "Tests" "$tests"
+    emit "Maintenance" "$maint"
+    emit "Other" "$other"
+  fi
+}
+
+tags="$(git tag --sort=v:refname)"
+[[ -n $tags ]] || die "no tags"
+
+last="$(tail -1 <<<"$tags")"
+
+echo "# Changelog"
+echo
+if [[ -n $next ]]; then
+  emit_range "[$next] - $(date +%Y-%m-%d)" "$last..HEAD"
+else
+  emit_range "[Unreleased]" "$last..HEAD"
+fi
+
+# tags ascending, each section covering (prev_tag..tag]; sections are
+# prepended so the file reads newest-first
+sections=""
+prev=""
+while IFS= read -r t; do
+  if [[ -z $prev ]]; then range="$t"; else range="$prev..$t"; fi
+  body="$(emit_range "[$t] - $(git log -1 --format=%cs "$t")" "$range")"
+  if [[ -n $body ]]; then sections="$body
+
+$sections"; fi
+  prev="$t"
+done <<<"$tags"
+printf '%s' "$sections"
