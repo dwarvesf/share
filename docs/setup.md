@@ -96,6 +96,20 @@ When `token_cmd` is set, setup does not store the token. Save it in 1Password yo
 
 Each `--host` share creates one CNAME and one tunnel ingress rule; `share rm` deletes both. This needs a credential that can edit DNS records. The browser-login certificate cannot, so on that path the DNS write fails, share puts the ingress back, and the error says to export `CLOUDFLARE_API_TOKEN` or rerun `share setup` with the token. With `CLOUDFLARE_API_TOKEN` set, both live shares (`share add 3000 --host ...`) and snapshots (`share add ./dist --host ...`) work; a snapshot on its own hostname also serves deep links from `index.html`, which is what a SPA build needs.
 
+## 4c. No domain: `share setup --quick`
+
+```sh
+share setup --quick
+```
+
+Quick mode uses Cloudflare's TryCloudflare tunnels: no domain, no login, no API token, no DNS. Setup writes only `mode=quick`, `hosts`, and `port` to the config; `share start` runs `cloudflared tunnel --url http://127.0.0.1:<port>` and reads the random `https://<x>.trycloudflare.com` URL out of the log. `share status` and every `share add` link use that hostname.
+
+The trade-offs are real:
+
+- **The URL changes on every start.** A link handed out dies at the next `share start`, restart, or reboot (the login service starts a new tunnel too). Quick mode is for "show someone this right now", not for links that must live.
+- **No `--host` shares.** TryCloudflare cannot route a name you pick; `share add ... --host` refuses and points at named setup.
+- **Switching modes is a teardown.** `share teardown --yes` (keeps `~/share`), then `share setup <hostname>` for a stable domain, or `--quick` to go back. Each refuses to overwrite the other's config.
+
 ## 5. Serve from a different machine
 
 Only machines listed in `hosts` serve. Two machines on one tunnel would split requests between two different `~/share` folders, so links would fail at random.

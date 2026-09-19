@@ -275,6 +275,90 @@ check "add still exits 0" "0" "$rc"
 check "reload error names caddy.log" "1" "$(grep -c 'caddy.log' <<<"$out")"
 check "row survives reload failure" "1" "$(grep -c 'localhost:19992' "$SHARE_ROOT/index.tsv")"
 
+echo "=== quick tunnel mode ==="
+# A fake cloudflared: prints the banner URL (or dies when SHARE_FAKE_QUICK_URL=none), then idles.
+mkdir -p "$WORK/fakebin"
+cat >"$WORK/fakebin/cloudflared" <<'EOF'
+#!/bin/bash
+u="${SHARE_FAKE_QUICK_URL:-fake-tunnel}"
+[[ $u == none ]] && exit 1
+echo "INF |  https://$u.trycloudflare.com  |" >&2
+exec sleep 600
+EOF
+chmod +x "$WORK/fakebin/cloudflared"
+QPATH="$WORK/fakebin:$PATH"
+qurl() { echo "$1" | sed -E "s|https://[^/]+|http://127.0.0.1:$SHARE_PORT|"; }
+qwait() { # qwait <fqdn>: poll quick.url for 5s
+  local _; for _ in $(seq 1 50); do [[ $(cat "$SHARE_ROOT/quick.url" 2>/dev/null) == "$1" ]] && return 0; sleep 0.1; done; return 1
+}
+
+bash "$SH" stop >/dev/null
+printf 'tunnel_id=abc123\nhostname=s.example.test\n' >"$SHARE_CONFIG_DIR/config"
+out=$(SHARE_TUNNEL=1 PATH="$QPATH" bash "$SH" setup --quick 2>&1); rc=$?
+check "quick setup refuses over a named config" "1" "$rc"
+check "names teardown" "1" "$(grep -c 'share teardown' <<<"$out")"
+rm -f "$SHARE_CONFIG_DIR/config"
+
+SHARE_LIVE_CHECK=0 SHARE_TUNNEL=1 PATH="$QPATH" bash "$SH" setup --quick --no-service >/dev/null
+check "config has mode=quick" "1" "$(grep -c '^mode=quick' "$SHARE_CONFIG_DIR/config")"
+check "no tunnel_id written" "0" "$(grep -c 'tunnel_id' "$SHARE_CONFIG_DIR/config")"
+check "no cert or token" "0" "$([[ -f $SHARE_CONFIG_DIR/cert.pem || -f $SHARE_CONFIG_DIR/tunnel-token ]] && echo 1 || echo 0)"
+qwait fake-tunnel.trycloudflare.com
+check "quick.url parsed from the log" "fake-tunnel.trycloudflare.com" "$(cat "$SHARE_ROOT/quick.url")"
+check "status shows the quick URL" "1" "$(bash "$SH" status | grep -c 'https://fake-tunnel.trycloudflare.com (quick tunnel')"
+
+out=$(SHARE_TUNNEL=1 PATH="$QPATH" bash "$SH" setup s2.example.test 2>&1); rc=$?
+check "named setup refuses over a quick config" "1" "$rc"
+check "names teardown again" "1" "$(grep -c 'share teardown' <<<"$out")"
+SHARE_TUNNEL=1 PATH="$QPATH" bash "$SH" setup --quick s2.example.test >/dev/null 2>&1
+check "setup --quick <host> is a usage error" "1" "$?"
+
+q_file=$(bash "$SH" add "$WORK/outside.txt" 2>/dev/null | head -1)
+check "quick link is on the trycloudflare host" "1" "$(grep -cE '^https://fake-tunnel\.trycloudflare\.com/[0-9a-f]{6}/outside\.txt$' <<<"$q_file")"
+check "quick file answers locally" "200" "$(wait_code 200 "$(qurl "$q_file")")"
+
+q_live=$(bash "$SH" add "$FIX_PORT" 2>/dev/null | head -1)
+check "quick live link" "1" "$(grep -cE '^https://fake-tunnel\.trycloudflare\.com/[0-9a-f]{6}/$' <<<"$q_live")"
+check "quick live proxies" "hello fixture" "$(curl -s "$(qurl "${q_live}hello.txt")")"
+
+out=$(bash "$SH" add "$WORK/outside.txt" --host a.example.test 2>&1 1>/dev/null); rc=$?
+check "--host refused in quick mode" "1" "$rc"
+check "--host message names teardown" "1" "$(grep -c 'share teardown' <<<"$out")"
+check "no host row written" "0" "$(grep -c 'host=a\.example\.test' "$SHARE_ROOT/index.tsv")"
+
+# restart: a stale quick.url must never survive; the new URL wins
+bash "$SH" stop >/dev/null
+SHARE_LIVE_CHECK=0 SHARE_FAKE_QUICK_URL=second-tunnel SHARE_TUNNEL=1 PATH="$QPATH" bash "$SH" start >/dev/null
+qwait second-tunnel.trycloudflare.com
+check "restart yields the new URL" "second-tunnel.trycloudflare.com" "$(cat "$SHARE_ROOT/quick.url")"
+q2_file=$(bash "$SH" add "$WORK/outside.txt" 2>/dev/null | head -1)
+q2_id=$(cut -d/ -f4 <<<"$q2_file")
+check "links move to the new host" "1" "$(grep -c 'second-tunnel' <<<"$q2_file")"
+bash "$SH" rm "$q2_file" >/dev/null
+check "rm accepts a pasted quick link" "0" "$(grep -c "$q2_id" "$SHARE_ROOT/index.tsv")"
+
+bash "$SH" stop >/dev/null
+out=$(SHARE_FAKE_QUICK_URL=none SHARE_TUNNEL=1 PATH="$QPATH" bash "$SH" serve 2>&1); rc=$?
+check "no URL dies" "1" "$rc"
+check "die names cloudflared.log" "1" "$(grep -c 'cloudflared.log' <<<"$out")"
+check "caddy reaped on parse death" "000" "$(wait_code 000 "http://127.0.0.1:$SHARE_PORT/x")"
+
+SHARE_LIVE_CHECK=0 SHARE_FAKE_QUICK_URL=third SHARE_TUNNEL=1 PATH="$QPATH" bash "$SH" start >/dev/null
+qwait third.trycloudflare.com
+q3=$(bash "$SH" add "$WORK/outside.txt" 2>/dev/null | head -1)
+check "third URL in use" "1" "$(grep -c 'third.trycloudflare' <<<"$q3")"
+
+bash "$SH" stop >/dev/null
+SHARE_LIVE_CHECK=0 SHARE_TUNNEL=0 PATH="$QPATH" bash "$SH" start >/dev/null
+sleep 0.5
+q4=$(bash "$SH" add "$WORK/outside.txt" 2>/dev/null | head -1)
+check "tunnel=0 still serves locally" "200" "$(curl -s -o /dev/null -w '%{http_code}' "$(qurl "$q4")")"
+
+bash "$SH" teardown --yes >/dev/null
+check "quick teardown exits 0" "0" "$?"
+check "config trashed" "0" "$([[ -f $SHARE_CONFIG_DIR/config ]] && echo 1 || echo 0)"
+check "quick.url gone" "0" "$([[ -f $SHARE_ROOT/quick.url ]] && echo 1 || echo 0)"
+
 echo "=== skill ==="
 check "skill prints a SKILL.md" "1" "$(bash "$SH" skill | grep -c '^name: share')"
 SHARE_SKILL_DIR="$WORK/skilldir" bash "$SH" skill --install >/dev/null

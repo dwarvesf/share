@@ -3,6 +3,7 @@
 #        or proxy a running dev server on localhost:<port>.
 #
 #   share setup [hostname]    log in to Cloudflare, create the tunnel + DNS, install the service, verify
+#   share setup --quick       no domain needed: serve at a random trycloudflare.com URL (changes every start)
 #   share add [--ttl 7d|12h|never] [--no-index] <file|dir>   copy it in, print + copy the link, auto-start
 #   share add <port|localhost:port|http://localhost:port>    live proxy at https://<host>/<id>/
 #   share add ... --host <name>.<zone>                       give the share its own hostname
@@ -34,6 +35,7 @@ port="${SHARE_PORT:-$(cfg port || true)}"; port="${port:-8787}"
 metrics_port=$((port + 1))   # cloudflared /ready, polled so `start` returns once links work
 hosts="${SHARE_HOSTS:-$(cfg hosts || true)}"
 tunnel="${SHARE_TUNNEL:-1}"  # 0 = local-only (tests)
+mode="$(cfg mode || true)"   # "quick" = trycloudflare, no domain; empty = named tunnel
 api="https://api.cloudflare.com/client/v4"
 
 die() { echo "share: $*" >&2; exit 1; }
@@ -66,22 +68,33 @@ to_trash() { # an empty path would make `trash` move the current directory
   if command -v trash >/dev/null; then trash "$1"; return; fi
   mkdir -p "$root/trash" && mv -f "$1" "$root/trash/$(basename "$1").$(date +%s)"
 }
-need_host() { [[ -n $host_name ]] || die "no hostname configured: run 'share setup <hostname>' first"; }
+need_host() { [[ -n $host_name || $mode == quick ]] || die "no setup yet: run 'share setup <hostname>' or 'share setup --quick'"; }
+
+# the public hostname share links use: the configured hostname in named mode,
+# the fqdn cloudflared printed in quick mode (empty while not serving)
+serving_host() {
+  if [[ $mode == quick ]]; then cat "$root/quick.url" 2>/dev/null || true
+  else echo "$host_name"; fi
+}
 
 share_url() { # share_url <id> <name> [opts]: the link depends on the share kind
-  local fqdn path
+  local fqdn path shost
   fqdn="$(opt_val host "${3:-}" || true)"
   if [[ -n $fqdn ]]; then
     printf 'https://%s/\n' "$fqdn"; return
   fi
+  shost="$(serving_host)"
+  if [[ -z $shost ]]; then
+    if [[ $mode == quick ]]; then shost="<pending>.trycloudflare.com"; else shost="<no-hostname>"; fi
+  fi
   if has_opt live "${3:-}"; then
-    printf 'https://%s/%s/\n' "${host_name:-<no-hostname>}" "$1"; return
+    printf 'https://%s/%s/\n' "$shost" "$1"; return
   fi
   path="$2"
   if [[ -d $pub/$1/$2 ]]; then path="$2/"
   elif [[ $2 == *.md && -f $pub/$1/${2%.md}.html ]]; then path="${2%.md}.html"
   fi
-  printf 'https://%s/%s/%s\n' "${host_name:-<no-hostname>}" "$1" "$(printf '%s' "$path" | sed 's/ /%20/g')"
+  printf 'https://%s/%s/%s\n' "$shost" "$1" "$(printf '%s' "$path" | sed 's/ /%20/g')"
 }
 
 ttl_secs() {
@@ -260,6 +273,7 @@ cmd_add() {
     esac
   done
   [[ $ntargets == 1 ]] || die "$usage"
+  [[ -z $host_fqdn || $mode != quick ]] || die "--host needs a named tunnel: 'share teardown', then 'share setup <hostname>'"
   local pt kind tport="" src name id exp=0 url opts="" secs
   pt="$(parse_target "$target")" || die "$usage"
   if [[ $pt == snapshot ]]; then
@@ -290,7 +304,7 @@ cmd_add() {
   # stage the payload before any Cloudflare write: a copy failure must not orphan DNS or ingress
   if [[ $kind == live ]]; then
     echo "share: live share: anyone with the link reaches 127.0.0.1:$tport while this machine is awake" >&2
-    [[ -z $host_fqdn ]] && echo "share: apps that use absolute asset paths (/static/...) break under a path prefix; use --host <name>.<zone>" >&2
+    [[ -z $host_fqdn && $mode != quick ]] && echo "share: apps that use absolute asset paths (/static/...) break under a path prefix; use --host <name>.<zone>" >&2
     curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$tport/" || echo "share: nothing answers on 127.0.0.1:$tport yet" >&2
   else
     copy "$src" "$id" "$opts"
@@ -457,8 +471,11 @@ cmd_serve() {
   mkdir -p -m 700 "$root"; mkdir -p "$pub"
   cmd_prune   # before the render, so the Caddyfile never carries expired rows
   write_caddyfile
-  local token="" caddy_pid loop_pid tunnel_pid=""
-  if [[ $tunnel == 1 ]]; then
+  local token=""
+  # pids stay global: the EXIT trap must still see them when cmd_serve returns
+  # normally (e.g. cloudflared dies, wait returns) and locals unbind first.
+  caddy_pid="" loop_pid="" tunnel_pid=""
+  if [[ $tunnel == 1 && $mode != quick ]]; then
     need_host
     token="$(token_read || true)"
     [[ -n $token ]] || die "no tunnel token for $host_name: run 'share setup $host_name'"
@@ -466,18 +483,44 @@ cmd_serve() {
   echo $$ >"$pidfile"
   caddy run --config "$root/Caddyfile" --adapter caddyfile >>"$root/caddy.log" 2>&1 &
   caddy_pid=$!
-  (while sleep 3600; do bash "$0" prune || true; done) &
+  # The prune loop redirects to the log: inheriting serve's stdout would let an
+  # orphaned sleep hold a caller's $( ) pipe open for an hour after serve dies.
+  (while sleep 3600; do bash "$0" prune || true; done) >>"$root/serve.log" 2>&1 &
   loop_pid=$!
-  if [[ $tunnel == 1 ]]; then
+  # The trap lands before the tunnel work and reads the pids at run time:
+  # a die in the quick-URL parse must still reap caddy and the prune loop.
+  # pkill first: the loop's current sleep is a grandchild kill(1) can't reach.
+  trap '[[ -n ${loop_pid:-} ]] && pkill -P "$loop_pid" 2>/dev/null; kill ${caddy_pid:-} ${loop_pid:-} ${tunnel_pid:-} 2>/dev/null; wait 2>/dev/null; rm -f "$pidfile"' EXIT
+  trap 'exit 0' INT TERM
+  if [[ $tunnel == 1 && $mode == quick ]]; then
+    # quick tunnel: no token, no DNS; cloudflared prints a random trycloudflare URL.
+    # Only lines written after this spawn count: the log can hold a stale URL.
+    local loglines=0 qu="" _
+    [[ -f $root/cloudflared.log ]] && loglines="$(wc -l <"$root/cloudflared.log")"
+    rm -f "$root/quick.url"
+    cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$port" --metrics "127.0.0.1:$metrics_port" >>"$root/cloudflared.log" 2>&1 &
+    tunnel_pid=$!
+    for _ in $(seq 1 150); do
+      qu="$(tail -n "+$((loglines + 1))" "$root/cloudflared.log" 2>/dev/null | grep -oE 'https://[a-z0-9.-]+\.trycloudflare\.com' | head -1 || true)"
+      [[ -n $qu ]] && break
+      # kill -0 alone lies for an unreaped child (zombie): check the state too
+      if ! kill -0 "$tunnel_pid" 2>/dev/null || [[ $(ps -o stat= -p "$tunnel_pid" 2>/dev/null) == Z* ]]; then
+        die "cloudflared died before printing a URL; see $root/cloudflared.log"
+      fi
+      sleep 0.2
+    done
+    [[ -n $qu ]] || die "cloudflared printed no trycloudflare URL after 30s; see $root/cloudflared.log"
+    echo "${qu#https://}" >"$root/quick.url"
+  elif [[ $tunnel == 1 ]]; then
     TUNNEL_TOKEN="$token" cloudflared tunnel --no-autoupdate --loglevel warn --grace-period 2s --metrics "127.0.0.1:$metrics_port" run &
     tunnel_pid=$!
   fi
   # Wait for the children, so the next serve never meets a dying cloudflared still answering /ready.
-  trap 'kill '"$caddy_pid $loop_pid $tunnel_pid"' 2>/dev/null; wait 2>/dev/null; rm -f "$pidfile"' EXIT
-  trap 'exit 0' INT TERM
   sleep 1
   kill -0 "$caddy_pid" 2>/dev/null || die "caddy failed to start, see $root/caddy.log"
-  echo "serving $pub on ${host_name:-127.0.0.1:$port} (pid $$)"
+  local display="${host_name:-127.0.0.1:$port}"
+  [[ $mode == quick ]] && display="$(serving_host)"
+  echo "serving $pub on $display (pid $$)"
   wait "${tunnel_pid:-$caddy_pid}"
 }
 
@@ -576,7 +619,11 @@ svc_uninstall() {
 wait_running() { # wait_running <seconds>: the server is up and, with the tunnel, connected to Cloudflare
   local i
   for ((i = 0; i < $1 * 2; i++)); do
-    if running && { [[ $tunnel != 1 ]] || curl -sf -o /dev/null "http://127.0.0.1:$metrics_port/ready"; }; then return 0; fi
+    if running; then
+      if [[ $tunnel != 1 ]]; then return 0
+      elif [[ $mode == quick ]]; then [[ -s $root/quick.url ]] && return 0
+      elif curl -sf -o /dev/null "http://127.0.0.1:$metrics_port/ready"; then return 0; fi
+    fi
     sleep 0.5
   done
   return 1
@@ -618,14 +665,16 @@ cmd_start() {
 
 # The tunnel reports ready before caddy may listen, and the Cloudflare edge keeps routing to an
 # old connection for a few seconds after a restart. Only a public fetch proves a link works.
-live_check() { # live_check <seconds>: a probe file answers 200 through the public hostname, 3 times in a row
+live_check() { # live_check <seconds> [host]: a probe file answers 200 through the public hostname, 3 times in a row
   # One 200 is not enough: during a handover the edge still sends some requests to the old connection.
-  local probe code streak=0 _
+  local probe code streak=0 _ h
+  h="${2:-$(serving_host)}"
+  [[ -n $h ]] || return 1
   probe="_probe-$(rand_id).txt"
   mkdir -p "$pub" && echo ok >"$pub/$probe"
   for _ in $(seq 1 "$1"); do
-    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 --doh-url https://1.1.1.1/dns-query "https://$host_name/$probe" 2>/dev/null ||
-      curl -s -o /dev/null -w '%{http_code}' --max-time 5 "https://$host_name/$probe" || true)"
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 --doh-url https://1.1.1.1/dns-query "https://$h/$probe" 2>/dev/null ||
+      curl -s -o /dev/null -w '%{http_code}' --max-time 5 "https://$h/$probe" || true)"
     if [[ $code == 200 ]]; then streak=$((streak + 1)); else streak=0; fi
     [[ $streak -ge 3 ]] && break
     sleep 1
@@ -634,8 +683,10 @@ live_check() { # live_check <seconds>: a probe file answers 200 through the publ
   [[ $streak -ge 3 ]]
 }
 warn_not_live() {
-  [[ $tunnel == 1 && -n $host_name ]] || return 0
-  live_check 20 || echo "  share: https://$host_name/ is not answering yet; see $root/serve.log" >&2
+  [[ ${SHARE_LIVE_CHECK:-1} == 1 ]] || return 0   # test seam: no public probe in the suite
+  local h; h="$(serving_host)"
+  [[ $tunnel == 1 && -n $h ]] || return 0
+  live_check 20 "$h" || echo "  share: https://$h/ is not answering yet; see $root/serve.log" >&2
 }
 
 cmd_stop() {
@@ -651,8 +702,13 @@ cmd_stop() {
 
 cmd_status() {
   cmd_prune
-  if running; then echo "serving (pid $(cat "$pidfile")) on $host_name: links are live"
-  elif [[ -z $host_name ]]; then echo "not set up: share setup"
+  if running; then
+    if [[ $mode == quick ]]; then
+      echo "serving (pid $(cat "$pidfile")) on https://$(serving_host) (quick tunnel; the URL changes on every start)"
+    else
+      echo "serving (pid $(cat "$pidfile")) on $host_name: links are live"
+    fi
+  elif [[ -z $host_name && $mode != quick ]]; then echo "not set up: share setup <hostname>, or share setup --quick"
   else echo "not serving: share start"; fi
   svc_installed && echo "service: installed ($svc_label)"
   cmd_ls
@@ -719,6 +775,37 @@ cf_zone() { # API mode: prints "<zone_id> <account_id> <zone_name>" for the zone
     cand="${cand#*.}"
   done
   die "no Cloudflare zone for $host_name in this token's accounts"
+}
+
+write_config_quick() { # quick mode: a mode flag and the serving facts, nothing Cloudflare
+  hosts="${hosts:-$(this_host)}"
+  mkdir -p "$config_dir"
+  {
+    echo "mode=quick"
+    echo "hosts=$hosts"
+    echo "port=$port"
+  } >"$config.tmp"
+  mv -f "$config.tmp" "$config"
+}
+
+cmd_setup_quick() {
+  [[ -z $(cfg tunnel_id || true) ]] || die "already set up with a named tunnel; run 'share teardown' first"
+  local missing="" c
+  for c in caddy cloudflared jq curl; do command -v "$c" >/dev/null || missing="$missing $c"; done
+  [[ -z $missing ]] || die "missing:$missing (brew install$missing)"
+  write_config_quick
+  mode=quick   # the file is written; this process still read it as named at startup
+  echo "mode:       quick tunnel (no domain, no login; links get a random trycloudflare.com URL)"
+  host_ok || { echo "this host ($(this_host)) is not in hosts=$hosts; skipping the service"; return 0; }
+  local service="${1:-1}"
+  if [[ $service == 1 ]] && { [[ $(uname -s) == Darwin ]] || command -v systemctl >/dev/null; }; then
+    svc_install; echo "service:    runs at login ($svc_label); the URL is new on every start"
+  fi
+  running || cmd_start >/dev/null 2>&1
+  local q; q="$(serving_host)"
+  [[ -n $q ]] || die "serving but no trycloudflare URL yet; see $root/cloudflared.log"
+  warn_not_live
+  echo "ready:      https://$q/ is live. The URL changes on every start. Next: share add <file|dir>"
 }
 
 write_config() { # write_config <tunnel_id> <tunnel_name>; keeps a token_cmd line if there was one
@@ -891,17 +978,23 @@ host_rm() { # host_rm <fqdn>: delete the CNAME, then the ingress rule; missing c
 }
 
 cmd_setup() {
-  local tunnel_name="" force=0 service=1 login=0
-  [[ -n ${1:-} && ${1:-} != --* ]] && { host_name="$1"; shift; }
+  local tunnel_name="" force=0 service=1 login=0 quick_setup=0 had_host_arg=0
+  [[ -n ${1:-} && ${1:-} != --* ]] && { host_name="$1"; had_host_arg=1; shift; }
   while [[ $# -gt 0 ]]; do
     case $1 in
       --tunnel-name) tunnel_name="${2:-}"; shift 2 ;;
       --force) force=1; shift ;;
       --no-service) service=0; shift ;;
       --login) login=1; shift ;;
-      *) die "usage: share setup [hostname] [--tunnel-name N] [--force] [--no-service] [--login]" ;;
+      --quick) quick_setup=1; shift ;;
+      *) die "usage: share setup [hostname] [--tunnel-name N] [--force] [--no-service] [--login] | share setup --quick [--no-service]" ;;
     esac
   done
+  if [[ $quick_setup == 1 ]]; then
+    [[ $had_host_arg == 0 && -z $tunnel_name && $force == 0 && $login == 0 ]] || die "usage: share setup --quick [--no-service]"
+    cmd_setup_quick "$service"; return
+  fi
+  [[ $mode != quick ]] || die "already set up with a quick tunnel; run 'share teardown' first"
   if [[ -z $host_name && -t 0 ]]; then read -rp "Hostname for your links (for example s.example.com): " host_name; fi
   [[ $host_name =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$ ]] || die "usage: share setup <hostname>, for example s.example.com"
   tunnel_name="${tunnel_name:-share-${host_name//./-}}"
@@ -997,6 +1090,19 @@ cmd_setup() {
 }
 
 cmd_teardown() {
+  if [[ $mode == quick ]]; then
+    if [[ ${1:-} != --yes ]]; then
+      [[ -t 0 ]] || die "rerun with --yes to confirm"
+      local a; read -rp "Remove the quick-tunnel setup? Nothing lives on Cloudflare; shares in $root stay. [y/N] " a
+      [[ $a == y* || $a == Y* ]] || die "aborted"
+    fi
+    svc_uninstall
+    cmd_stop >/dev/null
+    rm -f "$root/quick.url"
+    to_trash "$config"
+    echo "removed the quick setup (no tunnel, DNS, or token existed); shares in $root stay"
+    return 0
+  fi
   need_host
   local tid; tid="$(cfg tunnel_id || true)"
   [[ -n $tid ]] || die "no tunnel_id in $config"
@@ -1057,11 +1163,11 @@ description: Publish a local file, folder, or running dev server at a public lin
 
 # share
 
-Publish snapshots of local files/folders, or proxy a running `localhost` server, at `https://<host>/...`. The host is the user's own domain on Cloudflare; links live while the machine is awake.
+Publish snapshots of local files/folders, or proxy a running `localhost` server, at `https://<host>/...`. The host is the user's own domain on Cloudflare; links live while the machine is awake. With `share setup --quick` no domain is needed: links get a random `*.trycloudflare.com` host that changes on every start.
 
 ## Before anything
 
-`share status` shows whether setup ran, whether it is serving, and every share. If setup never ran, stop and tell the user: `share setup <hostname>` needs a browser login or `CLOUDFLARE_API_TOKEN`.
+`share status` shows whether setup ran, whether it is serving, and every share. If setup never ran, stop and tell the user: `share setup --quick` needs no account, or `share setup <hostname>` needs a browser login or `CLOUDFLARE_API_TOKEN`.
 
 ## Commands
 
@@ -1083,6 +1189,7 @@ Publish snapshots of local files/folders, or proxy a running `localhost` server,
 - A shared folder gets a generated file listing unless `--no-index`; check for sensitive names first. Dotfiles and symlinks are never copied.
 - A file whose name is 2-5 digits (e.g. `8080`) reads as a port; use `./8080` to share the file.
 - Links die when the machine sleeps. If a link 404s or the visitor sees Cloudflare 530, run `share status`.
+- In quick mode (`setup --quick`) the `trycloudflare.com` URL is new on every `share start` and every login-service restart: an old link is dead forever, always read the current one from `share status` or the `add` output. `--host` is refused in quick mode.
 - `rm`/`hits`/`refresh` accept the pasted link as well as the bare id.
 EOF
   [[ -n $d ]] && echo "installed $out"
