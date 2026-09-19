@@ -1,12 +1,17 @@
 # Changelog
 
-## [Unreleased]
+## [v0.3.0] - 2026-09-19
 
 ### Features
 
-- generate CHANGELOG.md from tag history on release
+- CHANGELOG.md generated from tag history (#16)
 - quick tunnels via 'share setup --quick' (TryCloudflare) (#14)
 - release pipeline (#13)
+
+### Documentation
+
+- escape pipes inside README table cells (#18)
+- slim README to features, how it works, install (#17)
 
 ### Tests
 
