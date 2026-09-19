@@ -115,18 +115,8 @@ token_forget() {
 
 # --- snapshots ---
 
-render_md() { # render every .md under <dir> to a sibling .html; .md links become .html
-  command -v pandoc >/dev/null || return 0
-  local filter="$root/md-links.lua" style="$root/md-style.html" f out katex
-  cat >"$filter" <<'LUA'
-function Link(el)
-  if not el.target:match("^%a+:") then
-    el.target = el.target:gsub("%.md$", ".html"):gsub("%.md#", ".html#")
-  end
-  return el
-end
-LUA
-  cat >"$style" <<'CSS'
+write_md_style() { # the reading stylesheet, shared by pandoc renders and gen_index
+  cat >"$root/md-style.html" <<'CSS'
 <style>
 :root { --bg:#fcfcfc; --fg:#1a1a1a; --muted:#6b6b6b; --line:#d9d9d9; --code-bg:rgba(36,36,36,.055); --link:#0b57d0; }
 @media (prefers-color-scheme: dark) { :root { --bg:#1a1a1a; --fg:#d4d4d4; --muted:#9a9a9a; --line:#3a3a3a; --code-bg:rgba(255,255,255,.08); --link:#8ab4f8; } }
@@ -151,6 +141,20 @@ figure { text-align:center; } figcaption { color:var(--muted); font-size:.9em; m
 hr { border:0; border-top:1px solid var(--line); margin:2.5em 0; }
 </style>
 CSS
+}
+
+render_md() { # render every .md under <dir> to a sibling .html; .md links become .html
+  command -v pandoc >/dev/null || return 0
+  local filter="$root/md-links.lua" style="$root/md-style.html" f out katex
+  cat >"$filter" <<'LUA'
+function Link(el)
+  if not el.target:match("^%a+:") then
+    el.target = el.target:gsub("%.md$", ".html"):gsub("%.md#", ".html#")
+  end
+  return el
+end
+LUA
+  write_md_style
   find "$1" -type f -name '*.md' | while IFS= read -r f; do
     out="${f%.md}.html"
     [[ -e $out ]] && continue
@@ -162,7 +166,31 @@ CSS
   done
 }
 
-copy() { # copy <src> <id>: regular files only, so dotfiles (.git, .env) and symlinks (to ~/.ssh) never ship
+urlenc() { # percent-encode each path segment; the slashes between them stay
+  jq -rn --arg p "$1" '[$p | split("/")[] | @uri] | join("/")'
+}
+
+gen_index() { # gen_index <stage>: a folder with no index of its own gets a generated listing
+  [[ -f $1/index.html || -f $1/README.html ]] && return 0
+  local files f enc label
+  files="$(cd "$1" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)"
+  write_md_style
+  {
+    echo '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>index</title>'
+    cat "$root/md-style.html"
+    echo '</head><body><ul>'
+    while IFS= read -r f; do
+      [[ -n $f ]] || continue
+      if [[ $f == *.md && -f $1/${f%.md}.html ]]; then continue; fi  # listed by its render below
+      enc="$(urlenc "$f")"
+      label="$(sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' <<<"$f")"
+      printf '<li><a href="%s">%s</a></li>\n' "$enc" "$label"
+    done <<<"$files"
+    echo '</ul></body></html>'
+  } >"$1/index.html"
+}
+
+copy() { # copy <src> <id> [opts]: regular files only, so dotfiles (.git, .env) and symlinks (to ~/.ssh) never ship
   local parent name stage skipped
   parent="$(dirname "$1")"; name="$(basename "$1")"
   mkdir -p "$pub"
@@ -175,7 +203,10 @@ copy() { # copy <src> <id>: regular files only, so dotfiles (.git, .env) and sym
   if [[ -z "$(find "$stage" -type f | head -1)" ]]; then
     rm -rf "$stage"; die "nothing to share in $1 (dotfiles and symlinks are skipped)"
   fi
-  render_md "$stage"
+  render_md "$stage"          # a rendered README.md makes README.html, which suppresses gen_index
+  local payload="$stage"      # a folder is listed at its own root; a bare file lists under <id>
+  [[ -d $stage/$name ]] && payload="$stage/$name"
+  has_opt noindex "${3:-}" || gen_index "$payload"
   [[ -d $pub/$2 ]] && mv "$pub/$2" "$stage.old"
   mv "$stage" "$pub/$2"
   rm -rf "$stage.old"
@@ -207,11 +238,12 @@ parse_target() { # parse_target <arg>: "live <port>" for a port/localhost shape,
 }
 
 cmd_add() {
-  local ttl="${SHARE_TTL:-$(cfg ttl || true)}"; ttl="${ttl:-30d}"
-  local usage="usage: share add [--ttl 7d] <file|dir|port|localhost:port|http://localhost:port>"
+  local ttl="${SHARE_TTL:-$(cfg ttl || true)}"; ttl="${ttl:-30d}" noindex=""
+  local usage="usage: share add [--ttl 7d] [--no-index] <file|dir|port|localhost:port|http://localhost:port>"
   while [[ ${1:-} == --* ]]; do
     case $1 in
       --ttl) ttl="${2:-}"; shift 2 || die "$usage" ;;
+      --no-index) noindex=1; shift ;;
       *) die "$usage" ;;
     esac
   done
@@ -233,6 +265,7 @@ cmd_add() {
   else
     src="$(realpath "$1")"; name="$(basename "$src")"
   fi
+  [[ -n $noindex ]] && opts="${opts:+$opts }noindex"
   id="$(rand_id)"
   [[ $secs -gt 0 ]] && exp=$(($(date +%s) + secs))
   # shellcheck disable=SC2174 # the leaf ($root) is what needs 700: it holds the admin socket
@@ -242,7 +275,7 @@ cmd_add() {
     echo "share: apps that use absolute asset paths (/static/...) break under a path prefix; use --host <name>.<zone>" >&2
     curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$tport/" || echo "share: nothing answers on 127.0.0.1:$tport yet" >&2
   else
-    copy "$src" "$id"
+    copy "$src" "$id" "$opts"
     warn_private "$src" "$id"
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$src" "$(date +%F)" "$exp" "$opts" >>"$index"
@@ -282,7 +315,7 @@ cmd_refresh() {
   if has_opt live "$opts"; then echo "live share, nothing to refresh" >&2; return 0; fi
   src="$(cut -f3 <<<"$r")"
   [[ -e $src ]] || die "source is gone: $src (the snapshot keeps serving; share rm $1 to unpublish)"
-  copy "$src" "$1"
+  copy "$src" "$1" "$opts"
   write_caddyfile   # a refresh can add or remove index.html, which flips try_files
   caddy_reload
   echo "refreshed $1 from $src"

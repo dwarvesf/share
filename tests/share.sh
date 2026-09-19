@@ -181,6 +181,40 @@ check "dead backend still adds" "0" "$rc"
 check "warns nothing answers" "1" "$(grep -c 'nothing answers on 127.0.0.1:19991 yet' "$WORK/e19")"
 check "dead share returns 502" "502" "$(wait_code 502 "${dead_url}hello.txt")"
 
+echo "=== folder index ==="
+mkdir -p "$WORK/listme" && echo data >"$WORK/listme/file.txt" && printf '# Doc\n' >"$WORK/listme/other.md"
+list_url=$(bash "$SH" add "$WORK/listme" 2>/dev/null | head -1)
+list_id=$(cut -d/ -f4 <<<"$list_url")
+check "folder without index gets a listing" "200" "$(wait_code 200 "$list_url")"
+list_body=$(curl -s "$(local_url "$list_url")")
+check "txt linked by name" "1" "$(grep -c 'file.txt' <<<"$list_body")"
+if command -v pandoc >/dev/null; then
+  check ".md listed by its render" "1" "$(grep -c 'href="other.html"' <<<"$list_body")"
+fi
+
+noidx_url=$(bash "$SH" add --no-index "$WORK/listme" 2>/dev/null | head -1)
+check "--no-index keeps the 404" "404" "$(wait_code 404 "$noidx_url")"
+
+mkdir -p "$WORK/withreadme" && printf '# Readme\n' >"$WORK/withreadme/README.md" && echo x >"$WORK/withreadme/x.txt"
+wr_url=$(bash "$SH" add "$WORK/withreadme" 2>/dev/null | head -1)
+check "README folder answers" "200" "$(wait_code 200 "$wr_url")"
+wr_body=$(curl -s "$(local_url "$wr_url")")
+if command -v pandoc >/dev/null; then
+  check "README render is the index" "1" "$(grep -c 'max-width:42em' <<<"$wr_body")"
+  check "no generated list under a README" "0" "$(grep -c '<ul' <<<"$wr_body")"
+fi
+
+bash "$SH" refresh "$list_id" >/dev/null
+list_body=$(curl -s "$(local_url "$list_url")")
+check "refresh keeps the listing" "1" "$(grep -c 'file.txt' <<<"$list_body")"
+
+mkdir -p "$WORK/nested/sub" && echo top >"$WORK/nested/top.txt" && echo deep >"$WORK/nested/sub/deep.txt"
+nested_url=$(bash "$SH" add "$WORK/nested" 2>/dev/null | head -1)
+check "nested folder answers" "200" "$(wait_code 200 "$nested_url")"
+nested_body=$(curl -s "$(local_url "$nested_url")")
+check "nested file listed by path" "1" "$(grep -c 'href="sub/deep.txt"' <<<"$nested_body")"
+check "no subfolder entry" "0" "$(grep -cE 'href="sub/?"' <<<"$nested_body")"
+
 echo "=== stop ==="
 bash "$SH" stop >/dev/null
 check "stop takes links down" 000 "$(code "$md_url")"
