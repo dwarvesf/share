@@ -44,6 +44,12 @@ id_of() { # accept an id or a pasted share link: https://host/<id>/name -> <id>
   esac
 }
 rand_id() { od -An -N3 -tx1 /dev/urandom | tr -d ' \n'; }
+has_opt() { case " $2 " in *" $1 "*) return 0 ;; esac; return 1; }
+opt_val() { # opt_val <key> <opts>: the value of a key=value token, nothing when absent
+  local rest="${2#*"$1"=}"
+  [[ $rest == "$2" ]] && return 1
+  echo "${rest%% *}"
+}
 day_of() { date -r "$1" +%F 2>/dev/null || date -d "@$1" +%F; }
 to_trash() { # an empty path would make `trash` move the current directory
   [[ -n ${1:-} && -e $1 ]] || return 0
@@ -52,8 +58,16 @@ to_trash() { # an empty path would make `trash` move the current directory
 }
 need_host() { [[ -n $host_name ]] || die "no hostname configured: run 'share setup <hostname>' first"; }
 
-share_url() { # share_url <id> <name>
-  local path="$2"
+share_url() { # share_url <id> <name> [opts]: the link depends on the share kind
+  local fqdn path
+  fqdn="$(opt_val host "${3:-}" || true)"
+  if [[ -n $fqdn ]]; then
+    printf 'https://%s/\n' "$fqdn"; return
+  fi
+  if has_opt live "${3:-}"; then
+    printf 'https://%s/%s/\n' "${host_name:-<no-hostname>}" "$1"; return
+  fi
+  path="$2"
   if [[ -d $pub/$1/$2 ]]; then path="$2/"
   elif [[ $2 == *.md && -f $pub/$1/${2%.md}.html ]]; then path="${2%.md}.html"
   fi
@@ -185,7 +199,7 @@ cmd_add() {
   if [[ ${1:-} == --ttl ]]; then ttl="${2:-}"; shift 2 || die "usage: share add [--ttl 7d] <file|dir>"; fi
   [[ -e ${1:-} ]] || die "usage: share add [--ttl 7d] <file|dir>"
   need_host
-  local secs src name id exp=0 url
+  local secs src name id exp=0 url opts=""
   secs="$(ttl_secs "$ttl")"
   src="$(realpath "$1")"
   name="$(basename "$src")"
@@ -193,8 +207,8 @@ cmd_add() {
   [[ $secs -gt 0 ]] && exp=$(($(date +%s) + secs))
   mkdir -p "$root"
   copy "$src" "$id"
-  printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$src" "$(date +%F)" "$exp" >>"$index"
-  url="$(share_url "$id" "$name")"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$src" "$(date +%F)" "$exp" "$opts" >>"$index"
+  url="$(share_url "$id" "$name" "$opts")"
   echo "$url"
   if [[ ${SHARE_CLIPBOARD:-1} == 1 ]] && command -v pbcopy >/dev/null; then
     printf '%s' "$url" | pbcopy && echo "  (link copied)"
@@ -207,13 +221,17 @@ cmd_add() {
 
 cmd_ls() {
   [[ -s $index ]] || { echo "no shares"; return 0; }
-  local id name src date exp size until gone
-  while IFS=$'\t' read -r id name src date exp; do
-    size="$(du -sh "$pub/$id" 2>/dev/null | cut -f1 | tr -d ' ')"
+  local id name src date exp opts size until gone
+  while IFS=$'\t' read -r id name src date exp opts; do
     until="never"; [[ ${exp:-0} -gt 0 ]] && until="$(day_of "$exp")"
-    gone=""; [[ -e $src ]] || gone="  (source gone, snapshot still served)"
-    share_url "$id" "$name"
-    echo "    id=$id  size=${size:-?}  added=$date  expires=$until  from=$src$gone"
+    share_url "$id" "$name" "$opts"
+    if has_opt live "$opts"; then
+      echo "    id=$id  live -> $src  added=$date  expires=$until"
+    else
+      size="$(du -sh "$pub/$id" 2>/dev/null | cut -f1 | tr -d ' ')"
+      gone=""; [[ -e $src ]] || gone="  (source gone, snapshot still served)"
+      echo "    id=$id  size=${size:-?}  added=$date  expires=$until  from=$src$gone"
+    fi
   done <"$index"
 }
 

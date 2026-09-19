@@ -45,6 +45,12 @@ check "link carries a 6-hex id" "1" "$(grep -cE "^https://$SHARE_HOSTNAME/[0-9a-
 bash "$SH" add "$src/.env" >/dev/null 2>&1
 check "a bare dotfile is refused" 1 "$?"
 
+echo "=== compat: a five-column row still lists and removes ==="
+printf 'aa11bb\toldsnap\t%s\t2026-01-01\t0\n' "$WORK" >>"$SHARE_ROOT/index.tsv"
+check "five-column row lists" "1" "$(bash "$SH" ls | grep -c aa11bb)"
+bash "$SH" rm aa11bb >/dev/null
+check "five-column row removes" "0" "$(grep -c aa11bb "$SHARE_ROOT/index.tsv")"
+
 echo "=== serving ==="
 check "folder page" 200 "$(code "$dir_url")"
 check "asset" 200 "$(code "${dir_url}img/a.txt")"
