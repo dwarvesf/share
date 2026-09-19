@@ -42,6 +42,13 @@ while IFS= read -r s; do echo "  $s"; done <<<"$commits"
 [[ ${1:-} == --yes ]] || read -rp "tag and release $next? [y/N] " a
 [[ ${1:-} == --yes || ${a:-} == y* || ${a:-} == Y* ]] || die "aborted"
 
+# regenerate the changelog with the new version section, land it on main,
+# then tag that commit so the tag carries its own section
+bin/changelog --next "$next" >CHANGELOG.md
+git add CHANGELOG.md
+git commit -q -m "docs: changelog for $next"
+git push https://github.com/dwarvesf/share.git HEAD:main
+
 git tag -a "$next" -m "$next"
 git push https://github.com/dwarvesf/share.git "$next"
 echo "tagged $next (release.yml publishes the GitHub release)"
