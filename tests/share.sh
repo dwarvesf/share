@@ -215,6 +215,66 @@ nested_body=$(curl -s "$(local_url "$nested_url")")
 check "nested file listed by path" "1" "$(grep -c 'href="sub/deep.txt"' <<<"$nested_body")"
 check "no subfolder entry" "0" "$(grep -cE 'href="sub/?"' <<<"$nested_body")"
 
+echo "=== own hostname (dry) ==="
+mkdir -p "$WORK/dist" && echo '<h1>spa</h1>' >"$WORK/dist/index.html"
+: >"$SHARE_ROOT/host-calls.log"
+host_url=$(SHARE_HOST_DRY=1 bash "$SH" add "$WORK/dist" --host app.example.test 2>/dev/null | head -1)
+host_id=$(awk -F'\t' '$6 ~ /host=app\.example\.test/ {print $1}' "$SHARE_ROOT/index.tsv")
+check "host link is the fqdn" "https://app.example.test/" "$host_url"
+check "host row in ls" "1" "$(bash "$SH" ls | grep -c 'https://app.example.test/')"
+check "deep link serves index.html" "<h1>spa</h1>" "$(wait_code 200 "http://127.0.0.1:$SHARE_PORT/deep/link" app.example.test >/dev/null; curl -s -H 'Host: app.example.test' "http://127.0.0.1:$SHARE_PORT/deep/link")"
+put_ln=$(grep -n 'PUT ingress +1' "$SHARE_ROOT/host-calls.log" | cut -d: -f1)
+post_ln=$(grep -n 'POST CNAME' "$SHARE_ROOT/host-calls.log" | cut -d: -f1)
+check "ingress PUT before CNAME POST" "1" "$([[ -n $put_ln && -n $post_ln && $put_ln -lt $post_ln ]] && echo 1 || echo 0)"
+
+SHARE_HOST_DRY=1 bash "$SH" rm "$host_id" >/dev/null
+del_ln=$(grep -n 'DELETE CNAME' "$SHARE_ROOT/host-calls.log" | cut -d: -f1)
+prm_ln=$(grep -n 'PUT ingress -1' "$SHARE_ROOT/host-calls.log" | cut -d: -f1)
+check "DELETE CNAME before ingress PUT" "1" "$([[ -n $del_ln && -n $prm_ln && $del_ln -lt $prm_ln ]] && echo 1 || echo 0)"
+check "host share 404 after rm" "404" "$(wait_code 404 "http://127.0.0.1:$SHARE_PORT/deep/link" app.example.test)"
+
+out=$(SHARE_HOST_DRY=1 bash "$SH" add --host dev.s.example.test "$WORK/dist" 2>&1 1>/dev/null); rc=$?
+check "two-label host refused" "1" "$rc"
+check "one-label message" "1" "$(grep -c 'one label under' <<<"$out")"
+out=$(SHARE_HOST_DRY=1 bash "$SH" add --host other.zone "$WORK/dist" 2>&1 1>/dev/null); rc=$?
+check "foreign zone refused" "1" "$rc"
+check "one-label message again" "1" "$(grep -c 'one label under' <<<"$out")"
+
+out=$(env -u CLOUDFLARE_API_TOKEN bash "$SH" add --host nope.example.test "$WORK/dist" 2>&1 1>/dev/null); rc=$?
+check "no credential refused" "1" "$rc"
+check "no row for refused host" "0" "$(grep -c 'nope.example.test' "$SHARE_ROOT/index.tsv")"
+
+cat >"$SHARE_ROOT/host-fixture.json" <<'EOF'
+{"config":{"ingress":[{"service":"http_status:404"},{"hostname":"s.example.test","service":"http://127.0.0.1:18787"}]}}
+EOF
+: >"$SHARE_ROOT/host-calls.log"
+out=$(SHARE_HOST_DRY=1 bash "$SH" add "$WORK/dist" --host broken.example.test 2>&1 1>/dev/null); rc=$?
+check "tampered ingress refused" "1" "$rc"
+check "dashboard hint" "1" "$(grep -c 'dashboard' <<<"$out")"
+check "no PUT logged" "0" "$(grep -c PUT "$SHARE_ROOT/host-calls.log")"
+rm -f "$SHARE_ROOT/host-fixture.json"
+
+mkdir "$SHARE_ROOT/.lock-host"
+out=$(SHARE_HOST_DRY=1 SHARE_HOST_LOCK_TIMEOUT=1 bash "$SH" add "$WORK/dist" --host locked.example.test 2>&1 1>/dev/null); rc=$?
+check "held lock refuses" "1" "$rc"
+check "lock message" "1" "$(grep -c 'another share command holds the host lock' <<<"$out")"
+rmdir "$SHARE_ROOT/.lock-host"
+
+echo "=== serve restart renders live and host rows ==="
+SHARE_HOST_DRY=1 bash "$SH" add "$WORK/dist" --host fresh.example.test >/dev/null 2>&1
+bash "$SH" stop >/dev/null
+bash "$SH" start >/dev/null
+check "Caddyfile has handle_path" "1" "$(grep -q 'handle_path' "$SHARE_ROOT/Caddyfile" && echo 1 || echo 0)"
+check "Caddyfile has the host block" "1" "$(grep -c 'http://fresh.example.test:' "$SHARE_ROOT/Caddyfile")"
+check "no admin off" "0" "$(grep -c 'admin off' "$SHARE_ROOT/Caddyfile")"
+check "fresh host answers after restart" "200" "$(wait_code 200 "http://127.0.0.1:$SHARE_PORT/deep/link" fresh.example.test)"
+
+echo "=== reload failure keeps the row ==="
+out=$(PATH=/usr/bin:/bin bash "$SH" add 19992 2>&1 1>/dev/null); rc=$?
+check "add still exits 0" "0" "$rc"
+check "reload error names caddy.log" "1" "$(grep -c 'caddy.log' <<<"$out")"
+check "row survives reload failure" "1" "$(grep -c 'localhost:19992' "$SHARE_ROOT/index.tsv")"
+
 echo "=== stop ==="
 bash "$SH" stop >/dev/null
 check "stop takes links down" 000 "$(code "$md_url")"

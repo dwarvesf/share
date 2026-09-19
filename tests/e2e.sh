@@ -61,15 +61,52 @@ check "link answers right after start" 200 "$(code "$link")"
 "$share" service install >/dev/null 2>&1
 check "link answers right after a service reinstall" 200 "$(code "$link")"
 
+echo "=== own hostname (--host) ==="
+tunnel_id="$(awk -F= '$1 == "tunnel_id" {print $2}' "$SHARE_CONFIG_DIR/config")"
+zone_json="$(api "/zones?name=${host#*.}")"
+zone="$(jq -r '.result[0].id // empty' <<<"$zone_json")"
+account="$(jq -r '.result[0].account.id // empty' <<<"$zone_json")"
+zone_name="$(jq -r '.result[0].name // empty' <<<"$zone_json")"
+hhost="x-${host%%.*}.$zone_name"   # one label under the zone, namespaced by the e2e hostname
+BPORT=8998
+mkdir -p "$WORK/be" && echo "e2e live $mode" >"$WORK/be/index.html"
+cat >"$WORK/BeCaddyfile" <<EOF
+{
+	admin off
+	auto_https off
+}
+http://127.0.0.1:$BPORT {
+	bind 127.0.0.1
+	root * "$WORK/be"
+	file_server
+}
+EOF
+caddy run --config "$WORK/BeCaddyfile" --adapter caddyfile >>"$WORK/be.log" 2>&1 &
+be_pid=$!
+n=0; until curl -s -o /dev/null "http://127.0.0.1:$BPORT/" || [[ $n -ge 50 ]]; do sleep 0.2; n=$((n + 1)); done
+if [[ $mode == login ]]; then
+  out="$(env -u CLOUDFLARE_API_TOKEN "$share" add "$BPORT" --host "$hhost" 2>&1)"; rc=$?
+  check "host add refused under login auth" 1 "$rc"
+  check "login cert message" 1 "$(grep -c 'login cert cannot edit DNS' <<<"$out")"
+  check "login: no DNS record left" 0 "$(api "/zones/$zone/dns_records?name=$hhost" | jq '.result | length')"
+  check "login: ingress reverted" 0 "$(api "/accounts/$account/cfd_tunnel/$tunnel_id/configurations" | jq --arg h "$hhost" '[.result.config.ingress[] | select(.hostname == $h)] | length')"
+else
+  hlink="$("$share" add "$BPORT" --host "$hhost" | head -1)"
+  check "host link is the fqdn" "https://$hhost/" "$hlink"
+  n=0; until [[ $(code "$hlink") == 200 || $n -ge 30 ]]; do sleep 2; n=$((n + 1)); done
+  check "host share answers" 200 "$(code "$hlink")"
+  check "host share content" "e2e live $mode" "$(fetch "$hlink")"
+  "$share" rm "$hlink" >/dev/null
+  check "no DNS record left" 0 "$(api "/zones/$zone/dns_records?name=$hhost" | jq '.result | length')"
+  check "no ingress rule left" 0 "$(api "/accounts/$account/cfd_tunnel/$tunnel_id/configurations" | jq --arg h "$hhost" '[.result.config.ingress[] | select(.hostname == $h)] | length')"
+fi
+kill "$be_pid" 2>/dev/null || true
+
 echo "=== remove ==="
 "$share" rm "$link" >/dev/null
 check "rm takes the link down" 404 "$(code "$link")"
 
 echo "=== teardown ==="
-tunnel_id="$(awk -F= '$1 == "tunnel_id" {print $2}' "$SHARE_CONFIG_DIR/config")"
-zone_json="$(api "/zones?name=${host#*.}")"
-zone="$(jq -r '.result[0].id // empty' <<<"$zone_json")"
-account="$(jq -r '.result[0].account.id // empty' <<<"$zone_json")"
 CLOUDFLARE_API_TOKEN="$token" "$share" teardown --yes 2>&1 | sed 's/^/  | /'
 check "DNS record removed" 0 "$(api "/zones/$zone/dns_records?name=$host" | jq '.result | length')"
 check "tunnel deleted" true "$(api "/accounts/$account/cfd_tunnel/$tunnel_id" | jq '.result.deleted_at != null')"
