@@ -26,8 +26,8 @@ commits="$(git log --format='%s' "$last"..HEAD)"
 major=0 minor=0
 while IFS= read -r s; do
   case $s in
-    feat*!*|fix*!*|*BREAKING*) major=1 ;;
-    feat*:|feat*\(*) minor=1 ;;
+    *!:*|*BREAKING*) major=1 ;;
+    feat:*|feat\(*\):*) minor=1 ;;
   esac
 done <<<"$commits"
 
