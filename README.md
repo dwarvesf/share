@@ -1,6 +1,7 @@
 # share
 
 [![CI](https://github.com/dwarvesf/share/actions/workflows/ci.yml/badge.svg)](https://github.com/dwarvesf/share/actions/workflows/ci.yml)
+[![Cloudflare Tunnel](https://img.shields.io/badge/tunnel-Cloudflare-F38020?logo=cloudflare&logoColor=white)](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
 [![built by webuild](https://raw.githubusercontent.com/webuild-community/badge/master/svg/love.svg)](https://webuild.community)
 
 Publish a local file, folder, or running dev server at a link on your own domain. Like ngrok, but the hostname is yours and stays the same.
