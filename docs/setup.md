@@ -132,6 +132,7 @@ The DNS record depends on the path. With `CLOUDFLARE_API_TOKEN` set, teardown de
 | Symptom | Cause | Fix |
 |---|---|---|
 | Cloudflare error 530 / 1033 | Nothing is serving: the machine sleeps, or share is stopped. | `share start` |
+| 404 on the site root | Expected: the root has no page, even while serving. | `curl https://<hostname>/healthz`: `ok` means serving, 530 means not. |
 | 404 on a link | The share was removed or expired, or the link has a typo. | `share ls` |
 | `setup`: "already has a … record" / "already resolves" | The hostname is taken. | Pick another hostname, or `--force` to replace it. |
 | `setup`: "DNS route failed (did you pick … in the browser?)" | The browser login picked a different domain. | Rerun setup and pick the domain it names. |

@@ -16,13 +16,15 @@
      ├─ cloudflared tunnel run  ────────────────────┘   (TUNNEL_TOKEN from Keychain / file / token_cmd)
      ├─ caddy on 127.0.0.1:<port>
      │     default site: handle_path /<id>/* → reverse_proxy 127.0.0.1:<live port>  (live shares)
+     │                   handle /healthz → respond "ok" 200                         (health probe)
      │                   handle → file_server over ~/share/pub                      (snapshots)
      │     per --host share: site block on <fqdn>:<port> → reverse_proxy or file_server
      │                   + a tunnel ingress rule pinning httpHostHeader to <fqdn>
      │                   + a CNAME <fqdn> → <tunnel>.cfargotunnel.com
      │     headers: Cache-Control no-store, X-Robots-Tag noindex
      │     no directory listing; folder index = index.html, then README.html,
-     │     else a generated listing (unless --no-index); site root still 404s
+     │     else a generated listing (unless --no-index); site root still 404s,
+     │     so probes use /healthz
      │     admin API on unix socket ~/share/admin.sock (owner-only); Caddyfile is
      │     re-rendered from index.tsv and caddy reload runs on add / rm / refresh / prune
      │     JSON access log → ~/share/access.log
