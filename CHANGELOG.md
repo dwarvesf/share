@@ -1,5 +1,24 @@
 # Changelog
 
+## [v0.4.0] - 2026-09-24
+
+### Features
+
+- **serve:** add /healthz route to share serve (#23)
+
+### Fixes
+
+- release.yml needs a checkout for gh release create (#20)
+
+### Documentation
+
+- restore the Cloudflare badge in README (#22)
+- commits carry no co-author or generated-with trailers (#21)
+
+### Tests
+
+- verification record for release workflow fix (#19)
+
 ## [v0.3.0] - 2026-09-19
 
 ### Features
@@ -10,6 +29,7 @@
 
 ### Documentation
 
+- changelog for v0.3.0
 - escape pipes inside README table cells (#18)
 - slim README to features, how it works, install (#17)
 
