@@ -15,7 +15,10 @@ die() { echo "release: $*" >&2; exit 1; }
 
 [[ $(git branch --show-current) == main ]] || die "run on main"
 [[ -z $(git status --porcelain) ]] || die "main is dirty"
-git fetch --quiet https://github.com/dwarvesf/share.git main:refs/remotes/origin/main
+# -c fetch.prune=false: a user-global fetch.prune=true would delete
+# refs/remotes/origin/main here (it's not in this fetch's refspec set),
+# so the rev-parse below fails even though main IS in sync.
+git -c fetch.prune=false fetch --quiet https://github.com/dwarvesf/share.git main:refs/remotes/origin/main
 [[ $(git rev-parse HEAD) == "$(git rev-parse origin/main)" ]] || die "main is not in sync with origin"
 
 last="$(git tag --sort=-v:refname | head -1)"
