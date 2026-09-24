@@ -418,6 +418,9 @@ EOF
       done <"$index"
     fi
     cat <<EOF
+	handle /healthz {
+		respond "ok" 200
+	}
 	handle {
 		root * "$pub"
 		file_server {
