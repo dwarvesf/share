@@ -78,6 +78,9 @@ check "Cache-Control" "no-store" "$(header "$dir_url" Cache-Control)"
 check "X-Robots-Tag" "noindex, nofollow" "$(header "$dir_url" X-Robots-Tag)"
 check "admin socket, not admin off" "0" "$(grep -c 'admin off' "$SHARE_ROOT/Caddyfile")"
 check "admin socket exists" "1" "$([[ -S $SHARE_ROOT/admin.sock ]] && echo 1 || echo 0)"
+check "/healthz responds ok" 200 "$(code "https://$SHARE_HOSTNAME/healthz")"
+check "main host block has handle /healthz before the catch-all" "1" \
+  "$(awk '/^http:\/\/:/{f=1} f && /handle \/healthz/{print NR; exit} f && /^\thandle \{/{exit}' "$SHARE_ROOT/Caddyfile" | grep -c .)"
 
 echo "=== markdown ==="
 if command -v pandoc >/dev/null; then
