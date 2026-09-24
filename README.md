@@ -31,7 +31,7 @@ share add ./team-guide          # https://s.example.com/62cb50/team-guide/  (cop
 | **Agent-native** | `share skill --install` drops a SKILL.md for Claude Code and friends |
 | **Always on** | a login service (launchd/systemd) brings links back after reboot |
 
-Links are live only while the machine is awake; visitors get Cloudflare 530 when it sleeps.
+Links are live only while the machine is awake; visitors get Cloudflare 530 when it sleeps. `https://<hostname>/healthz` answers `ok` while share is serving; the site root 404s by design.
 
 ## How it works
 
