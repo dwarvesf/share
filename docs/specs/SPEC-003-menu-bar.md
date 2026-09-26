@@ -119,11 +119,13 @@ Invariants: never prunes, never writes or creates a file, never needs a TTY, nev
 
 **`bin/share` hardening** (behavior changes to existing verbs):
 
-- Every write to `index.tsv` (append in `add`, rewrite in `rm`) runs under an `index_lock` (a `mkdir` lock like `host_lock`, released on exit) and rewrites through `mktemp` in `$root`.
+- Every write to `index.tsv` (the append in `add`, the read-and-rewrite in `rm`) runs under `index_lock`, held only around that write: after `host_add`/`host_rm` return, released right after the `mv` or append. The lock is `$root/.lock-index` holding a `pid` file; a waiter that finds the recorded pid dead removes the lock and retries (stale-lock rule). The rewrite goes through `mktemp` in `$root`.
+- Lock cleanup uses one EXIT trap for the whole script: `host_lock` and `index_lock` add their directory to a global `held_locks` list, and a single `release_locks` trap removes every entry. No function sets its own EXIT trap.
 - `rand_id` loops until the id is not in the index and `pub/<id>` does not exist.
 - `add` refuses a source whose basename contains a tab or a newline: `share: names with tabs or newlines are not supported`.
 - `quick.url` is removed by `cmd_stop` and by the serve process's exit trap.
-- `share_url` sets its result without forking (`printf -v`, parameter expansion, `[[ -d ]]`/`[[ -f ]]` tests); `cmd_ls` output is unchanged. Link paths use `urlenc` for every character except `/`, fixing `#`, `?`, `%` and non-ASCII names.
+- `urlenc` becomes pure bash: an `LC_ALL=C` byte loop that keeps `A-Za-z0-9-_.~` and `/`, and writes every other byte as `%XX` (uppercase hex). Its output matches the current `jq @uri` form byte for byte, so `gen_index` links do not change; a test compares both encoders over a fixed name list (spaces, `#?%&+`, `é`, CJK, emoji).
+- `share_url` sets its result in a global without forking (`printf -v`, parameter expansion, `[[ -d ]]`/`[[ -f ]]` tests) and encodes the path with the new `urlenc`. `cmd_ls` output is unchanged for names made of unreserved characters and spaces; names with `#`, `?`, `%` or non-ASCII now print working links where they printed broken ones.
 - `hits` streams the access log (`jq -n '[inputs | …]'`) instead of slurping it.
 
 **`ShareBarCore` Swift API**
@@ -139,7 +141,8 @@ enum CLI {
 struct CLIResult { status: Int32; stdout: String; stderr: String; timedOut: Bool }
 actor MutationQueue { func run(_ args: [String]) async -> CLIResult }   // one mutating verb at a time
 struct MenuModel { init(snapshot: Snapshot?, failure: Failure?, now: Date); header; rows: [Row]; more: Int; icon: Icon }
-struct Row { id; title; trailing; url; canRefresh: Bool }
+struct MenuModel { …; showStart: Bool; showSetUp: Bool }
+struct Row { id; title; trailing; url; canRefresh: Bool; canCopy: Bool; removeText: String }
 ```
 
 - Location order: `SHARE_BIN`, `/opt/homebrew/bin/share`, `/usr/local/bin/share`, `$HOME/.local/bin/share`, `/opt/local/bin/share`. `$HOME` is expanded in Swift.
@@ -150,7 +153,9 @@ struct Row { id; title; trailing; url; canRefresh: Bool }
 
 Trailing text: `live` for live kind; `never` for `expires == 0`; `expired` when `expires <= now`; else the largest whole unit left, `<n>d left`, `<n>h left`, `<n>m left` (floor, minimum `1m left`). A row with `own_host` shows the host as its title.
 
-Header text: `Serving at <host>` (serving and ready); `Serving, tunnel not connected` (serving, not ready); `Stopped`; `Not serving on this Mac (hosts=<hosts>)` (not serving and `serves_here` false); `Not set up`; `share CLI not found`; `Update share CLI` (the `state` verb is unknown or the output does not decode); `Update Share Bar` (`schema` > 1).
+Header text: `Serving at <host>` (serving and ready); `Serving, tunnel not connected` (serving, not ready); `Stopped`; `Not serving on this Mac (hosts=<hosts>)` (not serving and `serves_here` false); `Not set up`; `share CLI not found`; `Update share CLI` (exit 1 and stdout starts with the CLI's help text, which is how a CLI without `state` answers); `Update Share Bar` (`schema` > 1); for any other failure, `share: ` plus the last stderr line, or `share exited <n>`.
+
+Model rules, all unit-tested in `ShareBarCore`: `canCopy` is false when `url` contains `<pending>` or `<no-hostname>`; `canRefresh` is true only for `snapshot`; `removeText` is "Remove <name>? The copy goes to the Trash." for plain shares and "Remove <name>? This also deletes the DNS record for <own_host>." for own-host shares; `showStart` is false when serving or when `serves_here` is false; `showSetUp` is true whenever the state is not `serving`; rows are capped at 25 and `more` holds the rest.
 
 ### Data model changes
 
@@ -183,13 +188,13 @@ Status icon: template SF Symbol `antenna.radiowaves.left.and.right` when serving
 
 - The menu opens instantly from the last snapshot; the fresh `state` result replaces the items in place on the main queue (run loop common modes), so the open menu updates.
 - Copy Link and Open are disabled when the `url` contains `<pending>` or `<no-hostname>`.
-- Start Sharing is hidden when `serves_here` is false.
+- Start Sharing follows `showStart`. Set Up… follows `showSetUp` and opens the window prefilled with the current host, because rerunning `share setup <host>` is the recovery for a setup that was cancelled or failed halfway.
 - Hits: one call in flight; opening another submenu cancels the previous one; results cached until the menu closes.
 - Adding on a Mac where `serves_here` is false shows an alert after the add: the link works only once a Mac in `hosts=` serves it.
 
-Setup window (SwiftUI, 420pt wide): hostname field, "Quick link, no domain needed" toggle that disables the field, "Open Share Bar at login" checkbox (on), Set Up button, monospaced read-only log streaming the child output, Cancel. While the window is open the app switches to `.regular` activation policy (Dock icon, Cmd-Tab), back to `.accessory` on close. Success closes the window and refreshes. Failure keeps the log.
+Setup window (SwiftUI, 420pt wide): hostname field, "Quick link, no domain needed" toggle that disables the field, "Open Share Bar at login" checkbox (on), Set Up button, monospaced read-only log streaming the child output, Cancel. While the window is open the app switches to `.regular` activation policy (Dock icon, Cmd-Tab), back to `.accessory` on close. Success closes the window and refreshes. Failure keeps the log. Cancel or closing the window terminates the setup process group and shows "Setup cancelled; Set Up again to finish". Quitting the app while setup runs terminates the group in `applicationWillTerminate`.
 
-Drop target: `button.window?.registerForDraggedTypes([.fileURL])` on the status button; each dropped file URL runs `add` in order through the mutation queue; after the last, the app re-reads `state` and copies the newest matching share's `url`. File promises (Mail attachments, Photos) are refused with an alert.
+Drop target: a transparent `DropView: NSView` added as a subview of the status item's button, sized to it, implementing `NSDraggingDestination` and registered for `[.fileURL]` (its `hitTest` returns nil so clicks reach the button). A drop that contains a folder asks first: "Publish the folder <name> at a public link for 30 days?" with Publish and Cancel. Each dropped path runs `add` in order through the mutation queue. The app records the share ids from `state` before the batch and copies the `url` of the id that is new afterwards (the last new one for a batch). File promises (Mail attachments, Photos) are refused with an alert. Folders chosen through Share File… get the same confirm.
 
 Open at Login reads `SMAppService.mainApp.status` each time the menu opens (`.enabled` shows ✓, `.requiresApproval` shows "Open at Login (approve in System Settings)" and opens Login Items settings). The setup checkbox registers it.
 
@@ -198,29 +203,33 @@ Open at Login reads `SMAppService.mainApp.status` each time the menu opens (`.en
 - `mac/` Swift package (swift-tools-version 5.9, macOS 13), targets `ShareBarCore`, `ShareBar`, `ShareBarCoreTests`.
 - `mac/Info.plist`: `CFBundleIdentifier foundation.d.share.bar`, `CFBundleName`/`CFBundleDisplayName` "Share Bar", `CFBundleExecutable ShareBar`, `CFBundlePackageType APPL`, `LSUIElement true`, `LSMinimumSystemVersion 13.0`, `CFBundleShortVersionString`/`CFBundleVersion` set by the build, `NSDocumentsFolderUsageDescription`, `NSDesktopFolderUsageDescription`, `NSDownloadsFolderUsageDescription`, `NSRemovableVolumesUsageDescription`, `NSNetworkVolumesUsageDescription` (each: "share copies the files you choose so it can publish them").
 - `mac/build.sh [--sign] [--notarize] <version>`: universal release build, bundle assembly, sign (ad-hoc without `--sign`), notarize and staple the `.app`, then zip. Last stdout line is the zip path.
-- `mac/release.sh <tag>`: runs `build.sh --sign --notarize`, uploads the zip to the tag's GitHub release, writes `Casks/share-bar.rb` through a throwaway tap clone PR and merges it. `bin/release` calls it after the formula bump when on macOS with the signing identity; otherwise it prints the command to run on such a Mac.
+- `mac/release.sh <tag>`: runs `build.sh --sign --notarize`, uploads the zip to the tag's GitHub release with `--clobber`, writes `Casks/share-bar.rb` through a throwaway tap clone PR and merges it; a rerun for the same tag force-updates an open cask PR branch. It is idempotent, so the recovery for "formula released, cask did not" is rerunning `mac/release.sh <tag>`. `bin/release` calls it after the formula bump when on macOS with the signing identity; otherwise it prints that command.
+- Signing inputs: the Developer ID Application identity for team `W777S7V8TN` in the release Mac's login keychain (its p12 lives in 1Password vault dfoundation-prod) and the notarytool keychain profile `DWARVES_NOTARY` (from the App Store Connect API key). `build.sh` checks both and never creates them; a missing one is named and the script exits. Rotation: import the new p12 into the keychain and rerun `xcrun notarytool store-credentials DWARVES_NOTARY`.
 - CI: a `mac` job on `macos-latest` runs `swift test --package-path mac` and `bash mac/build.sh 0.0.0`; shellcheck adds `mac/*.sh`.
 
 ## Task Breakdown
 
 ### Phase 1: Foundation
 
-- [ ] TASK-001: `bin/share` hardening (index lock, id loop, tab/newline refusal, `quick.url` lifecycle, fork-free `share_url` with `urlenc`, streamed `hits`). Accept: in `tests/share.sh`, 6 parallel `rm` plus 6 parallel `add` end with exactly the expected rows; a name with a tab is refused; a name with `#` and `é` yields a link that serves 200 locally; `hits` output is byte-identical to before on the test log; `share ls` output is unchanged for the existing fixtures; `/bin/bash -n bin/share` and shellcheck pass.
-- [ ] TASK-002: `share state`. Accept: `jq -e` validates it in every state (`not_setup`, `stopped`, serving with `SHARE_TUNNEL=0`); each share's `url` equals its `share ls` line; `own_host` and `kind` are right for snapshot, live, and host rows; `find "$SHARE_ROOT" "$SHARE_CONFIG_DIR" -newer <marker>` is empty after `state` with an expired row present; a 500-row index finishes under 3s in the suite (target under 1s on an idle Mac; the measured time goes in the verification record); `state` on a copy of the v0.5.1 script exits 1 and writes nothing.
-- [ ] TASK-003: `mac/` package with `ShareBarCore` and tests. Accept: `swift test --package-path mac` passes, covering decode of a real `state` fixture plus an unknown extra field; `schema: 2` maps to "Update Share Bar"; a non-JSON stdout maps to "Update share CLI"; locate order with an injected file check and expanded `$HOME`; a 200KB stdout child completes without deadlock; `state` timeout kills a `sleep 30` grandchild (its pid is gone after the kill); `MutationQueue` runs two verbs strictly in order; every trailing-text and header rule including boundaries (exactly 24h, exactly 60m, `expires == now`).
+- [ ] TASK-001: Index writes. `index_lock` with pid file and stale-lock rule, the single composed EXIT trap for both locks, `mktemp` rewrites, `rand_id` collision loop, tab/newline name refusal. Accept: in `tests/share.sh`, 6 parallel `rm` plus 6 parallel `add` end with exactly the expected rows; a lock dir whose pid is dead is broken and the command succeeds; a `host_rm` failure after `index_lock` leaves no lock dir; a tab name is refused; `/bin/bash -n bin/share` and shellcheck pass.
+- [ ] TASK-002: `quick.url` lifecycle. Accept: after `stop` in quick mode the file is gone; after the serve process exits the file is gone.
+- [ ] TASK-003: Pure-bash `urlenc` and fork-free `share_url`. Accept: the encoder comparison test passes over the fixed name list; a name with `#` and `é` serves 200 through the printed link; `share ls` output is unchanged for the existing fixtures.
+- [ ] TASK-004: Streamed `hits`. Accept: output is byte-identical to the slurping version on the test log.
+- [ ] TASK-005: `share state`. Accept: `jq -e` validates it in `not_setup`, `stopped`, and serving (`SHARE_TUNNEL=0`); each share's `url` equals its `share ls` line; `kind` and `own_host` are right for snapshot, live, and host rows; `find "$SHARE_ROOT" "$SHARE_CONFIG_DIR" -newer <marker>` is empty after `state` with an expired row present; a 500-row index finishes under 3s in the suite (target under 1s on an idle Mac, measured time recorded); `state` on a copy of the v0.5.1 script exits 1 and writes nothing.
+- [ ] TASK-006: `mac/` package, `ShareBarCore` and tests. Accept: `swift test --package-path mac` passes, covering: decode of a real `state` fixture plus an unknown extra field; every header rule, including exit 1 with help text versus a jq-missing stderr line; `schema: 2`; locate order with an injected file check and expanded `$HOME`; a 200KB stdout child without deadlock; a `state` timeout that kills a `sleep 30` grandchild; `MutationQueue` ordering; every trailing-text rule with boundaries (exactly 24h, exactly 60m, `expires == now`); `canCopy`, `canRefresh`, `removeText`, `showStart`, `showSetUp`, and the 25-row cap.
 
 ### Phase 2: Core
 
-- [ ] TASK-004: `ShareBar` status item and menu (header, rows capped at 25, submenus, lazy hits, remove confirm, Start/Stop, Share File…, Open at Login, Quit, poll timer, wake refresh). Accept: `swift build` succeeds; the assembled app run against a test `SHARE_ROOT` shows the item; a screenshot of the open menu is captured into the verification record; no Dock icon.
-- [ ] TASK-005: Drop target. Accept: dropping a file creates a share visible in `share ls`, the link from `state` is on the pasteboard, the icon shows the checkmark; a file-promise drag is refused with an alert.
-- [ ] TASK-006: Setup window. Accept: with an empty `SHARE_CONFIG_DIR`, the menu shows Set Up…; the window streams output; Cancel leaves no child of the setup process group alive (`pgrep -g <pgid>` empty) and no Dock icon afterwards.
+- [ ] TASK-007: `ShareBar` status item and menu wired to `MenuModel` (instant open from the cached snapshot and in-place update, submenus, lazy hits with one in flight, remove confirm, Start/Stop, Set Up…, Share File…, Open at Login, Quit, 60s poll, wake refresh, accessibility label). Accept: `swift build` succeeds; the app run against a test `SHARE_ROOT` shows the item; a screenshot of the open menu goes into the verification record; no Dock icon.
+- [ ] TASK-008: Drop target. Accept: dropping a file creates a share visible in `share ls`, its link is on the pasteboard, the icon shows the checkmark; dropping a folder asks first and Cancel publishes nothing; a file-promise drag is refused.
+- [ ] TASK-009: Setup window. Accept: with an empty `SHARE_CONFIG_DIR`, the menu shows Set Up…; the window streams output; Cancel and Quit each leave no member of the setup process group alive (`pgrep -g <pgid>` empty); no Dock icon after the window closes.
 
 ### Phase 3: Wiring
 
-- [ ] TASK-007: `mac/Info.plist` and `mac/build.sh`. Accept: without `--sign` it produces an ad-hoc signed universal app (`lipo -archs` lists `x86_64 arm64`) whose Info.plist carries every key above and the given version; with `--sign --notarize` notarytool reports `Accepted`, `xcrun stapler validate` passes on the `.app`, and `spctl -a -vv` says `Notarized Developer ID`.
-- [ ] TASK-008: CI `mac` job and shellcheck of `mac/*.sh`. Accept: the workflow YAML parses and the job's commands pass locally.
-- [ ] TASK-009: `mac/release.sh` and the `bin/release` hook. Cask: `version`, `sha256`, `url` to the release asset, `depends_on formula: "dwarvesf/tools/share"`, `depends_on macos: ">= :ventura"`, `app "Share Bar.app"`, `uninstall quit: "foundation.d.share.bar"`, `zap trash: ["~/Library/Preferences/foundation.d.share.bar.plist"]` (never `~/share`, `~/.config/share`, or the `foundation.d.share` LaunchAgent, which the formula owns). Accept: `RELEASE_DRY=1 mac/release.sh v0.0.0` prints the cask and the upload without writing; `brew style` passes on the printed cask.
-- [ ] TASK-010: Docs. README "Menu bar app" section (install, first-run states), `docs/how-it-works.md` gains the `share state` contract, the formula caveats name the cask, and a `docs/verification/menu-bar.md` record. Accept: the JSON example in the docs matches the implemented fields exactly (a test greps each field name).
+- [ ] TASK-010: `mac/Info.plist` and `mac/build.sh`. Accept: without `--sign` it produces an ad-hoc signed universal app (`lipo -archs` lists `x86_64 arm64`) with every Info.plist key above and the given version; with `--sign --notarize` notarytool reports `Accepted`, `xcrun stapler validate` passes on the `.app`, and `spctl -a -vv` says `Notarized Developer ID`; a missing identity exits non-zero naming it.
+- [ ] TASK-011: CI `mac` job and shellcheck of `mac/*.sh`. Accept: the workflow YAML parses and the job's commands pass locally.
+- [ ] TASK-012: `mac/release.sh` and the `bin/release` hook. Cask: `version`, `sha256`, `url` to the release asset, `depends_on formula: "dwarvesf/tools/share"`, `depends_on macos: ">= :ventura"`, `app "Share Bar.app"`, `uninstall quit: "foundation.d.share.bar"`, `zap trash: ["~/Library/Preferences/foundation.d.share.bar.plist"]` (never `~/share`, `~/.config/share`, or the `foundation.d.share` LaunchAgent, which the formula owns). Accept: `RELEASE_DRY=1 mac/release.sh v0.0.0` prints the cask and the upload without writing; `brew style` passes on the printed cask.
+- [ ] TASK-013: Docs. README "Menu bar app" section (install, first-run states), `docs/how-it-works.md` gains the `share state` contract, the formula caveats name the cask, and a `docs/verification/menu-bar.md` record. Accept: a test greps each JSON field name of the implemented output in the docs.
 
 ## After state
 
@@ -247,7 +256,7 @@ swift test --package-path mac
 bash mac/build.sh 0.0.0 && lipo -archs "mac/build/Share Bar.app/Contents/MacOS/ShareBar"
 ```
 
-Negative controls: (1) add a `cmd_prune` call at the top of `cmd_state`: the "state writes nothing" check fails; (2) remove the index lock from `cmd_rm`: the parallel-writers check fails.
+Negative controls: (1) add a `cmd_prune` call at the top of `cmd_state`: the "state writes nothing" check fails; (2) remove the index lock from `cmd_rm`: the parallel-writers check fails; (3) make `urlenc` keep `#`: the encoder comparison fails.
 
 ## Edge Cases
 
@@ -273,6 +282,10 @@ Negative controls: (1) add a `cmd_prune` call at the top of `cmd_state`: the "st
 20. This Mac not in `hosts=`: header "Not serving on this Mac (hosts=…)", Start hidden, adds warn that the link needs a serving Mac.
 21. More than 25 shares: 25 newest listed, then "N more (share ls)".
 22. A private GitHub repo dropped: the add succeeds, the warning alert offers Remove.
+23. A folder dragged across the menu bar by accident: the confirm dialog stops it.
+24. Two dropped files with the same basename, or a terminal `add` during the drop: the copied link comes from the id diff, never from a name match.
+25. A command dies holding a lock: the next command finds a dead pid in the lock and takes it over.
+26. `jq` missing or a bash error in the CLI: the header shows the CLI's error line, not an update hint.
 
 ## Failure modes
 
@@ -290,7 +303,7 @@ Negative controls: (1) add a `cmd_prune` call at the top of `cmd_state`: the "st
 
 - The tool rename. Display name, bundle id, and cask name each live in one place (DEC-007).
 - Creating live (port) shares or `--host` shares from the app.
-- A TTL picker, a folder-share confirm, a Finder Share extension: next iteration once the contract lands.
+- A TTL picker and a Finder Share extension: next iteration once the contract lands.
 - Auto-update inside the app: Homebrew updates the cask.
 - File promises (Mail, Photos drags), notifications, visit charts, Linux.
 - Supervising the serve daemon.
@@ -315,12 +328,17 @@ Negative controls: (1) add a `cmd_prune` call at the top of `cmd_state`: the "st
 - DEC-008: A new verb over a flag, so an old CLI cannot prune on the app's first call.
 - DEC-009: Reads have timeouts and kill the process group; writes are never killed.
 - DEC-010: The app always re-reads `state` after a verb instead of parsing verb output.
+- DEC-011: One composed EXIT trap owns every lock; locks carry a pid for stale-lock recovery.
+- DEC-012: `urlenc` is pure bash and must match `jq @uri` byte for byte.
+- DEC-013: Folder publishes from the app always confirm; the CLI stays unprompted.
 
 ## Review
 
 ### Verdict: FIX THEN SHIP (design-time, folded)
 
-Design critique (5 lenses) returned REVISE with 3 critical, 9 high, 6 medium, 3 low; the advisor returned 17 suggestions. Every critical and high finding is folded above: new verb (C1), kill model (C2), 500-row budget (C3), pipe draining (H1), index lock (H2), quick-URL lifecycle (H3), `ready` field and polling (H4), malformed rows (H5), GUI PATH (H6), `source_gone` dropped (H7), streamed hits (H8), stderr rules (H9). Mediums folded: hosts header (M1), `kind` split (M2), activation policy (M3), login item and packaging detail (M4), release split (M5), 25-row cap (M6). Low folded: id collision loop, `source`/`added` dropped. Advisor extras folded: urlenc links, zap limits, accessibility label, file-newer write test, private-repo warning alert. Deferred: TTL picker, folder confirm, Finder extension.
+Design critique (5 lenses) returned REVISE with 3 critical, 9 high, 6 medium, 3 low; the advisor returned 17 suggestions. Every critical and high finding is folded above: new verb (C1), kill model (C2), 500-row budget (C3), pipe draining (H1), index lock (H2), quick-URL lifecycle (H3), `ready` field and polling (H4), malformed rows (H5), GUI PATH (H6), `source_gone` dropped (H7), streamed hits (H8), stderr rules (H9). Mediums folded: hosts header (M1), `kind` split (M2), activation policy (M3), login item and packaging detail (M4), release split (M5), 25-row cap (M6). Low folded: id collision loop, `source`/`added` dropped. Advisor extras folded: urlenc links, zap limits, accessibility label, file-newer write test, private-repo warning alert. Deferred: TTL picker, Finder extension.
+
+Spec validation (fresh Opus) returned NEEDS REVISION with 2 criticals, both folded: pure-bash `urlenc` (DEC-012) and the composed lock trap with stale-lock recovery (DEC-011). Warnings folded: TASK-001 split into four, model fields for menu rules, the `ls` output wording, the header failure rule, id-diff link pick, folder confirm, setup cancel and quit, the named `DropView`, signing inputs and an idempotent release. No `docs/PHILOSOPHY.md` exists in this repo, so that check does not apply.
 
 ## Open questions
 

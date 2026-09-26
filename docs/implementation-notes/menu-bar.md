@@ -9,7 +9,8 @@ Delta from `docs/specs/SPEC-003-menu-bar.md`. Decisions already in the spec are 
 
 ## Deviations
 
-(none yet)
+- The first spec draft used `share status --json`. The design review showed an older CLI ignores the flag and prunes, so the contract became the verb `share state` (DEC-008). The ADR carries an amendment line rather than a rewrite.
+- The review turned up two bugs in share that exist today and that the app would trigger more often: concurrent index writers lose rows, and `quick.url` survives `stop`. Both are fixed in the spec's TASK-001 instead of a separate PR, since the app's correctness depends on them.
 
 ## Open questions for the operator
 
