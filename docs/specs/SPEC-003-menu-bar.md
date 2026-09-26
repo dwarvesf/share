@@ -42,6 +42,8 @@ The app ships with the CLI from the same repo (`mac/`) and version tag. A cask `
 ## Picture
 
 ```
+ bin/release ─▶ tag ─▶ formula bump ─▶ mac/release.sh ─▶ build.sh (sign, notarize, staple) ─▶ zip on the GitHub release ─▶ tap PR: Casks/share-bar.rb + formula caveats
+
  brew install --cask dwarvesf/tools/share-bar ──▶ formula share + Share Bar.app
                                                        │
  ┌────────────── Share Bar.app ──────────────┐         │
@@ -119,12 +121,14 @@ Invariants: never prunes, never writes or creates a file, never needs a TTY, nev
 
 **`bin/share` hardening** (behavior changes to existing verbs):
 
-- Every write to `index.tsv` (the append in `add`, the read-and-rewrite in `rm`) runs under `index_lock`, held only around that write: after `host_add`/`host_rm` return, released right after the `mv` or append. The lock is `$root/.lock-index` holding a `pid` file; a waiter that finds the recorded pid dead removes the lock and retries (stale-lock rule). The rewrite goes through `mktemp` in `$root`.
-- Lock cleanup uses one EXIT trap for the whole script: `host_lock` and `index_lock` add their directory to a global `held_locks` list, and a single `release_locks` trap removes every entry. No function sets its own EXIT trap.
+- `index_lock` covers the whole publish step of `add` and `rm`: the index write, `write_caddyfile`, and `caddy_reload`. It is taken after `host_add`/`host_rm` return and released after the reload. `write_caddyfile` renders to a `mktemp` file in `$root` and moves it into place, so caddy never reads a half-written file. The index rewrite also goes through `mktemp`.
+- Both locks use one acquire function, `lock_take <name>`: the lock is a symlink `$root/.lock-<name>` whose target is the holder's pid, created atomically with `ln -s`. A waiter that reads a target pid that `kill -0` says is dead removes the link and retries (stale-lock rule). `host_lock` moves onto it, so a leaked host lock no longer needs a manual `rmdir`. Inside a subshell `$$` is the parent's pid (bash 3.2 has no `BASHPID`), so a lock taken during `prune`'s pipeline is recovered once the parent exits; that is accepted.
+- Lock cleanup: `lock_take` appends the path to a global `held_locks` and re-arms `trap release_locks EXIT` on every take (the same handler, so re-arming is idempotent and also covers subshells, which do not inherit EXIT traps). `cmd_serve`'s existing EXIT trap calls `release_locks` as its first step. No other function sets an EXIT trap.
+- `cf()` gains `--max-time 30`, so a stalled Cloudflare call cannot hang an own-host `add` or `rm` forever.
 - `rand_id` loops until the id is not in the index and `pub/<id>` does not exist.
 - `add` refuses a source whose basename contains a tab or a newline: `share: names with tabs or newlines are not supported`.
 - `quick.url` is removed by `cmd_stop` and by the serve process's exit trap.
-- `urlenc` becomes pure bash: an `LC_ALL=C` byte loop that keeps `A-Za-z0-9-_.~` and `/`, and writes every other byte as `%XX` (uppercase hex). Its output matches the current `jq @uri` form byte for byte, so `gen_index` links do not change; a test compares both encoders over a fixed name list (spaces, `#?%&+`, `é`, CJK, emoji).
+- `urlenc` becomes pure bash and fork-free: an `LC_ALL=C` byte loop that sets its result in a global (no `$( )`), keeps exactly `A-Za-z0-9-_.~` and `/`, and writes every other byte as `%XX` in uppercase hex. The byte value is masked with `$((c & 255))`, because bash 3.2's `printf '%d' "'c"` sign-extends bytes above 127. The keep-set is the contract; it matches `jq @uri` in jq 1.7 and later, so `gen_index` links do not change. A test compares both encoders over a fixed name list: spaces, `#?%&+=`, `!*'()`, `é`, CJK, emoji.
 - `share_url` sets its result in a global without forking (`printf -v`, parameter expansion, `[[ -d ]]`/`[[ -f ]]` tests) and encodes the path with the new `urlenc`. `cmd_ls` output is unchanged for names made of unreserved characters and spaces; names with `#`, `?`, `%` or non-ASCII now print working links where they printed broken ones.
 - `hits` streams the access log (`jq -n '[inputs | …]'`) instead of slurping it.
 
@@ -140,15 +144,14 @@ enum CLI {
 }
 struct CLIResult { status: Int32; stdout: String; stderr: String; timedOut: Bool }
 actor MutationQueue { func run(_ args: [String]) async -> CLIResult }   // one mutating verb at a time
-struct MenuModel { init(snapshot: Snapshot?, failure: Failure?, now: Date); header; rows: [Row]; more: Int; icon: Icon }
-struct MenuModel { …; showStart: Bool; showSetUp: Bool }
+struct MenuModel { init(snapshot: Snapshot?, failure: Failure?, now: Date); header; rows: [Row]; more: Int; icon: Icon; showStart: Bool; showSetUp: Bool }
 struct Row { id; title; trailing; url; canRefresh: Bool; canCopy: Bool; removeText: String }
 ```
 
 - Location order: `SHARE_BIN`, `/opt/homebrew/bin/share`, `/usr/local/bin/share`, `$HOME/.local/bin/share`, `/opt/local/bin/share`. `$HOME` is expanded in Swift.
 - Child environment: inherited, plus `PATH` = the resolved CLI's directory, then `/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$HOME/.local/bin:/opt/local/bin:$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:/usr/bin:/bin:/usr/sbin:/sbin`, `LANG=en_US.UTF-8` when unset, `SHARE_CLIPBOARD=0`. stdin is `/dev/null`.
 - Spawning uses `posix_spawn` with `POSIX_SPAWN_SETPGROUP`, so a kill reaches grandchildren. Both pipes are drained while the process runs; a run completes when the process exits and both pipes hit EOF.
-- Timeouts: `state` 10s, `hits` 15s, both TERM the group, then KILL after 3s. Mutating verbs (`add`, `rm`, `refresh`, `start`, `stop`) have no timeout and are never killed; the header shows "Working…" while one runs. Setup is cancellable (TERM the group, KILL after 3s).
+- Timeouts: `state` 10s, `hits` 15s, both TERM the group, then KILL after 3s. Mutating verbs (`add`, `rm`, `refresh`, `start`, `stop`) have no timeout and are never killed automatically; the header shows "Working…" while one runs. After 60 seconds the menu adds "Stop Waiting", which asks first ("The share may be left half-published; run it again from the terminal to finish") and then TERMs the group, so a stuck call cannot block the queue forever. Setup is cancellable (TERM the group, KILL after 3s).
 - A `state` call already in flight is shared, not duplicated.
 
 Trailing text: `live` for live kind; `never` for `expires == 0`; `expired` when `expires <= now`; else the largest whole unit left, `<n>d left`, `<n>h left`, `<n>m left` (floor, minimum `1m left`). A row with `own_host` shows the host as its title.
@@ -203,7 +206,7 @@ Open at Login reads `SMAppService.mainApp.status` each time the menu opens (`.en
 - `mac/` Swift package (swift-tools-version 5.9, macOS 13), targets `ShareBarCore`, `ShareBar`, `ShareBarCoreTests`.
 - `mac/Info.plist`: `CFBundleIdentifier foundation.d.share.bar`, `CFBundleName`/`CFBundleDisplayName` "Share Bar", `CFBundleExecutable ShareBar`, `CFBundlePackageType APPL`, `LSUIElement true`, `LSMinimumSystemVersion 13.0`, `CFBundleShortVersionString`/`CFBundleVersion` set by the build, `NSDocumentsFolderUsageDescription`, `NSDesktopFolderUsageDescription`, `NSDownloadsFolderUsageDescription`, `NSRemovableVolumesUsageDescription`, `NSNetworkVolumesUsageDescription` (each: "share copies the files you choose so it can publish them").
 - `mac/build.sh [--sign] [--notarize] <version>`: universal release build, bundle assembly, sign (ad-hoc without `--sign`), notarize and staple the `.app`, then zip. Last stdout line is the zip path.
-- `mac/release.sh <tag>`: runs `build.sh --sign --notarize`, uploads the zip to the tag's GitHub release with `--clobber`, writes `Casks/share-bar.rb` through a throwaway tap clone PR and merges it; a rerun for the same tag force-updates an open cask PR branch. It is idempotent, so the recovery for "formula released, cask did not" is rerunning `mac/release.sh <tag>`. `bin/release` calls it after the formula bump when on macOS with the signing identity; otherwise it prints that command.
+- `mac/release.sh <tag>`: runs `build.sh --sign --notarize`, uploads the zip to the tag's GitHub release with `--clobber`, writes `Casks/share-bar.rb` through a throwaway tap clone PR and merges it; a rerun for the same tag force-updates an open cask PR branch. The same tap PR adds a caveats line to `Formula/share.rb` naming the cask (idempotent: skipped when present). It is idempotent, so the recovery for "formula released, cask did not" is rerunning `mac/release.sh <tag>`. `bin/release` calls it after the formula bump when on macOS with the signing identity; otherwise it prints `CASK NOT RELEASED: run mac/release.sh <tag> on a signing Mac` and exits 3.
 - Signing inputs: the Developer ID Application identity for team `W777S7V8TN` in the release Mac's login keychain (its p12 lives in 1Password vault dfoundation-prod) and the notarytool keychain profile `DWARVES_NOTARY` (from the App Store Connect API key). `build.sh` checks both and never creates them; a missing one is named and the script exits. Rotation: import the new p12 into the keychain and rerun `xcrun notarytool store-credentials DWARVES_NOTARY`.
 - CI: a `mac` job on `macos-latest` runs `swift test --package-path mac` and `bash mac/build.sh 0.0.0`; shellcheck adds `mac/*.sh`.
 
@@ -211,25 +214,27 @@ Open at Login reads `SMAppService.mainApp.status` each time the menu opens (`.en
 
 ### Phase 1: Foundation
 
-- [ ] TASK-001: Index writes. `index_lock` with pid file and stale-lock rule, the single composed EXIT trap for both locks, `mktemp` rewrites, `rand_id` collision loop, tab/newline name refusal. Accept: in `tests/share.sh`, 6 parallel `rm` plus 6 parallel `add` end with exactly the expected rows; a lock dir whose pid is dead is broken and the command succeeds; a `host_rm` failure after `index_lock` leaves no lock dir; a tab name is refused; `/bin/bash -n bin/share` and shellcheck pass.
+- [ ] TASK-001: Locks and the publish critical section. `lock_take` with pid symlinks and the stale rule, `host_lock` moved onto it, `index_lock` around index write plus `write_caddyfile` (via `mktemp`) plus `caddy_reload`, the re-armed `release_locks` trap, `cmd_serve`'s trap calling it, `cf()` `--max-time 30`, `rand_id` collision loop, tab/newline name refusal. Accept: in `tests/share.sh`, 6 parallel `rm` plus 6 parallel `add` end with exactly the expected rows and a Caddyfile listing exactly the surviving ids; a lock whose pid is dead is broken and the command succeeds; a `host_rm` die leaves neither `.lock-host` nor `.lock-index`; a die inside `prune`'s pipeline leaves no lock; a tab name is refused; `/bin/bash -n bin/share` and shellcheck pass.
 - [ ] TASK-002: `quick.url` lifecycle. Accept: after `stop` in quick mode the file is gone; after the serve process exits the file is gone.
-- [ ] TASK-003: Pure-bash `urlenc` and fork-free `share_url`. Accept: the encoder comparison test passes over the fixed name list; a name with `#` and `é` serves 200 through the printed link; `share ls` output is unchanged for the existing fixtures.
+- [ ] TASK-003: Pure-bash `urlenc` and fork-free `share_url`. Accept: the encoder comparison test passes over the fixed name list under `/bin/bash` 3.2; a name with `#` and `é` serves 200 through the printed link; `share ls` output is unchanged for the existing fixtures.
 - [ ] TASK-004: Streamed `hits`. Accept: output is byte-identical to the slurping version on the test log.
 - [ ] TASK-005: `share state`. Accept: `jq -e` validates it in `not_setup`, `stopped`, and serving (`SHARE_TUNNEL=0`); each share's `url` equals its `share ls` line; `kind` and `own_host` are right for snapshot, live, and host rows; `find "$SHARE_ROOT" "$SHARE_CONFIG_DIR" -newer <marker>` is empty after `state` with an expired row present; a 500-row index finishes under 3s in the suite (target under 1s on an idle Mac, measured time recorded); `state` on a copy of the v0.5.1 script exits 1 and writes nothing.
-- [ ] TASK-006: `mac/` package, `ShareBarCore` and tests. Accept: `swift test --package-path mac` passes, covering: decode of a real `state` fixture plus an unknown extra field; every header rule, including exit 1 with help text versus a jq-missing stderr line; `schema: 2`; locate order with an injected file check and expanded `$HOME`; a 200KB stdout child without deadlock; a `state` timeout that kills a `sleep 30` grandchild; `MutationQueue` ordering; every trailing-text rule with boundaries (exactly 24h, exactly 60m, `expires == now`); `canCopy`, `canRefresh`, `removeText`, `showStart`, `showSetUp`, and the 25-row cap.
+- [ ] TASK-006: `mac/` package and the `ShareBarCore` CLI runner: locate, `posix_spawn` with its own process group, both pipes drained while running, timeouts with TERM then KILL, the shared in-flight `state` call, `MutationQueue`. Accept: `swift test --package-path mac` covers locate order with an injected file check and expanded `$HOME`; a 200KB stdout child completes; a `state` timeout kills a `sleep 30` grandchild; two queued verbs run strictly in order; concurrent `state` requests spawn one process.
+- [ ] TASK-007: `ShareBarCore` model: `Snapshot` decode and every `MenuModel` rule. Accept: `swift test` covers decode of a real `state` fixture plus an unknown extra field; every header rule, including exit 1 with help text versus a jq-missing stderr line and `schema: 2`; every trailing-text rule with boundaries (exactly 24h, exactly 60m, `expires == now`); `canCopy`, `canRefresh`, `removeText`, `showStart`, `showSetUp`; the 25-row cap.
 
 ### Phase 2: Core
 
-- [ ] TASK-007: `ShareBar` status item and menu wired to `MenuModel` (instant open from the cached snapshot and in-place update, submenus, lazy hits with one in flight, remove confirm, Start/Stop, Set Up…, Share File…, Open at Login, Quit, 60s poll, wake refresh, accessibility label). Accept: `swift build` succeeds; the app run against a test `SHARE_ROOT` shows the item; a screenshot of the open menu goes into the verification record; no Dock icon.
-- [ ] TASK-008: Drop target. Accept: dropping a file creates a share visible in `share ls`, its link is on the pasteboard, the icon shows the checkmark; dropping a folder asks first and Cancel publishes nothing; a file-promise drag is refused.
-- [ ] TASK-009: Setup window. Accept: with an empty `SHARE_CONFIG_DIR`, the menu shows Set Up…; the window streams output; Cancel and Quit each leave no member of the setup process group alive (`pgrep -g <pgid>` empty); no Dock icon after the window closes.
+- [ ] TASK-008: Status item and menu rendering: header, rows, submenus, instant open from the cached snapshot with in-place update, 60s poll, wake refresh, accessibility label. Accept: `swift build` succeeds; the app run against a test `SHARE_ROOT` shows the item with no Dock icon; a screenshot of the open menu goes into the verification record; manual checks recorded there: an open menu updates when `state` returns, the icon changes within 60s after `share stop` in a terminal, the icon refreshes after sleep and wake.
+- [ ] TASK-009: Menu actions: Copy Link, Open, Refresh, lazy hits (one in flight, cancel on switch, cached per open), Remove with confirm, Start/Stop, Stop Waiting, Share File…, Set Up…, Open at Login, Quit. Accept: each action run by hand against a test `SHARE_ROOT` has the effect named in the spec, recorded in the verification record, including the `.requiresApproval` login state and a hits call cancelled by opening another submenu.
+- [ ] TASK-010: Drop target. Accept: dropping a file creates a share visible in `share ls`, its link is on the pasteboard, the icon shows the checkmark; dropping a folder asks first and Cancel publishes nothing; a file-promise drag is refused.
+- [ ] TASK-011: Setup window. Accept: with an empty `SHARE_CONFIG_DIR`, the menu shows Set Up…; the window streams output; Cancel and Quit each leave no member of the setup process group alive (`pgrep -g <pgid>` empty); no Dock icon after the window closes.
 
 ### Phase 3: Wiring
 
-- [ ] TASK-010: `mac/Info.plist` and `mac/build.sh`. Accept: without `--sign` it produces an ad-hoc signed universal app (`lipo -archs` lists `x86_64 arm64`) with every Info.plist key above and the given version; with `--sign --notarize` notarytool reports `Accepted`, `xcrun stapler validate` passes on the `.app`, and `spctl -a -vv` says `Notarized Developer ID`; a missing identity exits non-zero naming it.
-- [ ] TASK-011: CI `mac` job and shellcheck of `mac/*.sh`. Accept: the workflow YAML parses and the job's commands pass locally.
-- [ ] TASK-012: `mac/release.sh` and the `bin/release` hook. Cask: `version`, `sha256`, `url` to the release asset, `depends_on formula: "dwarvesf/tools/share"`, `depends_on macos: ">= :ventura"`, `app "Share Bar.app"`, `uninstall quit: "foundation.d.share.bar"`, `zap trash: ["~/Library/Preferences/foundation.d.share.bar.plist"]` (never `~/share`, `~/.config/share`, or the `foundation.d.share` LaunchAgent, which the formula owns). Accept: `RELEASE_DRY=1 mac/release.sh v0.0.0` prints the cask and the upload without writing; `brew style` passes on the printed cask.
-- [ ] TASK-013: Docs. README "Menu bar app" section (install, first-run states), `docs/how-it-works.md` gains the `share state` contract, the formula caveats name the cask, and a `docs/verification/menu-bar.md` record. Accept: a test greps each JSON field name of the implemented output in the docs.
+- [ ] TASK-012: `mac/Info.plist` and `mac/build.sh`. Accept: without `--sign` it produces an ad-hoc signed universal app (`lipo -archs` lists `x86_64 arm64`) with every Info.plist key above and the given version; with `--sign --notarize` notarytool reports `Accepted`, `xcrun stapler validate` passes on the `.app`, and `spctl -a -vv` says `Notarized Developer ID`; a missing identity exits non-zero naming it.
+- [ ] TASK-013: CI `mac` job and shellcheck of `mac/*.sh`. Accept: the workflow YAML parses and the job's commands pass locally.
+- [ ] TASK-014: `mac/release.sh` and the `bin/release` hook. Cask: `version`, `sha256`, `url` to the release asset, `livecheck` (`strategy :github_latest`), `depends_on formula: "dwarvesf/tools/share"`, `depends_on macos: ">= :ventura"`, `app "Share Bar.app"`, `uninstall quit: "foundation.d.share.bar"`, `zap trash: ["~/Library/Preferences/foundation.d.share.bar.plist"]` (never `~/share`, `~/.config/share`, or the `foundation.d.share` LaunchAgent, which the formula owns). The tap PR also adds the formula caveats line. Accept: `RELEASE_DRY=1 mac/release.sh v0.0.0` prints the cask, the caveats edit, and the upload without writing; `brew style` passes on the printed cask; `bin/release` without the identity prints the CASK NOT RELEASED line and exits 3.
+- [ ] TASK-015: Docs. README "Menu bar app" section (install, first-run states), `docs/how-it-works.md` gains the `share state` contract, and a `docs/verification/menu-bar.md` record. Accept: a test greps each JSON field name of the implemented output in the docs.
 
 ## After state
 
@@ -256,7 +261,7 @@ swift test --package-path mac
 bash mac/build.sh 0.0.0 && lipo -archs "mac/build/Share Bar.app/Contents/MacOS/ShareBar"
 ```
 
-Negative controls: (1) add a `cmd_prune` call at the top of `cmd_state`: the "state writes nothing" check fails; (2) remove the index lock from `cmd_rm`: the parallel-writers check fails; (3) make `urlenc` keep `#`: the encoder comparison fails.
+Negative controls: (1) add a `cmd_prune` call at the top of `cmd_state`: the "state writes nothing" check fails; (2) remove the index lock from `cmd_rm`: the parallel-writers check fails; (3) make `urlenc` keep `#`: the encoder comparison fails; (4) render the Caddyfile after releasing `index_lock`: the parallel Caddyfile check fails.
 
 ## Edge Cases
 
@@ -283,7 +288,7 @@ Negative controls: (1) add a `cmd_prune` call at the top of `cmd_state`: the "st
 21. More than 25 shares: 25 newest listed, then "N more (share ls)".
 22. A private GitHub repo dropped: the add succeeds, the warning alert offers Remove.
 23. A folder dragged across the menu bar by accident: the confirm dialog stops it.
-24. Two dropped files with the same basename, or a terminal `add` during the drop: the copied link comes from the id diff, never from a name match.
+24. Two dropped files with the same basename: the queue reads `state` before and after each `add`, and the copied link is the id that one `add` created. A terminal `add` that lands in the same moment can still be picked; that residual race is accepted.
 25. A command dies holding a lock: the next command finds a dead pid in the lock and takes it over.
 26. `jq` missing or a bash error in the CLI: the header shows the CLI's error line, not an update hint.
 
@@ -293,7 +298,9 @@ Negative controls: (1) add a `cmd_prune` call at the top of `cmd_state`: the "st
 |---|---|---|
 | CLI not on the GUI PATH | locate returns nil | fixed probe list plus `SHARE_BIN`; install state with the brew command |
 | A read hangs | `state`/`hits` timeout | TERM then KILL the process group; last snapshot stays, header shows the error |
-| A write is slow (big folder, `start` waits on the tunnel) | mutating verb running | no kill; "Working…" header; queue holds the next verb |
+| A write is slow (big folder, `start` waits on the tunnel) | mutating verb running | no automatic kill; "Working…" header; queue holds the next verb; "Stop Waiting" after 60s with a confirm |
+| A Cloudflare call stalls | `cf()` hits `--max-time 30` | the verb fails with the CLI's error line |
+| Cask lags the formula | `bin/release` could not sign | it prints `CASK NOT RELEASED: run mac/release.sh <tag> on a signing Mac` and exits 3 after the formula release |
 | Contract drift | decode failure, or `schema` > 1 | update headers; additive fields never break decode |
 | Concurrent index writers (app, terminal, hourly prune) | lost rows before this spec | `index_lock` around every write |
 | Destructive click | Remove chosen | confirm dialog naming what goes (copy to Trash; DNS record for own-host shares) |
@@ -331,6 +338,8 @@ Negative controls: (1) add a `cmd_prune` call at the top of `cmd_state`: the "st
 - DEC-011: One composed EXIT trap owns every lock; locks carry a pid for stale-lock recovery.
 - DEC-012: `urlenc` is pure bash and must match `jq @uri` byte for byte.
 - DEC-013: Folder publishes from the app always confirm; the CLI stays unprompted.
+- DEC-014: The publish step (index write, Caddyfile render, reload) is one critical section under `index_lock`; locks are pid symlinks shared by both lock kinds.
+- DEC-015: A stuck write can be stopped by the user after 60s with a confirm; never automatically.
 
 ## Review
 
@@ -339,6 +348,8 @@ Negative controls: (1) add a `cmd_prune` call at the top of `cmd_state`: the "st
 Design critique (5 lenses) returned REVISE with 3 critical, 9 high, 6 medium, 3 low; the advisor returned 17 suggestions. Every critical and high finding is folded above: new verb (C1), kill model (C2), 500-row budget (C3), pipe draining (H1), index lock (H2), quick-URL lifecycle (H3), `ready` field and polling (H4), malformed rows (H5), GUI PATH (H6), `source_gone` dropped (H7), streamed hits (H8), stderr rules (H9). Mediums folded: hosts header (M1), `kind` split (M2), activation policy (M3), login item and packaging detail (M4), release split (M5), 25-row cap (M6). Low folded: id collision loop, `source`/`added` dropped. Advisor extras folded: urlenc links, zap limits, accessibility label, file-newer write test, private-repo warning alert. Deferred: TTL picker, Finder extension.
 
 Spec validation (fresh Opus) returned NEEDS REVISION with 2 criticals, both folded: pure-bash `urlenc` (DEC-012) and the composed lock trap with stale-lock recovery (DEC-011). Warnings folded: TASK-001 split into four, model fields for menu rules, the `ls` output wording, the header failure rule, id-diff link pick, folder confirm, setup cancel and quit, the named `DropView`, signing inputs and an idempotent release. No `docs/PHILOSOPHY.md` exists in this repo, so that check does not apply.
+
+Second validation (fresh Opus) returned NEEDS REVISION with 1 critical, folded: the Caddyfile render and reload now sit inside `index_lock` (DEC-014). Warnings folded: pid-symlink locks shared with `host_lock`, re-armed trap for subshells, `cmd_serve` trap calls `release_locks`, `cf()` timeout and Stop Waiting (DEC-015), the `urlenc` mask and keep-set, tasks split to 15, manual checks named, formula caveats moved into the release tap PR, TASK-001 checks reworded, the drop race narrowed, the loud cask-lag exit and `livecheck`, the release pipeline drawn, `MenuModel` merged.
 
 ## Open questions
 
