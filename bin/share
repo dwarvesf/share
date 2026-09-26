@@ -141,27 +141,35 @@ token_forget() {
 write_md_style() { # the reading stylesheet, shared by pandoc renders and gen_index
   cat >"$root/md-style.html" <<'CSS'
 <style>
-:root { --bg:#fcfcfc; --fg:#1a1a1a; --muted:#6b6b6b; --line:#d9d9d9; --code-bg:rgba(36,36,36,.055); --link:#0b57d0; }
-@media (prefers-color-scheme: dark) { :root { --bg:#1a1a1a; --fg:#d4d4d4; --muted:#9a9a9a; --line:#3a3a3a; --code-bg:rgba(255,255,255,.08); --link:#8ab4f8; } }
-html { background:var(--bg); color:var(--fg); -webkit-text-size-adjust:100%; }
-body { max-width:42em; margin:0 auto; padding:3rem 1.25rem 5rem; font:17px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; font-kerning:normal; }
-h1,h2,h3,h4,h5,h6 { line-height:1.25; margin:2em 0 .6em; font-weight:650; }
-h1 { font-size:1.7em; margin-top:0; } h2 { font-size:1.35em; padding-bottom:.25em; border-bottom:1px solid var(--line); } h3 { font-size:1.1em; } h4,h5,h6 { font-size:1em; }
+/* Spacedown's "paper" reading theme (dwarvesf/spacedown assets/paper-theme.css) on pandoc's default template. */
+:root { --paper-bg:#fbfaf7; --paper-fg:#242321; --paper-muted:#6e6c67; --paper-rule:#dcd9d2; --paper-rule-strong:#b9b5ac; --paper-link:#2b5f91; --paper-code-bg:#f0eee9; --paper-mark:#f6e7a8;
+  --paper-font-sans:"iA Writer Quattro V", "iA Writer Quattro S", -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --paper-font-mono:"iA Writer Mono V", "iA Writer Mono S", ui-monospace, "SF Mono", Menlo, monospace; }
+@media (prefers-color-scheme: dark) { :root { --paper-bg:#19191b; --paper-fg:#dedcd6; --paper-muted:#9c9a94; --paper-rule:#34343a; --paper-rule-strong:#55555c; --paper-link:#8bb8e8; --paper-code-bg:#242428; --paper-mark:#5c4f1e; } }
+html { background:var(--paper-bg); color:var(--paper-fg); -webkit-text-size-adjust:100%; }
+body { max-width:44rem; margin:0 auto; padding:2.2rem 1.6rem 4rem; font:17px/1.62 var(--paper-font-sans); font-kerning:normal; text-rendering:optimizeLegibility; }
+h1,h2,h3,h4,h5,h6 { font-weight:650; letter-spacing:-0.005em; margin:2em 0 .6em; }
+h1 { font-size:1.6em; line-height:1.25; margin-top:0; } h2 { font-size:1.3em; line-height:1.3; } h3 { font-size:1.1em; line-height:1.4; } h4,h5,h6 { font-size:1em; } h6 { color:var(--paper-muted); }
 p, ul, ol, dl, blockquote, pre, table, figure { margin:0 0 1.1em; }
-a { color:var(--link); text-decoration:underline; text-decoration-thickness:1px; text-underline-offset:2px; }
-li + li { margin-top:.25em; }
-blockquote { margin-left:0; padding:.1em 1em; border-left:3px solid var(--line); color:var(--muted); }
-code, kbd, samp, pre { font-family:ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; font-size:.88em; }
-code { background:var(--code-bg); padding:.12em .35em; border-radius:4px; }
-pre { background:var(--code-bg); padding:.9em 1em; border-radius:6px; overflow-x:auto; line-height:1.5; }
-pre code { background:none; padding:0; font-size:inherit; }
-table { display:block; width:max-content; max-width:100%; overflow-x:auto; border-collapse:collapse; border-top:1px solid var(--fg); border-bottom:1px solid var(--fg); }
-th, td { padding:.45em .9em .45em 0; text-align:left; vertical-align:top; }
-th { border-bottom:1px solid var(--fg); font-weight:650; }
-tbody tr + tr td { border-top:1px solid var(--line); }
+ul, ol { padding-left:1.6em; } li + li { margin-top:.25em; } li > p, li > ul, li > ol { margin:.2em 0; } li::marker { color:var(--paper-muted); }
+a { color:var(--paper-link); text-decoration:underline; text-decoration-thickness:1px; text-underline-offset:.18em; text-decoration-color:color-mix(in srgb, var(--paper-link) 35%, transparent); overflow-wrap:anywhere; }
+a:hover { text-decoration-color:var(--paper-link); }
+blockquote { margin-left:0; padding:0 1em; border-left:3px solid var(--paper-rule); color:var(--paper-muted); }
+blockquote p:last-child { margin-bottom:0; }
+code, kbd, samp, pre { font-family:var(--paper-font-mono); font-size:.9em; }
+code { background:var(--paper-code-bg); padding:.1em .3em; border-radius:4px; overflow-wrap:anywhere; }
+pre, pre.sourceCode { background:var(--paper-code-bg); padding:.9rem 1rem; border-radius:6px; overflow-x:auto; line-height:1.55; } /* pandoc sets .sourceCode transparent */
+div.sourceCode { overflow:visible; margin:0 0 1.1em; }
+pre code { background:none; padding:0; font-size:inherit; white-space:pre; }
+/* Spacedown sizes table columns with a script; here a wide table scrolls as a block instead. */
+table { display:block; width:max-content; max-width:100%; overflow-x:auto; border-collapse:collapse; font-size:.9em; line-height:1.6; font-variant-numeric:tabular-nums; }
+th, td { padding:.5em 1em .5em 0; text-align:left; vertical-align:top; }
+thead th { font-weight:650; border-bottom:1px solid var(--paper-rule-strong); }
+tbody tr + tr td { border-top:1px solid var(--paper-rule); }
 img, video, svg { max-width:100%; height:auto; }
-figure { text-align:center; } figcaption { color:var(--muted); font-size:.9em; margin-top:.4em; }
-hr { border:0; border-top:1px solid var(--line); margin:2.5em 0; }
+figure { text-align:center; } figcaption { color:var(--paper-muted); font-size:.85em; line-height:1.5; margin-top:.4em; }
+mark { background:var(--paper-mark); color:inherit; }
+hr { border:0; border-top:1px solid var(--paper-rule); margin:2em 0; }
 </style>
 CSS
 }
