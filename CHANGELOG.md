@@ -1,5 +1,19 @@
 # Changelog
 
+## [v0.5.0] - 2026-09-27
+
+### Features
+
+- render markdown in Spacedown's paper reading theme (#26)
+
+### Fixes
+
+- **release:** pin fetch.prune=false for origin/main sync check (#24)
+
+### Documentation
+
+- document the /healthz route in README, setup, how-it-works (#25)
+
 ## [v0.4.0] - 2026-09-24
 
 ### Features
@@ -12,6 +26,7 @@
 
 ### Documentation
 
+- changelog for v0.4.0
 - restore the Cloudflare badge in README (#22)
 - commits carry no co-author or generated-with trailers (#21)
 
