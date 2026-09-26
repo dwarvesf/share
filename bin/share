@@ -167,7 +167,7 @@ th, td { padding:.5em 1em .5em 0; text-align:left; vertical-align:top; }
 thead th { font-weight:650; border-bottom:1px solid var(--paper-rule-strong); }
 tbody tr + tr td { border-top:1px solid var(--paper-rule); }
 img, video, svg { max-width:100%; height:auto; }
-figure { text-align:center; } figcaption { color:var(--paper-muted); font-size:.85em; line-height:1.5; margin-top:.4em; }
+p:has(> img:only-child) { margin-bottom:.6em; } p:has(> img:only-child) + p { font-size:.85em; line-height:1.5; color:var(--paper-muted); }
 mark { background:var(--paper-mark); color:inherit; }
 hr { border:0; border-top:1px solid var(--paper-rule); margin:2em 0; }
 </style>
@@ -192,7 +192,7 @@ LUA
     katex=""; grep -q '\$' "$f" && katex="--katex" # KaTeX from the CDN, only for pages with math
     # shellcheck disable=SC2086
     pandoc --quiet -s "$f" -o "$out" --lua-filter "$filter" --include-in-header "$style" \
-      --from=markdown-smart --metadata pagetitle="$(basename "$f" .md)" $katex \
+      --from=markdown-smart-implicit_figures --syntax-highlighting tango --metadata pagetitle="$(basename "$f" .md)" $katex \
       || echo "share: could not render $f" >&2
   done
 }
