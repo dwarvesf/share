@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.5.1] - 2026-09-27
+
+### Fixes
+
+- match Spacedown's figure and syntax conventions in md renders (#27)
+
 ## [v0.5.0] - 2026-09-27
 
 ### Features
@@ -12,6 +18,7 @@
 
 ### Documentation
 
+- changelog for v0.5.0
 - document the /healthz route in README, setup, how-it-works (#25)
 
 ## [v0.4.0] - 2026-09-24
