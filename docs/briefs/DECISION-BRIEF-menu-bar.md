@@ -99,6 +99,7 @@ Growth: a new share kind or link shape changes only bash. A new field appears in
   "mode": "named | quick",
   "host": "s.han.ws",
   "service": true,
+  "serves_here": true,
   "shares": [
     {"id": "3d324a", "name": "theme-check.md", "url": "https://s.han.ws/3d324a/theme-check.html",
      "kind": "snapshot | live | host", "source": "/tmp/x/theme-check.md",
