@@ -23,7 +23,7 @@ share add ./team-guide          # https://s.example.com/62cb50/team-guide/  (cop
 | **Live dev servers** | `share add 3000` proxies `127.0.0.1:3000` while it runs |
 | **Own hostname per share** | `--host dev.example.com` for apps that emit absolute paths |
 | **Folder index** | folders without `index.html` list their files (`--no-index` to refuse) |
-| **Markdown rendering** | with pandoc, `.md` gets a styled HTML render (light/dark, KaTeX math) |
+| **Markdown rendering** | with pandoc, `.md` renders in [Spacedown](https://github.com/dwarvesf/spacedown)'s paper reading theme (light/dark, KaTeX math) |
 | **Safe copy** | dotfiles (`.env`, `.git`) and symlinks are never copied |
 | **Expiry** | 30 days by default; `--ttl 12h\|7d\|never` |
 | **Visitor counts** | `share hits <id>`: requests and unique IPs |

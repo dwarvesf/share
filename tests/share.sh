@@ -88,7 +88,7 @@ if command -v pandoc >/dev/null; then
   check "single .md renders" 200 "$(code "$md_url")"
   check ".md link rewritten to .html" "1" "$(curl -s "$(local_url "${dir_url}notes.html")" | grep -c 'href="other.html"')"
   check "README.html renders" 200 "$(code "${docs_url}README.html")"
-  check "render carries the stylesheet" "1" "$(curl -s "$(local_url "${dir_url}notes.html")" | grep -c 'max-width:42em')"
+  check "render carries the stylesheet" "1" "$(curl -s "$(local_url "${dir_url}notes.html")" | grep -c 'max-width:44rem')"
   check "no math, no KaTeX" "0" "$(curl -s "$(local_url "${dir_url}notes.html")" | grep -c 'katex')"
   check "math loads KaTeX" "1" "$(curl -s "$(local_url "${dir_url}math.html")" | grep -c 'katex.min.js')"
 else
@@ -203,7 +203,7 @@ wr_url=$(bash "$SH" add "$WORK/withreadme" 2>/dev/null | head -1)
 check "README folder answers" "200" "$(wait_code 200 "$wr_url")"
 wr_body=$(curl -s "$(local_url "$wr_url")")
 if command -v pandoc >/dev/null; then
-  check "README render is the index" "1" "$(grep -c 'max-width:42em' <<<"$wr_body")"
+  check "README render is the index" "1" "$(grep -c 'max-width:44rem' <<<"$wr_body")"
   check "no generated list under a README" "0" "$(grep -c '<ul' <<<"$wr_body")"
 fi
 
