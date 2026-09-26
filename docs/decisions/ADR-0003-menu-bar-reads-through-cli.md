@@ -9,7 +9,7 @@ A macOS menu bar app shows share's state and runs its actions. The state lives i
 
 ## Decision
 
-The app never reads share's files. It gets state from `share status --json`, a read-only snapshot with a `schema` integer, and changes state only by running CLI verbs (`add`, `rm`, `refresh`, `hits`, `start`, `stop`, `setup`). The serve daemon stays owned by share's own login service; the app neither starts it at login nor supervises it.
+The app never reads share's files. It gets state from `share state`, a read-only snapshot with a `schema` integer, and changes state only by running CLI verbs (`add`, `rm`, `refresh`, `hits`, `start`, `stop`, `setup`). The serve daemon stays owned by share's own login service; the app neither starts it at login nor supervises it.
 
 ## Consequences
 
@@ -17,3 +17,5 @@ The app never reads share's files. It gets state from `share status --json`, a r
 - The JSON is a public contract. Removing or renaming a field bumps `schema`; adding one does not.
 - Each menu open spawns one bash process, a cost a menu opened by a click can carry.
 - The app and CLI can be different versions; the app degrades on an unknown schema instead of failing.
+
+Amended after design review: the contract is the new verb `share state` (an older CLI given `status --json` would prune), with `ready`, `hosts`, `own_host` fields; SPEC-003 holds the final schema.

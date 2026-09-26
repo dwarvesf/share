@@ -22,7 +22,7 @@ Design decided without the operator (bypass mode, operator away). Every call bel
 | Approach | What it is | Traded away |
 |---|---|---|
 | A. App parses the files | Swift reads `index.tsv`, `config`, `serve.pid` and rebuilds each URL | Duplicates `share_url` in a second language. Every CLI change to link shape silently breaks the app. |
-| B. CLI JSON contract (chosen) | New read-only `share status --json`; the app renders it and runs CLI verbs for actions | One extra CLI flag and a process spawn per refresh. |
+| B. CLI JSON contract (chosen) | New read-only `share state`; the app renders it and runs CLI verbs for actions | One extra CLI flag and a process spawn per refresh. |
 | C. Native engine | The app reimplements share | Two engines. Rejected outright. |
 
 ### Chosen approach + why
@@ -83,14 +83,14 @@ B. The CLI stays the only code that knows what a share is. The app is a thin vie
 
 | Unit | Purpose | Interface | Tested by |
 |---|---|---|---|
-| `share status --json` (bash) | read-only state snapshot | JSON on stdout, schema below | `tests/share.sh` |
+| `share state` (bash) | read-only state snapshot | JSON on stdout, schema below | `tests/share.sh` |
 | `ShareBarCore` (Swift library) | locate the CLI, run a verb with a timeout, decode the snapshot, map it to menu rows | `CLI.run(args) -> Result`, `Snapshot` decoding, `MenuModel(snapshot, now)` | `swift test` |
 | `ShareBar` (Swift executable) | status item, menu, drop target, setup window, login item | AppKit | build + manual smoke |
 | `mac/build.sh` | assemble, sign, notarize the `.app`, zip it | env: identity + notary profile | release run |
 
 Growth: a new share kind or link shape changes only bash. A new field appears in JSON first; the app ignores unknown fields.
 
-### I/O contract: `share status --json`
+### I/O contract: `share state`
 
 ```json
 {
@@ -108,7 +108,7 @@ Growth: a new share kind or link shape changes only bash. A new field appears in
 }
 ```
 
-`expires` is 0 for never. `status --json` never prunes, never writes, and exits 0 even when not set up. Hits stay on `share hits <id>` and the app calls it per share, on demand.
+`expires` is 0 for never. `state` never prunes, never writes, and exits 0 even when not set up. Hits stay on `share hits <id>` and the app calls it per share, on demand.
 
 ### Failure modes
 
@@ -129,7 +129,7 @@ ASCII by house rule (no Mermaid).
 
 ```
  ┌─────────────── Share Bar.app ───────────────┐        ┌──────── share CLI ────────┐
- │ NSStatusItem ── menuNeedsUpdate ──┐          │  spawn │ status --json  (read only) │
+ │ NSStatusItem ── menuNeedsUpdate ──┐          │  spawn │ state  (read only) │
  │   drop target ──┐                 ▼          │ ─────▶ │ add / rm / refresh / hits  │
  │ setup window ─┐ │         ShareBarCore       │        │ start / stop / setup       │
  │               └─┴──────▶ CLI.run + decode ───┼──────▶ └─────────────┬─────────────┘
