@@ -3,7 +3,7 @@ import ServiceManagement
 import ShareBarCore
 import os
 
-private let actionLogger = Logger(subsystem: "foundation.d.share.bar", category: "actions")
+private let actionLogger = Logger(subsystem: ShareBarIdentity.bundleID, category: "actions")
 
 /// Carries a non-Sendable AppKit value across a Task boundary when the caller already
 /// guarantees (as here) that it's only ever touched back on the main thread.
@@ -176,7 +176,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         headerItem.isEnabled = false
         menu.addItem(headerItem)
         if showStopWaitingItem {
-            menu.addItem(actionItem("Stop Waiting", action: #selector(stopWaiting)))
+            menu.addItem(actionItem("Stop Waiting…", action: #selector(stopWaiting)))
         }
         menu.addItem(.separator())
 
@@ -190,10 +190,12 @@ final class StatusItemController: NSObject, @unchecked Sendable {
             let item = NSMenuItem(title: row.title, action: nil, keyEquivalent: "")
             item.attributedTitle = rowAttributedTitle(row, tabLocation: tabLocation, font: font)
             // AppKit's default accessibility title for a menu item mirrors the rendered
-            // `attributedTitle.string` (name + tab + trailing) once one is set, not the
-            // plain `title` above; without this override VoiceOver would read
-            // "theme-check.md\t2d left" instead of just the name.
-            item.setAccessibilityTitle(row.title)
+            // `attributedTitle.string` verbatim, tab character included, so VoiceOver would
+            // read "theme-check.md\t2d left" with the tab as a pause and no indication of
+            // what the second part means. Override it with a comma-separated phrase so
+            // VoiceOver hears both the name and its status (`2d left`, `expired`, `live`,
+            // `never`) as one sentence.
+            item.setAccessibilityTitle("\(row.title), \(row.trailing)")
             item.submenu = submenu(for: row)
             menu.addItem(item)
         }
@@ -409,7 +411,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
                 let name = (path as NSString).lastPathComponent
                 guard confirmFolder(name: name) else { continue }
             }
-            actionLogger.log("add path=\(path, privacy: .public)")
+            actionLogger.log("add path=\(path, privacy: .private)")
             await performMutation(["add", path], warningShareID: nil, isAdd: true)
         }
     }
@@ -609,7 +611,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
             let result = await job.result
             timeoutTask.cancel()
             guard let self else { return }
-            let line = StatusItemController.hitsLine(from: result)
+            let line = result.hitsText
             RunLoop.main.perform(inModes: [.common]) {
                 // A superseded generation means this row's call was cancelled (the user
                 // opened another submenu, or the top menu closed): the process was killed
@@ -632,17 +634,6 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         job.cancel()
         currentHitsJob = nil
         currentHitsRowID = nil
-    }
-
-    private static func hitsLine(from result: CLIResult) -> String {
-        if result.status != 0 {
-            let lines = result.stderr.split(separator: "\n", omittingEmptySubsequences: false)
-            if let line = lines.last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
-                return String(line)
-            }
-            return "share exited \(result.status)"
-        }
-        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Other actions

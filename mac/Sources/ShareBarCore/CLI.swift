@@ -4,7 +4,7 @@ import os
 import Darwin
 #endif
 
-private let logger = Logger(subsystem: "foundation.d.share.bar", category: "cli")
+private let logger = Logger(subsystem: ShareBarIdentity.bundleID, category: "cli")
 
 /// Locates, spawns, and runs the `share` CLI. This is the only place that knows how to find
 /// or talk to the binary; everything else in the app goes through it.
@@ -63,7 +63,9 @@ public enum CLI {
     /// then KILLs it 3s later if it is still alive.
     public static func run(_ args: [String], timeout: TimeInterval?) async -> CLIResult {
         guard let url = locateForRun() else {
-            logger.error("share CLI not found; args=\(args.joined(separator: " "), privacy: .public)")
+            logger.error(
+                "share CLI not found; verb=\(args.first ?? "", privacy: .public) args=\(args.joined(separator: " "), privacy: .private)"
+            )
             return CLIResult(status: 127, stdout: "", stderr: "share: CLI not found", timedOut: false)
         }
         let env = childEnvironment(
@@ -86,7 +88,9 @@ public enum CLI {
     /// `onOutput` as it arrives instead of buffering it until exit.
     public static func spawnCancellable(_ args: [String], onOutput: @escaping (String) -> Void) -> CLIJob {
         guard let url = locateForRun() else {
-            logger.error("share CLI not found; args=\(args.joined(separator: " "), privacy: .public)")
+            logger.error(
+                "share CLI not found; verb=\(args.first ?? "", privacy: .public) args=\(args.joined(separator: " "), privacy: .private)"
+            )
             onOutput("share: CLI not found")
             return CLIJob.failed(CLIResult(status: 127, stdout: "", stderr: "share: CLI not found", timedOut: false))
         }
@@ -95,6 +99,7 @@ public enum CLI {
             inherited: ProcessInfo.processInfo.environment
         )
         let start = Date()
+        let verbForLog = args.first ?? ""
         let argvForLog = ([url.path] + args).joined(separator: " ")
 
         do {
@@ -136,7 +141,7 @@ public enum CLI {
                 let exit = waitAndDrain()
                 let duration = Date().timeIntervalSince(start)
                 logger.log(
-                    "argv=\(argvForLog, privacy: .public) exit=\(exit, privacy: .public) duration=\(duration, privacy: .public) timedOut=false"
+                    "verb=\(verbForLog, privacy: .public) argv=\(argvForLog, privacy: .private) exit=\(exit, privacy: .public) duration=\(duration, privacy: .public) timedOut=false"
                 )
                 return CLIResult(
                     status: exit,
@@ -147,7 +152,9 @@ public enum CLI {
             }
             return CLIJob(pid: handle.pid, resultTask: resultTask)
         } catch {
-            logger.error("spawn failed for \(argvForLog, privacy: .public): \(String(describing: error), privacy: .public)")
+            logger.error(
+                "spawn failed for verb=\(verbForLog, privacy: .public) argv=\(argvForLog, privacy: .private): \(String(describing: error), privacy: .public)"
+            )
             return CLIJob.failed(CLIResult(status: -1, stdout: "", stderr: "share: failed to spawn", timedOut: false))
         }
     }
@@ -163,13 +170,16 @@ public enum CLI {
         timeout: TimeInterval?
     ) -> CLIResult {
         let start = Date()
+        let verbForLog = argv.first ?? ""
         let argvForLog = ([executablePath] + argv).joined(separator: " ")
 
         let handle: Spawn.Handle
         do {
             handle = try Spawn.start(executablePath: executablePath, argv: argv, environment: environment)
         } catch {
-            logger.error("spawn failed for \(argvForLog, privacy: .public): \(String(describing: error), privacy: .public)")
+            logger.error(
+                "spawn failed for verb=\(verbForLog, privacy: .public) argv=\(argvForLog, privacy: .private): \(String(describing: error), privacy: .public)"
+            )
             return CLIResult(status: -1, stdout: "", stderr: "share: failed to spawn", timedOut: false)
         }
 
@@ -214,7 +224,7 @@ public enum CLI {
         let exit = Spawn.exitStatus(fromWaitStatus: waitStatus)
         let duration = Date().timeIntervalSince(start)
         logger.log(
-            "argv=\(argvForLog, privacy: .public) exit=\(exit, privacy: .public) duration=\(duration, privacy: .public) timedOut=\(timedOut, privacy: .public)"
+            "verb=\(verbForLog, privacy: .public) argv=\(argvForLog, privacy: .private) exit=\(exit, privacy: .public) duration=\(duration, privacy: .public) timedOut=\(timedOut, privacy: .public)"
         )
 
         return CLIResult(

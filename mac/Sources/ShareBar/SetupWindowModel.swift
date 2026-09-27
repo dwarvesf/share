@@ -2,7 +2,7 @@ import Foundation
 import ShareBarCore
 import os
 
-private let setupLogger = Logger(subsystem: "foundation.d.share.bar", category: "setup")
+private let setupLogger = Logger(subsystem: ShareBarIdentity.bundleID, category: "setup")
 
 /// Drives the setup window's SwiftUI view: field state, the running `CLIJob`, and the
 /// streamed log. `onFinished` fires once when the run completes (success or failure); the

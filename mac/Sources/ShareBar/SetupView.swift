@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import ShareBarCore
 
@@ -41,8 +42,17 @@ struct SetupView: View {
 
             HStack {
                 Spacer()
-                Button("Cancel") { model.cancel() }
-                    .disabled(!model.isRunning)
+                // Always enabled and bound to Escape: while a run is in flight it cancels
+                // that run (same as before); otherwise it closes the window, since there is
+                // nothing left to cancel.
+                Button("Cancel") {
+                    if model.isRunning {
+                        model.cancel()
+                    } else {
+                        NSApp.keyWindow?.performClose(nil)
+                    }
+                }
+                .keyboardShortcut(.cancelAction)
                 Button("Set Up") { model.setUp() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!model.canSetUp)

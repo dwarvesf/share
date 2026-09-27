@@ -124,4 +124,22 @@ final class MutationOutcomeTests: XCTestCase {
         let result = CLIResult(status: 1, stdout: "", stderr: "line one\n\nline three\n", timedOut: false)
         XCTAssertEqual(result.lastErrorLine, "share: line three")
     }
+
+    // MARK: - CLIResult.hitsText
+
+    func testHitsTextOnFailureIsTheLastNonEmptyStderrLineVerbatim() {
+        // Verbatim, unlike lastErrorLine: no "share: " prefixing.
+        let result = CLIResult(status: 1, stdout: "", stderr: "no share with id abc123\n", timedOut: false)
+        XCTAssertEqual(result.hitsText, "no share with id abc123")
+    }
+
+    func testHitsTextOnFailureWithEmptyStderrIsShareExited() {
+        let result = CLIResult(status: 2, stdout: "", stderr: "", timedOut: false)
+        XCTAssertEqual(result.hitsText, "share exited 2")
+    }
+
+    func testHitsTextOnSuccessIsTrimmedStdout() {
+        let result = CLIResult(status: 0, stdout: "  3 hits\n", stderr: "", timedOut: false)
+        XCTAssertEqual(result.hitsText, "3 hits")
+    }
 }

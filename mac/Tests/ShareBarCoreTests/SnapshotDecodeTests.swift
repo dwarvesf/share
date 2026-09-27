@@ -42,6 +42,39 @@ final class SnapshotDecodeTests: XCTestCase {
         )
     }
 
+    func testDecodesANonZeroSkippedCountAlongsideOneShare() throws {
+        // The spec's "skipped" field is present only when non-zero (malformed index rows the
+        // state loop dropped); this is a minimal inline snapshot rather than the shared
+        // fixture, since that fixture always decodes with no skipped rows.
+        let json = """
+        {
+          "schema": 1,
+          "state": "serving",
+          "ready": true,
+          "mode": "named",
+          "host": "s.han.ws",
+          "hosts": "hans-air-m4",
+          "serves_here": true,
+          "service": true,
+          "skipped": 2,
+          "shares": [
+            {
+              "id": "abc123",
+              "name": "notes.txt",
+              "url": "https://s.han.ws/abc123/notes.txt",
+              "kind": "snapshot",
+              "own_host": null,
+              "expires": 0
+            }
+          ]
+        }
+        """
+        let snapshot = try JSONDecoder().decode(Snapshot.self, from: Data(json.utf8))
+
+        XCTAssertEqual(snapshot.skipped, 2)
+        XCTAssertEqual(snapshot.shares.count, 1)
+    }
+
     func testFixtureBuildsAWorkingMenuModel() throws {
         // Not a MenuModel-rules test (see MenuModelHeaderTests / RowAndModelRulesTests for
         // those); just confirms the decoded fixture flows end to end into a model.

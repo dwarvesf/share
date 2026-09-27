@@ -4,7 +4,7 @@ import ServiceManagement
 import ShareBarCore
 import os
 
-private let setupWindowLogger = Logger(subsystem: "foundation.d.share.bar", category: "setup")
+private let setupWindowLogger = Logger(subsystem: ShareBarIdentity.bundleID, category: "setup")
 
 /// Owns the setup window's lifecycle: activation policy, and the single shared instance
 /// `AppDelegate.applicationWillTerminate` reaches to kill a running setup before the app
