@@ -376,9 +376,10 @@ final class StatusItemController: NSObject, @unchecked Sendable {
     // MARK: - Other actions
 
     @objc private func setUp() {
-        // Placeholder: TASK-011 builds the real setup window. Logging keeps this action
-        // observable in the meantime rather than silently doing nothing.
-        actionLogger.log("set-up requested; window not implemented yet (TASK-011)")
+        actionLogger.log("set-up requested")
+        SetupWindowController.show { [weak self] in
+            self?.triggerRefresh()
+        }
     }
 
     @objc private func copyInstallCommand() {

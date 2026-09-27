@@ -10,4 +10,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         statusItemController = StatusItemController()
     }
+
+    /// Quitting while setup runs (TASK-011) must not leave the setup process group behind.
+    func applicationWillTerminate(_ notification: Notification) {
+        SetupWindowController.terminateActiveJob()
+    }
 }
