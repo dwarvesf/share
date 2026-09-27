@@ -1,6 +1,6 @@
 # Proof of done: profiles
 
-Date: 2026-09-27
+Date: 2026-09-27 to 2026-09-28
 Branch: feat/share-profiles
 Spec: docs/specs/SPEC-005-profiles.md
 
@@ -9,7 +9,7 @@ Spec: docs/specs/SPEC-005-profiles.md
 ```
 Command: bash tests/share.sh
 Exit:    0
-Checks:  320 ok, 0 FAIL (PASS)
+Checks:  334 ok, 0 FAIL (PASS)
 Tail:    === NEGATIVE CONTROL: a host outside hosts must not serve ===
            ok    start refused on another host
          === process leaks ===
@@ -56,7 +56,7 @@ Result:  RED, exit 1, 5 FAILs (327 ok), at 5bfa07e (the first recording targeted
            FAIL  profile a reads share-tunnel.a:<host>: expected '1', got '0'
            FAIL  the two profiles never share an item: expected '2', got '1'
 Command: git checkout -- bin/share; bash tests/share.sh
-Result:  GREEN (the green run above)
+Result:  GREEN, 334 ok, 0 FAIL, exit 0
 Verdict: PASS (mutate -> RED -> restore)
 ```
 
@@ -68,14 +68,16 @@ split its live traffic for the length of the run.
 
 ```
 Command: sed -i.bak 's|port="$(free_port)"; metrics_port|port=18797; metrics_port|' bin/share; bash tests/share.sh
-Result:  RED, exit 1, 14 FAILs (304 ok), among them:
-           FAIL  profile b sets up: expected '0', got '1'   (serve refused the double bind)
+Result:  RED, exit 1, 19 FAILs (313 ok), re-recorded at 5bfa07e, among them:
+           FAIL  profile b sets up: expected '0', got '1'
            FAIL  the two profiles' ports differ: expected '1', got '0'
+           FAIL  profile b is serving: expected '1', got '0'
+           FAIL  profile roots are where the spec says: expected '1', got '0'
+           FAIL  profile b link is on its own quick host: expected '1', got '0'
            FAIL  a's share is absent on b's port: expected '404', got '200'
            FAIL  b's share answers on b's port: expected '200', got '404'
-           FAIL  profile b still serves after a's teardown: expected '1', got '0'
 Command: git checkout -- bin/share; bash tests/share.sh
-Result:  GREEN (the green run above)
+Result:  GREEN, 334 ok, 0 FAIL, exit 0
 Verdict: PASS (mutate -> RED -> restore)
 ```
 
@@ -90,7 +92,7 @@ Result:  RED, exit 1, 5 FAILs (315 ok):
            FAIL  profile a reads share-tunnel.a:<host>: expected '1', got '0'
            FAIL  no key was built before setup knew the hostname: expected '0', got '4'
 Command: git checkout -- bin/share; bash tests/share.sh
-Result:  GREEN, 320 ok, 0 FAIL, exit 0
+Result:  GREEN, 334 ok, 0 FAIL, exit 0
 Verdict: PASS (mutate -> RED -> restore)
 ```
 
