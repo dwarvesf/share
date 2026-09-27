@@ -57,6 +57,30 @@ final class RowAndModelRulesTests: XCTestCase {
         XCTAssertEqual(rowFor(share, now: now).trailing, "2d left")
     }
 
+    func testJustUnderTwoDaysLeftFloorsToOneDayNotTwo() {
+        let now = Date()
+        let share = makeShare(expires: Int(now.timeIntervalSince1970) + 2 * 86_400 - 1)
+        XCTAssertEqual(rowFor(share, now: now).trailing, "1d left")
+    }
+
+    func testJustUnderTwoHoursLeftFloorsToOneHourNotTwo() {
+        let now = Date()
+        let share = makeShare(expires: Int(now.timeIntervalSince1970) + 2 * 3_600 - 1)
+        XCTAssertEqual(rowFor(share, now: now).trailing, "1h left")
+    }
+
+    func testOneHundredNineteenSecondsLeftFloorsToOneMinuteNotTwo() {
+        let now = Date()
+        let share = makeShare(expires: Int(now.timeIntervalSince1970) + 119)
+        XCTAssertEqual(rowFor(share, now: now).trailing, "1m left")
+    }
+
+    func testThirtySecondsLeftFloorsToTheOneMinuteMinimum() {
+        let now = Date()
+        let share = makeShare(expires: Int(now.timeIntervalSince1970) + 30)
+        XCTAssertEqual(rowFor(share, now: now).trailing, "1m left")
+    }
+
     // MARK: - canCopy / canRefresh
 
     func testCanCopyIsFalseForAPendingQuickURL() {
