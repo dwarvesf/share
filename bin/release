@@ -84,8 +84,9 @@ echo "formula bumped to $next"
 # rerun mac/release.sh by hand on a signing Mac instead of failing the release.
 TEAM_ID="${TEAM_ID:-W777S7V8TN}"
 SIGN_ID="${SIGN_ID:-Developer ID Application: Dwarves Foundation Company Limited ($TEAM_ID)}"
+idents="$(security find-identity -v -p codesigning 2>/dev/null || true)"
 if [[ "$(uname)" == Darwin ]] \
-  && security find-identity -v -p codesigning 2>/dev/null | grep -qF "\"$SIGN_ID\""; then
+  && [[ "$idents" == *"\"$SIGN_ID\""* ]]; then
   bash mac/release.sh "$next"
 else
   echo "CASK NOT RELEASED: run mac/release.sh <tag> on a signing Mac"
