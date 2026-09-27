@@ -40,6 +40,14 @@ final class StateMappingTests: XCTestCase {
         XCTAssertEqual(Snapshot.from(result), .failure(.other("share: bin/share: line 42: jq: command not found")))
     }
 
+    func testDieStderrLineAlreadyPrefixedIsNotDoublePrefixed() {
+        // bin/share's own die() already writes "share: <msg>"; the header must not add a
+        // second "share: " in front of it.
+        let result = CLIResult(status: 1, stdout: "", stderr: "share: no such id foo\n", timedOut: false)
+
+        XCTAssertEqual(Snapshot.from(result), .failure(.other("share: no such id foo")))
+    }
+
     func testLastNonEmptyStderrLineIsPickedOverTrailingBlankLines() {
         let result = CLIResult(status: 1, stdout: "", stderr: "first\nsecond\n\n", timedOut: false)
 
