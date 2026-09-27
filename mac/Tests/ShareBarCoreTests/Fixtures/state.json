@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "state": "serving",
+  "ready": true,
+  "mode": "named",
+  "host": "s.han.ws",
+  "hosts": "hans-air-m4",
+  "serves_here": true,
+  "service": true,
+  "shares": [
+    {
+      "id": "3d324a",
+      "name": "theme-check.md",
+      "url": "https://s.han.ws/3d324a/theme-check.html",
+      "kind": "snapshot",
+      "own_host": null,
+      "expires": 1759000000
+    },
+    {
+      "id": "9f1a02",
+      "name": "localhost:3000",
+      "url": "https://s.han.ws/9f1a02/",
+      "kind": "live",
+      "own_host": null,
+      "expires": 0
+    },
+    {
+      "id": "b7e441",
+      "name": "docs.example.com",
+      "url": "https://docs.example.com/",
+      "kind": "snapshot",
+      "own_host": "docs.example.com",
+      "expires": 0
+    }
+  ],
+  "cloudflared_version": "2026.9.1"
+}

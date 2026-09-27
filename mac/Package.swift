@@ -7,6 +7,10 @@ let package = Package(
     targets: [
         .target(name: "ShareBarCore"),
         .executableTarget(name: "ShareBar", dependencies: ["ShareBarCore"]),
-        .testTarget(name: "ShareBarCoreTests", dependencies: ["ShareBarCore"]),
+        .testTarget(
+            name: "ShareBarCoreTests",
+            dependencies: ["ShareBarCore"],
+            resources: [.copy("Fixtures/state.json")]
+        ),
     ]
 )
