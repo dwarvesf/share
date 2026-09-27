@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - run: shellcheck bin/share install.sh tests/share.sh tests/e2e.sh demo/render.sh
+      - run: shellcheck bin/share install.sh tests/share.sh tests/e2e.sh demo/render.sh mac/*.sh
 
   test:
     strategy:
@@ -36,6 +36,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Install caddy and pandoc (Linux)
         if: runner.os == 'Linux'
@@ -51,3 +52,16 @@ jobs:
 
       - name: Self-test
         run: bash tests/share.sh
+
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Test
+        run: swift test --package-path mac
+
+      - name: Build (unsigned, ad-hoc)
+        run: bash mac/build.sh 0.0.0
