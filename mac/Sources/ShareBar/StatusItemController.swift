@@ -429,6 +429,9 @@ extension StatusItemController: NSMenuDelegate {
     /// own delegate callback (`menuWillOpen`, below), not this one.
     func menuNeedsUpdate(_ menu: NSMenu) {
         guard menu === self.menu else { return }
+        // Cleared on open as well because menuDidClose is not guaranteed to fire for every close path.
+        cancelHits()
+        hitsCache.removeAll()
         triggerRefresh()
     }
 
