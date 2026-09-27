@@ -9,7 +9,7 @@ Spec: docs/specs/SPEC-005-profiles.md
 ```
 Command: bash tests/share.sh
 Exit:    0
-Checks:  334 ok, 0 FAIL (PASS)
+Checks:  336 ok, 0 FAIL (PASS), at 1c2a044 (the tree every control below names)
 Tail:    === NEGATIVE CONTROL: a host outside hosts must not serve ===
            ok    start refused on another host
          === process leaks ===
@@ -48,7 +48,7 @@ checks they were before.
 
 ```
 Command: sed -i.bak 's|share-tunnel${profile:+.$profile}:|share-tunnel:|' bin/share; bash tests/share.sh
-Result:  RED, exit 1, 5 FAILs (327 ok), at 5bfa07e (the first recording targeted the
+Result:  RED, exit 1, 5 FAILs (331 ok), at 1c2a044 (the first recording targeted the
          earlier variable form of the key and was replayed after the key became a function):
            FAIL  default profile stores share-tunnel:<host>: expected '1', got '2'
            FAIL  default profile reads share-tunnel:<host>: expected '1', got '2'
@@ -56,7 +56,7 @@ Result:  RED, exit 1, 5 FAILs (327 ok), at 5bfa07e (the first recording targeted
            FAIL  profile a reads share-tunnel.a:<host>: expected '1', got '0'
            FAIL  the two profiles never share an item: expected '2', got '1'
 Command: git checkout -- bin/share; bash tests/share.sh
-Result:  GREEN, 334 ok, 0 FAIL, exit 0
+Result:  GREEN, 336 ok, 0 FAIL, exit 0, at 1c2a044
 Verdict: PASS (mutate -> RED -> restore)
 ```
 
@@ -68,7 +68,7 @@ split its live traffic for the length of the run.
 
 ```
 Command: sed -i.bak 's|port="$(free_port)"; metrics_port|port=18797; metrics_port|' bin/share; bash tests/share.sh
-Result:  RED, exit 1, 19 FAILs (313 ok), re-recorded at 5bfa07e, among them:
+Result:  RED, exit 1, 21 FAILs (315 ok), at 1c2a044, among them:
            FAIL  profile b sets up: expected '0', got '1'
            FAIL  the two profiles' ports differ: expected '1', got '0'
            FAIL  profile b is serving: expected '1', got '0'
@@ -76,8 +76,9 @@ Result:  RED, exit 1, 19 FAILs (313 ok), re-recorded at 5bfa07e, among them:
            FAIL  profile b link is on its own quick host: expected '1', got '0'
            FAIL  a's share is absent on b's port: expected '404', got '200'
            FAIL  b's share answers on b's port: expected '200', got '404'
+           FAIL  profiles: b serving on its host: expected 'b	serving	prof-b.trycloudflare.com', got 'b	stopped	-'
 Command: git checkout -- bin/share; bash tests/share.sh
-Result:  GREEN, 334 ok, 0 FAIL, exit 0
+Result:  GREEN, 336 ok, 0 FAIL, exit 0, at 1c2a044
 Verdict: PASS (mutate -> RED -> restore)
 ```
 
@@ -85,19 +86,22 @@ Verdict: PASS (mutate -> RED -> restore)
 
 ```
 Command: sed -i.bak 's|^token_key() { echo "share-tunnel${profile:+.$profile}:$host_name"; }|token_key_v="share-tunnel${profile:+.$profile}:$host_name"; token_key() { echo "$token_key_v"; }|' bin/share; bash tests/share.sh
-Result:  RED, exit 1, 5 FAILs (315 ok):
+Result:  RED, exit 1, 5 FAILs (331 ok), at 1c2a044:
            FAIL  default profile stores share-tunnel:<host>: expected '1', got '0'
            FAIL  default profile reads share-tunnel:<host>: expected '1', got '0'
            FAIL  profile a stores share-tunnel.a:<host>: expected '1', got '0'
            FAIL  profile a reads share-tunnel.a:<host>: expected '1', got '0'
            FAIL  no key was built before setup knew the hostname: expected '0', got '4'
 Command: git checkout -- bin/share; bash tests/share.sh
-Result:  GREEN, 334 ok, 0 FAIL, exit 0
+Result:  GREEN, 336 ok, 0 FAIL, exit 0, at 1c2a044
 Verdict: PASS (mutate -> RED -> restore)
 ```
 
-Plus the suite's own standing negative control, last in every run: a host outside
-`hosts` must not serve.
+Every control above was replayed in one sitting against 1c2a044, with the port 18787
+idle (the sibling worktree's concurrent suite runs had contaminated an earlier
+replay), and the tree was restored with `git checkout -- bin/share` between runs; the
+green run at the top is the same tree. Plus the suite's own standing negative control,
+last in every run: a host outside `hosts` must not serve.
 
 ## Test plan coverage
 

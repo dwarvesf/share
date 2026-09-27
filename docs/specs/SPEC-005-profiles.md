@@ -1,6 +1,6 @@
 # SPEC-005: profiles (two share instances on one machine)
 
-Status: DRAFT
+Status: VALIDATED
 Lane: full
 ADR: docs/decisions/ADR-0005-profile-is-a-path-prefix.md
 
