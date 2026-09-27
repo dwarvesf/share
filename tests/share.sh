@@ -770,7 +770,7 @@ out=$(psh e setup other.example.test --tunnel-name share-taken-example-test 2>&1
 check "setup on another profile's tunnel name is refused" "1" "$rc"
 check "the refusal names the tunnel" "1" "$(grep -c 'share-taken-example-test already belongs to another profile' <<<"$out")"
 rm -rf "$PHOME/.config/share/profiles/d"
-perm() { stat -f '%Lp' "$@" 2>/dev/null || stat -c '%a' "$@"; }   # macOS, then GNU
+perm() { stat -c '%a' "$@" 2>/dev/null || stat -f '%Lp' "$@"; }   # GNU first: on GNU, -f is filesystem status and would succeed
 check "a profile root's parents under ~/share are 700" "700 700" "$(perm "$PHOME/share" "$PHOME/share/profiles" | tr '\n' ' ' | sed 's/ $//')"
 # a's serve on b's live port: the runtime guard, since a hand-edited port= bypasses the setup-time pick
 psh a stop >/dev/null
