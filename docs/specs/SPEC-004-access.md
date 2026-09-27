@@ -1,0 +1,420 @@
+# Spec: per-link login gate (`--access`)
+Generated: 2026-09-27
+Status: VALIDATED (build waits on the rule-model decision in `## Decisions for Han`)
+Lane: full (authz, external provider, a new failure path that could publish content unguarded)
+References: `bin/share` `cmd_add`, `copy`, `cmd_rm`, `cmd_prune`, `cmd_teardown`, `cf()`, `host_auth`, `rows`, `write_caddyfile`; `docs/specs/SPEC-005-profiles.md` (in flight on `feat/share-profiles`); dwarvesf/foundation-ops `chatwoot/edge/edge-apply` and `docs/incidents/INC-009-chat-host-public-before-access-propagated.md`.
+
+## Problem
+
+Every share link is public to anyone who has it. Some files must reach only a set of people: an ops report for Dwarves OPS staff, not for contractors. Contractors also hold `@d.foundation` addresses, so an email-domain rule cannot separate the two groups. share needs a per-link gate that names people or a group. Other links on the same host stay public. Removing the share must remove the gate, so no Access app outlives its link.
+
+## Context (research, 2026-09-27)
+
+Read-only probes against the Cloudflare API and the live edge. No secret or account id is quoted here.
+
+### Credentials probed
+
+| Token | Access reads | Evidence |
+|---|---|---|
+| `op://dfoundation-prod/df-cloudflare-ci-token` | none | `access/organizations` and `access/groups` return code 10000 "Authentication error". `access/apps`, `access/identity_providers`, `access/policies`, and `cfd_tunnel` return `success:true` with an EMPTY list, although the account holds four Access apps and two tunnels. The token lacks Access and Tunnel scopes; an empty list from it proves nothing. |
+| `op://Toolkit/cf-api-token` (the token foundation-ops `chatwoot/edge` uses) | yes, on 4 accounts | Every read below comes from this token. It created the chatwoot Access apps live (foundation-ops `docs/verification/chatwoot-edge.md`, AC31), so it also holds Access: Apps and Policies Edit. It spans Console Labs, Dwarves LLC, Han Ngo, and WeBuild Community. |
+
+Gotcha for the build: a Cloudflare list call made without the matching scope can answer `success:true, result:[]`. share must never treat an empty list as "absent" for cleanup. It stores every app id it creates and deletes by id.
+
+### Dwarves LLC account
+
+| Item | State | Evidence |
+|---|---|---|
+| Access org | enabled, team domain `dwarves.cloudflareaccess.com` | `GET access/organizations`; `https://chat.d.foundation/app` answers 302 to `https://dwarves.cloudflareaccess.com/cdn-cgi/access/login/chat.d.foundation` |
+| Identity providers | ONE: `onetimepin` (email one-time PIN). No Google Workspace, no GitHub, no SAML/OIDC. | `GET access/identity_providers`: `[{"type":"onetimepin"}]` |
+| Access groups | ZERO | `GET access/groups`: `[]` |
+| Reusable policies | ZERO | `GET access/policies`: `[]` |
+| Access apps | 4, none reference a group: `chat-staff` (host-wide, `email_domain`), `chat-admin` (paths `/super_admin/*`, `/monitoring/sidekiq/*`, `email`), `chat-widget-public` (paths, `bypass everyone`), `vps-mon dashboard + catalog (dwarves)` (paths on `monitor.infras.workers.dev`, `email_domain`) | `GET access/apps` |
+| Tunnels | `dfoundation-hermes`, `mini-multica`; no share tunnel yet | `GET cfd_tunnel?is_deleted=false` |
+| Zones | include `d.foundation` | `GET zones?account.id=` |
+
+Consequence: today the only way to allow "OPS but not contractors" on this account is an explicit email list, inline or inside an Access Group. A Google Workspace group claim needs a `google-apps` IdP added first; a GitHub team needs a `github` IdP added first. Neither exists.
+
+### Other accounts share may run against (per profile)
+
+| Account | Access | IdPs | Groups |
+|---|---|---|---|
+| Han Ngo (today's default share profile, `air-share` tunnel) | enabled, `fromwu.cloudflareaccess.com` | `google` (consumer Google, not Workspace: no group claims), `onetimepin` | 0; one reusable policy `owner-only` (`email`) |
+| Console Labs, WeBuild Community | NOT enabled: every Access call returns code 9999 `access.api.error.not_enabled` | n/a | n/a |
+
+### Path matching, measured on the live edge
+
+Probes against existing path-scoped apps (`monitor.infras.workers.dev/dashboard`, `mon.han.ws/dashboard*`, `/catalog*`):
+
+| Request | Result |
+|---|---|
+| `/dashboard`, `/DASHBOARD`, `/Dashboard` | 302 to the team domain (matching is case-insensitive) |
+| `/%64ashboard`, `//dashboard`, `/./dashboard` (sent with `--path-as-is`) | 302 (the edge normalizes percent-encoding, doubled slashes, and dot segments before matching) |
+| `/dashboardx`, `/catalogfoo` against a `dashboard*` / `catalog*` pattern | 302 (a trailing `*` is a prefix match) |
+| `/` on the same hosts | 200 (a path app leaves the rest of the host public) |
+| `/x/..%2Fdashboard`, `/%2Fdashboard`, `/x/..%5Cdashboard` | 404 from the origin, NO Access redirect: the edge does not decode `%2F` or `%5C`, so these never match the path app. Caddy decodes and cleans the path, so `/x/..%2F<id>/f` would reach `pub/<id>/f`. share must refuse these at Caddy. |
+| `/x/%2e%2e/dashboard`, `/dashboard%2F` | 302 (encoded dots are normalized; a trailing encoded slash still prefix-matches) |
+
+The Access login redirect carries `kid=<AUD tag of the app that matched>`: on `chat.d.foundation/app` the `kid` equals the `aud` of `chat-staff` read from the API. So a probe can prove that THIS app enforces, not merely some broader app on the host.
+
+Cloudflare docs (Application paths): `example.com/alpha/*` does NOT match `example.com/alpha` itself; the more specific path wins when two apps overlap; at most one wildcard between slashes; query strings are ignored. So a share gate lists both `<host>/<id>` and `<host>/<id>/*`.
+
+The Access API field `self_hosted_domains` is deprecated (end of support 2025-11-21) in favor of `destinations: [{type:"public", uri:...}]`. foundation-ops still writes `self_hosted_domains`; share writes `destinations`.
+
+### Enforcement delay
+
+INC-009 (foundation-ops, 2026-09-24): a new self-hosted app on a NEW hostname started redirecting about 6.5 minutes after the API accepted it. Widening the destination list of an app that already enforced propagated at once (foundation-ops `docs/verification/chatwoot-edge.md`). UNVERIFIED: the delay for a NEW path app on a hostname that already routes (the share case). The design does not depend on the answer: content is published only after the gate is observed.
+
+### Share-side exposure paths found in the code
+
+| Path to the bytes | Why it matters |
+|---|---|
+| `https://<main>/<id>/...` | the default Caddy site serves all of `pub/` through `file_server` |
+| `https://<fqdn>/...` for a `--host` share | its own site block |
+| `https://<main>/<id>/...` for a `--host` SNAPSHOT share | `pub/<id>` is also reachable through the default site, so a `--host` gate must cover the main-host path too |
+| another profile's hostname | closed by SPEC-005: each profile's root, and so its `pub`, is separate |
+| `copy()` moves the stage into `pub/<id>` before the index row exists | the bytes are reachable the moment the `mv` lands, row or no row |
+| a path with `%2F` / `%5C` that Caddy decodes into `/<id>/...` | bypasses the path app (measured above); closed by a Caddy-level 400 |
+| `teardown` keeps `pub/` and `index.tsv` | a gated share's bytes would come back ungated after the next `setup`; teardown must unpublish gated shares |
+
+## Solution
+
+### Approaches considered
+
+| Approach | Tradeoff |
+|---|---|
+| A. Email-domain rule only (`domain:d.foundation`) | One call. Fails the hard requirement: contractors pass. |
+| B. Inline email list per link (`email:a@x,b@y`) | Works today with the one-time PIN IdP. Membership is retyped on every `add` and frozen into each app. |
+| C. Reference an existing Access Group by name (`group:dwarves-ops`) | Membership lives in one place, maintained by an admin; every gated link follows it. Works today (the group holds an email list) and later without a share change (the group can switch to a Workspace group claim or a GitHub team once that IdP exists). Needs one more token scope (Groups Read). |
+| D. share creates and maintains groups | Turns share into an identity admin tool. Out of scope. |
+| E. Gate in Caddy (basic auth, or verify the Access JWT) | No per-person identity (basic auth) or a Caddy plugin share does not ship. Rejected. |
+| F. Also validate the Access JWT in cloudflared (`originRequest.access {required, teamName, audTag}` on a per-share ingress rule with a `path` regex) | Fail-closed at the connector even if the edge path match misses. Costs one ingress edit per gated share under the host lock, and the ingress `path` regex faces the same encoded-path question. Deferred: the Caddy reject closes the measured gap with one static matcher. Upgrade path if a new edge bypass is found. |
+| G. Gated shares always get their own `--host` hostname and a host-wide app | Removes path matching entirely. Costs a DNS record per share, the `--host` credential, and the ~6.5 minute new-hostname delay on every gated add. Rejected as the default; `--host` plus `--access` stays available. |
+
+### Chosen approach + why
+
+Support three rule forms on one flag: `group:` (C, the answer to the OPS-not-contractors requirement), `email:` (B, a one-off without admin work), and `domain:` (A, the simple case, with a warning that it admits everyone on the domain). share only REFERENCES groups; it never creates, edits, or lists members. Each gated share gets its own self-hosted Access app with one app-scoped allow policy, created at `add` and deleted by stored id at `rm`, expiry, and teardown. Caddy refuses encoded slashes, backslashes, and dots in the path on every main-host request, which closes the one measured edge bypass without per-share work.
+
+### Extensibility & boundaries
+
+- Growth dimension: gated shares. Each costs one Access app. No per-share state outside `index.tsv` and the pending file.
+- Units: `access_parse` (flag -> include JSON), `access_create` / `access_delete` (Cloudflare side, one app, through `cf_try`), `access_gate` (edge probe loop), `access_sweep` (pending lines). `access_parse` and the dry-mode call order are testable locally; the rest needs `tests/e2e.sh`.
+- Out of bounds: group management, changing the rule of an existing share (rm and add again), IdP setup, service tokens, quick mode.
+
+## Picture
+
+```
+ share --profile dfoundation add ./ops-report.pdf --access group:dwarves-ops   (host s.d.foundation;
+                                                   the profile root path comes from SPEC-005)
+  1 stage copy ──▶ <root>/.stage.XXXX                 held OUTSIDE pub/: nothing to serve yet
+  2 resolve group ──▶ GET access/groups  ──▶ id of "dwarves-ops"
+  3 intent      ──▶ access-pending += "<id> -:<nonce> <owner>"   written BEFORE the POST
+    create app  ──▶ POST access/apps  {destinations: s.d.foundation/<id>, s.d.foundation/<id>/*,
+                                       policies: [allow include {group:{id}}]}
+                   line becomes "<id> <app id> <owner>"; read-back of destinations + policy
+  4 gate        ──▶ curl https://s.d.foundation/<id>/  and  /<id>
+                     until both 302 to https://*.cloudflareaccess.com/cdn-cgi/access/login/s.d.foundation
+                     with kid == this app's aud, 3 rounds in a row, up to 15 min
+                                                        visitors meanwhile get Access or a 404, never bytes
+  5 publish     ──▶ under the index lock: own pending line still there? mv stage ──▶ pub/<id>,
+                   row with access=<app id> access_rule=group:dwarves-ops, reload, drop the line
+  6 print + copy the link                               the id is secret until this line
+
+ every request to the main host: Caddy answers 400 when the raw PATH contains %2F, %5C, or %2E
+```
+
+## Design
+
+### Diagram
+
+Create and delete order, with the safe state after every step:
+
+```
+ add --access                          state if share dies right after this step
+ ─────────────────────────────────────  ─────────────────────────────────────────────────
+ stage copy (outside pub)               nothing public; stage trashed by the EXIT handler
+ intent line "<id> -:<nonce> <owner>"   nothing created
+ POST app (outcome unknown on a lost    an app may exist: the sweep finds it by its fixed name
+   response), line gets the app id      app gates an empty path (404 behind login); swept later
+ [--host] host_add (ingress, CNAME)     fqdn answers the Caddy default site: no row, no bytes
+ gate passes                            same as above
+ [index lock] exact own line present?   a sweep claimed or removed it: abort, trash the stage, die
+ mv stage -> pub/<id>, row, reload,     done; a crash inside the locked step leaves bytes with
+   drop the line [unlock]               the line: the sweep trashes pub/<id> FIRST, then the app
+
+ rm (and prune, teardown)
+ ─────────────────────────────────────
+ [index lock] "<id> <app id> <owner>" -> access-pending
+ [--host] host_rm (DNS, ingress)
+ trash pub/<id>, drop row, reload       link 404s behind login
+ DELETE app (404 counts as done)        gone; any other error keeps the line for a later sweep
+ line out of access-pending
+```
+
+The rule: bytes are published only after the gate is observed, and the gate is removed only after the bytes are gone. A sweep never touches a line whose owner is a live share process, claims a line (rewrites its owner to itself) under the same `index` lock before any network call, and a publisher only publishes while its exact line is still there.
+
+### ADR link(s)
+
+None yet. TASK-7 writes `docs/decisions/ADR-0006-access-gate-per-share.md` once Han picks the rule model (Access app per share, reference-only groups, observe-then-publish, the Caddy encoded-slash reject).
+
+### Boundaries & failure modes
+
+See `## Failure modes`.
+
+## Technical Design
+
+### Interfaces (I/O contract)
+
+**`share add [--ttl T] [--host FQDN] [--no-index] [--access RULE] <target>`**
+
+`RULE` is exactly one of:
+
+| Form | Example | Validation | Policy `include` |
+|---|---|---|---|
+| `group:<name>` | `group:dwarves-ops` | `name` is 1 to 64 chars of `A-Za-z0-9._-`; exactly one Access Group on the account has that name | `[{"group":{"id":"<uuid>"}}]` |
+| `email:<a>[,<b>...]` | `email:han@d.foundation,an@d.foundation` | each lowercased; one `@`; local part of `a-z0-9._%+-`, domain passes the hostname check; 1 to 50 addresses | one `{"email":{"email":"<a>"}}` per address |
+| `domain:<domain>` | `domain:d.foundation` | the hostname regex `rows()` uses | `[{"email_domain":{"domain":"<domain>"}}]` |
+
+Checks use `case` patterns and `${#var}` lengths in bash, and length checks in the `rows()` awk: no regex intervals, because `rows()` must run under mawk. Anything else: `die "usage: --access group:<name> | email:<a>[,<b>...] | domain:<domain>"` before any write. `domain:` prints one stderr line: `share: --access domain:<d> admits every address at <d>, contractors included; use group: to narrow it`.
+
+Refusals, all before any write:
+- quick mode: `--access needs a named tunnel on a Cloudflare account with Access: 'share teardown', then 'share setup <hostname>'`.
+- no `CLOUDFLARE_API_TOKEN`: `--access needs CLOUDFLARE_API_TOKEN with 'Access: Apps and Policies Edit' on the account that owns <zone>`. The browser-login cert is not tried (whether its token can manage Access is UNVERIFIED; requiring the API token keeps one path).
+- `group:` lookup: `GET access/groups?name=<name>&per_page=100`, then an exact client-side name match over every page (`result_info.total_pages`). Not found: `no Access group named '<name>' on the account that owns <zone> (or the token lacks 'Access: Organizations, Identity Providers, and Groups Read')`. Two matches: `two Access groups are named '<name>'; rename one`.
+- Access not enabled (API code 9999 on the create call): `Cloudflare Access is not enabled on the account that owns <zone>; enable Zero Trust in the dashboard first`.
+
+**`cf_try METHOD PATH [JSON]`**: a sibling of `cf()` with the same header-file token handling, which never dies. It sets three globals and prints nothing: `cf_body`, `cf_code` (HTTP status), and `cf_err` (first `errors[].code`). Callers invoke it directly, never inside `$( )`, because globals set in a command substitution are lost (the pitfall `rand_id` documents). A 404 can count as done and code 9999 maps to the enable hint. A transport failure sets `cf_code=000`. Every Access call uses it; `cf()` is unchanged.
+
+**Account**: the account that owns the profile's zone, from `GET /zones?name=<zone>` (`result[0].account.id`), as `host_auth` derives it. Per profile by construction: each profile has its own hostname, zone, and so account.
+
+**Access app** (`access_create`), one `POST /accounts/<acct>/access/apps` through `cf_try`:
+
+```json
+{"name": "share <id> <main host> <nonce>",
+ "type": "self_hosted",
+ "destinations": [{"type":"public","uri":"<main>/<id>"},
+                  {"type":"public","uri":"<main>/<id>/*"},
+                  {"type":"public","uri":"<fqdn>"}],
+ "app_launcher_visible": false,
+ "session_duration": "24h",
+ "policies": [{"name":"share <id>","decision":"allow","include":[...],"precedence":1}]}
+```
+
+The `<fqdn>` destination is present only for a `--host` share. `allowed_idps` is omitted, so every IdP on the account is offered (today: one-time PIN on Dwarves). The response's `aud` is kept in memory for the gate. Read-back: `GET .../access/apps/<id>`; the set of destination `uri` values must equal the set sent (order and extra fields ignored) and the app must carry at least one policy, else `access_delete` and die (INC-005's rule: a stored app is checked, not assumed). If the API rejects inline policy objects, the fallback is the two-call path foundation-ops uses (`POST app`, then `POST apps/<id>/policies`); TASK-1 settles which on a real account.
+
+**Gate** (`access_gate`): for each gated URL (`https://<main>/<id>/`, `https://<main>/<id>`, and `https://<fqdn>/` for `--host`):
+
+```
+curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' "<url>?share_gate=<rand>"
+```
+
+A URL passes when the code is 30x, the redirect URL matches `^https://[a-z0-9-]+\.cloudflareaccess\.com/cdn-cgi/access/login/<that url's host>`, and its `kid` query value equals the new app's `aud`. A round probes every URL once. Until the first all-pass round, rounds run every `SHARE_ACCESS_POLL` seconds (default 10). After it, two more rounds run 5 s apart; the gate passes when all three pass, and any failure restarts the count. The whole wait is capped at `SHARE_ACCESS_WAIT` seconds (default 900; INC-009 measured 390). Every 60 s it prints `share: waiting for Cloudflare Access to enforce on <main>/<id> (new apps can take several minutes)`. The gate runs whether or not this machine serves: Access acts at the edge before the tunnel.
+
+**Staging split**: `copy()` becomes `stage_copy <src> <opts>` (prints the stage dir, everything up to and including `gen_index`) and `stage_publish <stage> <id>` (the `mv` into `pub/<id>`). An ungated `add` and `refresh` call both back to back, unchanged in effect. A gated `add` runs `stage_publish` only after the gate passes. `lock_take` resets `trap release_locks EXIT` on every lock (`bin/share` `lock_take`), so the held stage path goes into a global that `release_locks` also trashes; a separate trap would be overwritten.
+
+**Pending file**: `$root/access-pending`, one line per app that is not, or no longer, backed by a finished row: `<share id>\t<app>\t<owner pid>\t<owner start>\t<created epoch>`. `<app>` is an app uuid, or `-:<nonce>` when the POST was sent and its outcome is unknown; `<nonce>` is 8 hex chars from `/dev/urandom` and is also the last word of the app name (`share <id> <main host> <nonce>`), so a lookup can never match an older app for the same id. `<owner start>` is `ps -o lstart= -p <pid>` at the time the line was written; `<created epoch>` is when the intent line was first written and never changes. Every read and write of the file happens under the `index` lock. After a successful POST the adder rewrites its `-:<nonce>` line to the uuid under the lock, and only when its exact line (own pid, own start) is still there; otherwise it deletes the app it just created and dies.
+
+**Owner liveness** (`owner_live <pid> <start>`): the pid is alive, its command matches `*share*`, and its current `lstart` equals the recorded one. The start time defeats pid reuse, including reuse by the long-lived `share serve`.
+
+`access_sweep`, per line, in three steps:
+1. Under the `index` lock, decide. Owner live -> skip the line (an add or rm owns it). A row with that share id carries `access=<app>` -> drop the line. Otherwise CLAIM it: rewrite the owner fields to this process. If no row has that share id and `pub/<share id>` exists, trash it, `write_caddyfile`, `caddy_reload`. Release the lock.
+2. Without the lock, the network part:
+   - `<app>` is `-:<nonce>`: first prove Access read in this run with `GET access/organizations` (`cf_code` 200). Unproven -> keep the line and stop here. Proven -> read every page of `access/apps` and match the name ending in `<nonce>`. A match gives the uuid to delete. No match drops the line only when `<created epoch>` is more than 10 minutes old (a POST can still commit after the 30 s client timeout); a younger line is kept for a later sweep.
+   - `DELETE access/apps/<uuid>`; 200 or 404 is done; anything else (including `000`) is not done.
+3. Under the `index` lock again: when done and the line still names this process as owner, drop it. When not done, leave the line claimed by this process; once this process exits, the next sweep sees a dead owner and retries.
+
+The sweep never deletes an app while its bytes are in `pub/`, never trashes a share that has a row, and never holds the lock across a network call (other writers wait at most 60 s for it, `lock_take` in `bin/share`). It runs at the start of any short-lived command that holds `CLOUDFLARE_API_TOKEN` and is about to touch Access (`add --access`, `rm` of a gated share, `prune`, `teardown`). It does NOT run inside `share serve` (its startup `cmd_prune` skips the sweep): serve lives for days, so a line it claimed and failed to delete would stay owned by a live process until serve restarts. The hourly prune is a separate `bash "$0" prune` process and sweeps normally. `rand_id` also skips any share id named in `access-pending`, so a new share never lands behind a waiting app.
+
+**Publish step** of a gated add, as one critical section under the `index` lock: confirm the EXACT line `<id>\t<app uuid>\t$$\t<own start>` is still in the file; `stage_publish`; append the row; `write_caddyfile`; `caddy_reload`; drop the line. Any mismatch (a sweep claimed or removed it) means the app may already be gone: trash the stage and die without publishing.
+
+**`rm <id>`** of a gated row: without `CLOUDFLARE_API_TOKEN`, `die "no Cloudflare credential for the Access app of <id>; set CLOUDFLARE_API_TOKEN, then rm again"` before any change (same stance as `--host`). With it: the order in `## Design`. `DELETE /accounts/<acct>/access/apps/<app id>`; a 404 counts as done; any other error dies with the id left in the pending file.
+
+**`prune`** of an expired gated row: with the token, as `rm`. Without it (the login service has no API token), it removes bytes and row, leaves the id in `access-pending`, and logs `share: Access app for <id> awaits deletion; run 'share prune' with CLOUDFLARE_API_TOKEN`. Expiry is never blocked. The orphan app gates an empty path.
+
+**`teardown`**: when any row carries `access=` or `access-pending` is non-empty and `CLOUDFLARE_API_TOKEN` is unset, die before any change: `teardown would orphan <n> Access app(s); rerun with CLOUDFLARE_API_TOKEN`. With it, every gated share is UNPUBLISHED in `rm` order (bytes to the Trash, row dropped, then the app deleted) and the pending file is swept, all before the tunnel goes. Ungated shares stay as today. A gated share never survives teardown, so a later `setup` cannot serve it ungated.
+
+**`ls`**: a gated row prints `access=<rule>` after `expires=`. With `CLOUDFLARE_API_TOKEN` set, `ls` also checks each gated row's app by id and prints `share: Access app for <id> is gone; the link is PUBLIC; share rm <id>` on a 404. `ls` and `status` print `share: <n> Access app(s) await deletion; run 'share prune' with CLOUDFLARE_API_TOKEN` when `access-pending` is non-empty. **`state`**: each share gains `"access": "<rule>"` or `null`, and the top level gains `"access_pending": <n>` (added fields; `schema` stays 1). **`refresh`**: unchanged; the app stays. **`hits`**: unchanged (a visitor redirected to login never reaches Caddy).
+
+**Caddy encoded-path reject**: `write_caddyfile` adds to the DEFAULT site (the main host), as its first `handle`:
+
+```
+@encsep expression {http.request.uri}.matches("^[^?]*(?i:%2f|%5c|%2e)")
+handle @encsep {
+	respond 400
+}
+```
+
+It must be a `handle` block: Caddy orders a bare `respond` after `handle`, so the catch-all `handle { file_server }` would answer first (reproduced by the round-2 validator with caddy v2.11.4: `/x/..%2Fabc123/f.txt` returned the file). `{http.request.uri}` is the raw request URI; the `^[^?]*` prefix limits the match to the path, so `?next=%2Fhome` still passes. `urlenc` never emits `%2F`, `%5C`, or `%2E` (it keeps `.` literal), so no link share prints is affected. `%2E` is defense in depth: the edge normalizes `%2e%2e` (measured 302), but Caddy alone would serve `/x/%2e%2e/<id>/f`. Measured with the fix: `..%2F`, `%2f`, and `..%5C` answer 400; a query with `%2F` answers 200; a `handle_path` live share still works. `--host` site blocks do not get it: a `--host` gate is host-wide, so there is no path match to slip past, and a live dev app behind `--host` may use `%2F` in its own paths.
+
+**Test seams**: `SHARE_ACCESS_DRY=1` skips every Access call and the edge probe. It is honoured only with `SHARE_TUNNEL=0`; with the tunnel on, `add --access` under `SHARE_ACCESS_DRY=1` dies before any write, so the seam can never publish a gated-looking row with no app. `access_create` appends `POST app` and returns a fixed fake uuid; `access_delete` appends `DELETE app <id>`; the group lookup reads `$root/access-groups-fixture.json` and appends `GET groups`; each probe round reads the next line of `$root/access-probe-fixture` (`pass` or `fail`, last line repeats) and appends `PROBE <result>`; `stage_publish` appends `PUBLISH <id>`, a sweep's trash appends `TRASH <id>`, and `caddy_reload` appends `RELOAD`. A `SHARE_ACCESS_DRY_POST=lost` knob makes `access_create` return `cf_code=000` after logging `POST app (lost) <body>`, and makes the next name lookup return one app whose name is the `name` field of that logged body (so a create that omits the nonce fails row 23). `SHARE_ACCESS_DRY_DELETE=lost` makes `access_delete` return `000` after logging `DELETE app <id> (lost)`. `SHARE_ACCESS_DRY_ORGS=deny` makes the Access-read proof fail. All to `$root/access-calls.log`. `SHARE_ACCESS_WAIT` and a `SHARE_ACCESS_POLL` (default 10) shorten the loop in tests.
+
+### Data model changes
+
+- `index.tsv` opts gain `access=<uuid>` and `access_rule=<rule>`. `rows()` drops a row whose `access=` is not a lowercase uuid or whose `access_rule=` fails the rule grammar, so a forged row never reaches a Cloudflare call; it counts in `state.skipped` as today. Such a row can only come from a hand edit; its app, if any, stays until removed in the dashboard (documented in `docs/how-it-works.md`).
+- New file `$root/access-pending` (per profile, inside the 0700 root).
+
+### API changes
+
+Cloudflare, per gated share: one Access app with one app-scoped policy. Reads: one `access/groups` list for `group:`. No change to DNS or ingress beyond what `--host` already does.
+
+Token scopes on the profile's account:
+
+| Scope | Needed for |
+|---|---|
+| Access: Apps and Policies Edit | every `--access` create, read-back, delete |
+| Access: Organizations, Identity Providers, and Groups Read | REQUIRED for every `--access` use: the `group:` lookup, and the sweep's proof of Access read (`GET access/organizations`) before trusting an app list for a `-:<nonce>` line. Without it such lines are never resolved |
+| Zone: Read | the zone -> account lookup (already needed by `--host`) |
+| Cloudflare Tunnel: Edit, DNS: Edit | only when combined with `--host` (unchanged) |
+
+### UI changes
+
+CLI flag, usage line, `ls` column, `state` field, the skill text (`share skill`) gains one row: gated links and the three rule forms.
+
+### Infrastructure changes
+
+None local. On Cloudflare: Access must be enabled on the profile's account. Each person who logs in uses a Zero Trust seat (UNVERIFIED: the Dwarves plan tier and seat cap).
+
+## Task Breakdown
+
+Dependency: SPEC-005 (profiles) lands first. Rows 20 and AC5 need it; every other task works on the default profile.
+
+### Phase 1: Foundation
+- [ ] TASK-1: spike on a throwaway profile and zone: create one app with inline `destinations` and `policies`, read it back, measure the time until `/<id>/` 302s with `kid == aud` on an already-routed host, probe the encoded shapes of row 17, delete the app. AC: the POST shape (inline or two-call) and the measured delay are written in `docs/implementation-notes/access.md`.
+- [ ] TASK-2: `access_parse`, the opts and `rows()` validation, `cf_try`. AC: rows 1, 2, 13 pass.
+- [ ] TASK-3: the Caddy encoded-path reject in `write_caddyfile`. AC: row 22 passes; the existing suite passes.
+
+### Phase 2: Core
+- [ ] TASK-4: `stage_copy` / `stage_publish` split with the stage path in the `release_locks` handler. Depends on nothing else. AC: the existing suite passes untouched; row 4 leaves no stage.
+- [ ] TASK-5: `access_create` (intent line, POST, read-back), `access_delete`, the pending file format, `rand_id` skipping pending ids. Depends on TASK-2. AC: rows 5, 8, 23, 24.
+- [ ] TASK-6: `access_gate`. Depends on TASK-5. AC: rows 6 and 16 in dry mode.
+- [ ] TASK-7: gated `add` wiring for snapshot, live, and `--host`, with the locked publish step. Depends on TASK-4 to TASK-6. AC: rows 3, 6, 7, 25.
+- [ ] TASK-8: `rm`, `prune`, `access_sweep`. Depends on TASK-5. AC: rows 9, 10, 11, 11b, 23b, 23c, 23d, 25b, 26; `share serve`'s startup prune logs no sweep call.
+- [ ] TASK-9: `teardown` unpublishes gated shares. Depends on TASK-8. AC: rows 12, 12b.
+
+### Phase 3: Polish
+- [ ] TASK-10: `ls` (app-gone check, pending count), `status`, `state` fields, skill row. AC: row 14 and the `ls` messages in `### Interfaces`.
+- [ ] TASK-11: `tests/e2e.sh` gated legs (rows 17 to 20). Depends on TASK-7 to TASK-9. AC: the legs pass against a throwaway zone; a run log goes to `docs/verification/access.md`.
+- [ ] TASK-12: docs and ADR. `docs/decisions/ADR-0006-access-gate-per-share.md`; README feature row; `docs/how-it-works.md` gains the gated lifecycle, `access-pending` in the file tree, the encoded-path reject in the Caddy block, and a security row; `docs/setup.md` gains the token scopes and how to create an Access Group by hand. AC: each named doc claim matches the code line it describes.
+
+## After state
+
+- [ ] `share --profile dfoundation add ./ops.pdf --access group:dwarves-ops` prints a link only after the gate passes; opening it asks for a one-time PIN; an address outside the group gets no code. (Today: `usage:` error.)
+- [ ] Another share on the same host still answers 200 with no login.
+- [ ] `https://<main>/x/..%2F<id>/<name>` answers 400. (Today: the bytes, for any share.)
+- [ ] `share rm <id>` leaves no Access app: `GET access/apps/<app id>` is 404.
+- [ ] An expired gated share under the service leaves its app in `access-pending`; `share status` shows the count; the next `share prune` with the token deletes it.
+- [ ] `share teardown` leaves no gated row, no gated bytes, and no app.
+- [ ] `bash tests/share.sh` PASS on macOS `/bin/bash` 3.2 and Ubuntu; `shellcheck` clean.
+
+## Acceptance Criteria (global)
+
+1. At no point in `add` does `https://<main>/<id>/...` or `https://<fqdn>/` answer the shared bytes without an Access redirect, including through encoded-separator paths (e2e probes during and after the gate wait; dry-mode order locally).
+2. Every app share creates is deleted by `rm`, token-holding `prune`, or `teardown`, or is named in `access-pending` (by id, or by `-` plus its fixed name); none is ever untracked.
+3. No new place a token appears in argv, logs, or output; every Cloudflare call goes through `cf()` or `cf_try`, which share the header-file token path.
+4. Ungated shares, old rows, quick mode, and `--host` without `--access` behave as before, except that on the main host a raw path containing `%2F`, `%5C`, or `%2E` now answers 400. `--host` sites are unchanged.
+5. Works per profile: a gated share on one profile creates its app on that profile's account and is unreachable through another profile's hostname.
+
+## Failure modes
+
+| Failure | Detection | Behavior |
+|---|---|---|
+| Gate never passes within `SHARE_ACCESS_WAIT` | the wait cap | delete the app (and `host_rm` for `--host`), trash the stage, `die "Cloudflare Access did not enforce on <main>/<id> within <n>s; nothing was published"`. A failed delete keeps the pending line and says so |
+| Ctrl-C or crash during the gate | the EXIT handler; a pending line whose pid is dead | stage trashed; next credentialed command sweeps the app |
+| POST response lost (timeout, network) | `cf_code=000` | pending line stays `-:<nonce>`; a later sweep that has proven Access read finds the app by its nonce name; an unproven sweep keeps the line; the add dies without publishing |
+| Read-back mismatch (destination set or no policy) | read-back compare | delete the app, die, nothing published |
+| A sweep races a running add or rm | owner pid plus start time in the pending line; the `index` lock | the sweep skips a live owner; a sweep that claims a line rewrites its owner first, so the publisher's exact-line check fails and it aborts without publishing |
+| Group renamed or deleted after `add` | none needed | the app keeps the group id; a deleted group matches nobody: fail-closed |
+| App deleted by hand in the dashboard | `ls` with the token: GET by id answers 404 | `ls` prints the PUBLIC warning; `rm` treats the 404 as done |
+| Encoded separator or dot (`%2F`, `%5C`, `%2E`) aimed past the path app | Caddy matcher | 400 at Caddy for every share |
+| `rm` without the token | credential check | die, nothing changed |
+| `prune` without the token | credential check | bytes and row go, the app waits in `access-pending`; `status`, `ls`, `state` show the count |
+| Token lacks Groups Read | not-found on the lookup | `group:` dies with the scope named; `email:` and `domain:` still work |
+| Account without Access | `cf_err=9999` | die before publishing, with the enable hint |
+| Gate passes at the prober's edge location before others | none from one vantage point | residual risk: the id is unknown until share prints it, three rounds with `kid == aud` are required, and the Caddy reject covers the measured bypass. UNVERIFIED whether enforcement rolls out per location |
+
+## Test plan
+
+Local rows run in `tests/share.sh` with `SHARE_TUNNEL=0` and `SHARE_ACCESS_DRY=1`; call order compares line numbers in `access-calls.log`, never independent greps.
+
+| # | Category | Case | Assert |
+|---|---|---|---|
+| 1 | parse | `group:dwarves-ops`, `email:A@X.io,b@y.io`, `domain:d.foundation` | row carries `access_rule=` with the lowercased value; include JSON matches the grammar table |
+| 2 | parse-refuse | `--access bad`, `group:`, `email:nope`, `domain:-x`, 51 emails | exit 1, usage line on stderr, no row, no `POST app` |
+| 3 | refuse | quick mode + `--access`; `SHARE_ACCESS_DRY=1` with `SHARE_TUNNEL=1` | exit 1, named message, no call logged, no row |
+| 4 | refuse | `env -u CLOUDFLARE_API_TOKEN`, dry off | exit 1, scope named, no stage left under `$root` |
+| 5 | group | fixture without the name; fixture with it twice; fixture spread over two pages | the first two die with their messages and no `POST app`; the paged one resolves |
+| 6 | order | gated snapshot add, probe fixture `fail`,`fail`,`pass`x3 | line order `POST app` < every `PROBE` < `PUBLISH`; `pub/<id>` absent while any `PROBE fail` is logged (a background loop polls `pub/` and the log) |
+| 7 | order | gated live add | row and `handle_path` block written only after the last `PROBE pass` |
+| 8 | timeout | probe fixture `fail`, `SHARE_ACCESS_WAIT=2` | exit 1; `DELETE app` logged; no row; no `pub/<id>`; no `.stage.*`; `access-pending` empty |
+| 9 | rm | rm of a gated row | `RELOAD` precedes `DELETE app` in the log; local `GET /<id>/` 404; `access-pending` empty after |
+| 10 | prune | expired gated row, token unset | row and bytes gone; line in `access-pending`; exit 0; `status` prints the pending count |
+| 11 | sweep | then `prune` with the token | `DELETE app <that id>` logged; `access-pending` empty |
+| 11b | sweep | pending line with a dead pid whose `pub/<id>` exists and no row | log order `TRASH <id>` < `DELETE app`; `pub/<id>` gone |
+| 12 | teardown | gated row present, token unset | exit 1 before any change: service, config, row all intact |
+| 12b | teardown | gated and ungated rows, token set | no `access=` row and no gated `pub/<id>` left; `DELETE app` logged; the ungated row and its bytes stay |
+| 13 | rows | hand-written row with `access=../x` or a bad `access_rule=` | `ls` skips it; `state` counts it in `skipped` |
+| 14 | state | gated and ungated rows, one pending line | `access` is the rule string and `null`; `access_pending` is 1; `schema` is 1 |
+| 15 | compat | existing suite, ungated | unchanged PASS |
+| 16 | negative control | break the order: publish before the gate (temporary patch) | row 6 FAILs |
+| 17 | e2e | `tests/e2e.sh` gated leg on a throwaway zone with Access, `--access email:<tester>` | during the gate wait a parallel poll of `/<id>/` never sees 200; after `add`, `/<id>/`, `/<id>`, `/<ID upper>/`, the first id char percent-encoded, `//<id>/`, and `/x/%2e%2e/<id>/` all 302 with `kid == aud`; `/x/..%2F<id>/<name>` and `/%2F<id>/<name>` answer 400; a second ungated share answers 200 |
+| 18 | e2e | `--host dev.<zone> --access ...` | `https://dev.<zone>/` and `https://<main>/<id>/` both 302 |
+| 19 | e2e | `rm` | `GET access/apps/<app id>` 404; `/<id>/` never 200 |
+| 20 | e2e | two profiles on two zones (needs SPEC-005) | gated share on profile A: `https://<B host>/<id>/` is 404 |
+| 21 | UAT | Han opens a `group:dwarves-ops` link | one-time PIN to a group address succeeds; a contractor address gets no code |
+| 22 | caddy | local `curl --path-as-is` of `/x/..%2F<id>/<name>`, `/%2f<id>/<name>`, `/x/..%5C<id>/<name>`, `/x/%2e%2e/<id>/<name>` for a snapshot share, and `/x/..%2F<live id>/` for a main-host live share; the plain links; `/<id>/50%25.v1.txt` for a file named `50%.v1.txt`; `/<id>/<name>?next=%2Fhome`; `caddy adapt` of the rendered Caddyfile | 400 for the five encoded paths; 200 for the plain links, the `%25` file, and the query case; in the adapted JSON the `@encsep` route precedes the `file_server` route |
+| 23 | lost POST | `SHARE_ACCESS_DRY_POST=lost`, created epoch forged 11 minutes old | add dies, nothing published; pending line has `-:<nonce>`; the logged POST body's `name` ends in that nonce; a later `prune` with the token logs `GET orgs`, a name lookup that matches the name taken from the logged POST body, then `DELETE app`, and empties the file |
+| 23d | young no-match | a `-:<nonce>` line 1 minute old, proven read, no app with that nonce | line kept; no `DELETE` |
+| 23b | unproven list | as row 23, then `prune` with `SHARE_ACCESS_DRY_ORGS=deny` | no name lookup, no `DELETE`; the `-:<nonce>` line stays |
+| 23c | lost DELETE | a gated add paused in the gate whose owner fields are forged to a dead pid; `prune` with `SHARE_ACCESS_DRY_DELETE=lost` claims the line | the add's publish step finds a mismatched line, trashes its stage, dies; no `PUBLISH` in the log; no row |
+| 24 | rand_id | a pending line for id `abc123` and `rand_id_raw` stubbed to return `abc123` then another | the new share does not get `abc123` |
+| 25 | race | a gated add paused in the gate (probe fixture `fail` for 3 s) while `prune` with the token runs | no `DELETE app` logged by the prune; the add then publishes |
+| 25b | pid reuse | a pending line naming the pid of the running `share serve` but a different start time | the sweep treats the owner as dead and processes the line |
+| 26 | argv | a `curl` shim first on `PATH` recording its argv, a gated add plus rm with a sentinel token | the sentinel string never appears in the recorded argv |
+
+## Verification
+
+```
+shellcheck bin/share tests/share.sh tests/e2e.sh && /bin/bash tests/share.sh
+```
+
+Then by hand before release: `SHARE_E2E_HOST=... CLOUDFLARE_API_TOKEN=... SHARE_E2E_ACCESS_EMAIL=... tests/e2e.sh`, and the UAT row.
+
+## Out of Scope
+
+Creating, editing, or listing Access Groups or their members; adding IdPs; service-token access for machines; changing the rule of a live share; gating the whole main hostname; quick mode; storing an API token (SPEC-005 keeps share token-free).
+
+## Decisions for Han
+
+1. **Rule model for "OPS, not contractors".** Recommended: `--access group:dwarves-ops`, where `dwarves-ops` is an Access Group Han creates once in the Dwarves account holding an explicit email list. It works today with the one-time PIN IdP. Later, the group's include can switch to a Google Workspace group (needs a `google-apps` IdP with group claims) or a GitHub team (needs a `github` IdP) with no share change. Alternative: ship only `email:` and `domain:` (the token scopes stay the same, because the sweep's Access-read proof needs Groups Read anyway). Pick one.
+2. **Token for the Dwarves profile.** `df-cloudflare-ci-token` has no Access scope. `op://Toolkit/cf-api-token` has it but spans four accounts. Recommended: a new Dwarves-only token with the scopes in `### API changes`, owned by Han in `dfoundation-prod`, with an expiry and a rotation note in `docs/setup.md`.
+3. **Expiry cleanup under the login service.** Default in this spec: the service has no API token, so an expired gated share's app waits in `access-pending` (fail-closed, gates an empty path, counted in `status`) until a `share prune` with the token. Alternative: an `api_token_cmd=` config key (like `token_cmd`) so the service deletes the app at expiry, at the cost of a daemon that can change Access.
+
+Upkeep once shipped: each login uses a Zero Trust seat until an admin removes it (Dwarves plan tier and seat cap UNVERIFIED), and the per-account app cap is UNVERIFIED; TASK-1 records both.
+
+## Decision Log
+
+| Change | Why (validation round 1) |
+|---|---|
+| Caddy answers 400 to a raw URI with `%2F` or `%5C`, on every share | measured: `/x/..%2F<path>` and `/%2F<path>` skip a path app at the edge; Caddy decodes and cleans them into the gated path |
+| Pending lines carry the owner pid; the sweep skips live pids and decides under the `index` lock; the publish step re-checks its own line under the same lock | a concurrent sweep could delete the app of an add still in its gate wait, which would then publish ungated |
+| `teardown` unpublishes gated shares | teardown keeps `pub/` and rows, so a later `setup` would serve gated bytes with no app |
+| Intent line `<id> - <pid>` before the POST; the sweep resolves `-` by the fixed app name | a lost POST response would leave an untracked app |
+| Gate requires `kid == aud` of the new app | measured: the login redirect's `kid` is the matching app's AUD, so the probe proves this app enforces, not a broader one |
+| `cf_try` (non-dying, exposes HTTP status and error code) | `cf()` dies on any error, so "404 counts as done" and the code-9999 hint were not implementable |
+| `SHARE_ACCESS_DRY` honoured only with `SHARE_TUNNEL=0` | the seam would otherwise publish a gated-looking row with no app |
+| `rand_id` skips pending ids; the sweep trashes only when no row has that id | a new ungated share could land behind a waiting app, or be trashed by the sweep |
+| Group lookup filters by name and reads every page; grammar checks avoid regex intervals | paging correctness; `rows()` runs under mawk |
+| Pending count in `ls`, `status`, `state`; `ls` warns when a gated row's app is gone | expired apps waiting on a token, or a hand-deleted app, must be visible to a human |
+| Approaches F (cloudflared JWT check) and G (own hostname per gated share) recorded | real alternatives; F is the upgrade path if another edge bypass appears |
+| Round 2: Caddy reject is a `handle @encsep` block with a path-only match, main host only | a bare `respond` sorts after `handle`, so the reject never ran (reproduced); a whole-URI match broke `%2F` in query strings; `--host` gates are host-wide |
+| Round 2: the sweep proves Access read (`GET access/organizations`) before trusting an app list; lookup by a per-add nonce in the app name; all pages | the sweep may run under a different token whose empty list proves nothing; an older same-id app must not match |
+| Round 2: owner = pid plus `lstart`, liveness matches `*share*`; the sweep claims a line before any network call; the publisher requires its exact line | `running()` only matches `share serve`; a lost DELETE left the adder's line intact, so the adder would publish with no app |
+| Round 2: `cf_try` returns through globals, never `$( )`; the sweep releases the lock around network calls | globals set in a command substitution are lost; a 30 s call under the lock starves writers that wait 60 s |
+| Round 3: the app name carries the nonce; the scope table marks Groups Read required; the adder's `-:` to uuid rewrite uses the exact-line check; a proven no-match drops a `-:` line only after 10 minutes; `share serve` never sweeps; `%2E` joins the Caddy reject | the JSON contract disagreed with the lookup and would orphan the app; the sweep proof needs that scope; a late-committing POST; serve's long life would pin a claimed line; defense in depth behind the edge normalization |
+| TASK-4 split into TASK-4 to TASK-9; e2e (TASK-11) and ADR (TASK-12) tasks added; SPEC-005 dependency stated | atomicity and missing owners |
+
+## Open questions
+
+- Enforcement delay for a new PATH app on an already-routed hostname (TASK-1 measures it).
+- Whether inline `policies` objects on app create are accepted (TASK-1).
+- Whether Access rollout is per edge location (affects the 3-round gate; residual risk noted).
