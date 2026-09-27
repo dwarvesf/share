@@ -5,6 +5,18 @@ Branch: feat/menu-bar-app
 Spec: `docs/specs/SPEC-003-menu-bar.md` (17 tasks, AMEND-001, AMEND-002)
 Pre-build base: 91e9a5b
 
+## Green run at the ship commit (bdb284e, after both review rounds)
+
+```
+Command: /bin/bash -n bin/share && shellcheck bin/share install.sh tests/share.sh tests/e2e.sh demo/render.sh mac/*.sh bin/release && bash tests/share.sh
+Exit:    0
+Checks:  234 ok, 0 FAIL (PASS)
+
+Command: swift test --package-path mac
+Exit:    0
+Output:  Executed 109 tests, with 0 failures (0 unexpected)
+```
+
 ## Green run (final, fresh re-audit at 88c8306)
 
 ```
