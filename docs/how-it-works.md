@@ -139,9 +139,10 @@ The app changes anything only by running share's normal verbs (`add`, `rm`, `ref
 Invariants: `state` never prunes, never writes or creates a file, never needs a TTY,
 and never touches the clipboard. Removing or renaming a field bumps `schema`; adding a
 field does not, so an older app can still read a newer CLI. An index row with exactly 5
-tab fields (the shape share wrote before this version) reads with empty opts; a row
-with fewer than 5 or more than 6 fields is skipped and counted in `skipped` instead of
-breaking the read.
+tab fields (the shape share wrote before this version) reads with empty opts; a row is
+skipped, and counted in `skipped` instead of breaking the read, when it has fewer than 5
+or more than 6 fields, when its id is not exactly 6 lowercase hex characters, or when its
+`host=` opt is the main hostname or not a valid hostname.
 
 ## Why each choice
 

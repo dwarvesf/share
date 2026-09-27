@@ -246,3 +246,16 @@ TASK-015 is docs only; the verification record `docs/verification/menu-bar.md` i
 - `skipped` in `state` is now non-empty lines minus `rows` lines, so a forged row counts as skipped. A blank line still does not count.
 - `host_rm` refuses the main hostname and deletes only a DNS record whose content is `<tunnel>.cfargotunnel.com`; any other record stays and a warning names it.
 - Test fixtures with non-hex ids (`pad100`, `expire1`, `legacy1`, `nocred1`, `p%05x`) moved to hex ids, since `rows` now hides them. The awk avoids `{n}` intervals, because mawk lacks them.
+
+## 2026-09-27 round 2 security review: main-hostname and Caddy-unsafe-name refusals
+
+- Source: round 2 security review, findings A and B on the fix batch above `rows()`'s main-hostname/bad-id filtering (finding 1).
+- Finding A: `host_check` accepted `--host <the main hostname>`. `add` would write a row whose `host=` equals `$host_name`; `rows()` already hides such a row from `ls`, `rm`, `prune`, `write_caddyfile`, and `state` (finding 1's fix), so the share could never be listed, refreshed, or removed while its Caddyfile block (rendered separately, outside `rows()`, keyed off the literal `host=` opt) kept serving it. Fixed with `[[ $fqdn != "$host_name" ]] || die "--host cannot be the main hostname"`, checked before `host_zone` since it needs no zone lookup.
+- Finding B: `cmd_add` validated the realpath for tabs and newlines but not the resulting name for characters Caddy or the Caddyfile syntax treat specially. A source named `{query.p}` writes `root * "$pub/$id/{query.p}"` into the per-host block; Caddy expands `{query.p}` as a placeholder referencing the request's own query string, so a crafted query on that host can redirect `root` outside `$pub`. A name containing `"` breaks the quoted `root *` line for every share sharing that Caddyfile, not just the offending one. Fixed with `case $name in *[{}\"\\]*) die "names with { } \" or \\ are not supported" ;; esac`, next to the existing tab/newline check.
+- Reproduced red on a scratch copy of the unfixed script outside the repo before applying either fix: `add --host <main>` under `SHARE_HOST_DRY=1` exited 0 and wrote a `host=<main>` row; `add` of files named `{query.p}` and `a"b` both exited 0 and wrote rows. Both tests in `tests/share.sh` go red without their fix.
+
+## 2026-09-27 review pushback: finding 10 (child PATH order)
+
+- Finding 10 (LOW, security): the app's child `PATH` puts the resolved CLI's directory, then Homebrew/local paths, ahead of `/usr/bin:/bin:/usr/sbin:/sbin`.
+- Pushed back rather than fixed: the order is spec-pinned (`## Technical Design` > `ShareBarCore` Swift API, "Child environment"), and reordering buys no security, since the CLI's own directory already comes first regardless of where the system dirs sit. Putting the system dirs first would instead resolve `jq` and `trash` to Apple's copies (when present) ahead of the Homebrew ones the CLI is built and tested against, trading a theoretical PATH-hijack concern for a real behavior change on any Mac with both installed.
+- No code change; `docs/specs/SPEC-003-menu-bar.md`'s Review table records the pushback and its reasoning inline.
