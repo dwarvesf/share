@@ -352,15 +352,57 @@ Negative controls: (1) add a `cmd_prune` call at the top of `cmd_state`: the "st
 
 ## Review
 
-### Verdict: FIX THEN SHIP (design-time, folded)
+Parallel review, 2026-09-27, base 91e9a5b, 42 files. Lenses: security (Opus), architecture, test coverage, frontend (domain), infra (domain), advisor (critique). Design-time reviews and the three spec validations are in git history of this file.
 
-Design critique (5 lenses) returned REVISE with 3 critical, 9 high, 6 medium, 3 low; the advisor returned 17 suggestions. Every critical and high finding is folded above: new verb (C1), kill model (C2), 500-row budget (C3), pipe draining (H1), index lock (H2), quick-URL lifecycle (H3), `ready` field and polling (H4), malformed rows (H5), GUI PATH (H6), `source_gone` dropped (H7), streamed hits (H8), stderr rules (H9). Mediums folded: hosts header (M1), `kind` split (M2), activation policy (M3), login item and packaging detail (M4), release split (M5), 25-row cap (M6). Low folded: id collision loop, `source`/`added` dropped. Advisor extras folded: urlenc links, zap limits, accessibility label, file-newer write test, private-repo warning alert. Deferred: TTL picker, Finder extension.
+### Verdict: FIX THEN SHIP
 
-Spec validation (fresh Opus) returned NEEDS REVISION with 2 criticals, both folded: pure-bash `urlenc` (DEC-012) and the composed lock trap with stale-lock recovery (DEC-011). Warnings folded: TASK-001 split into four, model fields for menu rules, the `ls` output wording, the header failure rule, id-diff link pick, folder confirm, setup cancel and quit, the named `DropView`, signing inputs and an idempotent release. No `docs/PHILOSOPHY.md` exists in this repo, so that check does not apply.
+### Findings
 
-Second validation (fresh Opus) returned NEEDS REVISION with 1 critical, folded: the Caddyfile render and reload now sit inside `index_lock` (DEC-014). Warnings folded: pid-symlink locks shared with `host_lock`, re-armed trap for subshells, `cmd_serve` trap calls `release_locks`, `cf()` timeout and Stop Waiting (DEC-015), the `urlenc` mask and keep-set, tasks split to 15, manual checks named, formula caveats moved into the release tap PR, TASK-001 checks reworded, the drop race narrowed, the loud cask-lag exit and `livecheck`, the release pipeline drawn, `MenuModel` merged.
+| # | Severity | Finding | Lens(es) | Confidence | Status | Route |
+|---|---|---|---|---|---|---|
+| 1 | HIGH | A newline or tab in a parent folder of the shared file forges index rows; a forged row can serve `$HOME` or proxy the main hostname to a local port. `add` checks only the basename (bin/share:354); readers accept any 5 or 6 field line. Pre-existing on main. | security | 75 | validated (reproduced: forged site block in the Caddyfile) | gated_auto |
+| 2 | HIGH | VoiceOver hears only the share name; the row's status (`2d left`, `expired`, `live`, `never`) is stripped by `setAccessibilityTitle(row.title)` (StatusItemController.swift:192-196). | frontend | 75 | validated | gated_auto |
+| 3 | MEDIUM | The notary `.p8` is moved to the Trash (or a temp dir), never deleted (mac/release.sh:49-58). | security, infra | 100 | convergent | gated_auto |
+| 4 | MEDIUM | `rm` rewrites the index before trashing `pub/<id>`; a killed `rm` (Stop Waiting) leaves content served with no row (bin/share:441-442). | security | 75 | | gated_auto |
+| 5 | MEDIUM | Bundle id literal repeated in four Swift files; the pending rename becomes four edits. | architecture | 75 | | gated_auto |
+| 6 | MEDIUM | Setup window has no Escape (`.cancelAction`). | frontend | 75 | | gated_auto |
+| 7 | MEDIUM | `hitsLine` parsing sits in the untested app target, duplicating a tested Core rule. | test coverage | 75 | | gated_auto |
+| 8 | MEDIUM | `docs/how-it-works.md:95` still describes `rm` as always succeeding; own-host removals without a credential now refuse. | advisor | 75 | | gated_auto |
+| 9 | LOW | Full file paths logged with `privacy: .public`. | security | 100 | | gated_auto |
+| 10 | LOW | Child PATH puts user-writable dirs before `/usr/bin:/bin:/usr/sbin:/sbin`. | security | 75 | | gated_auto |
+| 11 | LOW | "Stop Waiting" opens a confirm but lacks the ellipsis. | frontend | 75 | | gated_auto |
+| 12 | LOW | No Swift test decodes a non-zero `skipped`. | test coverage | 75 | | gated_auto |
+| 13 | LOW | Cask PR merges with no `brew style` on the generated file. | infra | 75 | | advisory |
+| 14 | LOW | Spec After-state boxes unticked; release and Mini install not yet asserted anywhere. | advisor | 75 | | advisory |
 
-Third validation (fresh Opus) returned NEEDS REVISION with 1 critical, folded: `rm` refuses an own-host removal without a credential (DEC-016). Warnings folded: `refresh` and serve startup render under the lock, the lock released before `cmd_start` in `add`, rename-then-check stale breaking, the Stop Waiting text for a starting server, 5-field rows, header precedence and `ready` without a tunnel, `fetch-depth: 0` for the v0.5.1 check, a drop-target spike, TASK-016 and TASK-017 split out with checks, the four unowned alerts assigned, a wait for the GitHub release before upload, `os_log` logging. The operator approved building after this fold (DEC-017).
+### Suppressed (below the confidence gate)
+
+- Child env inherited wholesale; `SHARE_BIN`, `BASH_ENV`, `DYLD_*` honored in release builds (security, 50). Worth doing as hardening; not verified end to end.
+- New-share id diff can pick a concurrent terminal add (security, 50). Already an accepted residual race (edge case 24).
+- Lock breaker can leave two holders in a three-way race (security, 50). Accepted in TASK-001.
+- Setup status changes not announced to VoiceOver (frontend, 50); drop overlay may shadow the status button's AX node (frontend, 50); setup window has no initial focus (frontend, 50).
+- Kill-timing sleeps in Swift tests could flake under load (test coverage, 50).
+- Edge case 19 missing from the "not verified" table (test coverage, 50).
+- Signing identity default duplicated in two scripts; notary-timeout die does not print the zip path (infra, advisory).
+
+### Previously rejected
+
+None (no rejected-findings ledger in this repo).
+
+### Scores
+
+| Lens | Score |
+|---|---|
+| Security | 6/10 (worst: finding 1) |
+| Architecture | 9/10 (worst: finding 5) |
+| Test coverage | 9/10 (worst: finding 7) |
+| Frontend | 7/10 (worst: finding 2) |
+| Infra | 7/10 (worst: finding 3) |
+| Combined | 7.6/10 |
+
+### TODOs
+
+Findings 1 to 12 go to verification, then a fix batch; round 2 re-reviews the fix diff. Findings 13 and 14 are recorded only.
 
 ## Amendments
 
