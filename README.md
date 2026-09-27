@@ -14,6 +14,14 @@ share add ./team-guide          # https://s.example.com/62cb50/team-guide/  (cop
 
 ![Share a folder, then check who opened it](demo/use.gif)
 
+A second account or hostname on the same machine is a profile, with its own tunnel, port, and login service:
+
+```sh
+CLOUDFLARE_API_TOKEN=... share --profile work setup s.work.example   # no browser: a token for that account
+share --profile work add ./guide                                     # https://s.work.example/62cb50/guide/
+share profiles                                                       # default and work, each with its state
+```
+
 ## Features
 
 | | |

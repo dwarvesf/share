@@ -110,6 +110,101 @@ Plus the suite's own standing negative control, last in every run: a host outsid
 | 12 | `add of another profile's caddy port is refused`, `add of another profile's metrics port is refused`, `setup on another profile's hostname is refused`, `the refused setup wrote no config`, `serve on a port another profile listens on dies`, `the die names the port`, `b still answers alone on its port` |
 | 13 | `--profile after the verb is refused`, `--profile=<name> after the verb is refused`, `help shows the --profile line and the profiles verb`, `help reaches teardown` |
 
+## UX walkthrough: the README on a clean HOME
+
+`scratchpad/walkthrough.sh`: a fresh `HOME`, every `SHARE_*` override unset, the
+suite's fake `cloudflared` on `PATH` (a trycloudflare banner, then idle) and
+`SHARE_LIVE_CHECK=0`, so nothing reaches Cloudflare. The README's three-command
+quickstart in its `--quick` variant, then the README's "second profile" block, then a
+rerun, two wrong shapes, the skill text, the on-disk layout, and teardown. `share` is
+the worktree's `bin/share`; the temp dir is shown as `$WORK`.
+
+```
+### README quickstart (default profile, --quick variant)
+
+$ bash share setup --quick --no-service
+  mode:       quick tunnel (no domain, no login; links get a random trycloudflare.com URL)
+  ready:      https://demo.trycloudflare.com/ is live. The URL changes on every start. Next: share add <file|dir>
+  [exit 0]
+
+$ bash share add ./team-guide
+  https://demo.trycloudflare.com/674fe4/team-guide/
+  [exit 0]
+### README: second profile
+
+$ bash share --profile work setup --quick --no-service
+  port:       8795 (metrics 8796)
+  mode:       quick tunnel (no domain, no login; links get a random trycloudflare.com URL)
+  ready:      https://work.trycloudflare.com/ is live. The URL changes on every start. Next: share add <file|dir>
+  [exit 0]
+
+$ bash share --profile work add ./guide
+  https://work.trycloudflare.com/c6dc62/guide/
+  [exit 0]
+
+$ bash share profiles
+  default	serving	demo.trycloudflare.com
+  work	serving	work.trycloudflare.com
+  [exit 0]
+
+$ bash share ls
+  https://demo.trycloudflare.com/674fe4/team-guide/
+      id=674fe4  size=4.0K  added=2026-09-27  expires=2026-10-27  from=$WORK/team-guide
+  [exit 0]
+
+$ bash share --profile work ls
+  https://work.trycloudflare.com/c6dc62/guide/
+      id=c6dc62  size=12K  added=2026-09-27  expires=2026-10-27  from=$WORK/guide
+  [exit 0]
+### rerun is idempotent
+
+$ bash share --profile work setup --quick --no-service
+  mode:       quick tunnel (no domain, no login; links get a random trycloudflare.com URL)
+  ready:      https://work.trycloudflare.com/ is live. The URL changes on every start. Next: share add <file|dir>
+  [exit 0]
+### a wrong shape prints the cause and the fix
+
+$ bash share stop --profile work
+  share: --profile goes before the verb: share --profile <name> stop
+  [exit 1]
+
+$ bash share --profile Work status
+  share: bad profile name 'Work' (a-z, 0-9, -; 32 chars max)
+  [exit 1]
+### the skill teaches --profile
+
+$ bash -c bash 'share' skill | grep -c -- '--profile'
+  1
+  [exit 0]
+### on disk
+
+$ bash -c cd '$WORK/home' && find share .config/share -maxdepth 3 -name config -o -maxdepth 3 -name serve.pid | sort
+  .config/share/config
+  .config/share/profiles/work/config
+  share/profiles/work/serve.pid
+  share/serve.pid
+  [exit 0]
+### teardown
+
+$ bash share --profile work teardown --yes
+  removed the quick setup (no tunnel, DNS, or token existed); shares in $WORK/home/share/profiles/work stay
+  [exit 0]
+
+$ bash share teardown --yes
+  removed the quick setup (no tunnel, DNS, or token existed); shares in $WORK/home/share stay
+  [exit 0]
+
+$ bash share profiles
+  default	not_setup	-
+  [exit 0]
+```
+
+Every command did what the README says on the first try; the profile setup printed
+its picked port; a rerun reused it silently; the two wrong shapes named the cause and
+the fix; teardown of `work` left the default serving and removed the profile from the
+listing. Not covered here: a named hostname (needs a Cloudflare token), the login
+service (`--no-service` throughout), and the real `cloudflared`.
+
 ## Not proven
 
 - A named-mode profile against the live Cloudflare edge (tunnel, DNS, Keychain on a

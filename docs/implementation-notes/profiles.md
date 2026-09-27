@@ -20,6 +20,31 @@ Delta from `docs/specs/SPEC-005-profiles.md`. Decisions already in the spec are 
 - A launchd plist names the profile's root three times (config dir, root, both log paths), so a grep count of the directory is not a useful assertion; the test greps the two keys instead.
 - `set -e` and `[[ test ]] && cmd` as the last line of a function make the function fail when the test is false; the teardown rmdir is written as `[[ -z $profile ]] || rmdir ... || true`.
 
+## Headless setup on the Mini (next item, needs the operator's token)
+
+Setup already has a browser-free path: with `CLOUDFLARE_API_TOKEN` set it verifies the
+token, finds the zone, checks the hostname, creates or reuses the tunnel, writes the
+CNAME, stores the run token, and installs the service, with no `cloudflared tunnel
+login`. Nothing in this cycle had to change for that. What is missing is the token: a
+read-only probe of the Dwarves CI token (`op://dfoundation-prod/df-cloudflare-ci-token`)
+showed it active, able to read the `d.foundation` zone and list the account's tunnels,
+and refused on the zone's DNS records (`Authentication error`), so `setup` would stop at
+its DNS check before creating anything. `s.d.foundation` has no DNS record today.
+
+The operator creates a token in the Cloudflare dashboard (Account: Cloudflare Tunnel:
+Edit; Zone: DNS: Edit; Zone: Zone: Read; account and zone resources limited to
+`d.foundation`), stores it in 1Password as `df-cloudflare-share-token`, then runs on
+the Mini:
+
+```sh
+CLOUDFLARE_API_TOKEN="$(env -u OP_CONNECT_HOST -u OP_CONNECT_TOKEN op read 'op://dfoundation-prod/df-cloudflare-share-token/credential')" share --profile dfoundation setup s.d.foundation
+```
+
+One command, idempotent: a rerun reuses the tunnel `share-s-d-foundation`, keeps the
+picked port, replaces the Keychain item (`-U`), and reinstalls the service. The default
+`s.han.ws` setup is untouched (the hard invariant), which the live proof in the spec's
+Verification section checks with a `shasum` of its plist and config before and after.
+
 ## Open questions for the operator
 
-- None blocking. The live proof on the Mini needs a Cloudflare token with Tunnel Edit, DNS Edit, and Zone Read on `d.foundation`; the CI token has Zone Read and Tunnel Read but no DNS scope, so `setup` stops at the DNS check before creating anything.
+- None blocking. The Mini's login keychain must be unlocked for the Keychain store over ssh; it is, while the GUI session is logged in.
