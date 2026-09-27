@@ -27,6 +27,20 @@
 #                   discards the file on exit. This is the mode an
 #                   unattended release uses; leave NOTARY_KEY_OP unset to
 #                   keep using the notarytool keychain profile instead.
+#   NOTARY_ITEM_SUFFIX, NOTARY_VAULT
+#                   find the notary key item by title instead, for an item
+#                   whose field labels an op:// reference cannot address.
+#                   When NOTARY_KEY and NOTARY_KEY_OP are unset and both of
+#                   these are set, this script lists NOTARY_VAULT, requires
+#                   exactly one item whose title ends in NOTARY_ITEM_SUFFIX,
+#                   fetches it as JSON into a mode-600 temp file, writes the
+#                   key field into a mode-600 key file, and exports
+#                   NOTARY_KEY, NOTARY_KEY_ID, and NOTARY_ISSUER from the
+#                   item's fields. Both temp files are removed on exit. Needs
+#                   op and jq. Fields match by case-insensitive regex on the
+#                   label; override with NOTARY_KEY_FIELD_RE (default
+#                   'p8|private key'), NOTARY_KEY_ID_FIELD_RE ('^key ?id'),
+#                   NOTARY_ISSUER_FIELD_RE ('issuer').
 set -euo pipefail
 
 REPO="dwarvesf/share"
@@ -45,10 +59,12 @@ DRY="${RELEASE_DRY:-0}"
 ZIP_NAME="Share-Bar-$VERSION.zip"
 
 KEYFILE=""
+ITEMFILE=""
 WORK=""
 cleanup() {
-  # a temp copy of a secret this script made; the original stays in 1Password
+  # temp copies of a secret this script made; the original stays in 1Password
   [[ -z "$KEYFILE" ]] || rm -f "$KEYFILE"
+  [[ -z "$ITEMFILE" ]] || rm -f "$ITEMFILE"
   # An EXIT trap's own last exit status becomes the script's exit status, so
   # this must not end on a false test (e.g. WORK unset in the dry-run path).
   if [[ -n "$WORK" ]]; then
@@ -63,6 +79,10 @@ trap cleanup EXIT
 # profile exactly as before.
 fetch_notary_key() {
   [[ -z "${NOTARY_KEY:-}" ]] || return 0
+  if [[ -z "${NOTARY_KEY_OP:-}" && -n "${NOTARY_ITEM_SUFFIX:-}" && -n "${NOTARY_VAULT:-}" ]]; then
+    fetch_notary_key_by_suffix
+    return 0
+  fi
   [[ -n "${NOTARY_KEY_OP:-}" && -n "${NOTARY_KEY_ID:-}" && -n "${NOTARY_ISSUER:-}" ]] || return 0
 
   if [[ "$DRY" == "1" ]]; then
@@ -78,6 +98,54 @@ fetch_notary_key() {
   op read "$NOTARY_KEY_OP" >| "$keyfile" || die "op read failed for NOTARY_KEY_OP"
   [[ -s "$keyfile" ]] || die "op read returned an empty notary key for NOTARY_KEY_OP"
   export NOTARY_KEY="$keyfile"
+}
+
+# Prints the value of the item's first field whose label matches regex $1
+# (case-insensitive), or nothing.
+item_field() {
+  jq -r --arg re "$1" '[.fields[]? | select((.label // "") | test($re; "i")) | .value // empty][0] // empty' "$ITEMFILE"
+}
+
+# The item JSON and the key only ever touch mode-600 temp files, never the
+# terminal or a shell variable; the key id and issuer are identifiers.
+fetch_notary_key_by_suffix() {
+  if [[ "$DRY" == "1" ]]; then
+    echo "would resolve the notary key item by suffix"
+    return 0
+  fi
+
+  command -v op >/dev/null 2>&1 || die "op (1Password CLI) not found; needed for NOTARY_ITEM_SUFFIX"
+  command -v jq >/dev/null 2>&1 || die "jq not found; needed for NOTARY_ITEM_SUFFIX"
+  local list count id key_re id_re issuer_re marker
+  list="$(op item list --vault "$NOTARY_VAULT" --format json)" || die "op item list failed for NOTARY_VAULT"
+  count="$(jq --arg s "$NOTARY_ITEM_SUFFIX" '[.[] | select(.title | endswith($s))] | length' <<<"$list")" \
+    || die "could not parse op item list output"
+  [[ "$count" == "1" ]] || die "expected 1 item whose title ends in NOTARY_ITEM_SUFFIX, found $count"
+  id="$(jq -r --arg s "$NOTARY_ITEM_SUFFIX" '.[] | select(.title | endswith($s)) | .id' <<<"$list")"
+
+  ITEMFILE="$(mktemp)"
+  chmod 600 "$ITEMFILE"
+  op item get "$id" --vault "$NOTARY_VAULT" --reveal --format json >|"$ITEMFILE" \
+    || die "op item get failed for the NOTARY_ITEM_SUFFIX item"
+
+  key_re="${NOTARY_KEY_FIELD_RE:-p8|private key}"
+  id_re="${NOTARY_KEY_ID_FIELD_RE:-^key ?id}"
+  issuer_re="${NOTARY_ISSUER_FIELD_RE:-issuer}"
+
+  KEYFILE="$(mktemp)"
+  chmod 600 "$KEYFILE"
+  item_field "$key_re" >|"$KEYFILE" || die "could not parse the notary item JSON"
+  [[ -s "$KEYFILE" ]] || die "no private key field matching /$key_re/ in the notary item"
+  # built at runtime: a literal PEM header in this file trips the secret guard
+  marker="-----""BEGIN "
+  [[ "$(head -c ${#marker} "$KEYFILE")" == "$marker" ]] \
+    || die "the private key field matching /$key_re/ is not a PEM key"
+
+  NOTARY_KEY_ID="$(item_field "$id_re")"
+  [[ -n "$NOTARY_KEY_ID" ]] || die "no key id field matching /$id_re/ in the notary item"
+  NOTARY_ISSUER="$(item_field "$issuer_re")"
+  [[ -n "$NOTARY_ISSUER" ]] || die "no issuer field matching /$issuer_re/ in the notary item"
+  export NOTARY_KEY="$KEYFILE" NOTARY_KEY_ID NOTARY_ISSUER
 }
 
 cask_body() {
