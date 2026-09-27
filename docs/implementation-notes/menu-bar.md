@@ -259,3 +259,8 @@ TASK-015 is docs only; the verification record `docs/verification/menu-bar.md` i
 - Finding 10 (LOW, security): the app's child `PATH` puts the resolved CLI's directory, then Homebrew/local paths, ahead of `/usr/bin:/bin:/usr/sbin:/sbin`.
 - Pushed back rather than fixed: the order is spec-pinned (`## Technical Design` > `ShareBarCore` Swift API, "Child environment"), and reordering buys no security, since the CLI's own directory already comes first regardless of where the system dirs sit. Putting the system dirs first would instead resolve `jq` and `trash` to Apple's copies (when present) ahead of the Homebrew ones the CLI is built and tested against, trading a theoretical PATH-hijack concern for a real behavior change on any Mac with both installed.
 - No code change; `docs/specs/SPEC-003-menu-bar.md`'s Review table records the pushback and its reasoning inline.
+
+## 2026-09-28 About Share Bar
+
+- Added "About Share Bar" above Quit, separated by its own separator (a fresh bottom group, not folded into the Open at Login section). Action activates the app (`.accessory` apps aren't frontmost by default) then calls `orderFrontStandardAboutPanel(nil)`; no custom panel content beyond `NSHumanReadableCopyright` added to Info.plist.
+- No Settings window: the only setting, Open at Login, already lives in the menu itself.
