@@ -94,6 +94,55 @@ share add 3000
 
 `share refresh <id>` runs the same copy from the recorded source path and swaps it in under the same id (a live share is a no-op). `share rm <id>` moves `pub/<id>` to the Trash (or `~/share/trash` without a `trash` command) and drops the row.
 
+## `share state`
+
+The menu bar app never reads share's files. It runs `share state`, a read-only verb
+that prints a snapshot and exits 0 in every state: not set up, stopped, or serving.
+The app changes anything only by running share's normal verbs (`add`, `rm`, `refresh`,
+`start`, `stop`, `setup`); why that split exists: [ADR-0003](decisions/ADR-0003-menu-bar-reads-through-cli.md).
+
+```json
+{
+  "schema": 1,
+  "state": "serving",
+  "ready": true,
+  "mode": "named",
+  "host": "s.han.ws",
+  "hosts": "hans-air-m4",
+  "serves_here": true,
+  "service": true,
+  "shares": [
+    {"id": "3d324a", "name": "theme-check.md",
+     "url": "https://s.han.ws/3d324a/theme-check.html",
+     "kind": "snapshot", "own_host": null, "expires": 1759000000}
+  ]
+}
+```
+
+| Field | Values |
+|---|---|
+| `schema` | integer, `1` |
+| `state` | `serving` (pid alive), `stopped` (set up, not running), `not_setup` (no hostname and not quick mode) |
+| `ready` | whether a live check succeeded for the current mode and state; `false` whenever not serving |
+| `mode` | `named` or `quick` |
+| `host` | named mode: the configured hostname. quick mode: the live `trycloudflare.com` URL while serving, else `null` |
+| `hosts` | the `hosts=` config value, `""` when unset |
+| `serves_here` | whether this machine is in `hosts` |
+| `service` | whether the login service is installed |
+| `shares[]` | ordered newest first, same rows `share ls` prints |
+| `shares[].kind` | `live` for a live proxy, else `snapshot` |
+| `shares[].own_host` | the share's own `--host` value, else `null` |
+| `shares[].expires` | epoch seconds; `0` means never |
+| `shares[].url` | exactly what `share ls` prints for that row |
+| `skipped` | count of malformed index rows; present only when greater than zero |
+
+Invariants: `state` never prunes, never writes or creates a file, never needs a TTY,
+and never touches the clipboard. Removing or renaming a field bumps `schema`; adding a
+field does not, so an older app can still read a newer CLI. An index row with exactly 5
+tab fields (the shape share wrote before this version) reads with empty opts; a row
+with fewer than 5 or more than 6 fields is skipped and counted in `skipped` instead of
+breaking the read.
+
 ## Why each choice
 
 | Choice | Reason |

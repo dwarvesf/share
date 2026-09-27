@@ -737,6 +737,26 @@ check "v0.5.1 CLI: git show fetched the old script" "1" "$([[ -s $OLD_SH ]] && e
 check "v0.5.1 CLI: state exits 1 (unknown verb)" "1" "$rc"
 check "v0.5.1 CLI: state wrote nothing" "" "$(find "$OLD_ROOT" "$OLD_CFG" -newer "$old_marker" 2>/dev/null)"
 
+echo "=== TASK-015: docs cover every share state field ==="
+# Reuses $WORK/state-serving.json from TASK-005 above: real `share state` output
+# from the suite's own isolated root, with a snapshot, a live, and an own-host
+# share, so every JSON key name in the contract is present at least once.
+doc="$(cd "$(dirname "$SH")/.." && pwd)/docs/how-it-works.md"
+mapfile -t state_fields < <(jq -r '[paths | map(select(type == "string")) | .[-1]] | unique[]' "$WORK/state-serving.json")
+doc_covers_fields() { # doc_covers_fields <file>: 0 iff every name in $state_fields appears in it
+  local f
+  for f in "${state_fields[@]}"; do grep -qF -- "$f" "$1" || return 1; done
+  return 0
+}
+check "share state produced a real field list" "1" "$([[ ${#state_fields[@]} -ge 10 ]] && echo 1 || echo 0)"
+check "every share state field name appears in docs/how-it-works.md" "0" "$(doc_covers_fields "$doc"; echo $?)"
+
+echo "--- negative control: a doc missing a field name fails the check ---"
+# Works on a throwaway copy; the real docs/how-it-works.md is never written.
+sed 's/own_host/XXX/g' "$doc" >"$WORK/how-it-works.missing-field"
+check "negative control: doc missing own_host fails the check" "1" "$(doc_covers_fields "$WORK/how-it-works.missing-field"; echo $?)"
+check "the real doc (restored by never touching it) still passes" "0" "$(doc_covers_fields "$doc"; echo $?)"
+
 echo "=== skill ==="
 check "skill prints a SKILL.md" "1" "$(bash "$SH" skill | grep -c '^name: share')"
 SHARE_SKILL_DIR="$WORK/skilldir" bash "$SH" skill --install >/dev/null
