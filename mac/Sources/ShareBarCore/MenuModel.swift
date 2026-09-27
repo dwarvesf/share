@@ -54,21 +54,30 @@ public struct MenuModel: Sendable {
     public let more: Int
     public let icon: Icon
     public let showStart: Bool
+    public let showStop: Bool
     public let showSetUp: Bool
+    public let showCopyInstallCommand: Bool
 
     public init(snapshot: Snapshot?, failure: Failure?, now: Date) {
         header = MenuModel.headerText(snapshot: snapshot, failure: failure)
+        if case .cliNotFound? = failure {
+            showCopyInstallCommand = true
+        } else {
+            showCopyInstallCommand = false
+        }
         if let snapshot {
             let allRows = snapshot.shares.map { Row(share: $0, now: now) }
             rows = Array(allRows.prefix(MenuModel.rowCap))
             more = max(0, allRows.count - MenuModel.rowCap)
             showStart = snapshot.state != "serving" && snapshot.servesHere
+            showStop = snapshot.state == "serving"
             showSetUp = snapshot.state != "serving"
             icon = (snapshot.state == "serving" && snapshot.ready) ? .connected : .disconnected
         } else {
             rows = []
             more = 0
             showStart = false
+            showStop = false
             showSetUp = false
             icon = .disconnected
         }

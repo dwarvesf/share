@@ -1,5 +1,6 @@
-// Placeholder entry point. The AppKit status item, menu, and windows arrive in later tasks
-// (TASK-008 onward); this only has to build and link against ShareBarCore.
-import ShareBarCore
+import AppKit
 
-print("Share Bar (placeholder)")
+let app = NSApplication.shared
+let delegate = AppDelegate()
+app.delegate = delegate
+app.run()

@@ -159,6 +159,18 @@ final class RowAndModelRulesTests: XCTestCase {
         XCTAssertFalse(MenuModel(snapshot: snapshot, failure: nil, now: Date()).showSetUp)
     }
 
+    func testShowStopIsTrueOnlyWhenServing() {
+        XCTAssertTrue(MenuModel(snapshot: makeSnapshot(state: "serving"), failure: nil, now: Date()).showStop)
+        XCTAssertFalse(MenuModel(snapshot: makeSnapshot(state: "stopped"), failure: nil, now: Date()).showStop)
+        XCTAssertFalse(MenuModel(snapshot: nil, failure: nil, now: Date()).showStop)
+    }
+
+    func testShowCopyInstallCommandIsTrueOnlyWhenCLIIsNotFound() {
+        XCTAssertTrue(MenuModel(snapshot: nil, failure: .cliNotFound, now: Date()).showCopyInstallCommand)
+        XCTAssertFalse(MenuModel(snapshot: nil, failure: .oldCLI, now: Date()).showCopyInstallCommand)
+        XCTAssertFalse(MenuModel(snapshot: makeSnapshot(), failure: nil, now: Date()).showCopyInstallCommand)
+    }
+
     // MARK: - 25-row cap
 
     func testRowsAreCappedAt25AndMoreHoldsTheRest() {
