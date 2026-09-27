@@ -419,6 +419,12 @@ out=$(SHARE_HOST_DRY=1 bash "$SH" add --host other.zone "$WORK/dist" 2>&1 1>/dev
 check "foreign zone refused" "1" "$rc"
 check "one-label message again" "1" "$(grep -c 'one label under' <<<"$out")"
 
+idx_before_main=$(cksum <"$SHARE_ROOT/index.tsv")
+out=$(SHARE_HOST_DRY=1 bash "$SH" add --host "$SHARE_HOSTNAME" "$WORK/dist" 2>&1 1>/dev/null); rc=$?
+check "--host the main hostname is refused" "1" "$rc"
+check "main hostname message" "1" "$(grep -c 'cannot be the main hostname' <<<"$out")"
+check "no row for the main hostname host" "$idx_before_main" "$(cksum <"$SHARE_ROOT/index.tsv")"
+
 out=$(env -u CLOUDFLARE_API_TOKEN bash "$SH" add --host nope.example.test "$WORK/dist" 2>&1 1>/dev/null); rc=$?
 check "no credential refused" "1" "$rc"
 check "no row for refused host" "0" "$(grep -c 'nope.example.test' "$SHARE_ROOT/index.tsv")"
@@ -617,6 +623,22 @@ check "tab name message" "1" "$(grep -c 'tabs or newlines' <<<"$out")"
 out=$(bash "$SH" add "$WORK/badnames/$nl_name" 2>&1 1>/dev/null); rc=$?
 check "newline name refused" "1" "$rc"
 check "newline name message" "1" "$(grep -c 'tabs or newlines' <<<"$out")"
+
+echo "--- add refuses a Caddy-unsafe name ({ } \" or \\) ---"
+brace_name='{query.p}'
+quote_name='a"b'
+: >"$WORK/badnames/$brace_name"
+: >"$WORK/badnames/$quote_name"
+idx_before_unsafe=$(cksum <"$SHARE_ROOT/index.tsv")
+caddy_before_unsafe=$(cksum <"$SHARE_ROOT/Caddyfile")
+out=$(bash "$SH" add "$WORK/badnames/$brace_name" 2>&1 1>/dev/null); rc=$?
+check "brace name refused" "1" "$rc"
+check "brace name message" "1" "$(grep -c 'names with' <<<"$out")"
+out=$(bash "$SH" add "$WORK/badnames/$quote_name" 2>&1 1>/dev/null); rc=$?
+check "quote name refused" "1" "$rc"
+check "quote name message" "1" "$(grep -c 'names with' <<<"$out")"
+check "unsafe names left the index unchanged" "$idx_before_unsafe" "$(cksum <"$SHARE_ROOT/index.tsv")"
+check "unsafe names left the Caddyfile unchanged" "$caddy_before_unsafe" "$(cksum <"$SHARE_ROOT/Caddyfile")"
 
 echo "--- rm refuses an own-host removal it cannot finish; prune does not ---"
 mkdir -p "$SHARE_ROOT/pub/c0c0c1" "$SHARE_ROOT/pub/c0c0c2"

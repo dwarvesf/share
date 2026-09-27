@@ -365,6 +365,7 @@ cmd_add() {
   else
     src="$(realpath "$target")"; name="$(basename "$src")"
     case $src in *$'\t'*|*$'\n'*) die "paths with tabs or newlines are not supported" ;; esac
+    case $name in *[{}\"\\]*) die "names with { } \" or \\ are not supported" ;; esac
   fi
   [[ -n $noindex ]] && opts="${opts:+$opts }noindex"
   if [[ -n $host_fqdn ]]; then
@@ -998,6 +999,7 @@ host_check() { # host_check <fqdn>: credential and name are settled before any w
   if [[ ${SHARE_HOST_DRY:-0} != 1 && -z ${CLOUDFLARE_API_TOKEN:-} && ! -f $cert ]]; then
     die "--host needs CLOUDFLARE_API_TOKEN or a browser login (share setup --login)"
   fi
+  [[ $fqdn != "$host_name" ]] || die "--host cannot be the main hostname"
   host_zone
   case $fqdn in
     *."$zone_name") label="${fqdn%."$zone_name"}" ;;
