@@ -59,8 +59,37 @@ The launchd agent's first program argument is the `share` script itself, so the 
 ├── config                  key=value, written by setup
 ├── tunnel-token            Linux only, mode 600 (macOS uses the Keychain)
 ├── cert.pem                browser-login path only, mode 600
-└── cert.zone               the zone that cert.pem was issued for
+├── cert.zone               the zone that cert.pem was issued for
+└── profiles/<name>/        a named profile's config dir, same files; its root is ~/share/profiles/<name>
 ```
+
+## Profiles
+
+`share --profile <name> <verb>` (or `SHARE_PROFILE=<name>`) runs a second, independent
+setup beside the default one: another Cloudflare account, another hostname, or both.
+No flag, or the name `default`, is the setup every path above describes, unchanged. A
+name is a slug (`^[a-z0-9][a-z0-9-]{0,31}$`), checked before any path is built; the flag
+goes before the verb, and a `--profile` after the verb is refused rather than ignored.
+
+| Item | default | profile `<p>` |
+|---|---|---|
+| config dir | `~/.config/share` | `~/.config/share/profiles/<p>` |
+| root | `~/share` | `~/share/profiles/<p>` |
+| service label | `foundation.d.share` | `foundation.d.share.<p>` (its plist carries `SHARE_PROFILE`) |
+| Keychain item | `share-tunnel:<host>` (account `share`) | `share-tunnel.<p>:<host>` |
+| port, metrics port | `8787`, `8788`, or `port=` | picked at the first setup: the lowest odd port from 8789 whose pair no other profile claims and nothing listens on, then kept in `port=` |
+
+Profiles share nothing. The only cross-profile logic reads the other profiles' config
+files, for three refusals: the port pick, `share add <port>` of another profile's port
+or metrics port, and `share setup` on a hostname another profile already holds. `share
+serve` also refuses a port that already answers (caddy binds with SO_REUSEPORT, so two
+servers on one port would split requests silently); that guard covers the default
+profile too. `share profiles` lists the default and every directory under
+`~/.config/share/profiles` with its state and host, read through each profile's own
+`share state`. `share teardown` on a named profile also removes its config dir when
+empty; the root with its shares stays, as for the default. Share Bar watches the
+default profile only; a monitor for a named profile watches its launchd label.
+Why a profile is a path prefix rather than a config key: [ADR-0005](decisions/ADR-0005-profile-is-a-path-prefix.md).
 
 ## Lifecycle of a share
 
@@ -175,7 +204,7 @@ or more than 6 fields, when its id is not exactly 6 lowercase hex characters, or
 | Layer | How | Where |
 |---|---|---|
 | Lint | `shellcheck` | CI and local |
-| Behavior | `tests/share.sh` runs a local server (`SHARE_TUNNEL=0`, port 18787) and covers add, auto-start, headers, dotfile and symlink exclusion, markdown, a deleted source, refresh, hits, expiry, rm, stop, live shares (a second caddy as the origin), the generated folder index, and `--host` under `SHARE_HOST_DRY=1`, which records the Cloudflare calls instead of making them. It ends with a negative control: a host outside `hosts` must not serve. | CI (Ubuntu and macOS, with pandoc) and local |
+| Behavior | `tests/share.sh` runs a local server (`SHARE_TUNNEL=0`, port 18787) and covers add, auto-start, headers, dotfile and symlink exclusion, markdown, a deleted source, refresh, hits, expiry, rm, stop, live shares (a second caddy as the origin), the generated folder index, `--host` under `SHARE_HOST_DRY=1`, which records the Cloudflare calls instead of making them, and profiles (two quick profiles serving at once under a private `HOME`, with stubbed `security`, `launchctl`, and `systemctl`). It ends with a negative control: a host outside `hosts` must not serve. | CI (Ubuntu and macOS, with pandoc) and local |
 | Cloudflare and service | `tests/e2e.sh` against a throwaway hostname (API-token or `--login` setup): setup must pass its live check; a rerun must reuse the tunnel; a published folder must answer, show the snapshot, hide `.env`, and send `no-store`; links must answer right after `start` and after a service reinstall; `rm` must return 404; teardown must leave no DNS record, a deleted tunnel, and no service. Found and fixed with it: a 530 right after a service reinstall, because one 200 does not mean the edge has dropped the old connection. | Local, with a real zone and token; run before a release that touches setup or serving |
 
 ## Releasing

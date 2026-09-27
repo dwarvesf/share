@@ -31,6 +31,7 @@ share add ./team-guide          # https://s.example.com/62cb50/team-guide/  (cop
 | **Agent-native** | `share skill --install` drops a SKILL.md for Claude Code and friends |
 | **Always on** | a login service (launchd/systemd) brings links back after reboot |
 | **Menu bar app** | Share Bar shows what's shared and lets you drag a file onto the icon to publish it |
+| **Profiles** | `share --profile work ...` runs a second setup (another account or hostname) beside the first, on its own port and service |
 
 Links are live only while the machine is awake; visitors get Cloudflare 530 when it sleeps. `https://<hostname>/healthz` answers `ok` while share is serving; the site root 404s by design.
 
@@ -76,6 +77,7 @@ share hits <id|link>        # request and visitor counts
 share state                 # JSON snapshot for the menu bar app
 share stop | start          # take all links down / bring them back
 share teardown              # remove tunnel, service, and config
+share --profile <name> ...  # any command against another setup (or SHARE_PROFILE=<name>); share profiles lists them
 ```
 
 A share from a private GitHub repo prints a warning; the content is public to anyone with the link.

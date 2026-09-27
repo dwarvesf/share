@@ -2,6 +2,7 @@
 # share: publish snapshots of local files or folders at https://<your-host>/<id>/<name>,
 #        or proxy a running dev server on localhost:<port>.
 #
+#   share --profile <name> <command>   run it against another setup (or SHARE_PROFILE=<name>); no flag = the default one
 #   share setup [hostname]    log in to Cloudflare, create the tunnel + DNS, install the service, verify
 #   share setup --quick       no domain needed: serve at a random trycloudflare.com URL (changes every start)
 #   share add [--ttl 7d|12h|never] [--no-index] <file|dir>   copy it in, print + copy the link, auto-start
@@ -15,6 +16,7 @@
 #   share start | stop        start or stop serving (links live while this machine is awake)
 #   share service install|uninstall|status   the login service that keeps serving
 #   share state               machine-readable JSON snapshot (for the menu bar app)
+#   share profiles            every profile with its state and host
 #   share [status]            server state plus the share list
 #   share serve               serve in the foreground until Ctrl-C
 #   share skill [--install]   the SKILL.md that teaches an agent to use share
@@ -23,11 +25,29 @@
 # Docs: https://github.com/dwarvesf/share
 set -euo pipefail
 
-config_dir="${SHARE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/share}"
+die() { echo "share: $*" >&2; exit 1; }
+
+# A profile (--profile <name> before the verb, or SHARE_PROFILE) is a second setup beside the
+# default one: its own config dir, root, port, service label, and Keychain item. With no
+# profile every value below is what a single-profile install has always used.
+profile="${SHARE_PROFILE:-}"
+if [[ ${1:-} == --profile ]]; then
+  [[ $# -ge 2 && -n $2 ]] || die "usage: share --profile <name> <command>"
+  profile="$2"; shift 2
+fi
+[[ $profile == default ]] && profile=""
+[[ -z $profile || $profile =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || die "bad profile name '$profile' (a-z, 0-9, -; 32 chars max)"
+for arg in "$@"; do   # `share teardown --yes --profile x` must not tear down the default
+  case $arg in --profile|--profile=*) die "--profile goes before the verb: share --profile <name> ${1:-<command>}" ;; esac
+done
+export SHARE_PROFILE="$profile"   # start's nohup serve and the hourly prune run as bash "$0"
+profiles_dir="${XDG_CONFIG_HOME:-$HOME/.config}/share/profiles"
+
+config_dir="${SHARE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/share${profile:+/profiles/$profile}}"
 config="$config_dir/config"
 cfg() { [[ -f $config ]] && awk -v k="$1" 'index($0, k "=") == 1 {print substr($0, length(k) + 2); exit}' "$config"; }
 
-root="${SHARE_ROOT:-$HOME/share}"
+root="${SHARE_ROOT:-$HOME/share${profile:+/profiles/$profile}}"
 pub="$root/pub"            # served tree; nothing else is reachable from the tunnel
 index="$root/index.tsv"    # id, name, source, added date, expiry epoch (0 = never)
 pidfile="$root/serve.pid"
@@ -39,7 +59,6 @@ tunnel="${SHARE_TUNNEL:-1}"  # 0 = local-only (tests)
 mode="$(cfg mode || true)"   # "quick" = trycloudflare, no domain; empty = named tunnel
 api="https://api.cloudflare.com/client/v4"
 
-die() { echo "share: $*" >&2; exit 1; }
 this_host() { local h; h="$(uname -n)"; echo "${h%%.*}"; }
 host_ok() { case " $hosts " in *" $(this_host) "*) return 0 ;; esac; return 1; }
 running() { # the pid must still be a share serve: an unclean exit leaves the file and the OS reuses the pid
@@ -171,18 +190,19 @@ ttl_secs() {
 # --- tunnel token storage: token_cmd in config > macOS Keychain > 0600 file ---
 
 token_file="$config_dir/tunnel-token"
+token_key="share-tunnel${profile:+.$profile}:$host_name"   # the Keychain service name: one item per profile and hostname
 token_read() {
   local cmd; cmd="$(cfg token_cmd || true)"
   if [[ -n $cmd ]]; then eval "$cmd"; return; fi
   if command -v security >/dev/null; then
-    security find-generic-password -a share -s "share-tunnel:$host_name" -w 2>/dev/null && return
+    security find-generic-password -a share -s "$token_key" -w 2>/dev/null && return
   fi
   [[ -f $token_file ]] && cat "$token_file"
 }
 token_store() { # token_store <token>; stdin only, so the token never shows in ps
   if command -v security >/dev/null; then
-    printf 'add-generic-password -U -a share -s "share-tunnel:%s" -w "%s"\n' "$host_name" "$1" | security -i >/dev/null
-    echo "keychain (service share-tunnel:$host_name)"
+    printf 'add-generic-password -U -a share -s "%s" -w "%s"\n' "$token_key" "$1" | security -i >/dev/null
+    echo "keychain (service $token_key)"
   else
     (umask 077 && printf '%s' "$1" >"$token_file")
     echo "$token_file (mode 600)"
@@ -190,7 +210,7 @@ token_store() { # token_store <token>; stdin only, so the token never shows in p
 }
 token_forget() {
   if command -v security >/dev/null; then
-    security delete-generic-password -a share -s "share-tunnel:$host_name" >/dev/null 2>&1 || true
+    security delete-generic-password -a share -s "$token_key" >/dev/null 2>&1 || true
   fi
   [[ -f $token_file ]] && to_trash "$token_file"
   return 0
@@ -361,6 +381,7 @@ cmd_add() {
     [[ $tport -le 65535 ]] || die "$tport is above 65535; no such port"
     [[ $tport != "$port" ]] || die "$tport is this share server's own port"
     [[ $tport != "$metrics_port" ]] || die "$tport is the tunnel metrics port"
+    ! port_claimed "$tport" || die "$tport belongs to another share profile (share profiles)"
   fi
   need_host
   secs="$(ttl_secs "$ttl")"
@@ -588,6 +609,9 @@ cmd_serve() {
     token="$(token_read || true)"
     [[ -n $token ]] || die "no tunnel token for $host_name: run 'share setup $host_name'"
   fi
+  # caddy binds with SO_REUSEPORT, so a second server on the same port would start and split requests silently
+  ! listening "$port" || die "127.0.0.1:$port is already in use (another share profile? change port= in $config)"
+  [[ $tunnel != 1 ]] || ! listening "$metrics_port" || die "127.0.0.1:$metrics_port (metrics) is already in use (another share profile? change port= in $config)"
   echo $$ >"$pidfile"
   caddy run --config "$root/Caddyfile" --adapter caddyfile >>"$root/caddy.log" 2>&1 &
   caddy_pid=$!
@@ -635,7 +659,7 @@ cmd_serve() {
 
 # --- background service: launchd on macOS, systemd --user on Linux ---
 
-svc_label="${SHARE_SERVICE_LABEL:-foundation.d.share}"
+svc_label="${SHARE_SERVICE_LABEL:-foundation.d.share${profile:+.$profile}}"
 svc_plist="$HOME/Library/LaunchAgents/$svc_label.plist"
 svc_unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$svc_label.service"
 svc_installed() { [[ -f $svc_plist || -f $svc_unit ]]; }
@@ -661,9 +685,13 @@ svc_path() { # PATH for the service: the directories of every tool share calls
 xml() { sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' <<<"$1"; }
 
 svc_install() {
-  local self; self="$(self_path)"
+  local self plist_env="" unit_env=""; self="$(self_path)"
   running && ! svc_installed && cmd_stop >/dev/null
   mkdir -p "$root"
+  if [[ -n $profile ]]; then   # the daemon reads the profile's Keychain item; the default's files stay byte-identical
+    plist_env=$'\n\t\t<key>SHARE_PROFILE</key><string>'"$profile"'</string>'
+    unit_env=" \"SHARE_PROFILE=$profile\""
+  fi
   if [[ $(uname -s) == Darwin ]]; then
     mkdir -p "$(dirname "$svc_plist")"
     cat >"$svc_plist" <<EOF
@@ -679,7 +707,7 @@ svc_install() {
 	<key>EnvironmentVariables</key><dict>
 		<key>PATH</key><string>$(xml "$(svc_path)")</string>
 		<key>SHARE_CONFIG_DIR</key><string>$(xml "$config_dir")</string>
-		<key>SHARE_ROOT</key><string>$(xml "$root")</string>
+		<key>SHARE_ROOT</key><string>$(xml "$root")</string>$plist_env
 	</dict>
 	<key>StandardOutPath</key><string>$(xml "$root/serve.log")</string>
 	<key>StandardErrorPath</key><string>$(xml "$root/serve.log")</string>
@@ -697,7 +725,7 @@ After=network-online.target
 
 [Service]
 ExecStart="$self" serve
-Environment="PATH=$(svc_path)" "SHARE_CONFIG_DIR=$config_dir" "SHARE_ROOT=$root"
+Environment="PATH=$(svc_path)" "SHARE_CONFIG_DIR=$config_dir" "SHARE_ROOT=$root"$unit_env
 Restart=on-failure
 RestartSec=30
 
@@ -933,6 +961,44 @@ cf_zone() { # API mode: prints "<zone_id> <account_id> <zone_name>" for the zone
   die "no Cloudflare zone for $host_name in this token's accounts"
 }
 
+listening() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+other_cfg() { # other_cfg <key>: that key from every OTHER profile's config; the default claims port 8787 even with no config
+  local c v dflt="${XDG_CONFIG_HOME:-$HOME/.config}/share/config"
+  for c in "$dflt" "$profiles_dir"/*/config; do
+    [[ $c != "$config" ]] || continue
+    v=""; [[ -f $c ]] && v="$(awk -v k="$1" 'index($0, k "=") == 1 {print substr($0, length(k) + 2); exit}' "$c")"
+    [[ $1 == port && $c == "$dflt" ]] && v="${v:-8787}"
+    [[ -n $v ]] && echo "$v"
+  done
+  return 0
+}
+port_claimed() { # port_claimed <p>: p is another profile's port or metrics port
+  local q; for q in $(other_cfg port); do [[ $1 == "$q" || $1 == "$((q + 1))" ]] && return 0; done; return 1
+}
+free_port() { # the lowest odd port from 8789 whose pair (port, metrics) no other profile claims and nothing listens on
+  local p
+  for ((p = 8789; p < 65000; p += 2)); do
+    port_claimed "$p" || port_claimed "$((p + 1))" || listening "$p" || listening "$((p + 1))" || { echo "$p"; return 0; }
+  done
+  die "no free port pair from 8789 up"
+}
+profile_port() { # a named profile's first setup picks its own port pair, before any Cloudflare call; the config keeps it from then on
+  [[ -n $profile && -z ${SHARE_PORT:-} && -z "$(cfg port || true)" ]] || return 0
+  port="$(free_port)"; metrics_port=$((port + 1))
+  echo "port:       $port (metrics $metrics_port)"
+}
+
+cmd_profiles() { # the default, then every directory under profiles/; state and host from each one's own `share state`
+  local n d line
+  for n in default "$profiles_dir"/*/; do
+    [[ $n == default || -d $n ]] || continue
+    d="${n%/}"; d="${d##*/}"
+    # the overrides are unset for the children: an inherited SHARE_ROOT would make every row read one directory
+    line="$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR SHARE_PROFILE="$d" bash "$0" state 2>/dev/null | jq -r '[.state, (.host // "-")] | @tsv' 2>/dev/null)" || line=""
+    printf '%s\t%s\n' "$d" "${line:-error	-}"
+  done
+}
+
 write_config_quick() { # quick mode: a mode flag and the serving facts, nothing Cloudflare
   hosts="${hosts:-$(this_host)}"
   mkdir -p "$config_dir"
@@ -949,6 +1015,7 @@ cmd_setup_quick() {
   local missing="" c
   for c in caddy cloudflared jq curl; do command -v "$c" >/dev/null || missing="$missing $c"; done
   [[ -z $missing ]] || die "missing:$missing (brew install$missing)"
+  profile_port
   write_config_quick
   mode=quick   # the file is written; this process still read it as named at startup
   echo "mode:       quick tunnel (no domain, no login; links get a random trycloudflare.com URL)"
@@ -1150,10 +1217,14 @@ cmd_setup() {
   if [[ -z $host_name && -t 0 ]]; then read -rp "Hostname for your links (for example s.example.com): " host_name; fi
   [[ $host_name =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$ ]] || die "usage: share setup <hostname>, for example s.example.com"
   tunnel_name="${tunnel_name:-share-${host_name//./-}}"
+  local other; for other in $(other_cfg hostname); do   # two profiles on one hostname would reuse, then delete, one tunnel
+    [[ $other != "$host_name" ]] || die "$host_name is already the hostname of another profile (share profiles)"
+  done
 
   local missing="" c
   for c in caddy cloudflared jq curl; do command -v "$c" >/dev/null || missing="$missing $c"; done
   [[ -z $missing ]] || die "missing:$missing (brew install$missing)"
+  profile_port
 
   local zone="" zone_name za
   if [[ -n ${CLOUDFLARE_API_TOKEN:-} && $login == 0 ]]; then
@@ -1252,6 +1323,7 @@ cmd_teardown() {
     cmd_stop >/dev/null
     rm -f "$root/quick.url"
     to_trash "$config"
+    [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true   # a torn-down profile leaves no empty dir in `share profiles`
     echo "removed the quick setup (no tunnel, DNS, or token existed); shares in $root stay"
     return 0
   fi
@@ -1299,6 +1371,7 @@ cmd_teardown() {
   [[ -f $cert ]] && to_trash "$cert"
   rm -f "$config_dir/cert.zone"
   to_trash "$config"; echo "config:  moved to the Trash"
+  [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true
 }
 
 cmd_skill() { # cmd_skill [--install]: the skill file that makes share agent-native
@@ -1333,6 +1406,7 @@ Publish snapshots of local files/folders, or proxy a running `localhost` server,
 | `share refresh <id>` | Re-copy a snapshot from its source (no-op for live shares) |
 | `share rm <id>` | Unpublish; for `--host` shares also deletes the CNAME and tunnel rule |
 | `share start` / `share stop` | Serving on or off |
+| `share --profile <name> <command>` | Run any command against another setup (a second account or hostname); `share profiles` lists them. No flag is the default setup |
 
 ## Rules for agents
 
@@ -1362,7 +1436,8 @@ case "${1:-status}" in
   stop) cmd_stop ;;
   status) cmd_status ;;
   state) cmd_state ;;
+  profiles) cmd_profiles ;;
   serve) cmd_serve ;;
-  -h|--help|help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//' ;;
-  *) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  -h|--help|help) sed -n '2,/^# Docs:/p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) sed -n '2,/^# Docs:/p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

@@ -578,6 +578,180 @@ check "quick teardown exits 0" "0" "$?"
 check "config trashed" "0" "$([[ -f $SHARE_CONFIG_DIR/config ]] && echo 1 || echo 0)"
 check "quick.url gone" "0" "$([[ -f $SHARE_ROOT/quick.url ]] && echo 1 || echo 0)"
 
+echo "=== profiles ==="
+echo "--- derived paths, label, and the name check (probe of the top block) ---"
+prof_probe="$WORK/profile-probe.sh"
+{
+  sed -n '/^die() {/p' "$SH"
+  sed -n '/^profile=/,/^root=/p' "$SH"          # the flag parse, the name check, config_dir, root
+  sed -n '/^svc_label=/p' "$SH"
+  # shellcheck disable=SC2016 # literal code for the probe script, not this shell's expansion
+  echo 'printf "%s|%s|%s" "$config_dir" "$root" "$svc_label"'
+} >"$prof_probe"
+pp() { # pp [VAR=value]... [args]: the probe under a clean environment and HOME=/h
+  local e=(); while [[ ${1:-} == *=* ]]; do e+=("$1"); shift; done
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME -u SHARE_PROFILE HOME=/h ${e[@]+"${e[@]}"} bash "$prof_probe" "$@"
+}
+dflt_derived="/h/.config/share|/h/share|foundation.d.share"
+a_derived="/h/.config/share/profiles/a|/h/share/profiles/a|foundation.d.share.a"
+check "no profile: today's paths and label" "$dflt_derived" "$(pp)"
+check "--profile default is the same as no profile" "$dflt_derived" "$(pp --profile default)"
+check "SHARE_PROFILE= (empty) is the default" "$dflt_derived" "$(pp SHARE_PROFILE=)"
+check "--profile a: paths under profiles/a, label suffixed" "$a_derived" "$(pp --profile a)"
+check "SHARE_PROFILE=a: the same derivation" "$a_derived" "$(pp SHARE_PROFILE=a)"
+check "the flag wins over SHARE_PROFILE" "$a_derived" "$(pp SHARE_PROFILE=b --profile a)"
+check "--profile default wins over SHARE_PROFILE=a" "$dflt_derived" "$(pp SHARE_PROFILE=a --profile default)"
+for bad in '../x' 'a b' 'A' 'x/y' '-a'; do
+  out=$(pp --profile "$bad" 2>&1 1>/dev/null); rc=$?
+  check "profile name '$bad' is refused" "1" "$rc"
+  check "the refusal names the rule for '$bad'" "1" "$(grep -c 'bad profile name' <<<"$out")"
+  out=$(pp SHARE_PROFILE="$bad" 2>&1 1>/dev/null); rc=$?
+  check "SHARE_PROFILE='$bad' is refused too" "1" "$rc"
+done
+out=$(pp --profile 2>&1 1>/dev/null); rc=$?
+check "--profile with no name is a usage error" "1" "$rc"
+check "the usage names the flag" "1" "$(grep -c 'share --profile <name> <command>' <<<"$out")"
+out=$(pp teardown --yes --profile a 2>&1 1>/dev/null); rc=$?
+check "--profile after the verb is refused" "1" "$rc"
+check "the refusal says where the flag goes" "1" "$(grep -c 'goes before the verb' <<<"$out")"
+out=$(pp stop --profile=a 2>&1 1>/dev/null); rc=$?
+check "--profile=<name> after the verb is refused" "1" "$rc"
+check "help shows the --profile line and the profiles verb" "2" "$(bash "$SH" --help | grep -c 'share --profile <name> <command>\|^  share profiles')"
+check "help reaches teardown (the last usage line)" "1" "$(bash "$SH" --help | grep -c '^  share teardown')"
+
+echo "--- Keychain item keyed per profile (stubbed security; the token never reaches argv) ---"
+mkdir -p "$WORK/fakesec"
+cat >"$WORK/fakesec/security" <<'EOF'
+#!/bin/bash
+# records the verb and the -s service name it was asked for, never the -w value
+log="${SEC_LOG:?}"
+if [[ $1 == -i ]]; then
+  while IFS= read -r line; do svc="${line#*-s \"}"; echo "${line%% *} ${svc%%\"*}" >>"$log"; done
+  exit 0
+fi
+prev=""; for a in "$@"; do [[ $prev == -s ]] && echo "$1 $a" >>"$log"; prev="$a"; done
+echo faketoken
+EOF
+chmod +x "$WORK/fakesec/security"
+kc_probe="$WORK/kc-probe.sh"
+{
+  # shellcheck disable=SC2016 # literal code for the probe script, not this shell's expansion
+  echo 'profile="$1" host_name="$2" config="/nonexistent/config" config_dir="/nonexistent"'
+  sed -n '/^cfg() {/p' "$SH"
+  sed -n '/^token_file=/,/^token_forget() {/p' "$SH" | sed '$d'   # token_file, token_key, token_read, token_store
+  # shellcheck disable=SC2016 # literal code for the probe script, not this shell's expansion
+  echo 'token_store "s3cret-value" >/dev/null; token_read >/dev/null'
+} >"$kc_probe"
+: >"$WORK/sec.log"
+SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" bash "$kc_probe" "" s.example.test
+SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" bash "$kc_probe" a s.example.test
+check "default profile stores share-tunnel:<host>" "1" "$(grep -c '^add-generic-password share-tunnel:s.example.test$' "$WORK/sec.log")"
+check "default profile reads share-tunnel:<host>" "1" "$(grep -c '^find-generic-password share-tunnel:s.example.test$' "$WORK/sec.log")"
+check "profile a stores share-tunnel.a:<host>" "1" "$(grep -c '^add-generic-password share-tunnel.a:s.example.test$' "$WORK/sec.log")"
+check "profile a reads share-tunnel.a:<host>" "1" "$(grep -c '^find-generic-password share-tunnel.a:s.example.test$' "$WORK/sec.log")"
+check "the two profiles never share an item" "2" "$(cut -d' ' -f2 "$WORK/sec.log" | sort -u | wc -l | tr -d ' ')"
+check "the token value never reached the stub's argv or log" "0" "$(grep -c 's3cret' "$WORK/sec.log")"
+
+echo "--- two quick profiles serve at once under one HOME, each on its own port ---"
+PHOME="$WORK/home"; mkdir -p "$PHOME"
+psh() { # psh <profile> <verb...>: a profile command under a private HOME with no path or port override
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME \
+    HOME="$PHOME" SHARE_LIVE_CHECK=0 SHARE_TUNNEL=1 PATH="$QPATH" bash "$SH" --profile "$@"
+}
+pcfg() { sed -n "s/^port=//p" "$PHOME/.config/share/profiles/$1/config" 2>/dev/null; }
+SHARE_FAKE_QUICK_URL=prof-a psh a setup --quick --no-service >"$WORK/prof-a.setup" 2>&1
+check "profile a sets up" "0" "$?"
+SHARE_FAKE_QUICK_URL=prof-b psh b setup --quick --no-service >"$WORK/prof-b.setup" 2>&1
+check "profile b sets up" "0" "$?"
+pa=$(pcfg a); pb=$(pcfg b)
+check "profile a config holds a picked port" "1" "$([[ $pa =~ ^[0-9]+$ && $pa -ge 8789 ]] && echo 1 || echo 0)"
+check "setup printed the picked port" "1" "$(grep -c "^port:       $pa (metrics $((pa + 1)))" "$WORK/prof-a.setup")"
+check "the two profiles' ports differ" "1" "$([[ -n $pb && $pa != "$pb" ]] && echo 1 || echo 0)"
+check "neither port pair overlaps the other or the default's 8787/8788" "1" \
+  "$([[ $pa != 8787 && $pa != 8788 && $pb != 8787 && $pb != 8788 && $((pa + 1)) != "$pb" && $((pb + 1)) != "$pa" ]] && echo 1 || echo 0)"
+check "profile a is serving" "1" "$(psh a status | grep -c '^serving')"
+check "profile b is serving" "1" "$(psh b status | grep -c '^serving')"
+check "profile config dirs are where the spec says" "1" "$([[ -d $PHOME/.config/share/profiles/a && -d $PHOME/.config/share/profiles/b ]] && echo 1 || echo 0)"
+check "profile roots are where the spec says" "1" "$([[ -f $PHOME/share/profiles/a/serve.pid && -f $PHOME/share/profiles/b/serve.pid ]] && echo 1 || echo 0)"
+check "the default root under this HOME was never created" "0" "$([[ -e $PHOME/share/pub || -e $PHOME/.config/share/config ]] && echo 1 || echo 0)"
+
+pa_url=$(psh a add "$WORK/outside.txt" 2>/dev/null | head -1); pa_id=$(cut -d/ -f4 <<<"$pa_url")
+pb_url=$(psh b add "$WORK/outside.txt" 2>/dev/null | head -1); pb_id=$(cut -d/ -f4 <<<"$pb_url")
+check "profile a link is on its own quick host" "1" "$(grep -c '^https://prof-a\.trycloudflare\.com/' <<<"$pa_url")"
+check "profile b link is on its own quick host" "1" "$(grep -c '^https://prof-b\.trycloudflare\.com/' <<<"$pb_url")"
+check "a's share answers on a's port" "200" "$(wait_code 200 "http://127.0.0.1:$pa/$pa_id/outside.txt")"
+check "a's share is absent on b's port" "404" "$(wait_code 404 "http://127.0.0.1:$pb/$pa_id/outside.txt")"
+check "b's share answers on b's port" "200" "$(wait_code 200 "http://127.0.0.1:$pb/$pb_id/outside.txt")"
+check "share ls under a shows only a" "$pa_id" "$(psh a ls | sed -n 's/.*id=\([0-9a-f]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"
+check "share ls under b shows only b" "$pb_id" "$(psh b ls | sed -n 's/.*id=\([0-9a-f]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"
+check "SHARE_PROFILE=b from the environment also lists b" "$pb_id" "$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME HOME="$PHOME" SHARE_TUNNEL=1 SHARE_PROFILE=b bash "$SH" ls | sed -n 's/.*id=\([0-9a-f]*\).*/\1/p')"
+
+echo "--- share profiles lists every profile with state and host ---"
+psh a profiles >"$WORK/profiles.out"
+check "profiles: three lines" "3" "$(wc -l <"$WORK/profiles.out" | tr -d ' ')"
+check "profiles: default first, not set up under this HOME" "default	not_setup	-" "$(sed -n 1p "$WORK/profiles.out")"
+check "profiles: a serving on its host" "a	serving	prof-a.trycloudflare.com" "$(grep '^a	' "$WORK/profiles.out")"
+check "profiles: b serving on its host" "b	serving	prof-b.trycloudflare.com" "$(grep '^b	' "$WORK/profiles.out")"
+
+echo "--- rerun setup keeps the port; rm, refresh, hits, state act on one profile ---"
+SHARE_FAKE_QUICK_URL=prof-a psh a setup --quick --no-service >/dev/null 2>&1
+check "rerun keeps a's port" "$pa" "$(pcfg a)"
+check "a's state has one share" "1" "$(psh a state | jq '.shares | length')"
+check "a's hits counts a's fetches" "1" "$(psh a hits "$pa_id" | grep -cE '^[1-9][0-9]* hits?')"
+psh a refresh "$pa_id" >/dev/null 2>&1
+check "refresh under a exits 0" "0" "$?"
+psh a rm "$pa_id" >/dev/null
+check "rm under a removes a's row" "0" "$(psh a state | jq '.shares | length')"
+check "rm under a leaves b's row" "1" "$(psh b state | jq '.shares | length')"
+check "b's share still answers" "200" "$(code "http://127.0.0.1:$pb/$pb_id/outside.txt")"
+
+echo "--- the service file of a profile carries SHARE_PROFILE (stubbed launchctl/systemctl) ---"
+mkdir -p "$WORK/fakesvc"
+# shellcheck disable=SC2016 # literal code for the stub, not this shell's expansion
+printf '#!/bin/bash\n[[ $1 == print ]] && exit 1\nexit 0\n' >"$WORK/fakesvc/launchctl"
+printf '#!/bin/bash\nexit 0\n' >"$WORK/fakesvc/systemctl"
+chmod +x "$WORK/fakesvc/launchctl" "$WORK/fakesvc/systemctl"
+# profile c never serves: install writes the file, then the 10s wait for a server dies (exit 1), which is expected here
+PATH="$WORK/fakesvc:$QPATH" psh c service install >/dev/null 2>&1
+svc_file=""
+for f in "$PHOME/Library/LaunchAgents/foundation.d.share.c.plist" "$PHOME/.config/systemd/user/foundation.d.share.c.service"; do [[ -f $f ]] && svc_file="$f"; done
+check "profile c's service file uses the suffixed label" "1" "$([[ -n $svc_file ]] && echo 1 || echo 0)"
+check "profile c's service file carries SHARE_PROFILE=c" "1" "$(grep -c 'SHARE_PROFILE' "$svc_file")"
+check "profile c's service file pins its own config dir and root" "1" "$(grep -q 'SHARE_CONFIG_DIR[^S]*profiles/c' "$svc_file" && grep -q 'SHARE_ROOT[^S]*share/profiles/c' "$svc_file" && echo 1 || echo 0)"
+rmdir "$PHOME/share/profiles/c" 2>/dev/null; rm -rf "$PHOME/.config/share/profiles/c"
+
+echo "--- collisions between profiles are refused, never silent ---"
+out=$(psh a add "$pb" 2>&1 1>/dev/null); rc=$?
+check "add of another profile's caddy port is refused" "1" "$rc"
+check "the refusal names the other profile" "1" "$(grep -c 'another share profile' <<<"$out")"
+out=$(psh a add "$((pb + 1))" 2>&1 1>/dev/null); rc=$?
+check "add of another profile's metrics port is refused" "1" "$rc"
+mkdir -p "$PHOME/.config/share/profiles/d"; printf 'hostname=taken.example.test\nport=8999\n' >"$PHOME/.config/share/profiles/d/config"
+out=$(psh e setup taken.example.test 2>&1 1>/dev/null); rc=$?
+check "setup on another profile's hostname is refused" "1" "$rc"
+check "the refusal names the other profile" "1" "$(grep -c 'already the hostname of another profile' <<<"$out")"
+check "the refused setup wrote no config" "0" "$([[ -e $PHOME/.config/share/profiles/e ]] && echo 1 || echo 0)"
+rm -rf "$PHOME/.config/share/profiles/d"
+# a's serve on b's live port: the runtime guard, since a hand-edited port= bypasses the setup-time pick
+psh a stop >/dev/null
+sed -i.bak "s/^port=.*/port=$pb/" "$PHOME/.config/share/profiles/a/config" && rm -f "$PHOME/.config/share/profiles/a/config.bak"
+out=$(psh a serve 2>&1 1>/dev/null); rc=$?
+check "serve on a port another profile listens on dies" "1" "$rc"
+check "the die names the port" "1" "$(grep -c "127.0.0.1:$pb is already in use" <<<"$out")"
+check "b still answers alone on its port" "200" "$(code "http://127.0.0.1:$pb/$pb_id/outside.txt")"
+sed -i.bak "s/^port=.*/port=$pa/" "$PHOME/.config/share/profiles/a/config" && rm -f "$PHOME/.config/share/profiles/a/config.bak"
+SHARE_FAKE_QUICK_URL=prof-a psh a start >/dev/null 2>&1
+check "a serves again on its own port" "1" "$(psh a status | grep -c '^serving')"
+
+echo "--- teardown of one profile leaves the other serving and no empty profile dir ---"
+psh a teardown --yes >/dev/null
+check "profile a teardown exits 0" "0" "$?"
+check "profile a config dir is gone" "0" "$([[ -e $PHOME/.config/share/profiles/a ]] && echo 1 || echo 0)"
+check "profile a is no longer listed" "0" "$(psh b profiles | grep -c '^a	')"
+check "profile b still serves after a's teardown" "1" "$(psh b status | grep -c '^serving')"
+psh b stop >/dev/null
+check "profile b stops" "0" "$([[ -f $PHOME/share/profiles/b/serve.pid ]] && echo 1 || echo 0)"
+
 echo "=== TASK-016 hardening ==="
 
 echo "--- cf() bounds a stalled Cloudflare call ---"
