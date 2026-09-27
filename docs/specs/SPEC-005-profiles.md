@@ -85,7 +85,7 @@ profile's port pair, and `setup` on a hostname another profile owns.
 | config dir | `~/.config/share` | `~/.config/share/profiles/<p>` |
 | root (pub, index, pidfile, locks, logs) | `~/share` | `~/share/profiles/<p>` |
 | launchd label / systemd unit | `foundation.d.share` | `foundation.d.share.<p>` |
-| Keychain item (account `share`) | `share-tunnel:<hostname>` | `share-tunnel.<p>:<hostname>` |
+| Keychain item (account `share`) | `share-tunnel:<hostname>` | `share-tunnel.<p>:<hostname>` (built when used, since setup learns the hostname after the script loads) |
 | token file (Linux), `cert.pem`, `cert.zone` | under the config dir | under the profile's config dir |
 | port / metrics port | `8787` / `8788`, or `port=` in config | `port=` in the profile's config, picked at setup |
 
@@ -102,17 +102,19 @@ profile's config and no `SHARE_PORT` picks a port before any Cloudflare call, an
 reassigns both `port` and `metrics_port`, so the ingress rule setup writes and the
 config it stores carry the same value. The pick: the lowest odd `p >= 8789` such that
 the pair `{p, p+1}` is disjoint from `{q, q+1}` for every other profile's `port=` `q`
-(the default profile claims `8787` even before its own setup) and nothing listens on
-`p` or `p+1`. Setup prints `port:       <p> (metrics <p+1>)` and writes `port=<p>` to
+(the default profile claims `8787` even before its own setup), neither is the port of a
+live share in any profile's index (a dev server that is down today would otherwise be
+proxied onto the new profile's caddy tomorrow), and nothing listens on `p` or `p+1`. Setup prints `port:       <p> (metrics <p+1>)` and writes `port=<p>` to
 the profile's config. A rerun of setup keeps the stored port.
 
 ### Collisions are refused, never silent
 
 - `share serve` dies before starting caddy when `127.0.0.1:<port>` already accepts a
   connection, and, with the tunnel on, when the metrics port does: `127.0.0.1:<port> is
-  already in use (another share profile? change port= in <config>)`. This applies to the
-  default profile too: today an orphaned caddy lets a second one bind the same port and
-  split requests; that becomes a loud failure.
+  already in use: an orphaned server, or another share profile (share profiles)? free it,
+  or change port= in <config> and rerun share setup` (the rerun moves the tunnel's ingress
+  rule to the new port). This applies to the default profile too: today an orphaned caddy
+  lets a second one bind the same port and split requests; that becomes a loud failure.
 - `share add <port>` refuses a port that is another profile's port or metrics port:
   `<port> belongs to another share profile (share profiles)`, so one profile never
   republishes another profile's shares under its own hostname.
@@ -138,8 +140,8 @@ also removes the profile's config dir when it is empty afterwards; the root
 
 `share profiles` prints one line per profile, the default first, then every directory
 under `<config base>/share/profiles`, as `<name>\t<state>\t<host or ->`, the state and
-host taken from that profile's `share state` run with `SHARE_ROOT` and
-`SHARE_CONFIG_DIR` unset. A profile whose `state` fails prints `<name>\terror\t-` and
+host taken from that profile's `share state` run with `SHARE_ROOT`, `SHARE_CONFIG_DIR`,
+`SHARE_PORT`, `SHARE_HOSTNAME`, `SHARE_HOSTS`, and `SHARE_SERVICE_LABEL` unset. A profile whose `state` fails prints `<name>\terror\t-` and
 the listing continues.
 
 ### Help
@@ -209,11 +211,11 @@ verb, and one skill row.
 | 2 | `--profile a` and `SHARE_PROFILE=a` | same derived paths under `profiles/a`; label `foundation.d.share.a`; key `share-tunnel.a:<host>`; the flag wins over the variable, both ways (`SHARE_PROFILE=b --profile a`, `SHARE_PROFILE=a --profile default`) |
 | 3 | `--profile ../x`, `'a b'`, `A`, `x/y`, `-a`, each also as `SHARE_PROFILE`; `--profile` with no name | die before any write; the message names the rule or the usage |
 | 4 | `--profile default`, `SHARE_PROFILE=` (empty) | identical to no flag |
-| 5 | two profiles `setup --quick --no-service` under one `HOME` | each config holds its own `port=`; the pairs are disjoint from each other and from `8787/8788`; setup printed the pick; both serve at once; each answers on its own port and 404s on the other's; each `share ls` shows only its own rows |
+| 5 | two profiles `setup --quick --no-service` under one `HOME` | each config holds its own `port=`; the pairs are disjoint from each other and from `8787/8788`; setup printed the pick; a third profile's pick skips a port the default live-shares; both serve at once; each answers on its own port and 404s on the other's; each `share ls` shows only its own rows |
 | 6 | rerun `setup --quick` on a profile | the stored port is kept |
 | 7 | `add`, `rm`, `refresh`, `hits`, `state`, `stop` under a profile | act on that profile's root only; the other profile's rows and server are untouched |
 | 8 | `share profiles` | lists `default` (not set up under that HOME) and both profiles with state and host |
-| 9 | Keychain key with a stubbed `security` | `token_store` under profile `a` writes service `share-tunnel.a:<host>`; the default writes `share-tunnel:<host>`; the token never appears in the stub's argv or log |
+| 9 | Keychain key with a stubbed `security`, in setup's order (token code loaded with an empty hostname, hostname assigned, then store) | `token_store` under profile `a` writes service `share-tunnel.a:<host>`; the default writes `share-tunnel:<host>`; no key ends in `:`; the token never appears in the stub's argv or log |
 | 10 | `teardown --yes` on a quick profile | config trashed; the empty profile dir is gone; the profile leaves `share profiles`; the other profile keeps serving |
 | 11 | `service install` for a profile with stubbed `launchctl`/`systemctl` | the file uses the suffixed label, carries `SHARE_PROFILE`, and pins the profile's config dir and root |
 | 12 | collisions | `add <other's port>` and `add <other's metrics port>` die; `setup <other's hostname>` dies before writing; `serve` with `port=` hand-set to the other profile's port dies naming the port while the other keeps answering |
@@ -236,7 +238,9 @@ shellcheck bin/share install.sh tests/share.sh tests/e2e.sh demo/render.sh mac/*
 
 Negative controls: (1) drop the profile from the Keychain service name: row 9 fails
 (both profiles write `share-tunnel:<host>`); (2) make `free_port` return a constant:
-row 5 fails (both configs hold the same `port=`, one profile answers on the other's port).
+row 5 fails (both configs hold the same `port=`, one profile answers on the other's port);
+(3) fix the Keychain key at load time instead of when used: row 9 fails (every key ends
+in `:`, the bug the second validation round found in the first implementation).
 
 Live proof on the Mini, once a Cloudflare token with Tunnel Edit + DNS Edit + Zone Read
 on `d.foundation` exists (not part of this PR; needs the operator's token):
@@ -269,3 +273,4 @@ how to pick a profile.
 - DEC-003: profiles nest under `~/share/profiles` and `~/.config/share/profiles` rather than siblings (`~/share.<p>`): one directory to list and to back up, and the operator's rule never deletes `~/share` wholesale.
 - DEC-004: a misplaced `--profile` is a refusal, not a second parse, because the fixed-position dispatch would otherwise run `teardown --yes` against the default install.
 - DEC-005: the serve guard applies to the default profile too, turning a silent SO_REUSEPORT double bind into a loud failure.
+- DEC-006: the Keychain key is a function, not a variable: `host_name` is empty when the script loads on a first setup and is assigned inside `cmd_setup`, so a key fixed at load time stored every fresh token under `share-tunnel:` (found by validation round 2 against the first implementation).

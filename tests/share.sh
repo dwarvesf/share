@@ -635,12 +635,14 @@ EOF
 chmod +x "$WORK/fakesec/security"
 kc_probe="$WORK/kc-probe.sh"
 {
+  # setup's real order: the token code loads while the hostname is still empty (a first
+  # setup has no config), setup assigns it later, then stores; a key fixed at load time misses
   # shellcheck disable=SC2016 # literal code for the probe script, not this shell's expansion
-  echo 'profile="$1" host_name="$2" config="/nonexistent/config" config_dir="/nonexistent"'
+  echo 'profile="$1" host_name="" config="/nonexistent/config" config_dir="/nonexistent"'
   sed -n '/^cfg() {/p' "$SH"
   sed -n '/^token_file=/,/^token_forget() {/p' "$SH" | sed '$d'   # token_file, token_key, token_read, token_store
   # shellcheck disable=SC2016 # literal code for the probe script, not this shell's expansion
-  echo 'token_store "s3cret-value" >/dev/null; token_read >/dev/null'
+  echo 'host_name="$2"; token_store "s3cret-value" >/dev/null; token_read >/dev/null'
 } >"$kc_probe"
 : >"$WORK/sec.log"
 SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" bash "$kc_probe" "" s.example.test
@@ -650,6 +652,7 @@ check "default profile reads share-tunnel:<host>" "1" "$(grep -c '^find-generic-
 check "profile a stores share-tunnel.a:<host>" "1" "$(grep -c '^add-generic-password share-tunnel.a:s.example.test$' "$WORK/sec.log")"
 check "profile a reads share-tunnel.a:<host>" "1" "$(grep -c '^find-generic-password share-tunnel.a:s.example.test$' "$WORK/sec.log")"
 check "the two profiles never share an item" "2" "$(cut -d' ' -f2 "$WORK/sec.log" | sort -u | wc -l | tr -d ' ')"
+check "no key was built before setup knew the hostname" "0" "$(grep -c ':$' "$WORK/sec.log")"
 check "the token value never reached the stub's argv or log" "0" "$(grep -c 's3cret' "$WORK/sec.log")"
 
 echo "--- two quick profiles serve at once under one HOME, each on its own port ---"
@@ -669,6 +672,12 @@ check "setup printed the picked port" "1" "$(grep -c "^port:       $pa (metrics 
 check "the two profiles' ports differ" "1" "$([[ -n $pb && $pa != "$pb" ]] && echo 1 || echo 0)"
 check "neither port pair overlaps the other or the default's 8787/8788" "1" \
   "$([[ $pa != 8787 && $pa != 8788 && $pb != 8787 && $pb != 8788 && $((pa + 1)) != "$pb" && $((pb + 1)) != "$pa" ]] && echo 1 || echo 0)"
+# a live share of another profile (even a dead dev server) must not become a new profile's port:
+# the default hostname would proxy the new profile's caddy
+mkdir -p "$PHOME/share"; printf 'l1ve01\tlocalhost:%s\thttp://127.0.0.1:%s\t2026-01-01\t0\tlive\n' "$((pb + 2))" "$((pb + 2))" >"$PHOME/share/index.tsv"
+SHARE_FAKE_QUICK_URL=prof-l psh l setup --quick --no-service >/dev/null 2>&1
+check "the pick skips a port another profile live-shares" "1" "$([[ $(pcfg l) != "$((pb + 2))" && $(pcfg l) != "$((pb + 1))" ]] && echo 1 || echo 0)"
+psh l teardown --yes >/dev/null 2>&1; rm -rf "$PHOME/share/profiles/l" "$PHOME/share/index.tsv"
 check "profile a is serving" "1" "$(psh a status | grep -c '^serving')"
 check "profile b is serving" "1" "$(psh b status | grep -c '^serving')"
 check "profile config dirs are where the spec says" "1" "$([[ -d $PHOME/.config/share/profiles/a && -d $PHOME/.config/share/profiles/b ]] && echo 1 || echo 0)"

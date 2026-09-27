@@ -190,19 +190,21 @@ ttl_secs() {
 # --- tunnel token storage: token_cmd in config > macOS Keychain > 0600 file ---
 
 token_file="$config_dir/tunnel-token"
-token_key="share-tunnel${profile:+.$profile}:$host_name"   # the Keychain service name: one item per profile and hostname
+# the Keychain service name, one item per profile and hostname; a function, not a variable:
+# on a first setup host_name is empty when the script loads and is assigned inside cmd_setup
+token_key() { echo "share-tunnel${profile:+.$profile}:$host_name"; }
 token_read() {
   local cmd; cmd="$(cfg token_cmd || true)"
   if [[ -n $cmd ]]; then eval "$cmd"; return; fi
   if command -v security >/dev/null; then
-    security find-generic-password -a share -s "$token_key" -w 2>/dev/null && return
+    security find-generic-password -a share -s "$(token_key)" -w 2>/dev/null && return
   fi
   [[ -f $token_file ]] && cat "$token_file"
 }
 token_store() { # token_store <token>; stdin only, so the token never shows in ps
   if command -v security >/dev/null; then
-    printf 'add-generic-password -U -a share -s "%s" -w "%s"\n' "$token_key" "$1" | security -i >/dev/null
-    echo "keychain (service $token_key)"
+    printf 'add-generic-password -U -a share -s "%s" -w "%s"\n' "$(token_key)" "$1" | security -i >/dev/null
+    echo "keychain (service $(token_key))"
   else
     (umask 077 && printf '%s' "$1" >"$token_file")
     echo "$token_file (mode 600)"
@@ -210,7 +212,7 @@ token_store() { # token_store <token>; stdin only, so the token never shows in p
 }
 token_forget() {
   if command -v security >/dev/null; then
-    security delete-generic-password -a share -s "$token_key" >/dev/null 2>&1 || true
+    security delete-generic-password -a share -s "$(token_key)" >/dev/null 2>&1 || true
   fi
   [[ -f $token_file ]] && to_trash "$token_file"
   return 0
@@ -610,8 +612,9 @@ cmd_serve() {
     [[ -n $token ]] || die "no tunnel token for $host_name: run 'share setup $host_name'"
   fi
   # caddy binds with SO_REUSEPORT, so a second server on the same port would start and split requests silently
-  ! listening "$port" || die "127.0.0.1:$port is already in use (another share profile? change port= in $config)"
-  [[ $tunnel != 1 ]] || ! listening "$metrics_port" || die "127.0.0.1:$metrics_port (metrics) is already in use (another share profile? change port= in $config)"
+  local busy="an orphaned server, or another share profile (share profiles)? free it, or change port= in $config and rerun share setup"
+  ! listening "$port" || die "127.0.0.1:$port is already in use: $busy"
+  [[ $tunnel != 1 ]] || ! listening "$metrics_port" || die "127.0.0.1:$metrics_port (metrics) is already in use: $busy"
   echo $$ >"$pidfile"
   caddy run --config "$root/Caddyfile" --adapter caddyfile >>"$root/caddy.log" 2>&1 &
   caddy_pid=$!
@@ -975,10 +978,18 @@ other_cfg() { # other_cfg <key>: that key from every OTHER profile's config; the
 port_claimed() { # port_claimed <p>: p is another profile's port or metrics port
   local q; for q in $(other_cfg port); do [[ $1 == "$q" || $1 == "$((q + 1))" ]] && return 0; done; return 1
 }
-free_port() { # the lowest odd port from 8789 whose pair (port, metrics) no other profile claims and nothing listens on
+live_shared() { # live_shared <p>: p is a live share's port in any profile's index (its dev server may be down right now)
+  local f
+  for f in "$HOME/share/index.tsv" "$HOME/share/profiles"/*/index.tsv; do
+    [[ -f $f ]] && awk -F'\t' -v p="$1" '$6 ~ /(^| )live( |$)/ {sub(/.*:/, "", $3); if ($3 == p) f = 1} END {exit !f}' "$f" && return 0
+  done
+  return 1
+}
+free_port() { # the lowest odd port from 8789 whose pair (port, metrics) no other profile claims or live-shares and nothing listens on
   local p
   for ((p = 8789; p < 65000; p += 2)); do
-    port_claimed "$p" || port_claimed "$((p + 1))" || listening "$p" || listening "$((p + 1))" || { echo "$p"; return 0; }
+    port_claimed "$p" || port_claimed "$((p + 1))" || live_shared "$p" || live_shared "$((p + 1))" ||
+      listening "$p" || listening "$((p + 1))" || { echo "$p"; return 0; }
   done
   die "no free port pair from 8789 up"
 }
@@ -993,8 +1004,9 @@ cmd_profiles() { # the default, then every directory under profiles/; state and 
   for n in default "$profiles_dir"/*/; do
     [[ $n == default || -d $n ]] || continue
     d="${n%/}"; d="${d##*/}"
-    # the overrides are unset for the children: an inherited SHARE_ROOT would make every row read one directory
-    line="$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR SHARE_PROFILE="$d" bash "$0" state 2>/dev/null | jq -r '[.state, (.host // "-")] | @tsv' 2>/dev/null)" || line=""
+    # the overrides are unset for the children: an inherited SHARE_ROOT or SHARE_HOSTNAME would make every row read one setup
+    line="$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_HOSTS -u SHARE_SERVICE_LABEL \
+      SHARE_PROFILE="$d" bash "$0" state 2>/dev/null | jq -r '[.state, (.host // "-")] | @tsv' 2>/dev/null)" || line=""
     printf '%s\t%s\n' "$d" "${line:-error	-}"
   done
 }
