@@ -92,7 +92,7 @@ share add 3000
 
 `--host dev.example.com` wraps either kind in its own hostname. Order of writes: tunnel ingress rule (inserted before the catch-all, carrying `httpHostHeader`), then the CNAME, then the index row; `share rm` deletes the CNAME, then the ingress rule, then the row. Every Cloudflare-side edit runs under the `.lock-host` mutex and refuses a tunnel config whose invariants were changed outside share. The name must be a single label under the setup zone because Universal SSL stops at one level.
 
-`share refresh <id>` runs the same copy from the recorded source path and swaps it in under the same id (a live share is a no-op). `share rm <id>` moves `pub/<id>` to the Trash (or `~/share/trash` without a `trash` command) and drops the row.
+`share refresh <id>` runs the same copy from the recorded source path and swaps it in under the same id (a live share is a no-op). `share rm <id>` moves `pub/<id>` to the Trash (or `~/share/trash` without a `trash` command) and drops the row. An own-host share (`--host`) refuses to be removed without a Cloudflare credential (`CLOUDFLARE_API_TOKEN` or a `share setup --login` cert), so its DNS record and ingress rule are never orphaned. `prune` still removes an expired one and warns that they stay behind.
 
 ## `share state`
 
