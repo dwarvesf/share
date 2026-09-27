@@ -1,10 +1,20 @@
 # Changelog
 
+## [v0.5.2] - 2026-09-27
+
+### Fixes
+
+- a stale serve.pid with a reused pid no longer blocks serve (#28)
+
 ## [v0.5.1] - 2026-09-27
 
 ### Fixes
 
 - match Spacedown's figure and syntax conventions in md renders (#27)
+
+### Documentation
+
+- changelog for v0.5.1
 
 ## [v0.5.0] - 2026-09-27
 
