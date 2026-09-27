@@ -620,7 +620,7 @@ check "help shows the --profile line and the profiles verb" "2" "$(bash "$SH" --
 check "help reaches teardown (the last usage line)" "1" "$(bash "$SH" --help | grep -c '^  share teardown')"
 # every hint that names a command builds it from the profile: a bare `share <verb>` outside the usage
 # header, a usage: line, a comment, or the backticked skill text is a hint that points at the default install
-check "no hint names a bare share <verb>" "0" "$(grep -nE '[^`]share (setup|teardown|start|stop|rm|refresh|add|service) ' "$SH" | grep -v '^[0-9]*:#' | grep -vc 'usage:')"
+check "no hint names a bare share <verb>" "0" "$(grep -nE '[^`]share (setup|teardown|start|stop|rm|refresh|add|service|status)([^a-z-]|$)' "$SH" | grep -v '^[0-9]*:#' | grep -vc 'usage:')"
 
 echo "--- Keychain item keyed per profile (stubbed security; the token never reaches argv) ---"
 mkdir -p "$WORK/fakesec"
@@ -711,6 +711,10 @@ check "profiles: an unreadable profile is an error row" "bad	error	-" "$(grep '^
 check "profiles: the other rows survive the error" "3" "$(grep -c 'not_setup\|serving' "$WORK/profiles-bad.out")"
 out=$(psh a add "$pb" 2>&1 1>/dev/null); rc=$?
 check "another profile's corrupt port= does not break this profile's port refusal" "1" "$([[ $rc == 1 ]] && grep -c 'another share profile' <<<"$out")"
+echo 'port=08789' >"$PHOME/.config/share/profiles/bad/config"   # a leading zero reads as octal in $(( )) and aborts bash
+out=$(psh a add "$pb" 2>&1 1>/dev/null); rc=$?
+check "another profile's leading-zero port= does not break this profile's port refusal" "1" "$([[ $rc == 1 ]] && grep -c 'another share profile' <<<"$out")"
+check "profiles: a leading-zero port is an error row too" "bad	error	-" "$(psh a profiles | grep '^bad	')"
 rm -rf "$PHOME/.config/share/profiles/bad"
 # an exported SHARE_ROOT must not leak into the per-profile state reads: each row is its own setup
 env -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME HOME="$PHOME" SHARE_ROOT="$WORK/elsewhere" \

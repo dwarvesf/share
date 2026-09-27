@@ -54,7 +54,7 @@ index="$root/index.tsv"    # id, name, source, added date, expiry epoch (0 = nev
 pidfile="$root/serve.pid"
 host_name="${SHARE_HOSTNAME:-$(cfg hostname || true)}"
 port="${SHARE_PORT:-$(cfg port || true)}"; port="${port:-8787}"
-[[ $port =~ ^[0-9]+$ ]] || die "port '$port' is not a number (port= in $config, or SHARE_PORT)"
+[[ $port =~ ^[1-9][0-9]*$ ]] || die "port '$port' is not a number (port= in $config, or SHARE_PORT)"   # no leading zero: $(( )) would read octal
 metrics_port=$((port + 1))   # cloudflared /ready, polled so `start` returns once links work
 hosts="${SHARE_HOSTS:-$(cfg hosts || true)}"
 tunnel="${SHARE_TUNNEL:-1}"  # 0 = local-only (tests)
@@ -984,7 +984,7 @@ other_cfg() { # other_cfg <key>: that key from every OTHER profile's config; the
 port_claimed() { # port_claimed <p>: p is another profile's port or metrics port
   local q
   for q in $(other_cfg port); do
-    [[ $q =~ ^[0-9]+$ ]] || continue   # another profile's corrupt port= is its own problem, never this command's
+    [[ $q =~ ^[1-9][0-9]*$ ]] || continue   # another profile's corrupt port= is its own problem, never this command's
     [[ $1 == "$q" || $1 == "$((q + 1))" ]] && return 0
   done
   return 1

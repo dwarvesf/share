@@ -129,7 +129,8 @@ the profile's config. A rerun of setup keeps the stored port.
   default naming maps to one `share-<host-with-dashes>`): `tunnel <name> already belongs
   to another profile (share profiles); pass --tunnel-name`. Either way two profiles never
   reuse, then delete, one tunnel.
-- A `port=` that is not a number dies at load for its own profile, and is skipped by the
+- A `port=` that is not a plain number (`^[1-9][0-9]*$`; a leading zero would read as
+  octal in arithmetic) dies at load for its own profile, and is skipped by the
   cross-profile scans, so one corrupt config never breaks another profile's commands.
 
 ### The service
@@ -296,5 +297,5 @@ how to pick a profile.
 - DEC-004: a misplaced `--profile` is a refusal, not a second parse, because the fixed-position dispatch would otherwise run `teardown --yes` against the default install.
 - DEC-005: the serve guard applies to the default profile too, turning a silent SO_REUSEPORT double bind into a loud failure.
 - DEC-007: the cross-profile scans (`other_cfg`, `live_shared`) read the derived locations only and ignore `SHARE_ROOT` and `SHARE_CONFIG_DIR`; a profile moved by an override is a deliberate step outside the layout, and the serve port guard still catches a resulting collision.
-- DEC-008: every message that names a command to run builds it from `me` (`share` or `share --profile <p>`), so a recovery hint for a named profile never points at the default install.
+- DEC-008: every message that names a command to run builds it from `me` (`share` or `share --profile <p>`), so a recovery hint for a named profile never points at the default install. A `usage:` line is exempt: it describes a verb's syntax, not a command to run against a profile, and the suite's guard grep excludes lines carrying `usage:`.
 - DEC-006: the Keychain key is a function, not a variable: `host_name` is empty when the script loads on a first setup and is assigned inside `cmd_setup`, so a key fixed at load time stored every fresh token under `share-tunnel:` (found by validation round 2 against the first implementation).
