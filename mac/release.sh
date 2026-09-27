@@ -15,6 +15,18 @@
 #   RELEASE_DRY=1   skip the build, the release wait/upload, and every tap
 #                   write; print the cask (placeholder sha256), the formula
 #                   caveats edit, and the upload command instead
+#   NOTARY_KEY, NOTARY_KEY_ID, NOTARY_ISSUER
+#                   App Store Connect API key auth for notarytool, passed
+#                   through to build.sh (see mac/build.sh's header). When
+#                   NOTARY_KEY is already set, this script leaves it alone.
+#   NOTARY_KEY_OP   an op:// reference to the notary key's .p8 field. When
+#                   NOTARY_KEY is unset and NOTARY_KEY_OP, NOTARY_KEY_ID,
+#                   and NOTARY_ISSUER are all set, this script reads the
+#                   key with `op read` into a mode-600 temp file, exports
+#                   NOTARY_KEY to point at it for the build.sh call, and
+#                   discards the file on exit. This is the mode an
+#                   unattended release uses; leave NOTARY_KEY_OP unset to
+#                   keep using the notarytool keychain profile instead.
 set -euo pipefail
 
 REPO="dwarvesf/share"
@@ -31,6 +43,49 @@ VERSION="${TAG#v}"
 MAC_DIR="$(cd "$(dirname "$0")" && pwd)"
 DRY="${RELEASE_DRY:-0}"
 ZIP_NAME="Share-Bar-$VERSION.zip"
+
+KEYFILE=""
+WORK=""
+cleanup() {
+  if [[ -n "$KEYFILE" && -f "$KEYFILE" ]]; then
+    if command -v trash >/dev/null 2>&1; then
+      trash "$KEYFILE" >/dev/null 2>&1 || true
+    else
+      local discard
+      discard="$(mktemp -d)"
+      mv "$KEYFILE" "$discard/" 2>/dev/null || true
+    fi
+  fi
+  # An EXIT trap's own last exit status becomes the script's exit status, so
+  # this must not end on a false test (e.g. WORK unset in the dry-run path).
+  if [[ -n "$WORK" ]]; then
+    rm -rf "$WORK"
+  fi
+  return 0
+}
+trap cleanup EXIT
+
+# Fetches NOTARY_KEY from 1Password when asked (NOTARY_KEY unset, the other
+# three set); otherwise a no-op, so build.sh falls back to the keychain
+# profile exactly as before.
+fetch_notary_key() {
+  [[ -z "${NOTARY_KEY:-}" ]] || return 0
+  [[ -n "${NOTARY_KEY_OP:-}" && -n "${NOTARY_KEY_ID:-}" && -n "${NOTARY_ISSUER:-}" ]] || return 0
+
+  if [[ "$DRY" == "1" ]]; then
+    echo "would read notary key from $NOTARY_KEY_OP"
+    return 0
+  fi
+
+  command -v op >/dev/null 2>&1 || die "op (1Password CLI) not found; needed to read NOTARY_KEY_OP"
+  local keyfile
+  keyfile="$(mktemp)"
+  chmod 600 "$keyfile"
+  KEYFILE="$keyfile"
+  op read "$NOTARY_KEY_OP" >| "$keyfile" || die "op read failed for NOTARY_KEY_OP"
+  [[ -s "$keyfile" ]] || die "op read returned an empty notary key for NOTARY_KEY_OP"
+  export NOTARY_KEY="$keyfile"
+}
 
 cask_body() {
   cat <<RUBY
@@ -61,6 +116,8 @@ RUBY
 }
 
 # --- build, sign, notarize -----------------------------------------------------
+fetch_notary_key
+
 if [[ "$DRY" == "1" ]]; then
   echo "== build (skipped: RELEASE_DRY=1)"
   SHA="sha256-placeholder-dry-run-not-a-real-digest"
@@ -100,7 +157,7 @@ if [[ "$DRY" == "1" ]]; then
 fi
 
 # --- tap: cask + formula caveats, through a throwaway clone --------------------
-WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+WORK="$(mktemp -d)"
 BRANCH="chore/$CASK_NAME-$TAG"
 git clone --quiet --depth 1 "https://github.com/$TAP_REPO.git" "$WORK/tap"
 
