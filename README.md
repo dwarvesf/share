@@ -14,6 +14,14 @@ share add ./team-guide          # https://s.example.com/62cb50/team-guide/  (cop
 
 ![Share a folder, then check who opened it](demo/use.gif)
 
+A second account or hostname on the same machine is a profile, with its own tunnel, port, and login service:
+
+```sh
+CLOUDFLARE_API_TOKEN=... share --profile work setup s.work.example   # no browser: a token for that account
+share --profile work add ./guide                                     # https://s.work.example/62cb50/guide/
+share profiles                                                       # default and work, each with its state (setup --quick works per profile too)
+```
+
 ## Features
 
 | | |
@@ -31,6 +39,7 @@ share add ./team-guide          # https://s.example.com/62cb50/team-guide/  (cop
 | **Agent-native** | `share skill --install` drops a SKILL.md for Claude Code and friends |
 | **Always on** | a login service (launchd/systemd) brings links back after reboot |
 | **Menu bar app** | Share Bar shows what's shared and lets you drag a file onto the icon to publish it |
+| **Profiles** | `share --profile work ...` runs a second setup (another account or hostname) beside the first, on its own port and service |
 
 Links are live only while the machine is awake; visitors get Cloudflare 530 when it sleeps. `https://<hostname>/healthz` answers `ok` while share is serving; the site root 404s by design.
 
@@ -67,7 +76,7 @@ From a clone: `git clone https://github.com/dwarvesf/share.git && cd share && ./
 ## Commands
 
 ```sh
-share setup s.example.com   # one-time: tunnel, DNS, login service (or --quick for no domain)
+share setup s.example.com   # one-time: tunnel, DNS, login service (--quick: no domain; --no-service: no login service)
 share add <file|dir|port>   # publish, print + copy the link
 share ls                    # shares with link, size, source, expiry
 share refresh <id|link>     # re-copy from source under the same link
@@ -75,7 +84,8 @@ share rm <id|link>          # unpublish (copy goes to Trash)
 share hits <id|link>        # request and visitor counts
 share state                 # JSON snapshot for the menu bar app
 share stop | start          # take all links down / bring them back
-share teardown              # remove tunnel, service, and config
+share teardown [--yes]      # remove tunnel, service, and config; the shares on disk stay
+share --profile <name> ...  # any command against another setup (or SHARE_PROFILE=<name>); share profiles lists them
 ```
 
 A share from a private GitHub repo prints a warning; the content is public to anyone with the link.

@@ -110,6 +110,17 @@ The trade-offs are real:
 - **No `--host` shares.** TryCloudflare cannot route a name you pick; `share add ... --host` refuses and points at named setup.
 - **Switching modes is a teardown.** `share teardown --yes` (keeps `~/share`), then `share setup <hostname>` for a stable domain, or `--quick` to go back. Each refuses to overwrite the other's config.
 
+## 4d. A second setup on the same machine: profiles
+
+```sh
+CLOUDFLARE_API_TOKEN=... share --profile work setup s.work.example   # another account or hostname
+share --profile work add ./guide                                     # https://s.work.example/<id>/guide/
+share add ./notes.pdf                                                # the default setup, unchanged
+share profiles                                                       # default and work, each with state and host
+```
+
+A profile is a second, independent share: its own config dir (`~/.config/share/profiles/work`), root (`~/share/profiles/work`), login service (`foundation.d.share.work`), Keychain item (`share-tunnel.work:<hostname>`), and port (picked at the first setup, then kept in its config). `SHARE_PROFILE=work` selects it from the environment; the flag goes before the verb. The default setup never moves, so an existing install needs nothing. A named profile needs its own credential at setup: an API token for that account, or the browser login (each profile keeps its own `cert.pem`). `share --profile work teardown` removes only that profile. Share Bar shows the default profile only; to watch a named profile, watch its launchd label. Detail: [how-it-works.md](how-it-works.md#profiles).
+
 ## 5. Serve from a different machine
 
 Only machines listed in `hosts` serve. Two machines on one tunnel would split requests between two different `~/share` folders, so links would fail at random.
@@ -141,4 +152,5 @@ The DNS record depends on the path. With `CLOUDFLARE_API_TOKEN` set, teardown de
 | "not in hosts" | This machine is not allowed to serve. | Add its short name (`uname -n` up to the first dot) to `hosts`. |
 | "no tunnel token" | The Keychain item or token file is missing. | Rerun `share setup <hostname>`. |
 | "caddy failed to start" | Another process uses the port. | Free the port, or change `port` and rerun setup so the route follows. |
+| "127.0.0.1:<port> is already in use" | Another share profile, or another process, listens on this profile's port or metrics port. | `share profiles` to find it; change `port=` in the config it names and rerun setup so the route follows. |
 | Markdown served as raw text | pandoc is not installed. | `brew install pandoc`, then `share refresh <id>`. |
