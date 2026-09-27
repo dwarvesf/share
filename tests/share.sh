@@ -608,6 +608,135 @@ check "prune still removes the payload" "0" "$([[ -d $SHARE_ROOT/pub/nocred2 ]] 
 SHARE_HOST_DRY=1 bash "$SH" rm nocred1 >/dev/null 2>&1
 check "cleanup: nocred1 row gone" "0" "$(grep -c '^nocred1' "$SHARE_ROOT/index.tsv")"
 
+echo "=== TASK-005: share state ==="
+state_schema_ok() { # state_schema_ok <json-file> <expected-state>: the full field/type contract
+  jq -e --arg st "$2" '
+    .schema == 1
+    and .state == $st
+    and (.ready | type) == "boolean"
+    and (.mode == "named" or .mode == "quick")
+    and (.host == null or (.host | type) == "string")
+    and (.hosts | type) == "string"
+    and (.serves_here | type) == "boolean"
+    and (.service | type) == "boolean"
+    and (.shares | type) == "array"
+    and (.shares | map(has("id") and has("name") and has("url") and has("kind") and has("expires")) | all)
+  ' "$1" >/dev/null
+}
+
+echo "--- not_setup: schema valid, exit 0, nothing written ---"
+mkdir -p "$WORK/state-ns-root" "$WORK/state-ns-config"
+ns_marker="$WORK/state-ns-marker"; touch "$ns_marker"; sleep 1.1
+out=$(env -u SHARE_HOSTNAME -u SHARE_HOSTS SHARE_ROOT="$WORK/state-ns-root" SHARE_CONFIG_DIR="$WORK/state-ns-config" SHARE_TUNNEL=0 bash "$SH" state); rc=$?
+echo "$out" >"$WORK/state-ns.json"
+check "not_setup: exit 0" "0" "$rc"
+check "not_setup: schema valid" "0" "$(state_schema_ok "$WORK/state-ns.json" not_setup; echo $?)"
+check "not_setup: shares empty" "[]" "$(jq -c .shares "$WORK/state-ns.json")"
+check "not_setup: host is null" "null" "$(jq -c .host "$WORK/state-ns.json")"
+check "not_setup: ready is false" "false" "$(jq -c .ready "$WORK/state-ns.json")"
+check "not_setup: writes nothing" "" "$(find "$WORK/state-ns-root" "$WORK/state-ns-config" -newer "$ns_marker" 2>/dev/null)"
+
+echo "--- stopped: host is always the configured hostname in named mode, ready false ---"
+printf 'hostname=stopped.example.test\nhosts=nowhere-host\n' >"$WORK/state-ns-config/config"
+touch "$ns_marker"; sleep 1.1
+out=$(env -u SHARE_HOSTNAME -u SHARE_HOSTS SHARE_ROOT="$WORK/state-ns-root" SHARE_CONFIG_DIR="$WORK/state-ns-config" SHARE_TUNNEL=0 bash "$SH" state); rc=$?
+echo "$out" >"$WORK/state-stopped.json"
+check "stopped: exit 0" "0" "$rc"
+check "stopped: schema valid" "0" "$(state_schema_ok "$WORK/state-stopped.json" stopped; echo $?)"
+check "stopped: host is the configured hostname" "stopped.example.test" "$(jq -r .host "$WORK/state-stopped.json")"
+check "stopped: ready is false" "false" "$(jq -c .ready "$WORK/state-stopped.json")"
+check "stopped: writes nothing" "" "$(find "$WORK/state-ns-root" "$WORK/state-ns-config" -newer "$ns_marker" 2>/dev/null)"
+
+echo "--- serving (SHARE_TUNNEL=0): snapshot, live, host, expired, 5-field, malformed rows ---"
+ST_ROOT="$WORK/state-root"; ST_CFG="$WORK/state-config"
+mkdir -p "$ST_ROOT" "$ST_CFG" "$WORK/state-src"
+st_env=(SHARE_ROOT="$ST_ROOT" SHARE_CONFIG_DIR="$ST_CFG" SHARE_PORT=18796 SHARE_TUNNEL=0 SHARE_CLIPBOARD=0 SHARE_HOSTNAME=state.example.test SHARE_HOSTS="$h")
+stsh() { env "${st_env[@]}" bash "$SH" "$@"; }
+
+printf '# Doc\n\nbody\n' >"$WORK/state-src/doc.md"
+snap_out=$(stsh add "$WORK/state-src/doc.md" 2>/dev/null)
+snap_url=$(head -1 <<<"$snap_out")
+snap_id=$(cut -d/ -f4 <<<"$snap_url")
+live_out=$(stsh add 28796 2>/dev/null)
+live_url=$(head -1 <<<"$live_out")
+live_id=$(cut -d/ -f4 <<<"$live_url")
+echo x >"$WORK/state-src/hostfile.txt"
+env "${st_env[@]}" SHARE_HOST_DRY=1 bash "$SH" add "$WORK/state-src/hostfile.txt" --host state-host.example.test >/dev/null 2>&1
+host_id=$(awk -F'\t' '$6 ~ /host=state-host\.example\.test/ {print $1}' "$ST_ROOT/index.tsv")
+# captured now, before the synthetic rows below and the marker: `share ls` runs
+# cmd_prune, which would otherwise remove the expire1 row and rewrite the index
+# and Caddyfile right in the window the "writes nothing" check watches.
+ls_out=$(stsh ls)
+{
+  printf 'expire1\texpired.txt\t/nonexistent\t2020-01-01\t1\t\n'   # expired, not yet pruned
+  printf 'legacy1\tlegacy.txt\t/nonexistent\t2020-01-01\t0\n'      # 5-field, v0.1.x shape
+  printf 'bad1\tbadrow\n'                                          # malformed: 2 fields
+} >>"$ST_ROOT/index.tsv"
+
+# caddy's reload from the last add flushes its own log lines a moment after the
+# reload call returns; wait for caddy.log to go quiet before the marker, so that
+# trailing write is never mistaken for one made by `state` itself.
+settle=0; prev_sz=-1
+for _ in $(seq 1 30); do
+  sz=$(wc -c <"$ST_ROOT/caddy.log" 2>/dev/null || echo 0)
+  [[ $sz == "$prev_sz" ]] && settle=$((settle + 1)) || settle=0
+  [[ $settle -ge 3 ]] && break
+  prev_sz=$sz; sleep 0.1
+done
+st_marker="$WORK/state-marker"; touch "$st_marker"; sleep 1.1
+out=$(stsh state); rc=$?
+echo "$out" >"$WORK/state-serving.json"
+
+check "serving: exit 0" "0" "$rc"
+check "serving: schema valid" "0" "$(state_schema_ok "$WORK/state-serving.json" serving; echo $?)"
+check "serving: ready true under SHARE_TUNNEL=0" "true" "$(jq -c .ready "$WORK/state-serving.json")"
+check "serving: writes nothing" "" "$(find "$ST_ROOT" "$ST_CFG" -newer "$st_marker" 2>/dev/null)"
+check "serving: 5-field legacy row appears" "1" "$(jq '[.shares[] | select(.id == "legacy1")] | length' "$WORK/state-serving.json")"
+check "serving: expired-not-pruned row appears" "1" "$(jq '[.shares[] | select(.id == "expire1")] | length' "$WORK/state-serving.json")"
+check "serving: malformed row counted in skipped" "1" "$(jq '.skipped' "$WORK/state-serving.json")"
+check "serving: shares ordered newest-first" "legacy1 expire1 $host_id $live_id $snap_id" \
+  "$(jq -r '[.shares[].id] | join(" ")' "$WORK/state-serving.json")"
+
+check "snapshot kind" "snapshot" "$(jq -r --arg id "$snap_id" '.shares[] | select(.id==$id) | .kind' "$WORK/state-serving.json")"
+check "snapshot own_host null" "null" "$(jq -c --arg id "$snap_id" '.shares[] | select(.id==$id) | .own_host' "$WORK/state-serving.json")"
+check "live kind" "live" "$(jq -r --arg id "$live_id" '.shares[] | select(.id==$id) | .kind' "$WORK/state-serving.json")"
+check "live own_host null" "null" "$(jq -c --arg id "$live_id" '.shares[] | select(.id==$id) | .own_host' "$WORK/state-serving.json")"
+check "own-host row's own_host is the fqdn" "state-host.example.test" \
+  "$(jq -r --arg id "$host_id" '.shares[] | select(.id==$id) | .own_host' "$WORK/state-serving.json")"
+check "own-host row's kind is snapshot" "snapshot" "$(jq -r --arg id "$host_id" '.shares[] | select(.id==$id) | .kind' "$WORK/state-serving.json")"
+
+for id in "$snap_id" "$live_id" "$host_id"; do
+  state_url=$(jq -r --arg id "$id" '.shares[] | select(.id==$id) | .url' "$WORK/state-serving.json")
+  ls_url=$(grep -B1 "id=$id" <<<"$ls_out" | head -1)
+  check "state url == share ls url for $id" "$ls_url" "$state_url"
+done
+
+stsh stop >/dev/null
+
+echo "--- 500-row index answers fast ---"
+PERF_ROOT="$WORK/state-perf-root"; PERF_CFG="$WORK/state-perf-config"
+mkdir -p "$PERF_ROOT" "$PERF_CFG"
+for n in $(seq 1 500); do printf 'p%05x\tfile%d.txt\t/nonexistent/file%d.txt\t2026-01-01\t0\t\n' "$n" "$n" "$n"; done >"$PERF_ROOT/index.tsv"
+TIMEFORMAT='%R'
+{ time env SHARE_ROOT="$PERF_ROOT" SHARE_CONFIG_DIR="$PERF_CFG" SHARE_HOSTNAME=perf.example.test SHARE_HOSTS="$h" SHARE_TUNNEL=0 \
+    bash "$SH" state >"$WORK/state-perf.json"; } 2>"$WORK/state-perf.time"
+perf_secs=$(cat "$WORK/state-perf.time")
+echo "  share state over 500 rows took ${perf_secs}s"
+check "500-row index produces 500 shares" "500" "$(jq '.shares | length' "$WORK/state-perf.json")"
+check "500-row index answers under 3s" "1" "$(awk -v t="$perf_secs" 'BEGIN{print (t<3)?1:0}')"
+
+echo "--- state on the v0.5.1 CLI (predates the verb): exit 1, writes nothing ---"
+OLD_SH="$WORK/share-v0.5.1"
+git -C "$(cd "$(dirname "$SH")/.." && pwd)" show v0.5.1:bin/share >"$OLD_SH" 2>/dev/null
+chmod +x "$OLD_SH"
+OLD_ROOT="$WORK/state-old-root"; OLD_CFG="$WORK/state-old-config"
+mkdir -p "$OLD_ROOT" "$OLD_CFG"
+old_marker="$WORK/state-old-marker"; touch "$old_marker"; sleep 1.1
+out=$(env SHARE_ROOT="$OLD_ROOT" SHARE_CONFIG_DIR="$OLD_CFG" SHARE_HOSTNAME=old.example.test SHARE_HOSTS="$h" SHARE_TUNNEL=0 bash "$OLD_SH" state 2>&1); rc=$?
+check "v0.5.1 CLI: git show fetched the old script" "1" "$([[ -s $OLD_SH ]] && echo 1 || echo 0)"
+check "v0.5.1 CLI: state exits 1 (unknown verb)" "1" "$rc"
+check "v0.5.1 CLI: state wrote nothing" "" "$(find "$OLD_ROOT" "$OLD_CFG" -newer "$old_marker" 2>/dev/null)"
+
 echo "=== skill ==="
 check "skill prints a SKILL.md" "1" "$(bash "$SH" skill | grep -c '^name: share')"
 SHARE_SKILL_DIR="$WORK/skilldir" bash "$SH" skill --install >/dev/null

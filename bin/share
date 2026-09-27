@@ -14,6 +14,7 @@
 #   share prune               unpublish expired shares now (also hourly while serving)
 #   share start | stop        start or stop serving (links live while this machine is awake)
 #   share service install|uninstall|status   the login service that keeps serving
+#   share state               machine-readable JSON snapshot (for the menu bar app)
 #   share [status]            server state plus the share list
 #   share serve               serve in the foreground until Ctrl-C
 #   share skill [--install]   the SKILL.md that teaches an agent to use share
@@ -803,6 +804,53 @@ cmd_status() {
   cmd_ls
 }
 
+cmd_state() { # read-only JSON snapshot for the menu bar app: never prunes, writes, needs a TTY, or touches the clipboard
+  local mode_val="named" host_val="" state_val ready_val="false" serves_val="false" service_val="false" skipped_n=0
+  [[ $mode == quick ]] && mode_val="quick"
+  if running; then state_val="serving"
+  elif [[ -n $host_name || $mode == quick ]]; then state_val="stopped"
+  else state_val="not_setup"; fi
+  if [[ $state_val != serving ]]; then ready_val="false"
+  elif [[ $tunnel != 1 ]]; then ready_val="true"
+  elif [[ $mode_val == quick ]]; then
+    [[ -s $root/quick.url ]] && ready_val="true" || ready_val="false"
+  else
+    curl -sf -m 1 -o /dev/null "http://127.0.0.1:$metrics_port/ready" 2>/dev/null && ready_val="true" || ready_val="false"
+  fi
+  if [[ $mode_val == named ]]; then host_val="$host_name"
+  elif [[ $state_val == serving ]]; then host_val="$(cat "$root/quick.url" 2>/dev/null || true)"; fi
+  host_ok && serves_val="true"
+  svc_installed && service_val="true"
+  # skipped_n is computed here, not inside the pipeline below: a `{ } | jq` pipeline
+  # forks the left side, so an assignment made there never reaches this shell's copy
+  # of the variable, and jq's --argjson would see only the local's initial "0".
+  [[ -s $index ]] && skipped_n="$(awk -F'\t' 'NF>0 && NF!=5 && NF!=6{c++} END{print c+0}' "$index")"
+  {
+    if [[ -s $index ]]; then
+      local id name src date exp opts kind own_host line rows=() i
+      while IFS=$'\t' read -r id name src date exp opts; do
+        kind="snapshot"; has_opt live "$opts" && kind="live"
+        own_host="${opts#*host=}"
+        [[ $own_host == "$opts" ]] && own_host="" || own_host="${own_host%% *}"
+        share_url "$id" "$name" "$opts"
+        printf -v line '%s\t%s\t%s\t%s\t%s\t%s' "$id" "$name" "$share_url_out" "$kind" "$own_host" "${exp:-0}"
+        rows+=("$line")
+      done < <(awk -F'\t' 'NF==5||NF==6' "$index")
+      for ((i = ${#rows[@]} - 1; i >= 0; i--)); do printf '%s\n' "${rows[i]}"; done
+    fi
+  } | jq -nR \
+    --arg state "$state_val" --argjson ready "$ready_val" --arg mode "$mode_val" \
+    --arg host "$host_val" --arg hosts "$hosts" --argjson serves_here "$serves_val" \
+    --argjson service "$service_val" --argjson skipped "$skipped_n" '
+    def row: split("\t") | {id: .[0], name: .[1], url: .[2], kind: .[3],
+      own_host: (if .[4] == "" then null else .[4] end), expires: (.[5] | tonumber)};
+    {schema: 1, state: $state, ready: $ready, mode: $mode,
+     host: (if $host == "" then null else $host end), hosts: $hosts,
+     serves_here: $serves_here, service: $service,
+     shares: [inputs | select(length > 0) | row]}
+    + (if $skipped > 0 then {skipped: $skipped} else {} end)'
+}
+
 # --- Cloudflare setup / teardown ---
 #
 # Two ways to authorize. With CLOUDFLARE_API_TOKEN set, share uses the API for
@@ -1288,7 +1336,8 @@ case "${1:-status}" in
   start) cmd_start ;;
   stop) cmd_stop ;;
   status) cmd_status ;;
+  state) cmd_state ;;
   serve) cmd_serve ;;
-  -h|--help|help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' ;;
-  *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  -h|--help|help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
