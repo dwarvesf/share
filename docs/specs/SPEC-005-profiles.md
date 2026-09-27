@@ -54,8 +54,9 @@ Chosen: a profile is a validated slug that supplies the default for each per-ins
 value (config dir, root, label, Keychain key, port); the explicit `SHARE_*` overrides
 keep their precedence. Alternatives and why they lost: ADR-0005. Nothing is shared
 between profiles, so the only cross-profile logic is two read-only scans: the other
-profiles' config files (`other_cfg`), used for three refusals (the port pick, `add <port>`
-of another profile's port pair, and `setup` on a hostname another profile owns), and
+profiles' config files (`other_cfg`), used for four refusals (the port pick, `add <port>`
+of another profile's port pair, and `setup` on a hostname or a tunnel name another
+profile owns), and
 every profile's `index.tsv` (`live_shared`), used by the port pick to skip a port any
 profile live-shares. Both scans follow the derived locations (`~/.config/share`,
 `~/share`, and their `profiles/` subdirectories); a profile moved with `SHARE_ROOT` or
@@ -123,8 +124,13 @@ the profile's config. A rerun of setup keeps the stored port.
   `<port> belongs to another share profile (share profiles)`, so one profile never
   republishes another profile's shares under its own hostname.
 - `share setup <hostname>` refuses a hostname that another profile's config already
-  holds: `<hostname> is already the hostname of another profile (share profiles)`, so
-  two profiles never reuse, then delete, one tunnel.
+  holds: `<hostname> is already the hostname of another profile (share profiles)`, and a
+  tunnel name another profile's config holds (`--tunnel-name`, or two hostnames that the
+  default naming maps to one `share-<host-with-dashes>`): `tunnel <name> already belongs
+  to another profile (share profiles); pass --tunnel-name`. Either way two profiles never
+  reuse, then delete, one tunnel.
+- A `port=` that is not a number dies at load for its own profile, and is skipped by the
+  cross-profile scans, so one corrupt config never breaks another profile's commands.
 
 ### The service
 
@@ -185,7 +191,13 @@ verb, and one skill row.
   and `TUNNEL_TOKEN` in the environment, never argv.
 - A named profile's root sits under `~/share/profiles`, outside the default's `pub`,
   and the serve port guard plus the `add <port>` refusal keep one profile's caddy from
-  serving another's files.
+  serving another's files. A profile set up before the default creates `~/share` and
+  `~/share/profiles` with mode 700, the mode the default's root has always had, so the
+  default's later index, access log, and admin socket never land in a world-readable dir.
+- Every message that names a command to run (setup, teardown, start, the recovery
+  hints) builds it from the current profile, and a suite check greps `bin/share` for a
+  bare `share <verb>` hint outside the usage header and the skill text, so a hint for a
+  named profile never points at the default install (DEC-008).
 - Cloudflare credentials are per invocation (`CLOUDFLARE_API_TOKEN`) or per profile
   config (`token_cmd`, the login certificate). When SPEC-004's `share api-token` stores an
   API token (a token command or a Keychain item, on the tunnel token's pattern), that
@@ -201,7 +213,8 @@ verb, and one skill row.
 | a bad name from the flag or the env | the slug check | die before any path is built |
 | two profiles on one port (hand-edited `port=`, inherited `SHARE_PORT`, an override that collapses two profiles) | `serve` finds the port answering | die naming the port and the config to change; the other profile keeps serving |
 | a live share of another profile's caddy or metrics port | `port_claimed` at `add` | die naming `share profiles`; no row written |
-| two profiles on one hostname | `other_cfg hostname` at `setup` | die before any Cloudflare call |
+| two profiles on one hostname or one tunnel name | `other_cfg hostname` / `other_cfg tunnel_name` at `setup` | die before any Cloudflare call |
+| a corrupt `port=` in one profile | the load-time check (own) / the scans skip it (others) | own commands die naming the config; other profiles are unaffected |
 | a profile's `state` fails inside `share profiles` | non-zero child | that row reads `error`, the rest print |
 | a named profile's outage | none from Share Bar (it watches the default only) | `share profiles`; an external monitor watches label `foundation.d.share.<p>` |
 
@@ -227,8 +240,8 @@ verb, and one skill row.
 | 9 | Keychain key with a stubbed `security`, in setup's order (token code loaded with an empty hostname, hostname assigned, then store) | `token_store` under profile `a` writes service `share-tunnel.a:<host>`; the default writes `share-tunnel:<host>`; no key ends in `:`; the token never appears in the stub's argv or log |
 | 10 | `teardown --yes` on a quick profile | config trashed; the empty profile dir is gone; the profile leaves `share profiles`; the other profile keeps serving |
 | 11 | `service install` for a profile with stubbed `launchctl`/`systemctl` | the file uses the suffixed label, carries `SHARE_PROFILE`, and pins the profile's config dir and root |
-| 12 | collisions | `add <other's port>` and `add <other's metrics port>` die; `setup <other's hostname>` dies before writing; `serve` with `port=` hand-set to the other profile's port dies naming the port and this profile's own `setup` command while the other keeps answering |
-| 13 | misplaced flag and help | `teardown --yes --profile a` and `stop --profile=a` die; `--help` shows the `--profile` line, `profiles`, and `teardown` |
+| 12 | collisions | `add <other's port>`, `add <other's metrics port>`, and `add 8787` before the default exists die; `setup <other's hostname>` and `setup --tunnel-name <other's tunnel>` die before writing; a profile-created `~/share` and `~/share/profiles` are 700; a corrupt `port=` in another profile does not break `add <port>`; `serve` with `port=` hand-set to the other profile's port dies naming the port and this profile's own `setup` command while the other keeps answering |
+| 13 | misplaced flag, help, hints | `teardown --yes --profile a` and `stop --profile=a` die; `--help` shows the `--profile` line, `profiles`, and `teardown`; no hint in `bin/share` names a bare `share <verb>` outside the usage header and the skill text |
 
 Test seam: a stub `security` earlier in `PATH` that records the verb and the `-s`
 service name it was asked for (never the `-w` value) to a log; stub `launchctl` and

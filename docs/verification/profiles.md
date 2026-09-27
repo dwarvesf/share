@@ -32,8 +32,13 @@ showing only its rows, `SHARE_PROFILE` from the environment; `share profiles` wi
 three rows; a setup rerun keeping the port; `hits`, `refresh`, `rm`, `state` on one
 profile leaving the other's row and server; the service file of a profile through
 stubbed `launchctl`/`systemctl` (suffixed label, `SHARE_PROFILE`, pinned dirs);
-`add` of another profile's port and metrics port refused; `setup` on another
-profile's hostname refused with no config written; `serve` with `port=` hand-set to the
+`add` of another profile's port and metrics port refused, and `add 8787` before the
+default exists; `setup` on another profile's hostname or tunnel name refused with no
+config written; a profile-created `~/share` and `~/share/profiles` at mode 700; a
+metrics-port-only collision refused by name; `share profiles` under an exported
+`SHARE_ROOT` still reading each profile's own state, and a corrupt profile as one
+`error` row that breaks neither the listing nor another profile's port refusal; no
+hint in `bin/share` naming a bare `share <verb>`; `serve` with `port=` hand-set to the
 other profile's port dying by name while the other keeps answering; `teardown` of one
 profile leaving the other serving and no empty profile dir. The pre-existing suite
 runs unchanged around it, so the default profile's paths and behavior are the same
@@ -42,14 +47,14 @@ checks they were before.
 ## Negative control 1: the Keychain key drops the profile
 
 ```
-Command: sed -i.bak 's|^token_key="share-tunnel${profile:+.$profile}:$host_name"|token_key="share-tunnel:$host_name"|' bin/share; bash tests/share.sh
-Result:  RED, exit 1, 5 FAILs:
+Command: sed -i.bak 's|share-tunnel${profile:+.$profile}:|share-tunnel:|' bin/share; bash tests/share.sh
+Result:  RED, exit 1, 5 FAILs (327 ok), at 5bfa07e (the first recording targeted the
+         earlier variable form of the key and was replayed after the key became a function):
            FAIL  default profile stores share-tunnel:<host>: expected '1', got '2'
            FAIL  default profile reads share-tunnel:<host>: expected '1', got '2'
            FAIL  profile a stores share-tunnel.a:<host>: expected '1', got '0'
            FAIL  profile a reads share-tunnel.a:<host>: expected '1', got '0'
            FAIL  the two profiles never share an item: expected '2', got '1'
-         313 ok
 Command: git checkout -- bin/share; bash tests/share.sh
 Result:  GREEN (the green run above)
 Verdict: PASS (mutate -> RED -> restore)
@@ -103,12 +108,12 @@ Plus the suite's own standing negative control, last in every run: a host outsid
 | 5 | `profile a config holds a picked port`, `setup printed the picked port`, `the two profiles' ports differ`, `neither port pair overlaps ...`, `the pick skips a port another profile live-shares`, `profile a is serving`, `profile b is serving`, `a's share answers on a's port`, `a's share is absent on b's port`, `share ls under a shows only a`, `SHARE_PROFILE=b from the environment also lists b` |
 | 6 | `rerun keeps a's port` |
 | 7 | `a's state has one share`, `a's hits counts a's fetches`, `refresh under a exits 0`, `rm under a removes a's row`, `rm under a leaves b's row`, `b's share still answers` |
-| 8 | `profiles: three lines`, `profiles: default first ...`, `profiles: a serving on its host`, `profiles: b serving on its host` |
+| 8 | `profiles: three lines`, `profiles: default first ...`, `profiles: a serving on its host`, `profiles: b serving on its host`, `profiles under an exported SHARE_ROOT still reads each profile's own state`, `profiles: an unreadable profile is an error row`, `profiles: the other rows survive the error` |
 | 9 | `the two profiles never share an item`, `no key was built before setup knew the hostname`, `the token value never reached the stub's argv or log` |
 | 10 | `profile a teardown exits 0`, `profile a config dir is gone`, `profile a is no longer listed`, `profile b still serves after a's teardown` |
 | 11 | `profile c's service file uses the suffixed label`, `... carries SHARE_PROFILE=c`, `... pins its own config dir and root` |
-| 12 | `add of another profile's caddy port is refused`, `add of another profile's metrics port is refused`, `setup on another profile's hostname is refused`, `the refused setup wrote no config`, `serve on a port another profile listens on dies`, `the die names the port`, `b still answers alone on its port` |
-| 13 | `--profile after the verb is refused`, `--profile=<name> after the verb is refused`, `help shows the --profile line and the profiles verb`, `help reaches teardown` |
+| 12 | `add of another profile's caddy port is refused`, `add of another profile's metrics port is refused`, `add of the default's 8787 is refused even before the default is set up`, `setup on another profile's hostname is refused`, `the refused setup wrote no config`, `setup on another profile's tunnel name is refused`, `a profile root's parents under ~/share are 700`, `serve on a port another profile listens on dies`, `the die names the port`, `the recovery hint names this profile's own setup`, `serve whose metrics port another profile listens on dies`, `b still answers alone on its port`, `another profile's corrupt port= does not break this profile's port refusal` |
+| 13 | `--profile after the verb is refused`, `--profile=<name> after the verb is refused`, `help shows the --profile line and the profiles verb`, `help reaches teardown`, `no hint names a bare share <verb>` |
 
 ## UX walkthrough: the README on a clean HOME
 

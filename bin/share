@@ -351,7 +351,7 @@ warn_private() { # a share out of a private GitHub repo is almost always a mista
   repo="$(sed -E 's#^(git@github\.com:|https://github\.com/)##; s#\.git$##' <<<"$repo")"
   [[ $repo == */* && $repo != *:* ]] || return 0
   if [[ "$(gh repo view "$repo" --json isPrivate -q .isPrivate 2>/dev/null)" == true ]]; then
-    echo "share: WARNING: this comes from the PRIVATE repo $repo and is now public to anyone with the link (share rm $2 to undo)" >&2
+    echo "share: WARNING: this comes from the PRIVATE repo $repo and is now public to anyone with the link ($me rm $2 to undo)" >&2
   fi
 }
 
@@ -380,7 +380,7 @@ cmd_add() {
     esac
   done
   [[ $ntargets == 1 ]] || die "$usage"
-  [[ -z $host_fqdn || $mode != quick ]] || die "--host needs a named tunnel: 'share teardown', then 'share setup <hostname>'"
+  [[ -z $host_fqdn || $mode != quick ]] || die "--host needs a named tunnel: '$me teardown', then '$me setup <hostname>'"
   local pt kind tport="" src name id exp=0 url opts="" secs
   pt="$(parse_target "$target")" || die "$usage"
   if [[ $pt == snapshot ]]; then
@@ -459,7 +459,7 @@ cmd_refresh() {
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
   if has_opt live "$opts"; then echo "live share, nothing to refresh" >&2; return 0; fi
   src="$(cut -f3 <<<"$r")"
-  [[ -e $src ]] || die "source is gone: $src (the snapshot keeps serving; share rm $1 to unpublish)"
+  [[ -e $src ]] || die "source is gone: $src (the snapshot keeps serving; $me rm $1 to unpublish)"
   copy "$src" "$1" "$opts"
   lock_take index
   # a concurrent rm may have dropped the row while copy ran outside the lock;
@@ -481,7 +481,7 @@ cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so ex
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
   fqdn="$(opt_val host "$opts" || true)"
   if [[ ${SHARE_HOST_DRY:-0} != 1 && -n $fqdn && ${2:-} != prune && -z ${CLOUDFLARE_API_TOKEN:-} && ! -f $cert ]]; then
-    die "no Cloudflare credential for $fqdn; set CLOUDFLARE_API_TOKEN or run share setup --login, then rm again"
+    die "no Cloudflare credential for $fqdn; set CLOUDFLARE_API_TOKEN or run $me setup --login, then rm again"
   fi
   [[ -n $fqdn ]] && host_rm "$fqdn"
   lock_take index
@@ -744,7 +744,7 @@ EOF
     systemctl --user daemon-reload
     systemctl --user enable --now "$svc_label.service" >/dev/null
   else
-    die "no launchd or systemd here; use 'share start' instead"
+    die "no launchd or systemd here; use '$me start' instead"
   fi
 }
 
@@ -783,7 +783,7 @@ cmd_service() {
       warn_not_live
       echo "service installed ($svc_label): serving now and at every login" ;;
     uninstall)
-      svc_uninstall; echo "service removed; links are down until 'share start'" ;;
+      svc_uninstall; echo "service removed; links are down until '$me start'" ;;
     status)
       if svc_installed; then echo "service: installed ($svc_label)"; else echo "service: not installed"; fi ;;
     *) die "usage: share service install|uninstall|status" ;;
@@ -805,7 +805,7 @@ cmd_start() {
   fi
   wait_running 10 || die "server did not start, see $root/serve.log"
   warn_not_live
-  echo "  serving in the background (pid $(cat "$pidfile")); share stop to end"
+  echo "  serving in the background (pid $(cat "$pidfile")); $me stop to end"
 }
 
 # The tunnel reports ready before caddy may listen, and the Cloudflare edge keeps routing to an
@@ -854,8 +854,8 @@ cmd_status() {
     else
       echo "serving (pid $(cat "$pidfile")) on $host_name: links are live"
     fi
-  elif [[ -z $host_name && $mode != quick ]]; then echo "not set up: share setup <hostname>, or share setup --quick"
-  else echo "not serving: share start"; fi
+  elif [[ -z $host_name && $mode != quick ]]; then echo "not set up: $me setup <hostname>, or $me setup --quick"
+  else echo "not serving: $me start"; fi
   svc_installed && echo "service: installed ($svc_label)"
   cmd_ls
 }
@@ -982,7 +982,12 @@ other_cfg() { # other_cfg <key>: that key from every OTHER profile's config; the
   return 0
 }
 port_claimed() { # port_claimed <p>: p is another profile's port or metrics port
-  local q; for q in $(other_cfg port); do [[ $1 == "$q" || $1 == "$((q + 1))" ]] && return 0; done; return 1
+  local q
+  for q in $(other_cfg port); do
+    [[ $q =~ ^[0-9]+$ ]] || continue   # another profile's corrupt port= is its own problem, never this command's
+    [[ $1 == "$q" || $1 == "$((q + 1))" ]] && return 0
+  done
+  return 1
 }
 live_shared() { # live_shared <p>: p is a live share's port in any profile's index (its dev server may be down right now)
   local f
@@ -1029,7 +1034,7 @@ write_config_quick() { # quick mode: a mode flag and the serving facts, nothing 
 }
 
 cmd_setup_quick() {
-  [[ -z $(cfg tunnel_id || true) ]] || die "already set up with a named tunnel; run 'share teardown' first"
+  [[ -z $(cfg tunnel_id || true) ]] || die "already set up with a named tunnel; run '$me teardown' first"
   local missing="" c
   for c in caddy cloudflared jq curl; do command -v "$c" >/dev/null || missing="$missing $c"; done
   [[ -z $missing ]] || die "missing:$missing (brew install$missing)"
@@ -1086,7 +1091,7 @@ host_zone() { # the zone every --host name lives under; learned once, kept in co
 host_check() { # host_check <fqdn>: credential and name are settled before any write
   local fqdn="$1" label
   if [[ ${SHARE_HOST_DRY:-0} != 1 && -z ${CLOUDFLARE_API_TOKEN:-} && ! -f $cert ]]; then
-    die "--host needs CLOUDFLARE_API_TOKEN or a browser login (share setup --login)"
+    die "--host needs CLOUDFLARE_API_TOKEN or a browser login ($me setup --login)"
   fi
   [[ $fqdn != "$host_name" ]] || die "--host cannot be the main hostname"
   host_zone
@@ -1107,15 +1112,15 @@ host_auth() { # cf_token, account, zone_id, tun_id for Cloudflare-side host work
   elif [[ -f $cert ]]; then
     cf_token="$(cert_field apiToken)"; account="$(cf_token_account)"; auth=login
   else
-    die "--host needs CLOUDFLARE_API_TOKEN or a browser login (share setup --login)"
+    die "--host needs CLOUDFLARE_API_TOKEN or a browser login ($me setup --login)"
   fi
-  [[ -n $cf_token ]] || die "--host needs CLOUDFLARE_API_TOKEN or a browser login (share setup --login)"
+  [[ -n $cf_token ]] || die "--host needs CLOUDFLARE_API_TOKEN or a browser login ($me setup --login)"
   local z; z="$(cf GET "/zones?name=$zone_name")"
   zone_id="$(jq -r '.result[0].id // empty' <<<"$z")"
   account="${account:-$(jq -r '.result[0].account.id // empty' <<<"$z")}"
   [[ -n $zone_id && -n $account ]] || die "the credential cannot see the $zone_name zone"
   tun_id="$(cfg tunnel_id || true)"
-  [[ -n $tun_id ]] || die "no tunnel_id in $config; run 'share setup' first"
+  [[ -n $tun_id ]] || die "no tunnel_id in $config; run '$me setup' first"
 }
 
 host_lock() { lock_take host "${SHARE_HOST_LOCK_TIMEOUT:-60}"; }   # one Cloudflare-side edit at a time
@@ -1135,7 +1140,7 @@ ingress_check() { # the catch-all stays last and the primary hostname first, els
     (.config.ingress | length) >= 2
     and (.config.ingress[-1].service == "http_status:404")
     and (.config.ingress[0].hostname == $h)' <<<"$1" >/dev/null \
-    || die "tunnel ingress was edited outside share; fix it in the dashboard or rerun share setup --force"
+    || die "tunnel ingress was edited outside share; fix it in the dashboard or rerun $me setup --force"
 }
 
 ingress_put() { # ingress_put <config-json> <dry-log-word>
@@ -1171,7 +1176,7 @@ host_add() { # host_add <fqdn>: collision guard, ingress rule, then the CNAME
         "{\"type\":\"CNAME\",\"name\":\"$fqdn\",\"content\":\"$tun_id.cfargotunnel.com\",\"proxied\":true,\"comment\":\"share host\"}" 2>&1)"; then
       (ingress_put "$cfg_json" revert) || true
       if [[ $auth == login ]]; then
-        die "the login cert cannot edit DNS records directly: export CLOUDFLARE_API_TOKEN with DNS Edit, or run share setup with the token"
+        die "the login cert cannot edit DNS records directly: export CLOUDFLARE_API_TOKEN with DNS Edit, or run $me setup with the token"
       fi
       die "could not create the DNS record for $fqdn (the ingress change was reverted): $out"
     fi
@@ -1201,7 +1206,7 @@ host_rm() { # host_rm <fqdn>: delete the CNAME, then the ingress rule; missing c
     if [[ -n $rid ]]; then
       if ! out="$(cf DELETE "/zones/$zone_id/dns_records/$rid" 2>&1)"; then
         if [[ $auth == login ]]; then
-          die "the login cert cannot edit DNS records directly: export CLOUDFLARE_API_TOKEN with DNS Edit, or run share setup with the token"
+          die "the login cert cannot edit DNS records directly: export CLOUDFLARE_API_TOKEN with DNS Edit, or run $me setup with the token"
         fi
         die "could not delete the DNS record for $fqdn: $out"
       fi
@@ -1231,7 +1236,7 @@ cmd_setup() {
     [[ $had_host_arg == 0 && -z $tunnel_name && $force == 0 && $login == 0 ]] || die "usage: share setup --quick [--no-service]"
     cmd_setup_quick "$service"; return
   fi
-  [[ $mode != quick ]] || die "already set up with a quick tunnel; run 'share teardown' first"
+  [[ $mode != quick ]] || die "already set up with a quick tunnel; run '$me teardown' first"
   if [[ -z $host_name && -t 0 ]]; then read -rp "Hostname for your links (for example s.example.com): " host_name; fi
   [[ $host_name =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$ ]] || die "usage: share setup <hostname>, for example s.example.com"
   tunnel_name="${tunnel_name:-share-${host_name//./-}}"
@@ -1383,7 +1388,7 @@ cmd_teardown() {
       echo "dns:     host shares in $index keep their records; remove them in the dashboard or rerun with CLOUDFLARE_API_TOKEN."
     fi
   else
-    die "set CLOUDFLARE_API_TOKEN, or run 'share setup $host_name' once to log in again"
+    die "set CLOUDFLARE_API_TOKEN, or run '$me setup $host_name' once to log in again"
   fi
   cf DELETE "/accounts/$account/cfd_tunnel/$tid/connections" >/dev/null 2>&1 || true
   cf DELETE "/accounts/$account/cfd_tunnel/$tid" >/dev/null

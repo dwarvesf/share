@@ -43,12 +43,16 @@ Alternatives rejected:
   `share profiles` lists them by reading each one's `state`.
 - The only cross-profile logic is two read-only scans of the derived locations: the
   other profiles' config files (the port pick, the `add <port>` refusal of another
-  profile's port pair, the `setup` refusal of a hostname another profile holds) and every
+  profile's port pair, the `setup` refusal of a hostname or a tunnel name another
+  profile holds) and every
   profile's index (the port pick skips a port any profile live-shares). A profile moved
   with `SHARE_ROOT` or `SHARE_CONFIG_DIR` is invisible to both; the serve port guard
   still catches a collision that results.
 - Every message that names a command builds it from the current profile, so a hint
-  for a named profile never points at the default install.
+  for a named profile never points at the default install; a suite check greps for a
+  bare `share <verb>` hint so the rule cannot drift.
+- A profile set up before the default creates `~/share` and `~/share/profiles` with
+  mode 700, so the default's root keeps the mode it has always had.
 - `serve` refuses a port that already answers, for every profile including the
   default: caddy binds with SO_REUSEPORT, so two servers on one port would split
   requests silently.
