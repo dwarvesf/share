@@ -95,3 +95,5 @@ TASK-014: no deviations from the cask field list, the wait/upload order, or the 
 - Decision/Change: `cmd_rm` now trashes `pub/<id>` only after the index rewrite, inside the `index` lock. `cmd_refresh` rechecks the row right after taking the `index` lock; if the row is gone it trashes `pub/<id>` again (covering the copy that already landed) and dies naming the id, instead of trusting the mv.
 - Why: both writers already serialize on the same `index` lock (TASK-001); moving each side's `pub/<id>` write inside that lock removes the race window instead of narrowing it.
 - Verified with a negative control: reverting both orderings makes `tests/share.sh`'s new "refresh racing rm" check fail (`pub/<id>` survives after `rm` reports success, 170 ok + 1 FAIL); restoring the fix turns the whole suite green again (171/171).
+
+TASK-002: no deviations; matches the spec verbatim.

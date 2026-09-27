@@ -566,7 +566,7 @@ cmd_serve() {
   # The trap lands before the tunnel work and reads the pids at run time:
   # a die in the quick-URL parse must still reap caddy and the prune loop.
   # pkill first: the loop's current sleep is a grandchild kill(1) can't reach.
-  trap 'release_locks; [[ -n ${loop_pid:-} ]] && pkill -P "$loop_pid" 2>/dev/null; kill ${caddy_pid:-} ${loop_pid:-} ${tunnel_pid:-} 2>/dev/null; wait 2>/dev/null; rm -f "$pidfile"' EXIT
+  trap 'release_locks; [[ -n ${loop_pid:-} ]] && pkill -P "$loop_pid" 2>/dev/null; kill ${caddy_pid:-} ${loop_pid:-} ${tunnel_pid:-} 2>/dev/null; wait 2>/dev/null; rm -f "$pidfile" "$root/quick.url"' EXIT
   trap 'exit 0' INT TERM
   if [[ $tunnel == 1 && $mode == quick ]]; then
     # quick tunnel: no token, no DNS; cloudflared prints a random trycloudflare URL.
@@ -772,6 +772,7 @@ cmd_stop() {
   elif [[ -f $svc_unit ]]; then systemctl --user stop "$svc_label.service"
   else kill "$pid"; fi
   while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
+  rm -f "$root/quick.url"
   if svc_installed; then echo "stopped (all links down; the service starts again at next login)"
   else echo "stopped (all links down)"; fi
 }

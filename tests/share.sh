@@ -439,6 +439,7 @@ check "no host row written" "0" "$(grep -c 'host=a\.example\.test' "$SHARE_ROOT/
 
 # restart: a stale quick.url must never survive; the new URL wins
 bash "$SH" stop >/dev/null
+check "stop clears quick.url" "0" "$([[ -f $SHARE_ROOT/quick.url ]] && echo 1 || echo 0)"
 SHARE_LIVE_CHECK=0 SHARE_FAKE_QUICK_URL=second-tunnel SHARE_TUNNEL=1 PATH="$QPATH" bash "$SH" start >/dev/null
 qwait second-tunnel.trycloudflare.com
 check "restart yields the new URL" "second-tunnel.trycloudflare.com" "$(cat "$SHARE_ROOT/quick.url")"
@@ -458,6 +459,13 @@ SHARE_LIVE_CHECK=0 SHARE_FAKE_QUICK_URL=third SHARE_TUNNEL=1 PATH="$QPATH" bash 
 qwait third.trycloudflare.com
 q3=$(bash "$SH" add "$WORK/outside.txt" 2>/dev/null | head -1)
 check "third URL in use" "1" "$(grep -c 'third.trycloudflare' <<<"$q3")"
+
+# the serve process's own EXIT trap must clear quick.url too, not only cmd_stop:
+# kill the pid directly instead of going through `share stop`.
+serve_pid="$(cat "$SHARE_ROOT/serve.pid")"
+kill "$serve_pid"
+for _ in $(seq 1 50); do kill -0 "$serve_pid" 2>/dev/null || break; sleep 0.1; done
+check "quick.url gone once the serve process exits, not via stop" "0" "$([[ -f $SHARE_ROOT/quick.url ]] && echo 1 || echo 0)"
 
 bash "$SH" stop >/dev/null
 SHARE_LIVE_CHECK=0 SHARE_TUNNEL=0 PATH="$QPATH" bash "$SH" start >/dev/null
