@@ -42,20 +42,35 @@ die() { echo "share: $*" >&2; exit 1; }
 this_host() { local h; h="$(uname -n)"; echo "${h%%.*}"; }
 host_ok() { case " $hosts " in *" $(this_host) "*) return 0 ;; esac; return 1; }
 running() { [[ -f $pidfile ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; }
-row() { [[ -f $index ]] && awk -F'\t' -v id="$1" '$1 == id' "$index"; }
+row() { [[ -f $index ]] && awk -F'\t' -v id="$1" '(NF == 5 || NF == 6) && $1 == id' "$index"; }
 id_of() { # accept an id or a pasted share link: https://host/<id>/name -> <id>; a bare https://<fqdn>/ resolves to the host row
   case ${1:-} in
     *://*)
       local p="${1#*://}"; local h="${p%%/*}" rest="${p#*/}"
       if [[ $p == "$h" || -z $rest ]] && [[ -f $index ]]; then
-        awk -F'\t' -v h="$h" '{n=split($6,a," "); for(i=1;i<=n;i++) if(a[i]=="host=" h){print $1; exit}}' "$index"
+        awk -F'\t' -v h="$h" '(NF==5||NF==6){n=split($6,a," "); for(i=1;i<=n;i++) if(a[i]=="host=" h){print $1; exit}}' "$index"
       else
         echo "${rest%%/*}"
       fi ;;
     *) echo "${1:-}" ;;
   esac
 }
-rand_id() { od -An -N3 -tx1 /dev/urandom | tr -d ' \n'; }
+rand_id_raw() { od -An -N3 -tx1 /dev/urandom | tr -d ' \n'; }   # the real candidate source
+rand_id() { # loops past a collision with an existing row or an orphaned pub/<id>
+  # SHARE_TEST_IDS (test seam): space-separated candidates consumed in order, then rand_id_raw.
+  # Consumed here, not inside rand_id_raw: rand_id_raw's output is captured with $( ), which
+  # forks a subshell, so a mutation made inside it would never reach this loop's next pass.
+  local id
+  while :; do
+    if [[ -n ${SHARE_TEST_IDS:-} ]]; then
+      id="${SHARE_TEST_IDS%% *}"
+      [[ $SHARE_TEST_IDS == "$id" ]] && SHARE_TEST_IDS="" || SHARE_TEST_IDS="${SHARE_TEST_IDS#* }"
+    else
+      id="$(rand_id_raw)"
+    fi
+    [[ -z "$(row "$id")" && ! -e $pub/$id ]] && { echo "$id"; return; }
+  done
+}
 has_opt() { case " $2 " in *" $1 "*) return 0 ;; esac; return 1; }
 opt_val() { # opt_val <key> <opts>: the value of a key=value token, nothing when absent
   local rest="${2#*"$1"=}"
@@ -325,6 +340,7 @@ cmd_add() {
     name="localhost:$tport"; src="http://127.0.0.1:$tport"; opts="live"
   else
     src="$(realpath "$target")"; name="$(basename "$src")"
+    case $name in *$'\t'*|*$'\n'*) die "names with tabs or newlines are not supported" ;; esac
   fi
   [[ -n $noindex ]] && opts="${opts:+$opts }noindex"
   if [[ -n $host_fqdn ]]; then
@@ -373,7 +389,7 @@ cmd_ls() {
       gone=""; [[ -e $src ]] || gone="  (source gone, snapshot still served)"
       echo "    id=$id  size=${size:-?}  added=$date  expires=$until  from=$src$gone"
     fi
-  done <"$index"
+  done < <(awk -F'\t' 'NF==5||NF==6' "$index")   # a 5-field row (v0.1.x) reads with opts empty; malformed rows are skipped
 }
 
 cmd_refresh() {
@@ -391,11 +407,14 @@ cmd_refresh() {
   echo "refreshed $1 from $src"
 }
 
-cmd_rm() {
+cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so expiry is never blocked (DEC-016)
   local r opts fqdn="" tmp
   r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
   fqdn="$(opt_val host "$opts" || true)"
+  if [[ ${SHARE_HOST_DRY:-0} != 1 && -n $fqdn && ${2:-} != prune && -z ${CLOUDFLARE_API_TOKEN:-} && ! -f $cert ]]; then
+    die "no Cloudflare credential for $fqdn; set CLOUDFLARE_API_TOKEN or run share setup --login, then rm again"
+  fi
   [[ -n $fqdn ]] && host_rm "$fqdn"
   [[ -d $pub/$1 ]] && to_trash "$pub/$1"
   lock_take index
@@ -412,9 +431,9 @@ cmd_prune() { # unpublish every share past its expiry
   local now ids id
   now="$(date +%s)"
   # a for loop, not `| while`: bash 5.3 skips the EXIT trap of a lock taken in a while-loop subshell
-  ids="$(awk -F'\t' -v now="$now" '$5 > 0 && $5 < now {print $1}' "$index")"
+  ids="$(awk -F'\t' -v now="$now" '(NF==5||NF==6) && $5 > 0 && $5 < now {print $1}' "$index")"
   for id in $ids; do
-    cmd_rm "$id" | sed 's/$/ (expired)/'
+    cmd_rm "$id" prune | sed 's/$/ (expired)/'
   done
 }
 
@@ -458,7 +477,7 @@ EOF
         if has_opt live "$opts" && [[ -z $fqdn ]]; then
           printf '\thandle_path /%s/* {\n\t\treverse_proxy http://127.0.0.1:%s\n\t}\n' "$id" "${src##*:}"
         fi
-      done <"$index"
+      done < <(awk -F'\t' 'NF==5||NF==6' "$index")
     fi
     cat <<EOF
 	handle /healthz {
@@ -497,7 +516,7 @@ EOF
           printf '\tfile_server {\n\t\tindex index.html README.html\n\t}\n'
         fi
         printf '}\n'
-      done <"$index"
+      done < <(awk -F'\t' 'NF==5||NF==6' "$index")
     fi
   } >"$tmp"
   mv -f "$tmp" "$root/Caddyfile"
@@ -775,7 +794,7 @@ cmd_status() {
 cf_token="" account="" auth="" zone_name="" zone_id="" tun_id=""
 cf() { # cf METHOD PATH [JSON]; the token goes through a header file, never argv
   local out
-  out="$(curl -sS -X "$1" "$api$2" -H @<(printf 'Authorization: Bearer %s\n' "$cf_token") \
+  out="$(curl -sS --max-time 30 -X "$1" "$api$2" -H @<(printf 'Authorization: Bearer %s\n' "$cf_token") \
     -H 'Content-Type: application/json' ${3:+--data "$3"})" || die "Cloudflare API $1 $2: request failed"
   if [[ "$(jq -r '.success' <<<"$out" 2>/dev/null)" != true ]]; then
     die "Cloudflare API $1 $2 failed: $(jq -c '.errors' <<<"$out" 2>/dev/null || head -c 300 <<<"$out")"

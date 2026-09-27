@@ -68,6 +68,11 @@ check "five-column row lists" "1" "$(bash "$SH" ls | grep -c aa11bb)"
 bash "$SH" rm aa11bb >/dev/null
 check "five-column row removes" "0" "$(grep -c aa11bb "$SHARE_ROOT/index.tsv")"
 
+printf 'zzzzzz\tbroken\n' >>"$SHARE_ROOT/index.tsv"   # malformed: fewer than 5 tab fields
+check "malformed row does not crash ls" "0" "$(bash "$SH" ls >/dev/null 2>&1; echo $?)"
+check "malformed row is skipped from ls" "0" "$(bash "$SH" ls | grep -c zzzzzz)"
+grep -v '^zzzzzz' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
+
 echo "=== serving ==="
 check "folder page" 200 "$(code "$dir_url")"
 check "asset" 200 "$(code "${dir_url}img/a.txt")"
@@ -444,6 +449,74 @@ bash "$SH" teardown --yes >/dev/null
 check "quick teardown exits 0" "0" "$?"
 check "config trashed" "0" "$([[ -f $SHARE_CONFIG_DIR/config ]] && echo 1 || echo 0)"
 check "quick.url gone" "0" "$([[ -f $SHARE_ROOT/quick.url ]] && echo 1 || echo 0)"
+
+echo "=== TASK-016 hardening ==="
+
+echo "--- cf() bounds a stalled Cloudflare call ---"
+mkdir -p "$WORK/fakecurl"
+cat >"$WORK/fakecurl/curl" <<'CURLEOF'
+#!/bin/bash
+mt="" prev=""
+for a in "$@"; do
+  [[ $prev == --max-time ]] && mt="$a"
+  prev="$a"
+done
+sleep "${mt:-120}"
+exit 28
+CURLEOF
+chmod +x "$WORK/fakecurl/curl"
+cf_start=$(date +%s)
+(CLOUDFLARE_API_TOKEN=faketoken PATH="$WORK/fakecurl:$PATH" bash "$SH" setup cf.max-time.test >/dev/null 2>&1) &
+cf_pid=$!
+for _ in $(seq 1 400); do kill -0 "$cf_pid" 2>/dev/null || break; sleep 0.1; done
+pkill -f "$WORK/fakecurl/curl" 2>/dev/null
+wait "$cf_pid" 2>/dev/null
+cf_elapsed=$(( $(date +%s) - cf_start ))
+check "cf() with a sleeping curl still returns within 35s" "1" "$([[ $cf_elapsed -le 35 ]] && echo 1 || echo 0)"
+rm -rf "$WORK/fakecurl"
+
+echo "--- rand_id loops past a collision ---"
+printf 'cccccc\ttaken\t/nonexistent\t2026-01-01\t0\t\n' >>"$SHARE_ROOT/index.tsv"
+echo hi >"$WORK/randid.txt"
+rid_url=$(SHARE_TEST_IDS="cccccc cccccc dddddd" bash "$SH" add "$WORK/randid.txt" 2>/dev/null | head -1)
+check "collision loop skips a taken id twice and lands on the third" "1" "$(grep -cE '/dddddd/' <<<"$rid_url")"
+bash "$SH" rm dddddd >/dev/null 2>&1
+grep -v '^cccccc' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
+
+echo "--- add refuses a tab or newline in the basename ---"
+mkdir -p "$WORK/badnames"
+tab_name=$'tab\tname.txt'
+nl_name=$'nl\nname.txt'
+: >"$WORK/badnames/$tab_name"
+: >"$WORK/badnames/$nl_name"
+out=$(bash "$SH" add "$WORK/badnames/$tab_name" 2>&1 1>/dev/null); rc=$?
+check "tab name refused" "1" "$rc"
+check "tab name message" "1" "$(grep -c 'tabs or newlines' <<<"$out")"
+out=$(bash "$SH" add "$WORK/badnames/$nl_name" 2>&1 1>/dev/null); rc=$?
+check "newline name refused" "1" "$rc"
+check "newline name message" "1" "$(grep -c 'tabs or newlines' <<<"$out")"
+
+echo "--- rm refuses an own-host removal it cannot finish; prune does not ---"
+mkdir -p "$SHARE_ROOT/pub/nocred1" "$SHARE_ROOT/pub/nocred2"
+echo x >"$SHARE_ROOT/pub/nocred1/f.txt"
+echo x >"$SHARE_ROOT/pub/nocred2/f.txt"
+printf 'nocred1\tnocred1\t/nonexistent\t2026-01-01\t0\thost=nocred1.example.test\n' >>"$SHARE_ROOT/index.tsv"
+printf 'nocred2\tnocred2\t/nonexistent\t2026-01-01\t1\thost=nocred2.example.test\n' >>"$SHARE_ROOT/index.tsv"
+
+out=$(env -u CLOUDFLARE_API_TOKEN bash "$SH" rm nocred1 2>&1 1>/dev/null); rc=$?
+check "rm refuses an own-host removal with no credential" "1" "$rc"
+check "refusal names the host" "1" "$(grep -c 'no Cloudflare credential for nocred1.example.test' <<<"$out")"
+check "row stays after refused rm" "1" "$(grep -c '^nocred1' "$SHARE_ROOT/index.tsv")"
+check "payload stays after refused rm" "1" "$([[ -d $SHARE_ROOT/pub/nocred1 ]] && echo 1 || echo 0)"
+
+out=$(env -u CLOUDFLARE_API_TOKEN bash "$SH" prune 2>&1 1>/dev/null); rc=$?
+check "prune exits 0 despite no credential" "0" "$rc"
+check "prune warns DNS stays behind" "1" "$(grep -c 'no Cloudflare credential; DNS and ingress' <<<"$out")"
+check "prune still removes the expired row" "0" "$(grep -c '^nocred2' "$SHARE_ROOT/index.tsv")"
+check "prune still removes the payload" "0" "$([[ -d $SHARE_ROOT/pub/nocred2 ]] && echo 1 || echo 0)"
+
+SHARE_HOST_DRY=1 bash "$SH" rm nocred1 >/dev/null 2>&1
+check "cleanup: nocred1 row gone" "0" "$(grep -c '^nocred1' "$SHARE_ROOT/index.tsv")"
 
 echo "=== skill ==="
 check "skill prints a SKILL.md" "1" "$(bash "$SH" skill | grep -c '^name: share')"
