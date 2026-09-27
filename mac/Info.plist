@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>foundation.d.share.bar</string>
+	<key>CFBundleName</key>
+	<string>Share Bar</string>
+	<key>CFBundleDisplayName</key>
+	<string>Share Bar</string>
+	<key>CFBundleExecutable</key>
+	<string>ShareBar</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.0.0</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>share copies the files you choose so it can publish them</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>share copies the files you choose so it can publish them</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>share copies the files you choose so it can publish them</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>share copies the files you choose so it can publish them</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>share copies the files you choose so it can publish them</string>
+</dict>
+</plist>

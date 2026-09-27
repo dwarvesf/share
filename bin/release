@@ -78,3 +78,17 @@ pr="$(gh pr create --repo dwarvesf/homebrew-tools --title "chore: share ${next#v
 echo "tap bump: $pr"
 gh pr merge --repo dwarvesf/homebrew-tools "$pr" --squash --delete-branch >/dev/null
 echo "formula bumped to $next"
+
+# menu bar app cask: needs macOS plus the Developer ID identity build.sh signs
+# with; without both, the formula still shipped, so say so and let the caller
+# rerun mac/release.sh by hand on a signing Mac instead of failing the release.
+TEAM_ID="${TEAM_ID:-W777S7V8TN}"
+SIGN_ID="${SIGN_ID:-Developer ID Application: Dwarves Foundation Company Limited ($TEAM_ID)}"
+idents="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+if [[ "$(uname)" == Darwin ]] \
+  && [[ "$idents" == *"\"$SIGN_ID\""* ]]; then
+  bash mac/release.sh "$next"
+else
+  echo "CASK NOT RELEASED: run mac/release.sh <tag> on a signing Mac"
+  exit 3
+fi

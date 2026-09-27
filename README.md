@@ -30,6 +30,7 @@ share add ./team-guide          # https://s.example.com/62cb50/team-guide/  (cop
 | **No domain needed** | `share setup --quick` serves at a random `trycloudflare.com` URL |
 | **Agent-native** | `share skill --install` drops a SKILL.md for Claude Code and friends |
 | **Always on** | a login service (launchd/systemd) brings links back after reboot |
+| **Menu bar app** | Share Bar shows what's shared and lets you drag a file onto the icon to publish it |
 
 Links are live only while the machine is awake; visitors get Cloudflare 530 when it sleeps. `https://<hostname>/healthz` answers `ok` while share is serving; the site root 404s by design.
 
@@ -72,11 +73,36 @@ share ls                    # shares with link, size, source, expiry
 share refresh <id|link>     # re-copy from source under the same link
 share rm <id|link>          # unpublish (copy goes to Trash)
 share hits <id|link>        # request and visitor counts
+share state                 # JSON snapshot for the menu bar app
 share stop | start          # take all links down / bring them back
 share teardown              # remove tunnel, service, and config
 ```
 
 A share from a private GitHub repo prints a warning; the content is public to anyone with the link.
+
+## Menu bar app
+
+```sh
+brew install --cask dwarvesf/tools/share-bar    # macOS; also pulls the share formula
+```
+
+Share Bar is a menu bar icon for share: no terminal needed to see what's shared or to
+publish something new. Click the icon for the current state and the share list, each
+with Copy Link, Open in Browser, Refresh, and Remove. Drop a file or folder on the icon
+to run `share add` on it.
+
+First run, before anything is set up:
+
+| State | Header | What you can do |
+|---|---|---|
+| CLI missing | `share CLI not found` | Copy Install Command |
+| Not set up | `Not set up` | Set Up… (hostname, or quick mode with no domain) |
+| Stopped | `Stopped` | Start Sharing |
+| Serving | `Serving at <host>` | the share list, Stop Sharing |
+
+The app only reads through the CLI (`share state`) and only acts through the CLI's own
+verbs; it never touches `~/share` directly. To see what the app is doing, `log stream
+--predicate 'subsystem == "foundation.d.share.bar"'` shows every CLI call and action.
 
 ## Docs
 

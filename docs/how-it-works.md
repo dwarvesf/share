@@ -92,7 +92,57 @@ share add 3000
 
 `--host dev.example.com` wraps either kind in its own hostname. Order of writes: tunnel ingress rule (inserted before the catch-all, carrying `httpHostHeader`), then the CNAME, then the index row; `share rm` deletes the CNAME, then the ingress rule, then the row. Every Cloudflare-side edit runs under the `.lock-host` mutex and refuses a tunnel config whose invariants were changed outside share. The name must be a single label under the setup zone because Universal SSL stops at one level.
 
-`share refresh <id>` runs the same copy from the recorded source path and swaps it in under the same id (a live share is a no-op). `share rm <id>` moves `pub/<id>` to the Trash (or `~/share/trash` without a `trash` command) and drops the row.
+`share refresh <id>` runs the same copy from the recorded source path and swaps it in under the same id (a live share is a no-op). `share rm <id>` moves `pub/<id>` to the Trash (or `~/share/trash` without a `trash` command) and drops the row. An own-host share (`--host`) refuses to be removed without a Cloudflare credential (`CLOUDFLARE_API_TOKEN` or a `share setup --login` cert), so its DNS record and ingress rule are never orphaned. `prune` still removes an expired one and warns that they stay behind.
+
+## `share state`
+
+The menu bar app never reads share's files. It runs `share state`, a read-only verb
+that prints a snapshot and exits 0 in every state: not set up, stopped, or serving.
+The app changes anything only by running share's normal verbs (`add`, `rm`, `refresh`,
+`start`, `stop`, `setup`); why that split exists: [ADR-0003](decisions/ADR-0003-menu-bar-reads-through-cli.md).
+
+```json
+{
+  "schema": 1,
+  "state": "serving",
+  "ready": true,
+  "mode": "named",
+  "host": "s.han.ws",
+  "hosts": "hans-air-m4",
+  "serves_here": true,
+  "service": true,
+  "shares": [
+    {"id": "3d324a", "name": "theme-check.md",
+     "url": "https://s.han.ws/3d324a/theme-check.html",
+     "kind": "snapshot", "own_host": null, "expires": 1759000000}
+  ]
+}
+```
+
+| Field | Values |
+|---|---|
+| `schema` | integer, `1` |
+| `state` | `serving` (pid alive), `stopped` (set up, not running), `not_setup` (no hostname and not quick mode) |
+| `ready` | whether a live check succeeded for the current mode and state; `false` whenever not serving |
+| `mode` | `named` or `quick` |
+| `host` | named mode: the configured hostname. quick mode: the live `trycloudflare.com` URL while serving, else `null` |
+| `hosts` | the `hosts=` config value, `""` when unset |
+| `serves_here` | whether this machine is in `hosts` |
+| `service` | whether the login service is installed |
+| `shares[]` | ordered newest first, same rows `share ls` prints |
+| `shares[].kind` | `live` for a live proxy, else `snapshot` |
+| `shares[].own_host` | the share's own `--host` value, else `null` |
+| `shares[].expires` | epoch seconds; `0` means never |
+| `shares[].url` | exactly what `share ls` prints for that row |
+| `skipped` | count of malformed index rows; present only when greater than zero |
+
+Invariants: `state` never prunes, never writes or creates a file, never needs a TTY,
+and never touches the clipboard. Removing or renaming a field bumps `schema`; adding a
+field does not, so an older app can still read a newer CLI. An index row with exactly 5
+tab fields (the shape share wrote before this version) reads with empty opts; a row is
+skipped, and counted in `skipped` instead of breaking the read, when it has fewer than 5
+or more than 6 fields, when its id is not exactly 6 lowercase hex characters, or when its
+`host=` opt is the main hostname or not a valid hostname.
 
 ## Why each choice
 

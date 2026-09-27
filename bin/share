@@ -14,6 +14,7 @@
 #   share prune               unpublish expired shares now (also hourly while serving)
 #   share start | stop        start or stop serving (links live while this machine is awake)
 #   share service install|uninstall|status   the login service that keeps serving
+#   share state               machine-readable JSON snapshot (for the menu bar app)
 #   share [status]            server state plus the share list
 #   share serve               serve in the foreground until Ctrl-C
 #   share skill [--install]   the SKILL.md that teaches an agent to use share
@@ -46,20 +47,48 @@ running() { # the pid must still be a share serve: an unclean exit leaves the fi
   local pid; pid="$(cat "$pidfile")"
   kill -0 "$pid" 2>/dev/null && [[ $(ps -o command= -p "$pid" 2>/dev/null) == *share*serve* ]]
 }
-row() { [[ -f $index ]] && awk -F'\t' -v id="$1" '$1 == id' "$index"; }
+rows() { # the only index reader: a forged row (bad id, main or malformed host=) never reaches a path, Caddyfile, or Cloudflare call
+  [[ -f $index ]] || return 0
+  # no {n} intervals: mawk lacks them; the host regex is setup's hostname check
+  awk -F'\t' -v main="$host_name" '
+    (NF == 5 || NF == 6) && length($1) == 6 && $1 !~ /[^0-9a-f]/ {
+      n = split($6, a, " ")
+      for (i = 1; i <= n; i++) if (substr(a[i], 1, 5) == "host=") {
+        h = substr(a[i], 6)
+        if (h == main || h !~ /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z][a-z]+$/) next
+      }
+      print
+    }' "$index"
+}
+row() { rows | awk -F'\t' -v id="$1" '$1 == id'; }
 id_of() { # accept an id or a pasted share link: https://host/<id>/name -> <id>; a bare https://<fqdn>/ resolves to the host row
   case ${1:-} in
     *://*)
       local p="${1#*://}"; local h="${p%%/*}" rest="${p#*/}"
       if [[ $p == "$h" || -z $rest ]] && [[ -f $index ]]; then
-        awk -F'\t' -v h="$h" '{n=split($6,a," "); for(i=1;i<=n;i++) if(a[i]=="host=" h){print $1; exit}}' "$index"
+        rows | awk -F'\t' -v h="$h" '{n=split($6,a," "); for(i=1;i<=n;i++) if(a[i]=="host=" h){print $1; exit}}'
       else
         echo "${rest%%/*}"
       fi ;;
     *) echo "${1:-}" ;;
   esac
 }
-rand_id() { od -An -N3 -tx1 /dev/urandom | tr -d ' \n'; }
+rand_id_raw() { od -An -N3 -tx1 /dev/urandom | tr -d ' \n'; }   # the real candidate source
+rand_id() { # loops past a collision with an existing row or an orphaned pub/<id>
+  # SHARE_TEST_IDS (test seam): space-separated candidates consumed in order, then rand_id_raw.
+  # Consumed here, not inside rand_id_raw: rand_id_raw's output is captured with $( ), which
+  # forks a subshell, so a mutation made inside it would never reach this loop's next pass.
+  local id
+  while :; do
+    if [[ -n ${SHARE_TEST_IDS:-} ]]; then
+      id="${SHARE_TEST_IDS%% *}"
+      [[ $SHARE_TEST_IDS == "$id" ]] && SHARE_TEST_IDS="" || SHARE_TEST_IDS="${SHARE_TEST_IDS#* }"
+    else
+      id="$(rand_id_raw)"
+    fi
+    [[ -z "$(row "$id")" && ! -e $pub/$id ]] && { echo "$id"; return; }
+  done
+}
 has_opt() { case " $2 " in *" $1 "*) return 0 ;; esac; return 1; }
 opt_val() { # opt_val <key> <opts>: the value of a key=value token, nothing when absent
   local rest="${2#*"$1"=}"
@@ -74,6 +103,32 @@ to_trash() { # an empty path would make `trash` move the current directory
 }
 need_host() { [[ -n $host_name || $mode == quick ]] || die "no setup yet: run 'share setup <hostname>' or 'share setup --quick'"; }
 
+# Locks are symlinks $root/.lock-<name> -> holder pid, so a dead holder's lock can be broken.
+# Inside a subshell $$ is the parent's pid (bash 3.2 has no BASHPID); that lock is recovered once the parent exits.
+held_locks=""   # names this process holds; the EXIT trap releases them
+lock_take() { # lock_take <name> [timeout-secs]
+  local l="$root/.lock-$1" s="$root/.lock-$1.stale.$$" i=0 max=$(( ${2:-60} * 5 )) pid
+  # a real directory is a pre-symlink lock: ln would link inside it, so it counts as held
+  while [[ -d $l && ! -L $l ]] || ! ln -sn "$$" "$l" 2>/dev/null; do
+    pid="$(readlink "$l" 2>/dev/null || true)"
+    # stale: rename to a private name, re-read, remove only if still dead; a live one goes back
+    if [[ -n $pid ]] && ! kill -0 "$pid" 2>/dev/null && mv "$l" "$s" 2>/dev/null; then
+      pid="$(readlink "$s" 2>/dev/null || true)"
+      if [[ -n $pid ]] && ! kill -0 "$pid" 2>/dev/null; then rm -f "$s"; else mv -f "$s" "$l"; fi
+      continue
+    fi
+    i=$((i + 1)); [[ $i -gt $max ]] && die "another share command holds the $1 lock"
+    sleep 0.2
+  done
+  held_locks="$held_locks $1"
+  trap release_locks EXIT   # re-armed on every take: subshells do not inherit EXIT traps
+}
+lock_release() { # lock_release <name>: only a link that still names this pid is removed
+  [[ "$(readlink "$root/.lock-$1" 2>/dev/null)" == "$$" ]] && rm -f "$root/.lock-$1"
+  held_locks="${held_locks// $1/}"
+}
+release_locks() { local n; for n in $held_locks; do lock_release "$n"; done; }
+
 # the public hostname share links use: the configured hostname in named mode,
 # the fqdn cloudflared printed in quick mode (empty while not serving)
 serving_host() {
@@ -81,24 +136,25 @@ serving_host() {
   else echo "$host_name"; fi
 }
 
-share_url() { # share_url <id> <name> [opts]: the link depends on the share kind
+share_url() { # share_url <id> <name> [opts]: sets share_url_out; the link depends on the share kind
   local fqdn path shost
   fqdn="$(opt_val host "${3:-}" || true)"
   if [[ -n $fqdn ]]; then
-    printf 'https://%s/\n' "$fqdn"; return
+    printf -v share_url_out 'https://%s/' "$fqdn"; return
   fi
   shost="$(serving_host)"
   if [[ -z $shost ]]; then
     if [[ $mode == quick ]]; then shost="<pending>.trycloudflare.com"; else shost="<no-hostname>"; fi
   fi
   if has_opt live "${3:-}"; then
-    printf 'https://%s/%s/\n' "$shost" "$1"; return
+    printf -v share_url_out 'https://%s/%s/' "$shost" "$1"; return
   fi
   path="$2"
   if [[ -d $pub/$1/$2 ]]; then path="$2/"
   elif [[ $2 == *.md && -f $pub/$1/${2%.md}.html ]]; then path="${2%.md}.html"
   fi
-  printf 'https://%s/%s/%s\n' "$shost" "$1" "$(printf '%s' "$path" | sed 's/ /%20/g')"
+  urlenc "$path"
+  printf -v share_url_out 'https://%s/%s/%s' "$shost" "$1" "$urlenc_out"
 }
 
 ttl_secs() {
@@ -196,13 +252,22 @@ LUA
     katex=""; grep -q '\$' "$f" && katex="--katex" # KaTeX from the CDN, only for pages with math
     # shellcheck disable=SC2086
     pandoc --quiet -s "$f" -o "$out" --lua-filter "$filter" --include-in-header "$style" \
-      --from=markdown-smart-implicit_figures --syntax-highlighting tango --metadata pagetitle="$(basename "$f" .md)" $katex \
+      --from=markdown-smart-implicit_figures --highlight-style=tango --metadata pagetitle="$(basename "$f" .md)" $katex \
       || echo "share: could not render $f" >&2
   done
 }
 
-urlenc() { # percent-encode each path segment; the slashes between them stay
-  jq -rn --arg p "$1" '[$p | split("/")[] | @uri] | join("/")'
+urlenc() { # urlenc <str>: sets urlenc_out; fork-free byte loop, keeps A-Za-z0-9-_.~ and '/', %XX (uppercase) for the rest
+  local LC_ALL=C s="$1" out="" c i n
+  n=${#s}
+  for ((i = 0; i < n; i++)); do
+    c="${s:i:1}"
+    case $c in
+      [A-Za-z0-9._~/-]) out+="$c" ;;
+      *) printf -v c '%d' "'$c"; printf -v c '%%%02X' $((c & 255)); out+="$c" ;;  # masked: bash 3.2 sign-extends bytes above 127
+    esac
+  done
+  urlenc_out="$out"
 }
 
 gen_index() { # gen_index <stage>: a folder with no index of its own gets a generated listing
@@ -217,7 +282,7 @@ gen_index() { # gen_index <stage>: a folder with no index of its own gets a gene
     while IFS= read -r f; do
       [[ -n $f ]] || continue
       if [[ $f == *.md && -f $1/${f%.md}.html ]]; then continue; fi  # listed by its render below
-      enc="$(urlenc "$f")"
+      urlenc "$f"; enc="$urlenc_out"
       label="$(sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' <<<"$f")"
       printf '<li><a href="%s">%s</a></li>\n' "$enc" "$label"
     done <<<"$files"
@@ -303,6 +368,8 @@ cmd_add() {
     name="localhost:$tport"; src="http://127.0.0.1:$tport"; opts="live"
   else
     src="$(realpath "$target")"; name="$(basename "$src")"
+    case $src in *$'\t'*|*$'\n'*) die "paths with tabs or newlines are not supported" ;; esac
+    case $name in *[{}\"\\]*) die "names with { } \" or \\ are not supported" ;; esac
   fi
   [[ -n $noindex ]] && opts="${opts:+$opts }noindex"
   if [[ -n $host_fqdn ]]; then
@@ -323,17 +390,19 @@ cmd_add() {
     warn_private "$src" "$id"
   fi
   [[ -n $host_fqdn ]] && host_add "$host_fqdn"
+  lock_take index   # publish: row, render, reload as one step, so no writer's row or render is lost
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$src" "$(date +%F)" "$exp" "$opts" >>"$index"
   write_caddyfile
-  url="$(share_url "$id" "$name" "$opts")"
+  caddy_reload
+  lock_release index   # before cmd_start: serve's startup render takes the lock itself
+  share_url "$id" "$name" "$opts"
+  url="$share_url_out"
   echo "$url"
   if [[ ${SHARE_CLIPBOARD:-1} == 1 ]] && command -v pbcopy >/dev/null; then
     printf '%s' "$url" | pbcopy && echo "  (link copied)"
   fi
   if ! running; then
     if host_ok; then cmd_start; else echo "  (not serving: $(this_host) is not in hosts=$hosts)"; fi
-  else
-    caddy_reload
   fi
 }
 
@@ -343,6 +412,7 @@ cmd_ls() {
   while IFS=$'\t' read -r id name src date exp opts; do
     until="never"; [[ ${exp:-0} -gt 0 ]] && until="$(day_of "$exp")"
     share_url "$id" "$name" "$opts"
+    echo "$share_url_out"
     if has_opt live "$opts"; then
       echo "    id=$id  live -> $src  added=$date  expires=$until"
     else
@@ -350,7 +420,7 @@ cmd_ls() {
       gone=""; [[ -e $src ]] || gone="  (source gone, snapshot still served)"
       echo "    id=$id  size=${size:-?}  added=$date  expires=$until  from=$src$gone"
     fi
-  done <"$index"
+  done < <(rows)   # a 5-field row (v0.1.x) reads with opts empty; malformed rows are skipped
 }
 
 cmd_refresh() {
@@ -361,30 +431,48 @@ cmd_refresh() {
   src="$(cut -f3 <<<"$r")"
   [[ -e $src ]] || die "source is gone: $src (the snapshot keeps serving; share rm $1 to unpublish)"
   copy "$src" "$1" "$opts"
+  lock_take index
+  # a concurrent rm may have dropped the row while copy ran outside the lock;
+  # recheck it here before trusting the fresh mv into $pub/$1 (see cmd_rm).
+  if [[ -z "$(row "$1")" ]]; then
+    [[ -d $pub/$1 ]] && to_trash "$pub/$1"
+    lock_release index
+    die "$1 was removed during refresh"
+  fi
   write_caddyfile   # a refresh can add or remove index.html, which flips try_files
   caddy_reload
+  lock_release index
   echo "refreshed $1 from $src"
 }
 
-cmd_rm() {
-  local r opts fqdn=""
+cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so expiry is never blocked (DEC-016)
+  local r opts fqdn="" tmp
   r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
   fqdn="$(opt_val host "$opts" || true)"
+  if [[ ${SHARE_HOST_DRY:-0} != 1 && -n $fqdn && ${2:-} != prune && -z ${CLOUDFLARE_API_TOKEN:-} && ! -f $cert ]]; then
+    die "no Cloudflare credential for $fqdn; set CLOUDFLARE_API_TOKEN or run share setup --login, then rm again"
+  fi
   [[ -n $fqdn ]] && host_rm "$fqdn"
+  lock_take index
+  # the copy goes first: a killed rm leaves a row with nothing served, never content with no row
   [[ -d $pub/$1 ]] && to_trash "$pub/$1"
-  awk -F'\t' -v id="$1" '$1 != id' "$index" >"$index.tmp" && mv -f "$index.tmp" "$index"
+  tmp="$(mktemp "$root/.index.XXXXXX")"
+  awk -F'\t' -v id="$1" '$1 != id' "$index" >"$tmp" && mv -f "$tmp" "$index"
   write_caddyfile
   caddy_reload
+  lock_release index
   echo "unpublished $1"
 }
 
 cmd_prune() { # unpublish every share past its expiry
   [[ -s $index ]] || return 0
-  local now id
+  local now ids id
   now="$(date +%s)"
-  awk -F'\t' -v now="$now" '$5 > 0 && $5 < now {print $1}' "$index" | while IFS= read -r id; do
-    cmd_rm "$id" | sed 's/$/ (expired)/'
+  # a for loop, not `| while`: bash 5.3 skips the EXIT trap of a lock taken in a while-loop subshell
+  ids="$(rows | awk -F'\t' -v now="$now" '$5 > 0 && $5 < now {print $1}')"
+  for id in $ids; do
+    cmd_rm "$id" prune | sed 's/$/ (expired)/'
   done
 }
 
@@ -394,9 +482,9 @@ cmd_hits() {
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
   fqdn="$(opt_val host "$opts" || true)"
   [[ -s $log ]] || { echo "0 hits"; return 0; }
-  jq -rs --arg p "/$1/" --arg h "$fqdn" '
+  jq -rn --arg p "/$1/" --arg h "$fqdn" '
     def n($k; $w): "\($k) \($w)\(if $k == 1 then "" else "s" end)";
-    map(select((if $h == "" then (.request.uri | startswith($p)) else .request.host == $h end) and .status < 400)) as $h
+    [inputs | select((if $h == "" then (.request.uri | startswith($p)) else .request.host == $h end) and .status < 400)] as $h
     | n($h | length; "hit") + ", "
       + n($h | map(.request.headers["Cf-Connecting-Ip"][0] // .request.remote_ip) | unique | length; "visitor")
       + (if ($h | length) > 0 then ", last \($h[-1].ts | floor | strflocaltime("%F %H:%M"))" else "" end)' "$log"
@@ -405,7 +493,8 @@ cmd_hits() {
 # --- serving ---
 
 write_caddyfile() { # rendered from index.tsv; no-store: Cloudflare must not cache past rm or stop
-  local id name src date exp opts fqdn sroot
+  local id name src date exp opts fqdn sroot tmp
+  tmp="$(mktemp "$root/.Caddyfile.XXXXXX")"   # rendered aside and moved in: caddy never reads half a file
   {
     cat <<EOF
 {
@@ -427,7 +516,7 @@ EOF
         if has_opt live "$opts" && [[ -z $fqdn ]]; then
           printf '\thandle_path /%s/* {\n\t\treverse_proxy http://127.0.0.1:%s\n\t}\n' "$id" "${src##*:}"
         fi
-      done <"$index"
+      done < <(rows)
     fi
     cat <<EOF
 	handle /healthz {
@@ -466,9 +555,10 @@ EOF
           printf '\tfile_server {\n\t\tindex index.html README.html\n\t}\n'
         fi
         printf '}\n'
-      done <"$index"
+      done < <(rows)
     fi
-  } >"$root/Caddyfile"
+  } >"$tmp"
+  mv -f "$tmp" "$root/Caddyfile"
 }
 
 caddy_reload() { # apply Caddyfile changes over the admin socket; a failure warns, never kills
@@ -485,7 +575,10 @@ cmd_serve() {
   # shellcheck disable=SC2174 # the leaf ($root) is what needs 700: it holds the admin socket
   mkdir -p -m 700 "$root"; mkdir -p "$pub"
   cmd_prune   # before the render, so the Caddyfile never carries expired rows
+  # locks are taken only here, before serve's own EXIT trap replaces release_locks
+  lock_take index
   write_caddyfile
+  lock_release index
   local token=""
   # pids stay global: the EXIT trap must still see them when cmd_serve returns
   # normally (e.g. cloudflared dies, wait returns) and locals unbind first.
@@ -505,7 +598,7 @@ cmd_serve() {
   # The trap lands before the tunnel work and reads the pids at run time:
   # a die in the quick-URL parse must still reap caddy and the prune loop.
   # pkill first: the loop's current sleep is a grandchild kill(1) can't reach.
-  trap '[[ -n ${loop_pid:-} ]] && pkill -P "$loop_pid" 2>/dev/null; kill ${caddy_pid:-} ${loop_pid:-} ${tunnel_pid:-} 2>/dev/null; wait 2>/dev/null; rm -f "$pidfile"' EXIT
+  trap 'release_locks; [[ -n ${loop_pid:-} ]] && pkill -P "$loop_pid" 2>/dev/null; kill ${caddy_pid:-} ${loop_pid:-} ${tunnel_pid:-} 2>/dev/null; wait 2>/dev/null; rm -f "$pidfile" "$root/quick.url"' EXIT
   trap 'exit 0' INT TERM
   if [[ $tunnel == 1 && $mode == quick ]]; then
     # quick tunnel: no token, no DNS; cloudflared prints a random trycloudflare URL.
@@ -711,6 +804,7 @@ cmd_stop() {
   elif [[ -f $svc_unit ]]; then systemctl --user stop "$svc_label.service"
   else kill "$pid"; fi
   while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
+  rm -f "$root/quick.url"
   if svc_installed; then echo "stopped (all links down; the service starts again at next login)"
   else echo "stopped (all links down)"; fi
 }
@@ -729,6 +823,53 @@ cmd_status() {
   cmd_ls
 }
 
+cmd_state() { # read-only JSON snapshot for the menu bar app: never prunes, writes, needs a TTY, or touches the clipboard
+  local mode_val="named" host_val="" state_val ready_val="false" serves_val="false" service_val="false" skipped_n=0
+  [[ $mode == quick ]] && mode_val="quick"
+  if running; then state_val="serving"
+  elif [[ -n $host_name || $mode == quick ]]; then state_val="stopped"
+  else state_val="not_setup"; fi
+  if [[ $state_val != serving ]]; then ready_val="false"
+  elif [[ $tunnel != 1 ]]; then ready_val="true"
+  elif [[ $mode_val == quick ]]; then
+    [[ -s $root/quick.url ]] && ready_val="true" || ready_val="false"
+  else
+    curl -sf -m 1 -o /dev/null "http://127.0.0.1:$metrics_port/ready" 2>/dev/null && ready_val="true" || ready_val="false"
+  fi
+  if [[ $mode_val == named ]]; then host_val="$host_name"
+  elif [[ $state_val == serving ]]; then host_val="$(cat "$root/quick.url" 2>/dev/null || true)"; fi
+  host_ok && serves_val="true"
+  svc_installed && service_val="true"
+  # skipped_n is computed here, not inside the pipeline below: a `{ } | jq` pipeline
+  # forks the left side, so an assignment made there never reaches this shell's copy
+  # of the variable, and jq's --argjson would see only the local's initial "0".
+  [[ -s $index ]] && skipped_n=$(($(awk 'length {c++} END {print c+0}' "$index") - $(rows | awk 'END {print NR}')))
+  {
+    if [[ -s $index ]]; then
+      local id name src date exp opts kind own_host line rows=() i
+      while IFS=$'\t' read -r id name src date exp opts; do
+        kind="snapshot"; has_opt live "$opts" && kind="live"
+        own_host="${opts#*host=}"
+        [[ $own_host == "$opts" ]] && own_host="" || own_host="${own_host%% *}"
+        share_url "$id" "$name" "$opts"
+        printf -v line '%s\t%s\t%s\t%s\t%s\t%s' "$id" "$name" "$share_url_out" "$kind" "$own_host" "${exp:-0}"
+        rows+=("$line")
+      done < <(rows)
+      for ((i = ${#rows[@]} - 1; i >= 0; i--)); do printf '%s\n' "${rows[i]}"; done
+    fi
+  } | jq -nR \
+    --arg state "$state_val" --argjson ready "$ready_val" --arg mode "$mode_val" \
+    --arg host "$host_val" --arg hosts "$hosts" --argjson serves_here "$serves_val" \
+    --argjson service "$service_val" --argjson skipped "$skipped_n" '
+    def row: split("\t") | {id: .[0], name: .[1], url: .[2], kind: .[3],
+      own_host: (if .[4] == "" then null else .[4] end), expires: (.[5] | tonumber)};
+    {schema: 1, state: $state, ready: $ready, mode: $mode,
+     host: (if $host == "" then null else $host end), hosts: $hosts,
+     serves_here: $serves_here, service: $service,
+     shares: [inputs | select(length > 0) | row]}
+    + (if $skipped > 0 then {skipped: $skipped} else {} end)'
+}
+
 # --- Cloudflare setup / teardown ---
 #
 # Two ways to authorize. With CLOUDFLARE_API_TOKEN set, share uses the API for
@@ -740,7 +881,7 @@ cmd_status() {
 cf_token="" account="" auth="" zone_name="" zone_id="" tun_id=""
 cf() { # cf METHOD PATH [JSON]; the token goes through a header file, never argv
   local out
-  out="$(curl -sS -X "$1" "$api$2" -H @<(printf 'Authorization: Bearer %s\n' "$cf_token") \
+  out="$(curl -sS --max-time 30 -X "$1" "$api$2" -H @<(printf 'Authorization: Bearer %s\n' "$cf_token") \
     -H 'Content-Type: application/json' ${3:+--data "$3"})" || die "Cloudflare API $1 $2: request failed"
   if [[ "$(jq -r '.success' <<<"$out" 2>/dev/null)" != true ]]; then
     die "Cloudflare API $1 $2 failed: $(jq -c '.errors' <<<"$out" 2>/dev/null || head -c 300 <<<"$out")"
@@ -862,6 +1003,7 @@ host_check() { # host_check <fqdn>: credential and name are settled before any w
   if [[ ${SHARE_HOST_DRY:-0} != 1 && -z ${CLOUDFLARE_API_TOKEN:-} && ! -f $cert ]]; then
     die "--host needs CLOUDFLARE_API_TOKEN or a browser login (share setup --login)"
   fi
+  [[ $fqdn != "$host_name" ]] || die "--host cannot be the main hostname"
   host_zone
   case $fqdn in
     *."$zone_name") label="${fqdn%."$zone_name"}" ;;
@@ -891,18 +1033,8 @@ host_auth() { # cf_token, account, zone_id, tun_id for Cloudflare-side host work
   [[ -n $tun_id ]] || die "no tunnel_id in $config; run 'share setup' first"
 }
 
-host_lock() { # one Cloudflare-side edit at a time; stale after SHARE_HOST_LOCK_TIMEOUT seconds
-  local i=0 max=$(( ${SHARE_HOST_LOCK_TIMEOUT:-60} * 5 ))
-  while ! mkdir "$root/.lock-host" 2>/dev/null; do
-    i=$((i + 1)); [[ $i -gt $max ]] && die "another share command holds the host lock"
-    sleep 0.2
-  done
-  trap 'rmdir "$root/.lock-host" 2>/dev/null || true' EXIT
-}
-
-host_unlock() { # release as soon as the edit lands; the EXIT trap stays as the die-path backstop
-  rmdir "$root/.lock-host" 2>/dev/null || true
-}
+host_lock() { lock_take host "${SHARE_HOST_LOCK_TIMEOUT:-60}"; }   # one Cloudflare-side edit at a time
+host_unlock() { lock_release host; }   # as soon as the edit lands; the EXIT trap is the die-path backstop
 
 ingress_get() { # the tunnel config as {"config":{"ingress":[...]}}; dry mode reads a fixture
   if [[ ${SHARE_HOST_DRY:-0} == 1 ]]; then
@@ -964,6 +1096,7 @@ host_add() { # host_add <fqdn>: collision guard, ingress rule, then the CNAME
 
 host_rm() { # host_rm <fqdn>: delete the CNAME, then the ingress rule; missing counts as done
   local fqdn="$1" cfg_json rec="" rid="" out
+  [[ $fqdn != "$host_name" ]] || die "$fqdn is the main hostname; host_rm never touches it"
   host_lock
   if [[ ${SHARE_HOST_DRY:-0} == 1 ]]; then
     echo "DELETE CNAME" >>"$root/host-calls.log"
@@ -975,7 +1108,11 @@ host_rm() { # host_rm <fqdn>: delete the CNAME, then the ingress rule; missing c
     host_zone
     host_auth
     rec="$(cf GET "/zones/$zone_id/dns_records?name=$fqdn")"
-    rid="$(jq -r '.result[0].id // empty' <<<"$rec")"
+    # only a record pointing at this tunnel is ours to delete, as host_add checks before it creates one
+    rid="$(jq -r --arg t "$tun_id.cfargotunnel.com" 'first(.result[] | select(.content == $t) | .id) // empty' <<<"$rec")"
+    if [[ -z $rid ]] && jq -e '.result | length > 0' <<<"$rec" >/dev/null; then
+      echo "share: $fqdn has a DNS record that does not point at this tunnel; left alone" >&2
+    fi
     if [[ -n $rid ]]; then
       if ! out="$(cf DELETE "/zones/$zone_id/dns_records/$rid" 2>&1)"; then
         if [[ $auth == login ]]; then
@@ -1143,12 +1280,12 @@ cmd_teardown() {
       while IFS=$'\t' read -r _ _hn _hs _hd _he hopts; do
         hfqdn="$(opt_val host "$hopts" || true)"
         [[ -n $hfqdn ]] && host_rm "$hfqdn" && echo "dns:     deleted $hfqdn"
-      done <"$index"
+      done < <(rows)
     fi
   elif [[ -f $cert ]]; then
     cf_token="$(cert_field apiToken)"; account="$(cf_token_account)"
     echo "dns:     the login token cannot delete DNS records. Delete the CNAME $host_name in the Cloudflare dashboard, or rerun with CLOUDFLARE_API_TOKEN."
-    if [[ -s $index ]] && awk -F'\t' '$6 ~ /host=/ {f=1} END {exit !f}' "$index"; then
+    if [[ -s $index ]] && rows | awk -F'\t' '$6 ~ /host=/ {f=1} END {exit !f}'; then
       echo "dns:     host shares in $index keep their records; remove them in the dashboard or rerun with CLOUDFLARE_API_TOKEN."
     fi
   else
@@ -1224,7 +1361,8 @@ case "${1:-status}" in
   start) cmd_start ;;
   stop) cmd_stop ;;
   status) cmd_status ;;
+  state) cmd_state ;;
   serve) cmd_serve ;;
-  -h|--help|help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' ;;
-  *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  -h|--help|help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
