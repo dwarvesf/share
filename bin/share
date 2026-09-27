@@ -401,6 +401,13 @@ cmd_refresh() {
   [[ -e $src ]] || die "source is gone: $src (the snapshot keeps serving; share rm $1 to unpublish)"
   copy "$src" "$1" "$opts"
   lock_take index
+  # a concurrent rm may have dropped the row while copy ran outside the lock;
+  # recheck it here before trusting the fresh mv into $pub/$1 (see cmd_rm).
+  if [[ -z "$(row "$1")" ]]; then
+    [[ -d $pub/$1 ]] && to_trash "$pub/$1"
+    lock_release index
+    die "$1 was removed during refresh"
+  fi
   write_caddyfile   # a refresh can add or remove index.html, which flips try_files
   caddy_reload
   lock_release index
@@ -416,10 +423,10 @@ cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so ex
     die "no Cloudflare credential for $fqdn; set CLOUDFLARE_API_TOKEN or run share setup --login, then rm again"
   fi
   [[ -n $fqdn ]] && host_rm "$fqdn"
-  [[ -d $pub/$1 ]] && to_trash "$pub/$1"
   lock_take index
   tmp="$(mktemp "$root/.index.XXXXXX")"
   awk -F'\t' -v id="$1" '$1 != id' "$index" >"$tmp" && mv -f "$tmp" "$index"
+  [[ -d $pub/$1 ]] && to_trash "$pub/$1"
   write_caddyfile
   caddy_reload
   lock_release index

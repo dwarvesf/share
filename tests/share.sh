@@ -127,6 +127,26 @@ check "expired share pruned" 404 "$(code "$docs_url")"
 bash "$SH" rm "$dir_url" >/dev/null
 check "rm by link unpublishes" 404 "$(code "$dir_url")"
 
+echo "=== refresh racing rm: no republish after unpublish ==="
+# copy() runs outside the index lock, so a slow copy widens the window for a
+# concurrent rm to finish first; 300 files makes that window wide enough to
+# hit reliably across a handful of rounds instead of by luck on one.
+race_src="$WORK/race"
+mkdir -p "$race_src"
+for i in $(seq 1 300); do echo "line $i" >"$race_src/f$i.txt"; done
+race_bad=0
+for round in 1 2 3 4 5 6 7 8 9 10; do
+  race_url=$(bash "$SH" add "$race_src" 2>/dev/null | head -1)
+  race_id=$(cut -d/ -f4 <<<"$race_url")
+  bash "$SH" refresh "$race_id" >"$WORK/race.refresh.$round" 2>&1 & refresh_pid=$!
+  bash "$SH" rm "$race_id" >"$WORK/race.rm.$round" 2>&1 & rm_pid=$!
+  wait "$rm_pid"; rm_rc=$?
+  wait "$refresh_pid"
+  { [[ $rm_rc -eq 0 ]] && grep -qx "unpublished $race_id" "$WORK/race.rm.$round"; } || race_bad=1
+  [[ -e "$SHARE_ROOT/pub/$race_id" ]] && race_bad=1
+done
+check "refresh racing rm: rm always succeeds and pub/<id> never survives" "0" "$race_bad"
+
 echo "=== live shares ==="
 FIX_PORT=18991
 mkdir -p "$WORK/backend" && echo "hello fixture" >"$WORK/backend/hello.txt"
