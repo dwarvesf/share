@@ -1,6 +1,6 @@
 # Spec: per-link login gate (`--access`)
 Generated: 2026-09-27
-Status: VALIDATED (build waits on the rule-model decision in `## Decisions for Han`)
+Status: VALIDATED (decisions made; build starts after SPEC-005 merges)
 Lane: full (authz, external provider, a new failure path that could publish content unguarded)
 References: `bin/share` `cmd_add`, `copy`, `cmd_rm`, `cmd_prune`, `cmd_teardown`, `cf()`, `host_auth`, `rows`, `write_caddyfile`; `docs/specs/SPEC-005-profiles.md` (in flight on `feat/share-profiles`); dwarvesf/foundation-ops `chatwoot/edge/edge-apply` and `docs/incidents/INC-009-chat-host-public-before-access-propagated.md`.
 
@@ -179,8 +179,8 @@ Checks use `case` patterns and `${#var}` lengths in bash, and length checks in t
 
 Refusals, all before any write:
 - quick mode: `--access needs a named tunnel on a Cloudflare account with Access: 'share teardown', then 'share setup <hostname>'`.
-- no `CLOUDFLARE_API_TOKEN`: `--access needs CLOUDFLARE_API_TOKEN with 'Access: Apps and Policies Edit' on the account that owns <zone>`. The browser-login cert is not tried (whether its token can manage Access is UNVERIFIED; requiring the API token keeps one path).
-- `group:` lookup: `GET access/groups?name=<name>&per_page=100`, then an exact client-side name match over every page (`result_info.total_pages`). Not found: `no Access group named '<name>' on the account that owns <zone> (or the token lacks 'Access: Organizations, Identity Providers, and Groups Read')`. Two matches: `two Access groups are named '<name>'; rename one`.
+- no API token resolves (see `## Onboarding`): the guided message in `## Onboarding`, item O1. The browser-login cert is not tried (whether its token can manage Access is UNVERIFIED; requiring the API token keeps one path).
+- `group:` lookup: `GET access/groups?name=<name>&per_page=100`, then an exact client-side name match over every page (`result_info.total_pages`). Not found: the guided message in `## Onboarding`, item O3. Two matches: `two Access groups are named '<name>'; rename one`.
 - Access not enabled (API code 9999 on the create call): `Cloudflare Access is not enabled on the account that owns <zone>; enable Zero Trust in the dashboard first`.
 
 **`cf_try METHOD PATH [JSON]`**: a sibling of `cf()` with the same header-file token handling, which never dies. It sets three globals and prints nothing: `cf_body`, `cf_code` (HTTP status), and `cf_err` (first `errors[].code`). Callers invoke it directly, never inside `$( )`, because globals set in a command substitution are lost (the pitfall `rand_id` documents). A 404 can count as done and code 9999 maps to the enable hint. A transport failure sets `cf_code=000`. Every Access call uses it; `cf()` is unchanged.
@@ -274,12 +274,155 @@ CLI flag, usage line, `ls` column, `state` field, the skill text (`share skill`)
 
 None local. On Cloudflare: Access must be enabled on the profile's account. Each person who logs in uses a Zero Trust seat (UNVERIFIED: the Dwarves plan tier and seat cap).
 
+## Onboarding
+
+Hard requirement from Han: first use of `--access` is guided, and every failure names its fix. This section adds one verb, `share api-token`, and one token resolver. Nothing else is new.
+
+### Token resolution (`api_token_resolve`)
+
+Every Access code path in this spec (add, rm, prune, teardown, sweep) gets its API token from one resolver, first hit wins, in this order. Wherever this spec says `CLOUDFLARE_API_TOKEN`, read "the resolved API token".
+
+| Order | Source | Same pattern as |
+|---|---|---|
+| 1 | `api_token_cmd=<command>` in the profile's config; share runs it and uses its stdout | `token_cmd` in `token_read` (`bin/share`) |
+| 2 | Keychain item, account `share`, service `share-api:<hostname>` (SPEC-005 names it `share-api.<p>:<hostname>` for a named profile); Linux: `$config_dir/api-token`, mode 600 | `token_store` / `token_read` for the tunnel token |
+| 3 | `CLOUDFLARE_API_TOKEN` in the environment, only when the profile stores no token | today's `--host` and `teardown` |
+
+The profile's stored token wins over the environment, so a broad token exported in a shell never silently replaces the dedicated per-profile token. The preflight's first line names the source in use.
+
+`share serve` exports `SHARE_API_TOKEN_OFF=1`, and the resolver returns nothing from ANY source when it is set, the environment included. So a serve started by launchd, systemd, `share start`, or the auto-start in `add` (`nohup`), and its hourly prune, never make an Access call, as Han decided (Decisions, item 3). The resolver sets a non-exported shell variable only; it never exports the token, so auto-start cannot carry it into the daemon. `--host` paths keep reading `CLOUDFLARE_API_TOKEN` as today; this switch covers Access only. Only an interactive `share prune`, `rm`, `ls`, or `add` deletes waiting apps. `--host` keeps its current credential rules; the stored token is only for Access. `write_config` keeps an existing `api_token_cmd=` line on a setup rerun, as it keeps `token_cmd` today. `teardown` forgets the stored token (the `share-api:` Keychain item or the 600 file) with the tunnel token; `api_token_cmd` leaves with the config. This supersedes SPEC-005's line "share never stores an API token": share stores a token command (preferred) or a Keychain item, both per profile, both through the existing storage pattern.
+
+### `share api-token [--cmd '<command>' | --check]` (the one new verb)
+
+- Every form first runs `need_host` (a profile with no setup dies with the existing "no setup yet" message) and builds the Keychain service name with SPEC-005's key function, so the key is never `share-api:` with an empty host.
+- `share api-token --cmd 'op read "op://<vault>/<item>/credential"'`: writes `api_token_cmd=<command>` to the profile's config, replacing an existing line. It stores no secret. Preferred, and printed first in every hint.
+- `share api-token`: reads the token from stdin. On a TTY it prompts with echo off (`read -rs`). It stores the token with `token_store`'s stdin-only method under the service name above, so the token never appears in argv.
+- `share api-token --check`: stores nothing; runs the preflight below.
+- Every form ends by running the preflight. A store succeeds only if the preflight passes. On a failed preflight the stored value stays, so the user fixes the token's scopes in the dashboard and reruns `--check` without pasting again.
+
+### Preflight (`access_preflight`)
+
+The preflight is read-only against Cloudflare and safe to rerun: it never creates, edits, or deletes a Cloudflare object and never writes local state. It runs in `share api-token` and as the first step of `add --access`. Each check prints one line, `ok` or `MISSING`, with the scope's exact dashboard name:
+
+```
+share: checking the API token for profile dfoundation (zone d.foundation)
+  ok       token found (api_token_cmd)
+  ok       Zone: Read                                        GET /zones?name=d.foundation -> 1 zone
+  ok       Access: Organizations, Identity Providers, and Groups Read   GET /accounts/<acct>/access/organizations -> 200
+  MISSING  Access: Apps and Policies Edit                    POST /accounts/<acct>/access/apps {} -> 10000
+  fix: add the missing permission to this token at https://dash.cloudflare.com/?to=/:account/api-tokens (account API tokens), then run: share api-token --check
+```
+
+| Check | Call | ok when | MISSING line names |
+|---|---|---|---|
+| token present | the resolver | some source returns a non-empty value | O1 message |
+| Zone: Read | `GET /zones?name=<zone>` | one zone; this also yields the account id | `Zone: Read` (or: the zone is on another account) |
+| Access: Organizations, Identity Providers, and Groups Read | `GET /accounts/<acct>/access/organizations` | HTTP 200 | the scope; code 9999 prints the enable-Zero-Trust fix instead |
+| Access: Apps and Policies Edit | `POST /accounts/<acct>/access/apps` with body `{}` | HTTP 400 with a validation error code (the body is invalid, so nothing is created); TASK-1 pins the exact code and the check accepts only that code | the scope on 10000; any other outcome (`000`, 429, 5xx, an unexpected 2xx) prints `could not check  Access: Apps and Policies Edit (<code>); rerun: share api-token --check` and counts as not ok |
+
+The empty-body probe is how the check proves Edit without writing. Its exact response codes are UNVERIFIED; TASK-1 records them. If an invalid body is ever accepted or the codes do not separate, TASK-1 replaces this probe with a create-then-delete of an app on `<main>/share-preflight-<nonce>`, tracked in `access-pending` like any app. That fallback would make the preflight write, and it would be noted in the spec amendment.
+
+The exit status is 0 only when every line is `ok`. A rerun gives the same lines for the same token.
+
+### Guided messages (testable text)
+
+**O1, no token.** `add --access`, `rm` or `prune` of a gated share, or `teardown` with gated shares, when the resolver finds nothing:
+
+```
+share: --access needs a Cloudflare API token for s.d.foundation (profile dfoundation); none is set.
+  1. Create it (permissions prefilled; pick the account that owns d.foundation):
+     https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=%5B%7B%22key%22%3A%22access%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22access_acct%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22read%22%7D%5D&name=share%20access%20%28dfoundation%29
+  2. Store it in 1Password, then: share api-token --cmd 'op read "op://<vault>/<item>/credential"'
+     (or paste it: share api-token)
+```
+
+`rm` and `prune` also keep their existing refusal semantics: `rm` changes nothing, `prune` defers the app.
+
+**Verified template-URL format** (Cloudflare docs "API token template URLs", `developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/`, fetched 2026-09-27):
+
+| Kind | Format |
+|---|---|
+| Account token (chosen) | `https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=<url-encoded JSON>&name=<url-encoded name>` |
+| User token | `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=<url-encoded JSON>&accountId=*&zoneId=all&name=<name>` |
+
+- `permissionGroupKeys` is a URL-encoded JSON array of `{"key": <short key>, "type": "read"|"edit"|...}`.
+- The documented keys are `access` (Access applications), `access_acct` (Access organizations, IdPs, groups), and `zone` (Zone), so share asks for `[{"key":"access","type":"edit"},{"key":"access_acct","type":"read"},{"key":"zone","type":"read"}]`.
+- The account-token form is chosen because the token is owned by one account, which is the Dwarves-only requirement by construction. `:account` is a literal placeholder: the dashboard asks which account.
+- The user-token form documents only `accountId=*` and `zoneId=all` (every account), so share does not use it.
+- An account token needs an account Administrator or Super Administrator to create it. The docs note that the template only pre-fills the form; the user still clicks Create.
+- UNVERIFIED until TASK-1 opens the URL in a browser: that the dashboard pre-ticks all three permissions. On mismatch, TASK-1 records the working form, for example permission group IDs in place of short keys, which the docs PR describes for account-token links.
+
+`share` builds the URL from the profile name and prints it; nothing is fetched.
+
+**O3, group not found.** The lookup is authoritative only after the preflight's Groups Read line is `ok`:
+
+```
+share: no Access group named 'dwarves-ops' on the account that owns d.foundation.
+  Create it once (share never creates groups):
+  Cloudflare dashboard > Zero Trust > Access controls > Policies > Rule groups tab > Add a group
+    Name: dwarves-ops
+    Include > Selector: Emails > Value: each address (one per entry)
+    Save
+  then rerun the same share add.
+```
+
+The path is quoted from Cloudflare docs, "Rule groups" (`developers.cloudflare.com/cloudflare-one/access-controls/policies/groups/`, updated 2026-04-17). The dashboard now calls Access groups "Rule groups"; the API is still `access/groups`.
+
+**Every other error line names its fix:**
+
+| Condition | Line ends with |
+|---|---|
+| Access not enabled (9999) | `enable Zero Trust for this account in the Cloudflare dashboard, then: share api-token --check` |
+| a scope missing at use time (10000 on a call) | `the token lacks '<scope name>'; add it at https://dash.cloudflare.com/?to=/:account/api-tokens (account API tokens), then: share api-token --check` |
+| `api_token_cmd` exits non-zero or prints nothing | `api_token_cmd failed (exit <n>); run it by hand to see why, or replace it: share api-token --cmd '<command>'` |
+| quick mode | the existing quick-mode refusal, which names `share setup <hostname>` |
+| gate timeout | `nothing was published; rerun the same share add (Access can take several minutes on a new app)` |
+
+### Onboarding acceptance criteria
+
+- O-AC1: with no token source, `share add ./x --access group:dwarves-ops` exits 1 before any write and prints the O1 block. The block contains the template URL from the verified format, with the three keys in the encoded JSON and the profile name in `name`.
+- O-AC2: `share api-token --cmd '<cmd>'` writes exactly one `api_token_cmd=` line to the profile's config and no secret anywhere. `share api-token` fed on stdin stores through the Keychain or 600-file path, and the value never appears in argv (row 26's shim). Both end with the preflight.
+- O-AC3: `share api-token --check` prints one line per scope in the table above, `MISSING` names the scope exactly as the dashboard does, and the exit status is 0 only when all are `ok`.
+- O-AC4: running `share api-token --check` twice in a row gives identical output, and neither run adds or changes a Cloudflare object or a local file (checked by the dry-mode call log and a before/after listing of `$root` and `$config_dir`).
+- O-AC5: an unknown group prints the O3 block verbatim with the name substituted, and share makes no `POST` to `access/groups`.
+- O-AC6: every error path in the table above prints a line that ends with a runnable command or a URL.
+- O-AC7: after `share setup <host>` (the stated precondition), the README "Private links" steps 2 to 4 work verbatim on a clean HOME (row 30), and a `/kit:gauntlet` probe that reads only the README completes steps 2 to 4, given a pre-made rule group and a pre-made token in 1Password (row 31). Step 1 and the token click are dashboard work outside a CLI probe.
+
+### README "Private links" quickstart (text to add, verbatim)
+
+````
+## Private links
+
+Share a link that only named people can open (Cloudflare Access, email one-time PIN). This needs a named setup (`share setup <hostname>`, not `--quick`) on a Cloudflare account with Zero Trust enabled. If that host is not your default profile, put `--profile <name>` before the verb in every command below.
+
+1. Create an Access rule group once in the Cloudflare dashboard: Zero Trust > Access controls > Policies > Rule groups > Add a group; name it (for example `dwarves-ops`) and include each person's email.
+2. Give share an API token. Run the command below with no token set: it prints a link that opens the token form with the right permissions filled in.
+
+   ```sh
+   share add ./report.pdf --access group:dwarves-ops
+   ```
+
+3. Store the token (1Password recommended), and let share check its permissions:
+
+   ```sh
+   share api-token --cmd 'op read "op://Private/share access token/credential"'
+   ```
+
+4. Publish:
+
+   ```sh
+   share add ./report.pdf --access group:dwarves-ops
+   ```
+
+   The link prints once Cloudflare enforces the login, which can take a few minutes the first time. Other forms: `--access email:a@example.com,b@example.com`, `--access domain:example.com`.
+````
+
 ## Task Breakdown
 
 Dependency: SPEC-005 (profiles) lands first. Rows 20 and AC5 need it; every other task works on the default profile.
 
 ### Phase 1: Foundation
-- [ ] TASK-1: spike on a throwaway profile and zone: create one app with inline `destinations` and `policies`, read it back, measure the time until `/<id>/` 302s with `kid == aud` on an already-routed host, probe the encoded shapes of row 17, delete the app. AC: the POST shape (inline or two-call) and the measured delay are written in `docs/implementation-notes/access.md`.
+- [ ] TASK-1: spike on a throwaway profile and zone: open the O1 template URL and record whether the dashboard pre-ticks the three permissions; check whether `GET /user/tokens/verify` (used by `auth_api` in setup and teardown) accepts an account-owned token or only `/accounts/<id>/tokens/verify` does; record the empty-body POST probe's codes; create one app with inline `destinations` and `policies`, read it back, measure the time until `/<id>/` 302s with `kid == aud` on an already-routed host, probe the encoded shapes of row 17, delete the app. AC: the POST shape (inline or two-call) and the measured delay are written in `docs/implementation-notes/access.md`.
 - [ ] TASK-2: `access_parse`, the opts and `rows()` validation, `cf_try`. AC: rows 1, 2, 13 pass.
 - [ ] TASK-3: the Caddy encoded-path reject in `write_caddyfile`. AC: row 22 passes; the existing suite passes.
 
@@ -291,10 +434,13 @@ Dependency: SPEC-005 (profiles) lands first. Rows 20 and AC5 need it; every othe
 - [ ] TASK-8: `rm`, `prune`, `access_sweep`. Depends on TASK-5. AC: rows 9, 10, 11, 11b, 23b, 23c, 23d, 25b, 26; `share serve`'s startup prune logs no sweep call.
 - [ ] TASK-9: `teardown` unpublishes gated shares. Depends on TASK-8. AC: rows 12, 12b.
 
+- [ ] TASK-13: `api_token_resolve` (with `SHARE_API_TOKEN_OFF` exported by `serve`), `share api-token`, `access_preflight`, the O1 and O3 messages, and the fix-naming error lines. Depends on TASK-2 and TASK-5. AC: O-AC1 to O-AC6; rows 27, 28, 29, 32.
+
 ### Phase 3: Polish
 - [ ] TASK-10: `ls` (app-gone check, pending count), `status`, `state` fields, skill row. AC: row 14 and the `ls` messages in `### Interfaces`.
 - [ ] TASK-11: `tests/e2e.sh` gated legs (rows 17 to 20). Depends on TASK-7 to TASK-9. AC: the legs pass against a throwaway zone; a run log goes to `docs/verification/access.md`.
-- [ ] TASK-12: docs and ADR. `docs/decisions/ADR-0006-access-gate-per-share.md`; README feature row; `docs/how-it-works.md` gains the gated lifecycle, `access-pending` in the file tree, the encoded-path reject in the Caddy block, and a security row; `docs/setup.md` gains the token scopes and how to create an Access Group by hand. AC: each named doc claim matches the code line it describes.
+- [ ] TASK-12: docs and ADR. `docs/decisions/ADR-0006-access-gate-per-share.md`; README feature row; `docs/how-it-works.md` gains the gated lifecycle, `access-pending` in the file tree, the encoded-path reject in the Caddy block, and a security row; `docs/setup.md` gains the token scopes, the template URL, and how to create a rule group by hand; README gains the "Private links" quickstart verbatim from `## Onboarding`; the skill text gains `--access` and `share api-token`. AC: each named doc claim matches the code line it describes; row 30 passes.
+- [ ] TASK-14: UX proof. Depends on TASK-11 to TASK-13. Rows 30 and 31. AC: both logs in `docs/verification/access.md`.
 
 ## After state
 
@@ -369,6 +515,12 @@ Local rows run in `tests/share.sh` with `SHARE_TUNNEL=0` and `SHARE_ACCESS_DRY=1
 | 24 | rand_id | a pending line for id `abc123` and `rand_id_raw` stubbed to return `abc123` then another | the new share does not get `abc123` |
 | 25 | race | a gated add paused in the gate (probe fixture `fail` for 3 s) while `prune` with the token runs | no `DELETE app` logged by the prune; the add then publishes |
 | 25b | pid reuse | a pending line naming the pid of the running `share serve` but a different start time | the sweep treats the owner as dead and processes the line |
+| 27 | onboarding O1 | no token source (env unset, no `api_token_cmd`, stub `security` with no item), `add ./x --access group:dwarves-ops` | exit 1; stderr has the O1 block; the URL starts `https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=`; URL-decoding the value gives exactly the three key/type pairs; `name` decodes to `share access (<profile>)`; no stage, row, or call logged |
+| 28 | api-token | `share api-token --cmd 'printf tok'`; then `printf tok \| share api-token` with a stub `security` recording `-s` only | config has one `api_token_cmd=printf tok` line (rerun replaces it, never duplicates); the stub saw service `share-api:<host>`; the `tok` value never appears in the recorded argv; both runs print the preflight |
+| 29 | preflight | dry fixtures per scope: all ok; Groups Read denied; Apps Edit denied (probe returns 10000); Access not enabled (9999) | lines and exit codes per the preflight table; each MISSING line carries the exact scope name; a second identical run prints identical output; the call log shows no write other than the invalid-body probe; `$root` and `$config_dir` listings are unchanged |
+| 30 | clean-HOME walkthrough | `HOME=$(mktemp -d)`; `share setup <throwaway host> --no-service` with a test API token (the precondition); a rule group made beforehand; then remove `CLOUDFLARE_API_TOKEN` from the environment (`unset`), then README "Private links" steps 2 to 4 verbatim, with `op` replaced by a stub that prints the test token | step 2 prints the O1 block; step 3's preflight is all `ok`; step 4 prints a link after the gate; the link 302s to Access. Run by hand before release; log in `docs/verification/access.md` |
+| 31 | gauntlet | `/kit:gauntlet` probe round: a fresh agent gets only README.md, a clean HOME already set up for a throwaway host, a pre-made rule group, a test token in 1Password (its `op://` ref given), and the outcome "publish ./report.pdf so only the rule group can open it" | the probe runs steps 2 to 4 and reaches a gated link without reading bin/share or any doc but README; each round's stuck point becomes a README or message fix; rounds recorded per the gauntlet contract |
+| 32 | error lines | trigger each row of the fix-naming table in dry mode | every stderr error line ends with a command or a URL (checked by a regex over the captured stderr) |
 | 26 | argv | a `curl` shim first on `PATH` recording its argv, a gated add plus rm with a sentinel token | the sentinel string never appears in the recorded argv |
 
 ## Verification
@@ -381,15 +533,17 @@ Then by hand before release: `SHARE_E2E_HOST=... CLOUDFLARE_API_TOKEN=... SHARE_
 
 ## Out of Scope
 
-Creating, editing, or listing Access Groups or their members; adding IdPs; service-token access for machines; changing the rule of a live share; gating the whole main hostname; quick mode; storing an API token (SPEC-005 keeps share token-free).
+Creating, editing, or listing Access Groups or their members; adding IdPs; service-token access for machines; changing the rule of a live share; gating the whole main hostname; quick mode; storing a raw API token outside the existing Keychain/600-file pattern. (SPEC-005's "share never stores an API token" needs a one-line amendment when this spec lands, because `share api-token` stores a token command or a Keychain item per profile.)
 
 ## Decisions for Han
 
-1. **Rule model for "OPS, not contractors".** Recommended: `--access group:dwarves-ops`, where `dwarves-ops` is an Access Group Han creates once in the Dwarves account holding an explicit email list. It works today with the one-time PIN IdP. Later, the group's include can switch to a Google Workspace group (needs a `google-apps` IdP with group claims) or a GitHub team (needs a `github` IdP) with no share change. Alternative: ship only `email:` and `domain:` (the token scopes stay the same, because the sweep's Access-read proof needs Groups Read anyway). Pick one.
-2. **Token for the Dwarves profile.** `df-cloudflare-ci-token` has no Access scope. `op://Toolkit/cf-api-token` has it but spans four accounts. Recommended: a new Dwarves-only token with the scopes in `### API changes`, owned by Han in `dfoundation-prod`, with an expiry and a rotation note in `docs/setup.md`.
-3. **Expiry cleanup under the login service.** Default in this spec: the service has no API token, so an expired gated share's app waits in `access-pending` (fail-closed, gates an empty path, counted in `status`) until a `share prune` with the token. Alternative: an `api_token_cmd=` config key (like `token_cmd`) so the service deletes the app at expiry, at the cost of a daemon that can change Access.
+Decided by Han, 2026-09-27:
 
-Upkeep once shipped: each login uses a Zero Trust seat until an admin removes it (Dwarves plan tier and seat cap UNVERIFIED), and the per-account app cap is UNVERIFIED; TASK-1 records both.
+1. **Rule model:** ship all three forms, `group:`, `email:`, and `domain:`. The OPS-not-contractors case uses `group:dwarves-ops`, an Access rule group Han creates as an email list.
+2. **Token:** a dedicated Dwarves-only token with exactly the scopes in `### API changes` (the O1 template URL requests them). It is stored per profile through `share api-token`.
+3. **Expiry cleanup:** a pending list plus `share prune`. The login service carries no token (`SHARE_API_TOKEN_OFF` in `serve`).
+
+Upkeep once shipped: each login uses a Zero Trust seat until an admin removes it (the Dwarves plan tier and seat cap are UNVERIFIED), and the per-account app cap is UNVERIFIED; TASK-1 records both.
 
 ## Decision Log
 
@@ -411,6 +565,9 @@ Upkeep once shipped: each login uses a Zero Trust seat until an admin removes it
 | Round 2: owner = pid plus `lstart`, liveness matches `*share*`; the sweep claims a line before any network call; the publisher requires its exact line | `running()` only matches `share serve`; a lost DELETE left the adder's line intact, so the adder would publish with no app |
 | Round 2: `cf_try` returns through globals, never `$( )`; the sweep releases the lock around network calls | globals set in a command substitution are lost; a 30 s call under the lock starves writers that wait 60 s |
 | Round 3: the app name carries the nonce; the scope table marks Groups Read required; the adder's `-:` to uuid rewrite uses the exact-line check; a proven no-match drops a `-:` line only after 10 minutes; `share serve` never sweeps; `%2E` joins the Caddy reject | the JSON contract disagreed with the lookup and would orphan the app; the sweep proof needs that scope; a late-committing POST; serve's long life would pin a claimed line; defense in depth behind the edge normalization |
+| Round 6: stored token wins over env; the Apps Edit probe accepts only the pinned 400 code; row 30 drops the setup token from the environment | a broad shell token must not replace the Dwarves-only token; a different 403 must not read as ok; O1 must print in the walkthrough |
+| Round 5: quickstart precondition (named setup, `--profile`); rows 30/31 start from a set-up HOME with a pre-made group and token; fix URLs point at the account token page; Apps Edit probe passes only on a 4xx validation error; `SHARE_API_TOKEN_OFF` blocks every source including env and the token is never exported; `api-token` requires `need_host`; setup keeps `api_token_cmd`; teardown forgets the stored token; TASK-1 checks user vs account token verify | the quickstart died in `need_host`; the user-token page cannot show an account token; a 5xx must not read as ok; nohup auto-start inherits env; empty-host Keychain key; config and Keychain drift |
+| Onboarding: `share api-token` (`--cmd` preferred, stdin, `--check`), one resolver (env, `api_token_cmd`, Keychain/600 file), read-only preflight naming each scope, O1 template URL, O3 rule-group path, fix-naming error lines, README quickstart, rows 27 to 32 | Han's hard requirement: first use is guided, and the storage reuses the `token_cmd` and Keychain pattern |
 | TASK-4 split into TASK-4 to TASK-9; e2e (TASK-11) and ADR (TASK-12) tasks added; SPEC-005 dependency stated | atomicity and missing owners |
 
 ## Open questions
