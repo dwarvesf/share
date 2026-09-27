@@ -300,6 +300,44 @@ nested_body=$(curl -s "$(local_url "$nested_url")")
 check "nested file listed by path" "1" "$(grep -c 'href="sub/deep.txt"' <<<"$nested_body")"
 check "no subfolder entry" "0" "$(grep -cE 'href="sub/?"' <<<"$nested_body")"
 
+echo "=== TASK-003: pure-bash urlenc / fork-free share_url ==="
+echo "--- urlenc matches jq @uri byte for byte, under bash and /bin/bash ---"
+urlenc_probe="$WORK/urlenc-probe.sh"
+{
+  sed -n '/^urlenc() {/,/^}/p' "$SH"
+  # shellcheck disable=SC2016 # literal code for the probe script, not this shell's expansion
+  echo 'urlenc "$1"; printf %s "$urlenc_out"'
+} >"$urlenc_probe"
+jq_urlenc() { jq -rn --arg p "$1" '[$p | split("/")[] | @uri] | join("/")'; }
+enc_fail=0
+while IFS= read -r enc_name; do
+  enc_want="$(jq_urlenc "$enc_name")"
+  for enc_shell in bash /bin/bash; do
+    enc_got="$("$enc_shell" "$urlenc_probe" "$enc_name")"
+    [[ $enc_got == "$enc_want" ]] || { echo "  FAIL  urlenc($enc_shell) [$enc_name]: want [$enc_want] got [$enc_got]"; enc_fail=1; }
+  done
+done <<'ENCNAMES'
+with space.md
+a#b?c%d&e+f=g
+bang!star'paren(x).txt
+café.md
+日本語.txt
+emoji 🎉.png
+dir/sub dir/file.html
+ENCNAMES
+check "urlenc matches jq @uri for the fixed name list, bash and /bin/bash" "0" "$enc_fail"
+
+echo "--- a name with # and é serves 200 through the link share ls prints ---"
+hash_name="hash#café.txt"
+echo data >"$WORK/$hash_name"
+hash_out=$(bash "$SH" add "$WORK/$hash_name" 2>/dev/null)
+hash_url=$(head -1 <<<"$hash_out")
+hash_id=$(cut -d/ -f4 <<<"$hash_url")
+ls_url=$(bash "$SH" ls | grep -B1 "id=$hash_id" | head -1)
+check "share ls prints the same link share add did" "$hash_url" "$ls_url"
+check "the hash+accent link serves 200" "200" "$(wait_code 200 "$hash_url")"
+bash "$SH" rm "$hash_id" >/dev/null
+
 echo "=== own hostname (dry) ==="
 mkdir -p "$WORK/dist" && echo '<h1>spa</h1>' >"$WORK/dist/index.html"
 : >"$SHARE_ROOT/host-calls.log"

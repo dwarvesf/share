@@ -118,24 +118,25 @@ serving_host() {
   else echo "$host_name"; fi
 }
 
-share_url() { # share_url <id> <name> [opts]: the link depends on the share kind
+share_url() { # share_url <id> <name> [opts]: sets share_url_out; the link depends on the share kind
   local fqdn path shost
   fqdn="$(opt_val host "${3:-}" || true)"
   if [[ -n $fqdn ]]; then
-    printf 'https://%s/\n' "$fqdn"; return
+    printf -v share_url_out 'https://%s/' "$fqdn"; return
   fi
   shost="$(serving_host)"
   if [[ -z $shost ]]; then
     if [[ $mode == quick ]]; then shost="<pending>.trycloudflare.com"; else shost="<no-hostname>"; fi
   fi
   if has_opt live "${3:-}"; then
-    printf 'https://%s/%s/\n' "$shost" "$1"; return
+    printf -v share_url_out 'https://%s/%s/' "$shost" "$1"; return
   fi
   path="$2"
   if [[ -d $pub/$1/$2 ]]; then path="$2/"
   elif [[ $2 == *.md && -f $pub/$1/${2%.md}.html ]]; then path="${2%.md}.html"
   fi
-  printf 'https://%s/%s/%s\n' "$shost" "$1" "$(printf '%s' "$path" | sed 's/ /%20/g')"
+  urlenc "$path"
+  printf -v share_url_out 'https://%s/%s/%s' "$shost" "$1" "$urlenc_out"
 }
 
 ttl_secs() {
@@ -238,8 +239,17 @@ LUA
   done
 }
 
-urlenc() { # percent-encode each path segment; the slashes between them stay
-  jq -rn --arg p "$1" '[$p | split("/")[] | @uri] | join("/")'
+urlenc() { # urlenc <str>: sets urlenc_out; fork-free byte loop, keeps A-Za-z0-9-_.~ and '/', %XX (uppercase) for the rest
+  local LC_ALL=C s="$1" out="" c i n
+  n=${#s}
+  for ((i = 0; i < n; i++)); do
+    c="${s:i:1}"
+    case $c in
+      [A-Za-z0-9._~/-]) out+="$c" ;;
+      *) printf -v c '%d' "'$c"; printf -v c '%%%02X' $((c & 255)); out+="$c" ;;  # masked: bash 3.2 sign-extends bytes above 127
+    esac
+  done
+  urlenc_out="$out"
 }
 
 gen_index() { # gen_index <stage>: a folder with no index of its own gets a generated listing
@@ -254,7 +264,7 @@ gen_index() { # gen_index <stage>: a folder with no index of its own gets a gene
     while IFS= read -r f; do
       [[ -n $f ]] || continue
       if [[ $f == *.md && -f $1/${f%.md}.html ]]; then continue; fi  # listed by its render below
-      enc="$(urlenc "$f")"
+      urlenc "$f"; enc="$urlenc_out"
       label="$(sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g' <<<"$f")"
       printf '<li><a href="%s">%s</a></li>\n' "$enc" "$label"
     done <<<"$files"
@@ -366,7 +376,8 @@ cmd_add() {
   write_caddyfile
   caddy_reload
   lock_release index   # before cmd_start: serve's startup render takes the lock itself
-  url="$(share_url "$id" "$name" "$opts")"
+  share_url "$id" "$name" "$opts"
+  url="$share_url_out"
   echo "$url"
   if [[ ${SHARE_CLIPBOARD:-1} == 1 ]] && command -v pbcopy >/dev/null; then
     printf '%s' "$url" | pbcopy && echo "  (link copied)"
@@ -382,6 +393,7 @@ cmd_ls() {
   while IFS=$'\t' read -r id name src date exp opts; do
     until="never"; [[ ${exp:-0} -gt 0 ]] && until="$(day_of "$exp")"
     share_url "$id" "$name" "$opts"
+    echo "$share_url_out"
     if has_opt live "$opts"; then
       echo "    id=$id  live -> $src  added=$date  expires=$until"
     else
