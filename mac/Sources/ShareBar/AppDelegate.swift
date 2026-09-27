@@ -9,6 +9,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         statusItemController = StatusItemController()
+
+        // Manual-verification-only debug entry (TASK-017/TASK-010): a colon-separated list
+        // of paths in `SHAREBAR_DEBUG_ADD_PATHS` runs through the same `addPaths` a real
+        // Share File… selection or drop would, without driving `NSOpenPanel` or a real
+        // drag. Never set by a normal launch; exists so manual checks can hit the add path
+        // deterministically instead of navigating a picker via synthetic keystrokes.
+        if let raw = ProcessInfo.processInfo.environment["SHAREBAR_DEBUG_ADD_PATHS"], !raw.isEmpty {
+            statusItemController?.debugAddPaths(raw.split(separator: ":").map(String.init))
+        }
     }
 
     /// Quitting while setup runs (TASK-011) must not leave the setup process group behind.

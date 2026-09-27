@@ -34,4 +34,25 @@ final class MutationQueueTests: XCTestCase {
         XCTAssertEqual(resultA.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "A")
         XCTAssertEqual(resultB.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "B")
     }
+
+    /// Stop Waiting (TASK-017): the running verb's process group can be TERMed from outside
+    /// the queue while it's still in flight.
+    func testCancelCurrentTermsTheRunningVerbsProcessGroup() async throws {
+        setenv("SHARE_BIN", "/bin/sh", 1)
+        let queue = MutationQueue()
+
+        async let result = queue.run(["-c", "sleep 30 & echo $!; wait"])
+        try await Task.sleep(nanoseconds: 200_000_000) // let the verb actually start
+        await queue.cancelCurrent()
+
+        let finished = await result
+        XCTAssertNotEqual(finished.status, 0, "TERM should end the sleep, not let it run to completion")
+    }
+
+    /// Cancelling when nothing is running is a harmless no-op (e.g. a stale Stop Waiting
+    /// click after the verb already finished on its own).
+    func testCancelCurrentWithNothingRunningIsANoOp() async throws {
+        let queue = MutationQueue()
+        await queue.cancelCurrent() // must not crash or hang
+    }
 }

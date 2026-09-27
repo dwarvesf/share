@@ -48,6 +48,7 @@ public struct Row: Sendable, Equatable {
 /// The whole rendered menu state, derived from the latest `state` result (or its failure).
 public struct MenuModel: Sendable {
     public static let rowCap = 25
+    public static let workingHeader = "Working…"
 
     public let header: String
     public let rows: [Row]
@@ -62,9 +63,15 @@ public struct MenuModel: Sendable {
     /// Distinct from `Not set up`, which means a real result came back saying so.
     public let isLoading: Bool
 
-    public init(snapshot: Snapshot?, failure: Failure?, now: Date) {
+    /// `isMutating` is true while a mutating verb (Refresh, Remove, Start/Stop, Share
+    /// File…) is running through the `MutationQueue`; it overrides the header to
+    /// "Working…" (TASK-017), above every other rule including `isLoading`, since a verb
+    /// can only be running once a first `state` result already landed.
+    public init(snapshot: Snapshot?, failure: Failure?, now: Date, isMutating: Bool = false) {
         isLoading = snapshot == nil && failure == nil
-        header = MenuModel.headerText(snapshot: snapshot, failure: failure, isLoading: isLoading)
+        header = isMutating
+            ? MenuModel.workingHeader
+            : MenuModel.headerText(snapshot: snapshot, failure: failure, isLoading: isLoading)
         if case .cliNotFound? = failure {
             showCopyInstallCommand = true
         } else {

@@ -34,9 +34,10 @@ private final class RowMenu: NSMenu {
 /// keeps it current on a 60s timer, on wake, and on every open, and applies the icon.
 ///
 /// Rendering (TASK-008) plus the read and app actions (TASK-009): Copy Link, Open in
-/// Browser, lazy per-row hit counts, Set Up… (logs only; TASK-011 builds the real window),
-/// Copy Install/Upgrade Command, Open at Login, and Quit. Refresh, Remove, Start/Stop, and
-/// Share File… stay no-ops for TASK-017.
+/// Browser, lazy per-row hit counts, Set Up…, Copy Install/Upgrade Command, Open at Login,
+/// and Quit. The mutating actions (TASK-017): Refresh, Remove… (confirm), Start/Stop
+/// Sharing, Share File…, the "Working…"/Stop Waiting header state, and the private-repo and
+/// not-serving-here alerts. The drop target (TASK-010) reuses the same add path.
 // @unchecked Sendable: every mutable property is only ever touched on the main thread (init,
 // or a block scheduled through `RunLoop.main.perform(inModes:)`); this just tells the
 // compiler what's already true so the refresh closure doesn't need a warning suppressed
@@ -44,11 +45,23 @@ private final class RowMenu: NSMenu {
 final class StatusItemController: NSObject, @unchecked Sendable {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
+    private let mutationQueue = MutationQueue()
 
     private var model = MenuModel(snapshot: nil, failure: nil, now: Date())
     private var isRefreshing = false
     private var pollTimer: Timer?
     private var wakeObserver: NSObjectProtocol?
+
+    // MARK: - Mutating-verb state (TASK-017)
+
+    /// The last `state` read, kept alongside `model` so a mutation's start/end can rebuild
+    /// `MenuModel` with a new `isMutating` flag without re-reading `state`.
+    private var currentSnapshot: Snapshot?
+    private var currentFailure: Failure?
+    private var isMutating = false
+    private var showStopWaitingItem = false
+    private var stopWaitingTimer: Timer?
+    private var checkmarkRevertTimer: Timer?
 
     // MARK: - Lazy hits state
 
@@ -78,6 +91,8 @@ final class StatusItemController: NSObject, @unchecked Sendable {
 
     deinit {
         pollTimer?.invalidate()
+        stopWaitingTimer?.invalidate()
+        checkmarkRevertTimer?.invalidate()
         if let wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
         }
@@ -127,13 +142,22 @@ final class StatusItemController: NSObject, @unchecked Sendable {
                 snapshot = nil
                 failure = value
             }
-            let newModel = MenuModel(snapshot: snapshot, failure: failure, now: Date())
             RunLoop.main.perform(inModes: [.common]) {
-                self.model = newModel
+                self.currentSnapshot = snapshot
+                self.currentFailure = failure
                 self.isRefreshing = false
-                self.applyModel()
+                self.rebuildModel()
             }
         }
+    }
+
+    /// Rebuilds `model` from the last `state` read plus the current mutating-verb flag,
+    /// then re-renders. The one place both inputs to `MenuModel` come together, so a
+    /// mutation's start/end can flip the header to/from "Working…" without a fresh `state`
+    /// call, and a fresh `state` result can land without losing that flag.
+    private func rebuildModel() {
+        model = MenuModel(snapshot: currentSnapshot, failure: currentFailure, now: Date(), isMutating: isMutating)
+        applyModel()
     }
 
     // MARK: - Rendering
@@ -149,6 +173,9 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         let headerItem = NSMenuItem(title: model.header, action: nil, keyEquivalent: "")
         headerItem.isEnabled = false
         menu.addItem(headerItem)
+        if showStopWaitingItem {
+            menu.addItem(actionItem("Stop Waiting", action: #selector(stopWaiting)))
+        }
         menu.addItem(.separator())
 
         // The trailing column (`2d left`, `live`, `never`, `expired`) right-aligns at a tab
@@ -177,12 +204,12 @@ final class StatusItemController: NSObject, @unchecked Sendable {
 
         menu.addItem(.separator())
 
-        menu.addItem(actionItem("Share File…", keyEquivalent: "n"))
+        menu.addItem(actionItem("Share File…", action: #selector(shareFile), keyEquivalent: "n"))
 
         if model.showStop {
-            menu.addItem(actionItem("Stop Sharing"))
+            menu.addItem(actionItem("Stop Sharing", action: #selector(stopSharing)))
         } else if model.showStart {
-            menu.addItem(actionItem("Start Sharing"))
+            menu.addItem(actionItem("Start Sharing", action: #selector(startSharing)))
         }
 
         menu.addItem(.separator())
@@ -255,14 +282,17 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         openItem.representedObject = row
         submenu.addItem(openItem)
 
-        let refreshItem = actionItem("Refresh") // TASK-017 wires this
+        let refreshItem = actionItem("Refresh", action: #selector(refreshRow))
         refreshItem.isEnabled = row.canRefresh
+        refreshItem.representedObject = row
         submenu.addItem(refreshItem)
 
         submenu.addItem(hitsItem)
 
         submenu.addItem(.separator())
-        submenu.addItem(actionItem("Remove…")) // TASK-017 wires this
+        let removeItem = actionItem("Remove…", action: #selector(removeRow))
+        removeItem.representedObject = row
+        submenu.addItem(removeItem)
 
         return submenu
     }
@@ -300,6 +330,206 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         guard let row = sender.representedObject as? Row, row.canCopy, let url = URL(string: row.url) else { return }
         actionLogger.log("open-in-browser id=\(row.id, privacy: .public)")
         NSWorkspace.shared.open(url)
+    }
+
+    // MARK: - Mutating actions (TASK-017)
+
+    @objc private func refreshRow(_ sender: NSMenuItem) {
+        guard let row = sender.representedObject as? Row, row.canRefresh else { return }
+        actionLogger.log("refresh id=\(row.id, privacy: .public)")
+        Task { [weak self] in await self?.performMutation(["refresh", row.id], warningShareID: row.id, isAdd: false) }
+    }
+
+    @objc private func removeRow(_ sender: NSMenuItem) {
+        guard let row = sender.representedObject as? Row else { return }
+        guard confirmRemove(row) else { return }
+        actionLogger.log("remove id=\(row.id, privacy: .public)")
+        Task { [weak self] in await self?.performMutation(["rm", row.id], warningShareID: nil, isAdd: false) }
+    }
+
+    /// Cancel is the default button (added first, so it gets the Return key equivalent and
+    /// the rightmost/primary position); Remove is the destructive-styled secondary button.
+    private func confirmRemove(_ row: Row) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = row.removeText
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel")
+        let removeButton = alert.addButton(withTitle: "Remove")
+        removeButton.hasDestructiveAction = true
+        return alert.runModal() == .alertSecondButtonReturn
+    }
+
+    @objc private func startSharing() {
+        actionLogger.log("start")
+        Task { [weak self] in await self?.performMutation(["start"], warningShareID: nil, isAdd: false) }
+    }
+
+    @objc private func stopSharing() {
+        actionLogger.log("stop")
+        Task { [weak self] in await self?.performMutation(["stop"], warningShareID: nil, isAdd: false) }
+    }
+
+    @objc private func shareFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Share"
+        guard panel.runModal() == .OK else { return }
+        let paths = panel.urls.map(\.path)
+        Task { [weak self] in await self?.addPaths(paths) }
+    }
+
+    @objc private func stopWaiting() {
+        let alert = NSAlert()
+        alert.messageText = StopWaiting.confirmText
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Continue Waiting")
+        let stopButton = alert.addButton(withTitle: "Stop Waiting")
+        stopButton.hasDestructiveAction = true
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        actionLogger.log("stop-waiting confirmed")
+        Task { [weak self] in await self?.mutationQueue.cancelCurrent() }
+    }
+
+    /// Runs one `add` per path, in order, through the mutation queue: a directory confirms
+    /// first (Share File… and a drop both go through this). Awaiting each `performMutation`
+    /// in turn (not firing them all at once) matters for the id diff: the next add's
+    /// "ids before" must be read after the previous add's `state` re-read has landed, not
+    /// from a snapshot captured before the whole batch started (edge case 24). `@MainActor`
+    /// for the same reason as `performMutation`: it calls `confirmFolder` (`NSAlert`)
+    /// directly, before any `await`, so the whole function must already be main-thread
+    /// isolated, not just the parts after a suspension point.
+    @MainActor
+    private func addPaths(_ paths: [String]) async {
+        for path in paths {
+            if isDirectory(path) {
+                let name = (path as NSString).lastPathComponent
+                guard confirmFolder(name: name) else { continue }
+            }
+            actionLogger.log("add path=\(path, privacy: .public)")
+            await performMutation(["add", path], warningShareID: nil, isAdd: true)
+        }
+    }
+
+    /// Manual-verification-only entry point (`SHAREBAR_DEBUG_ADD_PATHS`, wired in
+    /// `AppDelegate`): runs the exact same `addPaths` a real Share File… selection or a
+    /// real drop would, so a check can exercise the add/warning/id-diff/checkmark path
+    /// deterministically without driving `NSOpenPanel` or a real drag.
+    func debugAddPaths(_ paths: [String]) {
+        Task { [weak self] in await self?.addPaths(paths) }
+    }
+
+    private func isDirectory(_ path: String) -> Bool {
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
+    }
+
+    private func confirmFolder(name: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = FolderConfirm.text(name: name)
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Publish")
+        return alert.runModal() == .alertSecondButtonReturn
+    }
+
+    /// Runs one mutating verb through the shared queue: shows "Working…" and (after 60s)
+    /// offers Stop Waiting while it runs, re-reads `state` when it finishes, and presents
+    /// whatever alert the combined result calls for. `@MainActor` because every await here
+    /// must resume back on the main thread (it drives `NSAlert`, `NSOpenPanel`, and the
+    /// menu itself) and every caller is already on the main thread when it calls in.
+    @MainActor
+    private func performMutation(_ args: [String], warningShareID: String?, isAdd: Bool) async {
+        let idsBefore: Set<String> = isAdd ? Set((currentSnapshot?.shares ?? []).map(\.id)) : []
+        beginMutating()
+        let result = await mutationQueue.run(args)
+        let stateResult = await CLI.state()
+        switch Snapshot.from(stateResult) {
+        case .success(let snapshot):
+            currentSnapshot = snapshot
+            currentFailure = nil
+        case .failure(let failure):
+            currentSnapshot = nil
+            currentFailure = failure
+        }
+        endMutating()
+        handleOutcome(result: result, idsBefore: idsBefore, warningShareID: warningShareID, isAdd: isAdd)
+    }
+
+    private func beginMutating() {
+        isMutating = true
+        showStopWaitingItem = false
+        rebuildModel()
+        stopWaitingTimer?.invalidate()
+        let timer = Timer(timeInterval: StopWaiting.delay, repeats: false) { [weak self] _ in
+            self?.showStopWaitingItem = true
+            self?.rebuildModel()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        stopWaitingTimer = timer
+    }
+
+    private func endMutating() {
+        isMutating = false
+        showStopWaitingItem = false
+        stopWaitingTimer?.invalidate()
+        stopWaitingTimer = nil
+        rebuildModel()
+    }
+
+    /// Decides (via `MutationOutcome`, in `ShareBarCore`) what alert this result calls for,
+    /// finds an add's new share id by diffing against `idsBefore`, and, on a successful add,
+    /// copies its url and flashes the checkmark icon (shared with the drop target).
+    private func handleOutcome(result: CLIResult, idsBefore: Set<String>, warningShareID: String?, isAdd: Bool) {
+        var effectiveWarningID = warningShareID
+        if isAdd, result.status == 0, let snapshot = currentSnapshot,
+           let newShare = MutationOutcome.newShare(before: idsBefore, after: snapshot.shares) {
+            effectiveWarningID = newShare.id
+            setPasteboard(newShare.url)
+            flashCheckmark()
+        }
+        let notServingHere = isAdd && result.status == 0 && currentSnapshot?.servesHere == false
+        if let alert = MutationOutcome.alert(for: result, warningShareID: effectiveWarningID, notServingHere: notServingHere) {
+            present(alert)
+        }
+    }
+
+    private func present(_ alert: MutationAlert) {
+        let nsAlert = NSAlert()
+        nsAlert.messageText = alert.message
+        nsAlert.alertStyle = alert.kind == .failure ? .warning : .informational
+        switch alert.kind {
+        case .failure, .notServingHere:
+            nsAlert.addButton(withTitle: "OK")
+            nsAlert.runModal()
+        case .privateWarning:
+            nsAlert.addButton(withTitle: "OK")
+            let removeButton = nsAlert.addButton(withTitle: "Remove")
+            removeButton.hasDestructiveAction = true
+            if nsAlert.runModal() == .alertSecondButtonReturn, let id = alert.removeShareID {
+                actionLogger.log("remove-from-warning id=\(id, privacy: .public)")
+                Task { [weak self] in await self?.performMutation(["rm", id], warningShareID: nil, isAdd: false) }
+            }
+        }
+    }
+
+    /// Swaps in a plain `checkmark` SF Symbol for 1.5s, then restores whatever icon the
+    /// current model calls for. Shared by every successful add (TASK-017's Share File… and
+    /// TASK-010's drop).
+    private func flashCheckmark() {
+        guard let button = statusItem.button else { return }
+        if let image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Shared") {
+            image.isTemplate = true
+            button.image = image
+            button.title = ""
+        }
+        checkmarkRevertTimer?.invalidate()
+        let timer = Timer(timeInterval: 1.5, repeats: false) { [weak self] _ in
+            guard let self, let button = self.statusItem.button else { return }
+            StatusIcon.apply(self.model.icon, to: button)
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        checkmarkRevertTimer = timer
     }
 
     // MARK: - Lazy hits

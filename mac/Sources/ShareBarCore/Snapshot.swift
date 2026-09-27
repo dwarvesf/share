@@ -98,14 +98,6 @@ extension Snapshot {
            let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) {
             return .success(snapshot)
         }
-        return .failure(.other(otherFailureMessage(result)))
-    }
-
-    private static func otherFailureMessage(_ result: CLIResult) -> String {
-        let lines = result.stderr.split(separator: "\n", omittingEmptySubsequences: false)
-        if let line = lines.last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
-            return line.hasPrefix("share: ") ? String(line) : "share: \(line)"
-        }
-        return "share exited \(result.status)"
+        return .failure(.other(result.lastErrorLine))
     }
 }

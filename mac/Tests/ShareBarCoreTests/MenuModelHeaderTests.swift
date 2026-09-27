@@ -76,4 +76,23 @@ final class MenuModelHeaderTests: XCTestCase {
         let model = MenuModel(snapshot: snapshot, failure: nil, now: Date())
         XCTAssertEqual(model.header, "Serving at s.han.ws")
     }
+
+    // MARK: - isMutating (TASK-017)
+
+    func testIsMutatingShowsWorkingOverEveryOtherHeaderRule() {
+        let snapshot = makeSnapshot(state: "serving", ready: true, host: "s.han.ws")
+        let model = MenuModel(snapshot: snapshot, failure: nil, now: Date(), isMutating: true)
+        XCTAssertEqual(model.header, "Working…")
+    }
+
+    func testIsMutatingWinsEvenOverAFailure() {
+        let model = MenuModel(snapshot: nil, failure: .cliNotFound, now: Date(), isMutating: true)
+        XCTAssertEqual(model.header, "Working…")
+    }
+
+    func testIsMutatingDefaultsToFalseSoExistingCallersAreUnaffected() {
+        let snapshot = makeSnapshot(state: "serving", ready: true, host: "s.han.ws")
+        let model = MenuModel(snapshot: snapshot, failure: nil, now: Date())
+        XCTAssertEqual(model.header, "Serving at s.han.ws")
+    }
 }
