@@ -47,15 +47,8 @@ ZIP_NAME="Share-Bar-$VERSION.zip"
 KEYFILE=""
 WORK=""
 cleanup() {
-  if [[ -n "$KEYFILE" && -f "$KEYFILE" ]]; then
-    if command -v trash >/dev/null 2>&1; then
-      trash "$KEYFILE" >/dev/null 2>&1 || true
-    else
-      local discard
-      discard="$(mktemp -d)"
-      mv "$KEYFILE" "$discard/" 2>/dev/null || true
-    fi
-  fi
+  # a temp copy of a secret this script made; the original stays in 1Password
+  [[ -z "$KEYFILE" ]] || rm -f "$KEYFILE"
   # An EXIT trap's own last exit status becomes the script's exit status, so
   # this must not end on a false test (e.g. WORK unset in the dry-run path).
   if [[ -n "$WORK" ]]; then
