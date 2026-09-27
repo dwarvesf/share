@@ -1,0 +1,251 @@
+Scenario 1: serving, ready, 3 shares (mac/Tests/ShareBarCoreTests/Fixtures/state.json, unmodified)
+==================================================================================================
+- Serving at s.han.ws (disabled)
+- <separator> (disabled)
+- theme-check.md    expired
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- localhost:3000    live
+  - Copy Link
+  - Open in Browser
+  - Refresh (disabled)
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- docs.example.com    never
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- <separator> (disabled)
+- Share File…
+- Stop Sharing
+- <separator> (disabled)
+- Open at Login
+- Quit Share Bar
+
+Scenario 2: stopped, ready=false, same 3 shares (state.json with state="stopped", ready=false)
+==============================================================================================
+- Stopped (disabled)
+- <separator> (disabled)
+- theme-check.md    expired
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- localhost:3000    live
+  - Copy Link
+  - Open in Browser
+  - Refresh (disabled)
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- docs.example.com    never
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- <separator> (disabled)
+- Share File…
+- Start Sharing
+- <separator> (disabled)
+- Set Up…
+- Open at Login
+- Quit Share Bar
+
+Scenario 3: serving, ready, 30 shares (25-row cap + "5 more (share ls)" line)
+=============================================================================
+- Serving at s.han.ws (disabled)
+- <separator> (disabled)
+- project-1.md    live
+  - Copy Link
+  - Open in Browser
+  - Refresh (disabled)
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-2.md    never
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-3.md    1267d left
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-4.md    live
+  - Copy Link
+  - Open in Browser
+  - Refresh (disabled)
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-5.md    1267d left
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-6.md    never
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-7.md    live
+  - Copy Link
+  - Open in Browser
+  - Refresh (disabled)
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-8.md    never
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-9.md    1267d left
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-10.md    live
+  - Copy Link
+  - Open in Browser
+  - Refresh (disabled)
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-11.md    1267d left
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-12.md    never
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-13.md    live
+  - Copy Link
+  - Open in Browser
+  - Refresh (disabled)
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-14.md    never
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-15.md    1267d left
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-16.md    live
+  - Copy Link
+  - Open in Browser
+  - Refresh (disabled)
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-17.md    1267d left
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-18.md    never
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-19.md    live
+  - Copy Link
+  - Open in Browser
+  - Refresh (disabled)
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-20.md    never
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-21.md    1267d left
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-22.md    live
+  - Copy Link
+  - Open in Browser
+  - Refresh (disabled)
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-23.md    1267d left
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-24.md    never
+  - Copy Link
+  - Open in Browser
+  - Refresh
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- project-25.md    live
+  - Copy Link
+  - Open in Browser
+  - Refresh (disabled)
+  - Loading… (disabled)
+  - <separator> (disabled)
+  - Remove…
+- 5 more (share ls) (disabled)
+- <separator> (disabled)
+- Share File…
+- Stop Sharing
+- <separator> (disabled)
+- Open at Login
+- Quit Share Bar
