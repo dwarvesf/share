@@ -3,11 +3,13 @@
 # Runs on a spare port with SHARE_TUNNEL=0 and a throwaway config dir, so it
 # needs no credentials and never touches a live server. Markdown checks run
 # only when pandoc is installed. Ends with the host-guard negative control.
+# SHARE_TEST_PORT_BASE overrides the port base (default 18787) so two runs can go at once.
 set -uo pipefail
 
 SH="$(cd "$(dirname "$0")/.." && pwd)/bin/share"
 WORK=$(mktemp -d)
-export SHARE_ROOT="$WORK/root" SHARE_CONFIG_DIR="$WORK/config" SHARE_PORT=18787
+base=${SHARE_TEST_PORT_BASE:-18787}
+export SHARE_ROOT="$WORK/root" SHARE_CONFIG_DIR="$WORK/config" SHARE_PORT=$base
 export SHARE_TUNNEL=0 SHARE_CLIPBOARD=0 SHARE_HOSTNAME=s.example.test
 # A label no machine has, so an installed share service is never started or stopped by the test.
 export SHARE_SERVICE_LABEL="share-selftest-$$"
@@ -180,7 +182,7 @@ done
 check "refresh racing rm: rm always succeeds and pub/<id> never survives" "0" "$race_bad"
 
 echo "=== live shares ==="
-FIX_PORT=18991
+FIX_PORT=$((base + 204))
 mkdir -p "$WORK/backend" && echo "hello fixture" >"$WORK/backend/hello.txt"
 cat >"$WORK/BackendCaddyfile" <<EOF
 {
@@ -431,8 +433,8 @@ check "no row for refused host" "0" "$(grep -c 'nope.example.test' "$SHARE_ROOT/
 
 SHARE_HOST_DRY=1 bash "$SH" add "$WORK/dist" --host die.example.test >/dev/null 2>&1
 die_id=$(awk -F'\t' '$6 ~ /host=die\.example\.test/ {print $1}' "$SHARE_ROOT/index.tsv")
-cat >"$SHARE_ROOT/host-fixture.json" <<'EOF'
-{"config":{"ingress":[{"service":"http_status:404"},{"hostname":"s.example.test","service":"http://127.0.0.1:18787"}]}}
+cat >"$SHARE_ROOT/host-fixture.json" <<EOF
+{"config":{"ingress":[{"service":"http_status:404"},{"hostname":"s.example.test","service":"http://127.0.0.1:$SHARE_PORT"}]}}
 EOF
 : >"$SHARE_ROOT/host-calls.log"
 out=$(SHARE_HOST_DRY=1 bash "$SH" add "$WORK/dist" --host broken.example.test 2>&1 1>/dev/null); rc=$?
@@ -704,14 +706,14 @@ check "stopped: writes nothing" "" "$(find "$WORK/state-ns-root" "$WORK/state-ns
 echo "--- serving (SHARE_TUNNEL=0): snapshot, live, host, expired, 5-field, malformed rows ---"
 ST_ROOT="$WORK/state-root"; ST_CFG="$WORK/state-config"
 mkdir -p "$ST_ROOT" "$ST_CFG" "$WORK/state-src"
-st_env=(SHARE_ROOT="$ST_ROOT" SHARE_CONFIG_DIR="$ST_CFG" SHARE_PORT=18796 SHARE_TUNNEL=0 SHARE_CLIPBOARD=0 SHARE_HOSTNAME=state.example.test SHARE_HOSTS="${h%%.*}")
+st_env=(SHARE_ROOT="$ST_ROOT" SHARE_CONFIG_DIR="$ST_CFG" SHARE_PORT=$((base + 9)) SHARE_TUNNEL=0 SHARE_CLIPBOARD=0 SHARE_HOSTNAME=state.example.test SHARE_HOSTS="${h%%.*}")
 stsh() { env "${st_env[@]}" bash "$SH" "$@"; }
 
 printf '# Doc\n\nbody\n' >"$WORK/state-src/doc.md"
 snap_out=$(stsh add "$WORK/state-src/doc.md" 2>/dev/null)
 snap_url=$(head -1 <<<"$snap_out")
 snap_id=$(cut -d/ -f4 <<<"$snap_url")
-live_out=$(stsh add 28796 2>/dev/null)
+live_out=$(stsh add "$((base + 10009))" 2>/dev/null)
 live_url=$(head -1 <<<"$live_out")
 live_id=$(cut -d/ -f4 <<<"$live_url")
 echo x >"$WORK/state-src/hostfile.txt"
