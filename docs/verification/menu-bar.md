@@ -103,3 +103,27 @@ Screen Recording is not granted to these sessions, so `screencapture` returns bl
 ## Rollback
 
 Every change is on `feat/menu-bar-app`. The CLI changes are additive (a new verb) or internal (locks, encoding, streaming); reverting the merge commit restores v0.5.1 behavior. A published cask is removed by reverting its tap commit in `dwarvesf/homebrew-tools`.
+
+## Real end-to-end run
+
+Date: 2026-09-27. Ran the real primary flow against the real `bin/share` CLI and a DEBUG `ShareBar` build, in an isolated sandbox under one `mktemp -d` root. `SHARE_TUNNEL=0` throughout, so nothing left the machine. Named mode was faked the way `tests/share.sh` does it, by exporting `SHARE_HOSTNAME` and `SHARE_HOSTS` so `bin/share` sees a configured hostname without a real Cloudflare tunnel. `swift build --package-path mac` built the debug binary; it ran with `SHAREBAR_DEBUG_ADD_PATHS` set to one fixture file. The app's menu was driven through System Events, clicking or AXPress only on elements of process `ShareBar`, and Screen Recording was available this run, so `screencapture` captured real menu content used to confirm the trailing text.
+
+| Step | Command or AX action | Observed result |
+|---|---|---|
+| a. Debug add + CLI list + menu read | Launch debug `ShareBar` with `SHAREBAR_DEBUG_ADD_PATHS=$R/src/a.txt`; `bin/share ls`; AX read of the status menu | `bin/share ls` listed `https://share.local.test/2a48b0/a.txt`. The menu (via AX) showed the row titled `a.txt` with trailing text `29d left`, confirmed both through `AXTitle` and a screenshot taken while the menu was open. Header read `Serving at share.local.test`. |
+| b. Start Sharing | Intended: click "Start Sharing", then curl the file | The debug `add` auto-started the local Caddy server (the CLI's own documented behavior), so the share was already serving before any click; the menu showed "Stop Sharing", not "Start Sharing", and curl already returned 200 with no action taken. To exercise the Start path honestly, the server was stopped through the real CLI (`bin/share stop`) first; that call hung indefinitely. See the finding below; this step could not be completed as specified. |
+| c. Copy Link | Click "Copy Link" in the `a.txt` row submenu | `pbpaste` returned `https://share.local.test/2a48b0/a.txt`, exactly the `url` field `bin/share state` reported for id `2a48b0`. Pass. |
+| d. Hits line | One extra `curl` against the file, then open the `a.txt` submenu and read the hits row via AX | Hits row read `2 hits, 1 visitor, last 2026-09-27 16:36`, a real count reflecting the curls made against the link. Pass. |
+| e. Refresh | Click "Refresh" in the `a.txt` submenu | No alert window appeared (`0` windows on the `ShareBar` process afterward). `bin/share state` still listed share `2a48b0`. Pass. |
+| f. Remove | Click "Remove…", then click "Remove" in the confirm alert | Alert text read `Remove a.txt? The copy goes to the Trash.` with buttons Cancel and Remove. After clicking Remove: `bin/share state` no longer listed the share, `curl` against the old URL returned 404, and the file was found under `~/.Trash/2a48b0/a.txt` with its original content intact, not deleted. Pass. |
+| g. Stop Sharing | Click "Stop Sharing" in the main menu | Failed. The app spawned the real `bin/share stop` as a subprocess and hung: reopening the menu afterward showed the header stuck on "Working…" and the local Caddy process kept running. Waited about 13 seconds total (well past when a normal stop returns) before concluding it was truly hung, not slow. |
+
+### Finding: `share stop` / "Stop Sharing" hangs on this sandbox
+
+`bin/share serve` backgrounds itself (`nohup bash "$0" serve & `), sets `trap 'exit 0' INT TERM`, and blocks on `wait "$caddy_pid"`. `bin/share stop` sends that process a plain `kill "$pid"` (SIGTERM) and then polls `kill -0` until it exits. In this run that polling never ended: sending SIGTERM to the `serve` process directly, by hand, also had no effect, while an isolated reproduction of the identical `trap ... TERM; wait "$pid"` pattern in the same `/opt/homebrew/bin/bash` responded to SIGTERM instantly. This points at something in this process's ancestry (most likely SIGTERM already ignored at the point `nohup bash "$0" serve &` was launched, which a non-interactive bash cannot override with `trap`, per POSIX) rather than a bash bug in general. Clicking "Stop Sharing" in the real app reproduces the exact same hang through `mutationQueue`, so this is not an artifact of driving the CLI directly; it blocks the real "Stop Sharing" primary-flow step in this sandbox.
+
+### Cleanup
+
+Per instructions, killed the app pid directly (`kill 11318`); the app quit cleanly, but it left the hung `share stop`, the backgrounded `share serve`, and `caddy` running as orphans, exactly as expected given the finding above. `bin/share stop` was given a further bounded wait and stayed hung, so the three leftover PIDs were force-killed (`kill -9`) as sandbox teardown, not as a fix to the finding. Final state: `pgrep -x ShareBar` empty, `lsof -iTCP:38787 -sTCP:LISTEN` empty. `$R` (the `mktemp -d` sandbox root) was left in place per instructions.
+
+Not run further: steps b and g are the only two that depend on a start/stop cycle, and both surfaced the same underlying hang; per instructions the run stopped at the first genuine failure (g) rather than working around it.
