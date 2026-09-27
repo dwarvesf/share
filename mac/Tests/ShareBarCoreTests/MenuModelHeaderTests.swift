@@ -6,6 +6,14 @@ import XCTest
 /// `Not serving on this Mac (hosts=<hosts>)`; `Stopped`; `Serving, tunnel not connected`;
 /// `Serving at <host>`.
 final class MenuModelHeaderTests: XCTestCase {
+    func testLoadingBeforeFirstResultShowsLoadingNotNotSetUp() {
+        // The cold-launch instant: no state call has returned yet, so there is neither a
+        // snapshot nor a failure. Must read "Loading…", never "Not set up".
+        let model = MenuModel(snapshot: nil, failure: nil, now: Date())
+        XCTAssertTrue(model.isLoading)
+        XCTAssertEqual(model.header, "Loading…")
+    }
+
     func testCLINotFound() {
         let model = MenuModel(snapshot: nil, failure: .cliNotFound, now: Date())
         XCTAssertEqual(model.header, "share CLI not found")

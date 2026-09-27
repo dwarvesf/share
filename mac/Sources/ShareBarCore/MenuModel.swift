@@ -57,13 +57,23 @@ public struct MenuModel: Sendable {
     public let showStop: Bool
     public let showSetUp: Bool
     public let showCopyInstallCommand: Bool
+    public let showCopyUpgradeCommand: Bool
+    /// True only before the first `state` result ever lands (no snapshot, no failure yet).
+    /// Distinct from `Not set up`, which means a real result came back saying so.
+    public let isLoading: Bool
 
     public init(snapshot: Snapshot?, failure: Failure?, now: Date) {
-        header = MenuModel.headerText(snapshot: snapshot, failure: failure)
+        isLoading = snapshot == nil && failure == nil
+        header = MenuModel.headerText(snapshot: snapshot, failure: failure, isLoading: isLoading)
         if case .cliNotFound? = failure {
             showCopyInstallCommand = true
         } else {
             showCopyInstallCommand = false
+        }
+        if case .oldCLI? = failure {
+            showCopyUpgradeCommand = true
+        } else {
+            showCopyUpgradeCommand = false
         }
         if let snapshot {
             let allRows = snapshot.shares.map { Row(share: $0, now: now) }
@@ -83,8 +93,11 @@ public struct MenuModel: Sendable {
         }
     }
 
-    /// First match wins, in the order the spec lists.
-    private static func headerText(snapshot: Snapshot?, failure: Failure?) -> String {
+    /// First match wins, in the order the spec lists. `isLoading` (no snapshot, no failure:
+    /// the cold-launch instant before the first `state` call returns) wins over all of them,
+    /// including `Not set up`, which the fallthrough below would otherwise say.
+    private static func headerText(snapshot: Snapshot?, failure: Failure?, isLoading: Bool) -> String {
+        if isLoading { return "Loading…" }
         if case .cliNotFound? = failure { return "share CLI not found" }
         if case .oldCLI? = failure { return "Update share CLI" }
         if let snapshot, snapshot.schema > 1 { return "Update Share Bar" }
