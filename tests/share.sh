@@ -704,7 +704,7 @@ check "stopped: writes nothing" "" "$(find "$WORK/state-ns-root" "$WORK/state-ns
 echo "--- serving (SHARE_TUNNEL=0): snapshot, live, host, expired, 5-field, malformed rows ---"
 ST_ROOT="$WORK/state-root"; ST_CFG="$WORK/state-config"
 mkdir -p "$ST_ROOT" "$ST_CFG" "$WORK/state-src"
-st_env=(SHARE_ROOT="$ST_ROOT" SHARE_CONFIG_DIR="$ST_CFG" SHARE_PORT=18796 SHARE_TUNNEL=0 SHARE_CLIPBOARD=0 SHARE_HOSTNAME=state.example.test SHARE_HOSTS="$h")
+st_env=(SHARE_ROOT="$ST_ROOT" SHARE_CONFIG_DIR="$ST_CFG" SHARE_PORT=18796 SHARE_TUNNEL=0 SHARE_CLIPBOARD=0 SHARE_HOSTNAME=state.example.test SHARE_HOSTS="${h%%.*}")
 stsh() { env "${st_env[@]}" bash "$SH" "$@"; }
 
 printf '# Doc\n\nbody\n' >"$WORK/state-src/doc.md"
@@ -772,7 +772,7 @@ PERF_ROOT="$WORK/state-perf-root"; PERF_CFG="$WORK/state-perf-config"
 mkdir -p "$PERF_ROOT" "$PERF_CFG"
 for n in $(seq 1 500); do printf '%06x\tfile%d.txt\t/nonexistent/file%d.txt\t2026-01-01\t0\t\n' "$n" "$n" "$n"; done >"$PERF_ROOT/index.tsv"
 TIMEFORMAT='%R'
-{ time env SHARE_ROOT="$PERF_ROOT" SHARE_CONFIG_DIR="$PERF_CFG" SHARE_HOSTNAME=perf.example.test SHARE_HOSTS="$h" SHARE_TUNNEL=0 \
+{ time env SHARE_ROOT="$PERF_ROOT" SHARE_CONFIG_DIR="$PERF_CFG" SHARE_HOSTNAME=perf.example.test SHARE_HOSTS="${h%%.*}" SHARE_TUNNEL=0 \
     bash "$SH" state >"$WORK/state-perf.json"; } 2>"$WORK/state-perf.time"
 perf_secs=$(cat "$WORK/state-perf.time")
 echo "  share state over 500 rows took ${perf_secs}s"
@@ -786,7 +786,7 @@ chmod +x "$OLD_SH"
 OLD_ROOT="$WORK/state-old-root"; OLD_CFG="$WORK/state-old-config"
 mkdir -p "$OLD_ROOT" "$OLD_CFG"
 old_marker="$WORK/state-old-marker"; touch "$old_marker"; sleep 1.1
-out=$(env SHARE_ROOT="$OLD_ROOT" SHARE_CONFIG_DIR="$OLD_CFG" SHARE_HOSTNAME=old.example.test SHARE_HOSTS="$h" SHARE_TUNNEL=0 bash "$OLD_SH" state 2>&1); rc=$?
+out=$(env SHARE_ROOT="$OLD_ROOT" SHARE_CONFIG_DIR="$OLD_CFG" SHARE_HOSTNAME=old.example.test SHARE_HOSTS="${h%%.*}" SHARE_TUNNEL=0 bash "$OLD_SH" state 2>&1); rc=$?
 check "v0.5.1 CLI: git show fetched the old script" "1" "$([[ -s $OLD_SH ]] && echo 1 || echo 0)"
 check "v0.5.1 CLI: state exits 1 (unknown verb)" "1" "$rc"
 check "v0.5.1 CLI: state wrote nothing" "" "$(find "$OLD_ROOT" "$OLD_CFG" -newer "$old_marker" 2>/dev/null)"
@@ -796,10 +796,11 @@ echo "=== TASK-015: docs cover every share state field ==="
 # from the suite's own isolated root, with a snapshot, a live, and an own-host
 # share, so every JSON key name in the contract is present at least once.
 doc="$(cd "$(dirname "$SH")/.." && pwd)/docs/how-it-works.md"
-mapfile -t state_fields < <(jq -r '[paths | map(select(type == "string")) | .[-1]] | unique[]' "$WORK/state-serving.json")
+state_fields=()
+while IFS= read -r f; do state_fields+=("$f"); done < <(jq -r '[paths | map(select(type == "string")) | .[-1]] | unique[]' "$WORK/state-serving.json")
 doc_covers_fields() { # doc_covers_fields <file>: 0 iff every name in $state_fields appears in it
   local f
-  for f in "${state_fields[@]}"; do grep -qF -- "$f" "$1" || return 1; done
+  for f in ${state_fields[@]+"${state_fields[@]}"}; do grep -qF -- "$f" "$1" || return 1; done
   return 0
 }
 check "share state produced a real field list" "1" "$([[ ${#state_fields[@]} -ge 10 ]] && echo 1 || echo 0)"

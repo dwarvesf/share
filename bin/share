@@ -252,7 +252,7 @@ LUA
     katex=""; grep -q '\$' "$f" && katex="--katex" # KaTeX from the CDN, only for pages with math
     # shellcheck disable=SC2086
     pandoc --quiet -s "$f" -o "$out" --lua-filter "$filter" --include-in-header "$style" \
-      --from=markdown-smart-implicit_figures --syntax-highlighting tango --metadata pagetitle="$(basename "$f" .md)" $katex \
+      --from=markdown-smart-implicit_figures --highlight-style=tango --metadata pagetitle="$(basename "$f" .md)" $katex \
       || echo "share: could not render $f" >&2
   done
 }
