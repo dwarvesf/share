@@ -366,6 +366,8 @@ Third validation (fresh Opus) returned NEEDS REVISION with 1 critical, folded: `
 
 - AMEND-001: 2026-09-27 | `build.sh` notarizes with an App Store Connect key (`NOTARY_KEY`, `NOTARY_KEY_ID`, `NOTARY_ISSUER`) as well as the keychain profile | why: the `DWARVES_NOTARY` profile was absent and `notarytool store-credentials` fails without an interactive keychain, which would make every release a manual step | at TASK-012 checkpoint | new tasks: none | re-validated: delta-only, by the TASK-012 re-verification
 
+- AMEND-002: 2026-09-27 | `mac/release.sh` gets the notarization key from 1Password when `NOTARY_KEY` is unset and `NOTARY_KEY_OP` (an `op://` reference to the `.p8` field) plus `NOTARY_KEY_ID` and `NOTARY_ISSUER` are set: it reads the key with `op read` straight into a `mktemp` file (mode 600), exports `NOTARY_KEY`, and moves the file to the Trash on exit | why: the keychain profile cannot be stored headlessly (AMEND-001), so without this a real `bin/release` would build and sign, then stop at notarization; the reference lives in the operator's environment, never in this public repo | at TASK-014 checkpoint | new tasks: none | re-validated: delta-only, by its task verifier
+
 ## Open questions
 
 (none)
