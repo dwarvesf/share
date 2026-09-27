@@ -46,8 +46,26 @@ enum Spawn {
         var attr: posix_spawnattr_t?
         posix_spawnattr_init(&attr)
         defer { posix_spawnattr_destroy(&attr) }
-        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETPGROUP))
+        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF))
         posix_spawnattr_setpgroup(&attr, 0) // new group, led by the child itself
+
+        // posix_spawn otherwise inherits the calling thread's signal mask into the child.
+        // GCD and Swift-concurrency worker threads commonly block most signals (including
+        // SIGTERM), so a child spawned from one of those threads would never receive a
+        // `killpg(..., SIGTERM)` sent later: it stays blocked forever. SETSIGMASK clears the
+        // child's mask outright; SETSIGDEF resets the disposition of the signals this app
+        // relies on to their default action, in case the parent's disposition (rather than
+        // its mask) was ever changed to ignore one of them.
+        var emptyMask = sigset_t()
+        sigemptyset(&emptyMask)
+        posix_spawnattr_setsigmask(&attr, &emptyMask)
+
+        var defaultedSignals = sigset_t()
+        sigemptyset(&defaultedSignals)
+        for signal in [SIGTERM, SIGINT, SIGHUP, SIGPIPE, SIGQUIT] {
+            sigaddset(&defaultedSignals, signal)
+        }
+        posix_spawnattr_setsigdefault(&attr, &defaultedSignals)
 
         let argvC = makeCArray([executablePath] + argv)
         let envC = makeCArray(environment.map { "\($0.key)=\($0.value)" })
