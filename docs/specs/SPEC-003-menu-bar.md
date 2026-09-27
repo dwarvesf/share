@@ -191,6 +191,8 @@ Status icon: template SF Symbol `antenna.radiowaves.left.and.right` when serving
  Set Up…                          (not_setup only)
  Copy Install Command             (CLI missing only)
  Open at Login  ✓
+ ─────────────
+ About Share Bar
  Quit Share Bar           ⌘Q
 ```
 

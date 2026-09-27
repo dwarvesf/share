@@ -20,6 +20,8 @@
 	<string>0.0.0</string>
 	<key>CFBundleVersion</key>
 	<string>0.0.0</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 Dwarves Foundation. MIT License.</string>
 	<key>NSDocumentsFolderUsageDescription</key>
 	<string>share copies the files you choose so it can publish them</string>
 	<key>NSDesktopFolderUsageDescription</key>

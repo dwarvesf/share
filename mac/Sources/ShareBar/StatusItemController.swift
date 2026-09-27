@@ -230,6 +230,10 @@ final class StatusItemController: NSObject, @unchecked Sendable {
 
         menu.addItem(openAtLoginItem())
 
+        menu.addItem(.separator())
+
+        menu.addItem(actionItem("About Share Bar", action: #selector(aboutShareBar)))
+
         let quitItem = NSMenuItem(title: "Quit Share Bar", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
@@ -672,6 +676,14 @@ final class StatusItemController: NSObject, @unchecked Sendable {
             actionLogger.error("open-at-login toggle failed: \(String(describing: error), privacy: .public)")
         }
         applyModel() // re-reads status immediately so the checkmark reflects the new state
+    }
+
+    /// `.accessory` apps don't get frontmost focus for free, so the panel needs an explicit
+    /// activate before `orderFrontStandardAboutPanel` or it can show up behind other windows.
+    @objc private func aboutShareBar() {
+        actionLogger.log("about")
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(nil)
     }
 
     @objc private func quit() {
