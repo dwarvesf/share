@@ -38,3 +38,30 @@ TASK-012: no deviations; matches the spec verbatim (every Info.plist key, ad-hoc
 - Added a second notarytool auth mode instead: `NOTARY_KEY` + `NOTARY_KEY_ID` + `NOTARY_ISSUER` (an App Store Connect `.p8`, its key ID, its issuer ID) pass `--key/--key-id/--issuer` to every notarytool call, so a Mac without the `DWARVES_NOTARY` keychain profile can still notarize headlessly. Ran the full `--sign --notarize` path for real against the Hacker Bar Release key: `status: Accepted`, `xcrun stapler validate "mac/build/Share Bar.app"` said "The validate action worked!", and `spctl -a -vv "mac/build/Share Bar.app"` returned `source=Notarized Developer ID`. The profile path still fails cleanly with no key-mode env set (exits 1 naming the missing `DWARVES_NOTARY` profile).
 
 TASK-013: no deviations; matches the spec verbatim
+
+## 2026-09-27 12:31 Locks: prune loop rewritten for bash 5.3 EXIT traps
+
+- Context: the spec relies on `lock_take` re-arming `trap release_locks EXIT` inside subshells. The new "die inside prune's pipeline" test failed under brew bash 5.3.20 and passed under `/bin/bash` 3.2.
+- Decision/Change: `cmd_prune` collects expired ids with `ids="$(awk ...)"` and loops with `for id in $ids`. The old code piped awk into `while read`. `cmd_rm "$id" | sed` stays a pipeline.
+- Why: bash 5.3 skips an EXIT trap set inside a `| while` body subshell, including a pipeline nested in it. A plain `cmd | sed` pipeline child runs its trap in both shells (probed).
+- Alternatives: a `BASH_SUBSHELL`-aware release in the parent. Rejected: more code, and the parent cannot know which lock a dead child left.
+- Impact: ids are 6-hex, so word splitting is safe. The prune test runs under both `bash` and `/bin/bash`.
+- Open questions: none.
+
+## 2026-09-27 12:31 Locks: details the spec left open
+
+- Context: the spec pins pid symlinks and rename-then-check. It leaves the timeouts, the release rule, and the upgrade case open.
+- Decision/Change: `lock_take <name> [secs]` defaults to 60s. `host_lock` passes `SHARE_HOST_LOCK_TIMEOUT` so the existing knob keeps working. `index` has no knob. `held_locks` holds lock names, not paths, so a `$root` with spaces survives word splitting. `lock_release` removes the link only when its target is still `$$`. A real directory at `.lock-<name>` counts as held.
+- Why: `ln -sn pid dir` creates a link inside an existing directory and succeeds, so a leftover pre-upgrade `mkdir` lock would silently disable locking. Treating it as held keeps today's behavior: time out and name the lock.
+- Alternatives: `rmdir` a legacy directory automatically. Rejected: it cannot tell a leaked lock from one an old binary holds.
+- Impact: residual window in the stale rule. A waiter moves a live link back with `mv -f`. A third process that took the lock during that window gets overwritten. Two waiters must both read a dead pid first, so this needs three racing processes. Accepted.
+- Open questions: none.
+
+## 2026-09-27 12:31 Test: the Caddyfile negative control needed a forced interleaving
+
+- Context: negative control 4 (render after releasing `index_lock`) passed the first parallel test in every run. `write_caddyfile` now renders to `mktemp` and moves the file in, so an unlocked render is always whole. Stale only happens when an older render lands last, and renders finish in start order.
+- Decision/Change: the test seeds 60 inert rows to stretch each render to about 100ms. It freezes the first remover (SIGSTOP) 50ms after its row leaves the index. If the frozen process holds `.lock-index`, the test resumes it after 0.3s. If not, it stays frozen until the other writers finish. The padding rows go away after the section.
+- Why: random SIGSTOP jitter caught the control in 25 to 75% of rounds. The targeted freeze caught it 12/12 in a harness and 5 of 6 suite rounds. The real code stayed clean 12/12.
+- Alternatives: a sleep seam inside `write_caddyfile`. Rejected: a test hook in production code.
+- Impact: suite time stays about 30s. Negative control 2 (no lock in `cmd_rm`) fails both rounds.
+- Open questions: `refresh` racing `rm` on the same id can recreate `pub/<id>` after the row is gone. The payload stays served with no row. This behavior predates the change and is out of scope here.

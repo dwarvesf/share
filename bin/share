@@ -70,6 +70,32 @@ to_trash() { # an empty path would make `trash` move the current directory
 }
 need_host() { [[ -n $host_name || $mode == quick ]] || die "no setup yet: run 'share setup <hostname>' or 'share setup --quick'"; }
 
+# Locks are symlinks $root/.lock-<name> -> holder pid, so a dead holder's lock can be broken.
+# Inside a subshell $$ is the parent's pid (bash 3.2 has no BASHPID); that lock is recovered once the parent exits.
+held_locks=""   # names this process holds; the EXIT trap releases them
+lock_take() { # lock_take <name> [timeout-secs]
+  local l="$root/.lock-$1" s="$root/.lock-$1.stale.$$" i=0 max=$(( ${2:-60} * 5 )) pid
+  # a real directory is a pre-symlink lock: ln would link inside it, so it counts as held
+  while [[ -d $l && ! -L $l ]] || ! ln -sn "$$" "$l" 2>/dev/null; do
+    pid="$(readlink "$l" 2>/dev/null || true)"
+    # stale: rename to a private name, re-read, remove only if still dead; a live one goes back
+    if [[ -n $pid ]] && ! kill -0 "$pid" 2>/dev/null && mv "$l" "$s" 2>/dev/null; then
+      pid="$(readlink "$s" 2>/dev/null || true)"
+      if [[ -n $pid ]] && ! kill -0 "$pid" 2>/dev/null; then rm -f "$s"; else mv -f "$s" "$l"; fi
+      continue
+    fi
+    i=$((i + 1)); [[ $i -gt $max ]] && die "another share command holds the $1 lock"
+    sleep 0.2
+  done
+  held_locks="$held_locks $1"
+  trap release_locks EXIT   # re-armed on every take: subshells do not inherit EXIT traps
+}
+lock_release() { # lock_release <name>: only a link that still names this pid is removed
+  [[ "$(readlink "$root/.lock-$1" 2>/dev/null)" == "$$" ]] && rm -f "$root/.lock-$1"
+  held_locks="${held_locks// $1/}"
+}
+release_locks() { local n; for n in $held_locks; do lock_release "$n"; done; }
+
 # the public hostname share links use: the configured hostname in named mode,
 # the fqdn cloudflared printed in quick mode (empty while not serving)
 serving_host() {
@@ -319,8 +345,11 @@ cmd_add() {
     warn_private "$src" "$id"
   fi
   [[ -n $host_fqdn ]] && host_add "$host_fqdn"
+  lock_take index   # publish: row, render, reload as one step, so no writer's row or render is lost
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$src" "$(date +%F)" "$exp" "$opts" >>"$index"
   write_caddyfile
+  caddy_reload
+  lock_release index   # before cmd_start: serve's startup render takes the lock itself
   url="$(share_url "$id" "$name" "$opts")"
   echo "$url"
   if [[ ${SHARE_CLIPBOARD:-1} == 1 ]] && command -v pbcopy >/dev/null; then
@@ -328,8 +357,6 @@ cmd_add() {
   fi
   if ! running; then
     if host_ok; then cmd_start; else echo "  (not serving: $(this_host) is not in hosts=$hosts)"; fi
-  else
-    caddy_reload
   fi
 }
 
@@ -357,29 +384,36 @@ cmd_refresh() {
   src="$(cut -f3 <<<"$r")"
   [[ -e $src ]] || die "source is gone: $src (the snapshot keeps serving; share rm $1 to unpublish)"
   copy "$src" "$1" "$opts"
+  lock_take index
   write_caddyfile   # a refresh can add or remove index.html, which flips try_files
   caddy_reload
+  lock_release index
   echo "refreshed $1 from $src"
 }
 
 cmd_rm() {
-  local r opts fqdn=""
+  local r opts fqdn="" tmp
   r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
   fqdn="$(opt_val host "$opts" || true)"
   [[ -n $fqdn ]] && host_rm "$fqdn"
   [[ -d $pub/$1 ]] && to_trash "$pub/$1"
-  awk -F'\t' -v id="$1" '$1 != id' "$index" >"$index.tmp" && mv -f "$index.tmp" "$index"
+  lock_take index
+  tmp="$(mktemp "$root/.index.XXXXXX")"
+  awk -F'\t' -v id="$1" '$1 != id' "$index" >"$tmp" && mv -f "$tmp" "$index"
   write_caddyfile
   caddy_reload
+  lock_release index
   echo "unpublished $1"
 }
 
 cmd_prune() { # unpublish every share past its expiry
   [[ -s $index ]] || return 0
-  local now id
+  local now ids id
   now="$(date +%s)"
-  awk -F'\t' -v now="$now" '$5 > 0 && $5 < now {print $1}' "$index" | while IFS= read -r id; do
+  # a for loop, not `| while`: bash 5.3 skips the EXIT trap of a lock taken in a while-loop subshell
+  ids="$(awk -F'\t' -v now="$now" '$5 > 0 && $5 < now {print $1}' "$index")"
+  for id in $ids; do
     cmd_rm "$id" | sed 's/$/ (expired)/'
   done
 }
@@ -401,7 +435,8 @@ cmd_hits() {
 # --- serving ---
 
 write_caddyfile() { # rendered from index.tsv; no-store: Cloudflare must not cache past rm or stop
-  local id name src date exp opts fqdn sroot
+  local id name src date exp opts fqdn sroot tmp
+  tmp="$(mktemp "$root/.Caddyfile.XXXXXX")"   # rendered aside and moved in: caddy never reads half a file
   {
     cat <<EOF
 {
@@ -464,7 +499,8 @@ EOF
         printf '}\n'
       done <"$index"
     fi
-  } >"$root/Caddyfile"
+  } >"$tmp"
+  mv -f "$tmp" "$root/Caddyfile"
 }
 
 caddy_reload() { # apply Caddyfile changes over the admin socket; a failure warns, never kills
@@ -481,7 +517,10 @@ cmd_serve() {
   # shellcheck disable=SC2174 # the leaf ($root) is what needs 700: it holds the admin socket
   mkdir -p -m 700 "$root"; mkdir -p "$pub"
   cmd_prune   # before the render, so the Caddyfile never carries expired rows
+  # locks are taken only here, before serve's own EXIT trap replaces release_locks
+  lock_take index
   write_caddyfile
+  lock_release index
   local token=""
   # pids stay global: the EXIT trap must still see them when cmd_serve returns
   # normally (e.g. cloudflared dies, wait returns) and locals unbind first.
@@ -501,7 +540,7 @@ cmd_serve() {
   # The trap lands before the tunnel work and reads the pids at run time:
   # a die in the quick-URL parse must still reap caddy and the prune loop.
   # pkill first: the loop's current sleep is a grandchild kill(1) can't reach.
-  trap '[[ -n ${loop_pid:-} ]] && pkill -P "$loop_pid" 2>/dev/null; kill ${caddy_pid:-} ${loop_pid:-} ${tunnel_pid:-} 2>/dev/null; wait 2>/dev/null; rm -f "$pidfile"' EXIT
+  trap 'release_locks; [[ -n ${loop_pid:-} ]] && pkill -P "$loop_pid" 2>/dev/null; kill ${caddy_pid:-} ${loop_pid:-} ${tunnel_pid:-} 2>/dev/null; wait 2>/dev/null; rm -f "$pidfile"' EXIT
   trap 'exit 0' INT TERM
   if [[ $tunnel == 1 && $mode == quick ]]; then
     # quick tunnel: no token, no DNS; cloudflared prints a random trycloudflare URL.
@@ -887,18 +926,8 @@ host_auth() { # cf_token, account, zone_id, tun_id for Cloudflare-side host work
   [[ -n $tun_id ]] || die "no tunnel_id in $config; run 'share setup' first"
 }
 
-host_lock() { # one Cloudflare-side edit at a time; stale after SHARE_HOST_LOCK_TIMEOUT seconds
-  local i=0 max=$(( ${SHARE_HOST_LOCK_TIMEOUT:-60} * 5 ))
-  while ! mkdir "$root/.lock-host" 2>/dev/null; do
-    i=$((i + 1)); [[ $i -gt $max ]] && die "another share command holds the host lock"
-    sleep 0.2
-  done
-  trap 'rmdir "$root/.lock-host" 2>/dev/null || true' EXIT
-}
-
-host_unlock() { # release as soon as the edit lands; the EXIT trap stays as the die-path backstop
-  rmdir "$root/.lock-host" 2>/dev/null || true
-}
+host_lock() { lock_take host "${SHARE_HOST_LOCK_TIMEOUT:-60}"; }   # one Cloudflare-side edit at a time
+host_unlock() { lock_release host; }   # as soon as the edit lands; the EXIT trap is the die-path backstop
 
 ingress_get() { # the tunnel config as {"config":{"ingress":[...]}}; dry mode reads a fixture
   if [[ ${SHARE_HOST_DRY:-0} == 1 ]]; then

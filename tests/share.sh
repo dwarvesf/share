@@ -28,6 +28,7 @@ wait_for_port() { # wait_for_port <port>: poll until something answers, 10s cap
   for _ in $(seq 1 100); do curl -s -o /dev/null "http://127.0.0.1:$1/" && return 0; sleep 0.1; done
   return 1
 }
+lock_count() { find "$SHARE_ROOT" -maxdepth 1 -name '.lock-*' | grep -c .; }
 wait_code() { # wait_code <expected> <url> [host]: poll the status for 5s, print the last one
   local c="" _
   for _ in $(seq 1 50); do
@@ -184,6 +185,62 @@ check "dead backend still adds" "0" "$rc"
 check "warns nothing answers" "1" "$(grep -c 'nothing answers on 127.0.0.1:19991 yet' "$WORK/e19")"
 check "dead share returns 502" "502" "$(wait_code 502 "${dead_url}hello.txt")"
 
+echo "=== concurrent writers ==="
+# Live rows are the ones the Caddyfile names by id (handle_path /<id>/*), so the render is checkable.
+all_ids() { cut -f1 "$SHARE_ROOT/index.tsv" | sort; }
+live_ids() { awk -F'\t' '$6 ~ /(^| )live( |$)/ && $6 !~ /host=/ {print $1}' "$SHARE_ROOT/index.tsv" | sort; }
+caddy_ids() { sed -n 's|^	handle_path /\([0-9a-f]*\)/\* {$|\1|p' "$SHARE_ROOT/Caddyfile" | sort; }
+md_id=$(cut -d/ -f4 <<<"$md_url")
+# Inert rows (no payload, not live, never expire) stretch every render to ~100ms, so the
+# first remover can be caught mid-publish below.
+for n in $(seq 100 159); do printf 'pad%s\tpad\t/nonexistent\t2026-01-01\t0\t\n' "$n"; done >>"$SHARE_ROOT/index.tsv"
+first_gone() { # first_gone <ids>: one of the ids no longer in the index
+  awk -F'\t' -v ids="$1" 'BEGIN {n = split(ids, a, " "); for (i = 1; i <= n; i++) w[a[i]] = 1}
+    {delete w[$1]} END {for (k in w) {print k; exit}}' "$SHARE_ROOT/index.tsv"
+}
+for round in 1 2; do
+  old_ids=""
+  for p in 1 2 3 4 5 6; do old_ids="$old_ids $(bash "$SH" add "191$round$p" 2>/dev/null | head -1 | cut -d/ -f4)"; done
+  before=$(all_ids)
+  mkdir -p "$WORK/par$round" "$WORK/rmpid$round"; pids=""
+  for p in 1 2 3 4 5 6; do
+    (bash "$SH" add "192$round$p" 2>/dev/null | head -1 | cut -d/ -f4 >"$WORK/par$round/$p") & pids="$pids $!"
+  done
+  for i in $old_ids; do bash "$SH" rm "$i" >/dev/null 2>&1 & pids="$pids $!"; echo $! >"$WORK/rmpid$round/$i"; done
+  bash "$SH" refresh "$md_id" >/dev/null 2>&1 & pids="$pids $!"
+  # Freeze the first remover 50ms after its row leaves the index, i.e. inside its render.
+  # Holding index_lock it blocks every other publish, so a short freeze does; a render done
+  # outside the lock would read a stale index, so it stays frozen until the others finish
+  # and its stale Caddyfile lands last.
+  gone=""
+  for _ in $(seq 1 500); do gone=$(first_gone "$old_ids"); [[ -n $gone ]] && break; sleep 0.01; done
+  frozen=$(cat "$WORK/rmpid$round/$gone")
+  sleep 0.05; kill -STOP "$frozen"
+  if [[ $(readlink "$SHARE_ROOT/.lock-index" 2>/dev/null) == "$frozen" ]]; then sleep 0.3
+  else
+    for _ in $(seq 1 100); do
+      busy=0; for q in $pids; do [[ $q != "$frozen" ]] && kill -0 "$q" 2>/dev/null && busy=1; done
+      [[ $busy == 0 ]] && break; sleep 0.05
+    done
+  fi
+  kill -CONT "$frozen"
+  # shellcheck disable=SC2086 # word-split pid list; a bare wait would also wait on the backend fixture
+  wait $pids
+  expected=$( (grep -vxF -f <(tr ' ' '\n' <<<"$old_ids" | grep .) <<<"$before"; cat "$WORK/par$round"/*) | sort)
+  check "round $round: 6 adds each got an id" "6" "$(cat "$WORK/par$round"/* | grep -cE '^[0-9a-f]{6}$')"
+  check "round $round: parallel add/rm/refresh keep exactly the expected rows" "$expected" "$(all_ids)"
+  check "round $round: Caddyfile lists exactly the surviving live ids" "$(live_ids)" "$(caddy_ids)"
+  check "round $round: no lock left behind" "0" "$(lock_count)"
+done
+grep -v '^pad' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
+
+sh -c 'exit 0' & dead=$!; wait "$dead"
+ln -s "$dead" "$SHARE_ROOT/.lock-index"
+bash "$SH" add 19131 >/dev/null 2>&1; rc=$?
+check "a dead holder's index lock is broken, add succeeds" "0" "$rc"
+check "the add behind the dead lock wrote its row" "1" "$(grep -c 'localhost:19131' "$SHARE_ROOT/index.tsv")"
+check "the broken lock is gone" "0" "$(lock_count)"
+
 echo "=== folder index ==="
 mkdir -p "$WORK/listme" && echo data >"$WORK/listme/file.txt" && printf '# Doc\n' >"$WORK/listme/other.md"
 list_url=$(bash "$SH" add "$WORK/listme" 2>/dev/null | head -1)
@@ -247,6 +304,8 @@ out=$(env -u CLOUDFLARE_API_TOKEN bash "$SH" add --host nope.example.test "$WORK
 check "no credential refused" "1" "$rc"
 check "no row for refused host" "0" "$(grep -c 'nope.example.test' "$SHARE_ROOT/index.tsv")"
 
+SHARE_HOST_DRY=1 bash "$SH" add "$WORK/dist" --host die.example.test >/dev/null 2>&1
+die_id=$(awk -F'\t' '$6 ~ /host=die\.example\.test/ {print $1}' "$SHARE_ROOT/index.tsv")
 cat >"$SHARE_ROOT/host-fixture.json" <<'EOF'
 {"config":{"ingress":[{"service":"http_status:404"},{"hostname":"s.example.test","service":"http://127.0.0.1:18787"}]}}
 EOF
@@ -255,13 +314,37 @@ out=$(SHARE_HOST_DRY=1 bash "$SH" add "$WORK/dist" --host broken.example.test 2>
 check "tampered ingress refused" "1" "$rc"
 check "dashboard hint" "1" "$(grep -c 'dashboard' <<<"$out")"
 check "no PUT logged" "0" "$(grep -c PUT "$SHARE_ROOT/host-calls.log")"
+SHARE_HOST_DRY=1 bash "$SH" rm "$die_id" >/dev/null 2>&1; rc=$?
+check "host_rm on tampered ingress dies" "1" "$rc"
+check "host_rm die leaves neither .lock-host nor .lock-index" "0" "$(lock_count)"
+awk -F'\t' -v OFS='\t' -v id="$die_id" '$1 == id {$5 = 1} {print}' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
+# both shells: bash 5.3 and 3.2 differ on EXIT traps in pipeline subshells
+for b in bash /bin/bash; do
+  out=$(SHARE_HOST_DRY=1 "$b" "$SH" prune 2>&1 1>/dev/null)
+  check "prune dies on the expired host row ($b)" "1" "$(grep -c 'tunnel ingress was edited outside share' <<<"$out")"
+  check "a die inside prune's pipeline leaves no lock ($b)" "0" "$(lock_count)"
+done
 rm -f "$SHARE_ROOT/host-fixture.json"
+SHARE_HOST_DRY=1 bash "$SH" rm "$die_id" >/dev/null 2>&1
+check "the died share removes once ingress is sane" "0" "$(grep -c 'die.example.test' "$SHARE_ROOT/index.tsv")"
 
 mkdir "$SHARE_ROOT/.lock-host"
 out=$(SHARE_HOST_DRY=1 SHARE_HOST_LOCK_TIMEOUT=1 bash "$SH" add "$WORK/dist" --host locked.example.test 2>&1 1>/dev/null); rc=$?
 check "held lock refuses" "1" "$rc"
 check "lock message" "1" "$(grep -c 'another share command holds the host lock' <<<"$out")"
 rmdir "$SHARE_ROOT/.lock-host"
+ln -s $$ "$SHARE_ROOT/.lock-host"   # a live holder: this suite's own pid
+out=$(SHARE_HOST_DRY=1 SHARE_HOST_LOCK_TIMEOUT=1 bash "$SH" add "$WORK/dist" --host locked.example.test 2>&1 1>/dev/null); rc=$?
+check "live pid lock refuses" "1" "$rc"
+check "live lock kept" "$$" "$(readlink "$SHARE_ROOT/.lock-host")"
+rm -f "$SHARE_ROOT/.lock-host"
+sh -c 'exit 0' & dead=$!; wait "$dead"
+ln -s "$dead" "$SHARE_ROOT/.lock-host"
+SHARE_HOST_DRY=1 bash "$SH" add "$WORK/dist" --host stale.example.test >/dev/null 2>&1; rc=$?
+check "a dead holder's host lock is broken, add succeeds" "0" "$rc"
+check "no lock after the stale break" "0" "$(lock_count)"
+stale_id=$(awk -F'\t' '$6 ~ /host=stale\.example\.test/ {print $1}' "$SHARE_ROOT/index.tsv")
+SHARE_HOST_DRY=1 bash "$SH" rm "$stale_id" >/dev/null 2>&1
 
 echo "=== serve restart renders live and host rows ==="
 SHARE_HOST_DRY=1 bash "$SH" add "$WORK/dist" --host fresh.example.test >/dev/null 2>&1
