@@ -62,6 +62,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
     private var showStopWaitingItem = false
     private var stopWaitingTimer: Timer?
     private var checkmarkRevertTimer: Timer?
+    private var dropView: DropView?
 
     // MARK: - Lazy hits state
 
@@ -80,6 +81,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         menu.delegate = self
         menu.autoenablesItems = false
         statusItem.menu = menu
+        installDropView()
 
         // Renders the "Loading…" placeholder instantly so the item never opens empty; the
         // first real `state` call (kicked off below) replaces it in place when it returns.
@@ -530,6 +532,42 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         }
         RunLoop.main.add(timer, forMode: .common)
         checkmarkRevertTimer = timer
+    }
+
+    // MARK: - Drop target (TASK-010)
+
+    /// See `DropView`'s own doc comment for the hitTest/drag spike finding this shape rests
+    /// on. Sized and pinned to the button so a drop anywhere on the icon is caught.
+    private func installDropView() {
+        guard let button = statusItem.button else { return }
+        let view = DropView(forwarding: button)
+        view.translatesAutoresizingMaskIntoConstraints = false
+        button.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.leadingAnchor.constraint(equalTo: button.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: button.trailingAnchor),
+            view.topAnchor.constraint(equalTo: button.topAnchor),
+            view.bottomAnchor.constraint(equalTo: button.bottomAnchor),
+        ])
+        view.onFiles = { [weak self] urls in
+            actionLogger.log("drop paths=\(urls.count, privacy: .public)")
+            Task { [weak self] in await self?.addPaths(urls.map(\.path)) }
+        }
+        view.onFilePromise = { [weak self] in
+            self?.presentFilePromiseRefused()
+        }
+        dropView = view
+    }
+
+    private func presentFilePromiseRefused() {
+        actionLogger.log("drop refused: file promise")
+        let alert = NSAlert()
+        alert.messageText =
+            "Share Bar can't share this drag (Mail, Photos, and similar apps hand over a promise, " +
+            "not a file). Save it to disk first, then drop the file."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     // MARK: - Lazy hits
