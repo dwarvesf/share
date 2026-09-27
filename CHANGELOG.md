@@ -1,10 +1,21 @@
 # Changelog
 
+## [v0.6.0] - 2026-09-28
+
+### Features
+
+- **mac:** About Share Bar in the menu (#31)
+- Share Bar, a menu bar app for share (#29)
+
 ## [v0.5.2] - 2026-09-27
 
 ### Fixes
 
 - a stale serve.pid with a reused pid no longer blocks serve (#28)
+
+### Documentation
+
+- changelog for v0.5.2
 
 ## [v0.5.1] - 2026-09-27
 
