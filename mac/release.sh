@@ -49,7 +49,7 @@ cask "$CASK_NAME" do
   end
 
   depends_on formula: "dwarvesf/tools/share"
-  depends_on macos: ">= :ventura"
+  depends_on macos: :ventura
 
   app "Share Bar.app"
 
