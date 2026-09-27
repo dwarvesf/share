@@ -79,10 +79,13 @@ goes before the verb, and a `--profile` after the verb is refused rather than ig
 | Keychain item | `share-tunnel:<host>` (account `share`) | `share-tunnel.<p>:<host>` |
 | port, metrics port | `8787`, `8788`, or `port=` | picked at the first setup: the lowest odd port from 8789 whose pair no other profile claims and nothing listens on, then kept in `port=` |
 
-Profiles share nothing. The only cross-profile logic reads the other profiles' config
-files, for three refusals: the port pick, `share add <port>` of another profile's port
-or metrics port, and `share setup` on a hostname another profile already holds. `share
-serve` also refuses a port that already answers (caddy binds with SO_REUSEPORT, so two
+Profiles share nothing. The only cross-profile logic is two read-only scans of the
+derived locations: the other profiles' config files, for three refusals (the port pick,
+`share add <port>` of another profile's port or metrics port, and `share setup` on a
+hostname or tunnel name another profile already holds), and every profile's `index.tsv`,
+so the port pick skips a port any profile live-shares. A profile moved with `SHARE_ROOT`
+or `SHARE_CONFIG_DIR` is invisible to both scans. `share serve` also refuses a port that
+already answers (caddy binds with SO_REUSEPORT, so two
 servers on one port would split requests silently); that guard covers the default
 profile too. `share profiles` lists the default and every directory under
 `~/.config/share/profiles` with its state and host, read through each profile's own

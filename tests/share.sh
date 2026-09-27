@@ -701,6 +701,17 @@ check "profiles: three lines" "3" "$(wc -l <"$WORK/profiles.out" | tr -d ' ')"
 check "profiles: default first, not set up under this HOME" "default	not_setup	-" "$(sed -n 1p "$WORK/profiles.out")"
 check "profiles: a serving on its host" "a	serving	prof-a.trycloudflare.com" "$(grep '^a	' "$WORK/profiles.out")"
 check "profiles: b serving on its host" "b	serving	prof-b.trycloudflare.com" "$(grep '^b	' "$WORK/profiles.out")"
+# a profile whose state cannot be read (a port that is not a number breaks the script's arithmetic) is one error row, not a dead listing
+mkdir -p "$PHOME/.config/share/profiles/bad" && echo 'port=1e3' >"$PHOME/.config/share/profiles/bad/config"
+psh a profiles >"$WORK/profiles-bad.out"
+check "profiles: an unreadable profile is an error row" "bad	error	-" "$(grep '^bad	' "$WORK/profiles-bad.out")"
+check "profiles: the other rows survive the error" "3" "$(grep -c 'not_setup\|serving' "$WORK/profiles-bad.out")"
+rm -rf "$PHOME/.config/share/profiles/bad"
+# an exported SHARE_ROOT must not leak into the per-profile state reads: each row is its own setup
+env -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME HOME="$PHOME" SHARE_ROOT="$WORK/elsewhere" \
+  SHARE_TUNNEL=1 PATH="$QPATH" bash "$SH" --profile a profiles >"$WORK/profiles-override.out"
+check "profiles under an exported SHARE_ROOT still reads each profile's own state" "a	serving	prof-a.trycloudflare.com b	serving	prof-b.trycloudflare.com" \
+  "$(grep '^[ab]	' "$WORK/profiles-override.out" | tr '\n' ' ' | sed 's/ $//')"
 
 echo "--- rerun setup keeps the port; rm, refresh, hits, state act on one profile ---"
 SHARE_FAKE_QUICK_URL=prof-a psh a setup --quick --no-service >/dev/null 2>&1
@@ -726,7 +737,7 @@ svc_file=""
 for f in "$PHOME/Library/LaunchAgents/foundation.d.share.c.plist" "$PHOME/.config/systemd/user/foundation.d.share.c.service"; do [[ -f $f ]] && svc_file="$f"; done
 check "profile c's service file uses the suffixed label" "1" "$([[ -n $svc_file ]] && echo 1 || echo 0)"
 check "profile c's service file carries SHARE_PROFILE=c" "1" "$(grep -c 'SHARE_PROFILE' "$svc_file")"
-check "profile c's service file pins its own config dir and root" "1" "$(grep -q 'SHARE_CONFIG_DIR[^S]*profiles/c' "$svc_file" && grep -q 'SHARE_ROOT[^S]*share/profiles/c' "$svc_file" && echo 1 || echo 0)"
+check "profile c's service file pins its own config dir and root" "1" "$({ grep -qF "SHARE_CONFIG_DIR</key><string>$PHOME/.config/share/profiles/c<" "$svc_file" || grep -qF "SHARE_CONFIG_DIR=$PHOME/.config/share/profiles/c\"" "$svc_file"; } && { grep -qF "SHARE_ROOT</key><string>$PHOME/share/profiles/c<" "$svc_file" || grep -qF "SHARE_ROOT=$PHOME/share/profiles/c\"" "$svc_file"; } && echo 1 || echo 0)"
 rmdir "$PHOME/share/profiles/c" 2>/dev/null; rm -rf "$PHOME/.config/share/profiles/c"
 
 echo "--- collisions between profiles are refused, never silent ---"
@@ -735,19 +746,34 @@ check "add of another profile's caddy port is refused" "1" "$rc"
 check "the refusal names the other profile" "1" "$(grep -c 'another share profile' <<<"$out")"
 out=$(psh a add "$((pb + 1))" 2>&1 1>/dev/null); rc=$?
 check "add of another profile's metrics port is refused" "1" "$rc"
+out=$(psh a add 8787 2>&1 1>/dev/null); rc=$?
+check "add of the default's 8787 is refused even before the default is set up" "1" "$rc"
+check "the 8787 refusal names the other profile" "1" "$(grep -c 'another share profile' <<<"$out")"
 mkdir -p "$PHOME/.config/share/profiles/d"; printf 'hostname=taken.example.test\nport=8999\n' >"$PHOME/.config/share/profiles/d/config"
 out=$(psh e setup taken.example.test 2>&1 1>/dev/null); rc=$?
 check "setup on another profile's hostname is refused" "1" "$rc"
 check "the refusal names the other profile" "1" "$(grep -c 'already the hostname of another profile' <<<"$out")"
 check "the refused setup wrote no config" "0" "$([[ -e $PHOME/.config/share/profiles/e ]] && echo 1 || echo 0)"
+printf 'hostname=taken.example.test\ntunnel_name=share-taken-example-test\nport=8999\n' >"$PHOME/.config/share/profiles/d/config"
+out=$(psh e setup other.example.test --tunnel-name share-taken-example-test 2>&1 1>/dev/null); rc=$?
+check "setup on another profile's tunnel name is refused" "1" "$rc"
+check "the refusal names the tunnel" "1" "$(grep -c 'share-taken-example-test already belongs to another profile' <<<"$out")"
 rm -rf "$PHOME/.config/share/profiles/d"
+perm() { stat -f '%Lp' "$@" 2>/dev/null || stat -c '%a' "$@"; }   # macOS, then GNU
+check "a profile root's parents under ~/share are 700" "700 700" "$(perm "$PHOME/share" "$PHOME/share/profiles" | tr '\n' ' ' | sed 's/ $//')"
 # a's serve on b's live port: the runtime guard, since a hand-edited port= bypasses the setup-time pick
 psh a stop >/dev/null
 sed -i.bak "s/^port=.*/port=$pb/" "$PHOME/.config/share/profiles/a/config" && rm -f "$PHOME/.config/share/profiles/a/config.bak"
 out=$(psh a serve 2>&1 1>/dev/null); rc=$?
 check "serve on a port another profile listens on dies" "1" "$rc"
 check "the die names the port" "1" "$(grep -c "127.0.0.1:$pb is already in use" <<<"$out")"
+check "the recovery hint names this profile's own setup" "1" "$(grep -c 'rerun share --profile a setup' <<<"$out")"
 check "b still answers alone on its port" "200" "$(code "http://127.0.0.1:$pb/$pb_id/outside.txt")"
+# only the metrics port collides: a's port one below b's, so a's metrics port is b's caddy port
+sed -i.bak "s/^port=.*/port=$((pb - 1))/" "$PHOME/.config/share/profiles/a/config" && rm -f "$PHOME/.config/share/profiles/a/config.bak"
+out=$(psh a serve 2>&1 1>/dev/null); rc=$?
+check "serve whose metrics port another profile listens on dies" "1" "$rc"
+check "the die names the metrics port" "1" "$(grep -c "127.0.0.1:$pb (metrics) is already in use" <<<"$out")"
 sed -i.bak "s/^port=.*/port=$pa/" "$PHOME/.config/share/profiles/a/config" && rm -f "$PHOME/.config/share/profiles/a/config.bak"
 SHARE_FAKE_QUICK_URL=prof-a psh a start >/dev/null 2>&1
 check "a serves again on its own port" "1" "$(psh a status | grep -c '^serving')"

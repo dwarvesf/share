@@ -53,9 +53,13 @@ same time, and existing installs must keep working with no migration.
 Chosen: a profile is a validated slug that supplies the default for each per-install
 value (config dir, root, label, Keychain key, port); the explicit `SHARE_*` overrides
 keep their precedence. Alternatives and why they lost: ADR-0005. Nothing is shared
-between profiles, so the only cross-profile logic is a scan of the other profiles'
-config files (`other_cfg`) used for three refusals: the port pick, `add <port>` of another
-profile's port pair, and `setup` on a hostname another profile owns.
+between profiles, so the only cross-profile logic is two read-only scans: the other
+profiles' config files (`other_cfg`), used for three refusals (the port pick, `add <port>`
+of another profile's port pair, and `setup` on a hostname another profile owns), and
+every profile's `index.tsv` (`live_shared`), used by the port pick to skip a port any
+profile live-shares. Both scans follow the derived locations (`~/.config/share`,
+`~/share`, and their `profiles/` subdirectories); a profile moved with `SHARE_ROOT` or
+`SHARE_CONFIG_DIR` is invisible to them (DEC-007).
 
 ## Behavior contract
 
@@ -159,7 +163,8 @@ verb, and one skill row.
 ## Files
 
 - `bin/share`: profile parse and validation at the top; derived `config_dir`, `root`,
-  `svc_label`, `token_key`; `other_cfg`, `port_claimed`, `free_port`, `profile_port`;
+  `svc_label`, `token_key`, `me`; `other_cfg`, `port_claimed`, `live_shared`, `listening`,
+  `free_port`, `profile_port`;
   the serve port guard; `cmd_profiles`; plist and unit environment; teardown rmdir;
   usage header and help range; skill row.
 - `tests/share.sh`: a profiles section (see test plan), a Keychain-key probe, stubs
@@ -181,8 +186,12 @@ verb, and one skill row.
 - A named profile's root sits under `~/share/profiles`, outside the default's `pub`,
   and the serve port guard plus the `add <port>` refusal keep one profile's caddy from
   serving another's files.
-- Cloudflare credentials stay per invocation (`CLOUDFLARE_API_TOKEN`) or per profile
-  config (`token_cmd`, `cert.pem`); share never stores an API token.
+- Cloudflare credentials are per invocation (`CLOUDFLARE_API_TOKEN`) or per profile
+  config (`token_cmd`, the login certificate). When SPEC-004's `share api-token` stores an
+  API token (a token command or a Keychain item, on the tunnel token's pattern), that
+  storage is namespaced per profile the same way: the config dir and the Keychain service
+  name carry the profile, so two profiles never share or clobber an API token. The login
+  service never reads an API token; it reads only the tunnel run token.
 
 ## Failure modes
 
@@ -214,11 +223,11 @@ verb, and one skill row.
 | 5 | two profiles `setup --quick --no-service` under one `HOME` | each config holds its own `port=`; the pairs are disjoint from each other and from `8787/8788`; setup printed the pick; a third profile's pick skips a port the default live-shares; both serve at once; each answers on its own port and 404s on the other's; each `share ls` shows only its own rows |
 | 6 | rerun `setup --quick` on a profile | the stored port is kept |
 | 7 | `add`, `rm`, `refresh`, `hits`, `state`, `stop` under a profile | act on that profile's root only; the other profile's rows and server are untouched |
-| 8 | `share profiles` | lists `default` (not set up under that HOME) and both profiles with state and host |
+| 8 | `share profiles`, also with `SHARE_ROOT` exported | lists `default` (not set up under that HOME) and both profiles with state and host; the exported override does not leak into the rows |
 | 9 | Keychain key with a stubbed `security`, in setup's order (token code loaded with an empty hostname, hostname assigned, then store) | `token_store` under profile `a` writes service `share-tunnel.a:<host>`; the default writes `share-tunnel:<host>`; no key ends in `:`; the token never appears in the stub's argv or log |
 | 10 | `teardown --yes` on a quick profile | config trashed; the empty profile dir is gone; the profile leaves `share profiles`; the other profile keeps serving |
 | 11 | `service install` for a profile with stubbed `launchctl`/`systemctl` | the file uses the suffixed label, carries `SHARE_PROFILE`, and pins the profile's config dir and root |
-| 12 | collisions | `add <other's port>` and `add <other's metrics port>` die; `setup <other's hostname>` dies before writing; `serve` with `port=` hand-set to the other profile's port dies naming the port while the other keeps answering |
+| 12 | collisions | `add <other's port>` and `add <other's metrics port>` die; `setup <other's hostname>` dies before writing; `serve` with `port=` hand-set to the other profile's port dies naming the port and this profile's own `setup` command while the other keeps answering |
 | 13 | misplaced flag and help | `teardown --yes --profile a` and `stop --profile=a` die; `--help` shows the `--profile` line, `profiles`, and `teardown` |
 
 Test seam: a stub `security` earlier in `PATH` that records the verb and the `-s`
@@ -273,4 +282,6 @@ how to pick a profile.
 - DEC-003: profiles nest under `~/share/profiles` and `~/.config/share/profiles` rather than siblings (`~/share.<p>`): one directory to list and to back up, and the operator's rule never deletes `~/share` wholesale.
 - DEC-004: a misplaced `--profile` is a refusal, not a second parse, because the fixed-position dispatch would otherwise run `teardown --yes` against the default install.
 - DEC-005: the serve guard applies to the default profile too, turning a silent SO_REUSEPORT double bind into a loud failure.
+- DEC-007: the cross-profile scans (`other_cfg`, `live_shared`) read the derived locations only and ignore `SHARE_ROOT` and `SHARE_CONFIG_DIR`; a profile moved by an override is a deliberate step outside the layout, and the serve port guard still catches a resulting collision.
+- DEC-008: every message that names a command to run builds it from `me` (`share` or `share --profile <p>`), so a recovery hint for a named profile never points at the default install.
 - DEC-006: the Keychain key is a function, not a variable: `host_name` is empty when the script loads on a first setup and is assigned inside `cmd_setup`, so a key fixed at load time stored every fresh token under `share-tunnel:` (found by validation round 2 against the first implementation).
