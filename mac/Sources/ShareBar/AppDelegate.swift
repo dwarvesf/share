@@ -15,9 +15,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Share File… selection or drop would, without driving `NSOpenPanel` or a real
         // drag. Never set by a normal launch; exists so manual checks can hit the add path
         // deterministically instead of navigating a picker via synthetic keystrokes.
+        // #if DEBUG: this read (and `debugAddPaths` itself) must not compile into a release
+        // build, or any process could set the env var before launching the notarized app
+        // and trigger an unattended `add`.
+        #if DEBUG
         if let raw = ProcessInfo.processInfo.environment["SHAREBAR_DEBUG_ADD_PATHS"], !raw.isEmpty {
             statusItemController?.debugAddPaths(raw.split(separator: ":").map(String.init))
         }
+        #endif
     }
 
     /// Quitting while setup runs (TASK-011) must not leave the setup process group behind.

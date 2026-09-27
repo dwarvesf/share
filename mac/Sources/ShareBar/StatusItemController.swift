@@ -418,9 +418,13 @@ final class StatusItemController: NSObject, @unchecked Sendable {
     /// `AppDelegate`): runs the exact same `addPaths` a real Share File… selection or a
     /// real drop would, so a check can exercise the add/warning/id-diff/checkmark path
     /// deterministically without driving `NSOpenPanel` or a real drag.
+    // #if DEBUG: must not exist in a release binary, or the env var alone would let any
+    // process trigger an unattended `add` with no user action.
+    #if DEBUG
     func debugAddPaths(_ paths: [String]) {
         Task { [weak self] in await self?.addPaths(paths) }
     }
+    #endif
 
     private func isDirectory(_ path: String) -> Bool {
         var isDir: ObjCBool = false
