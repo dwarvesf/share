@@ -73,6 +73,38 @@ check "malformed row does not crash ls" "0" "$(bash "$SH" ls >/dev/null 2>&1; ec
 check "malformed row is skipped from ls" "0" "$(bash "$SH" ls | grep -c zzzzzz)"
 grep -v '^zzzzzz' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
 
+echo "=== forged rows: a newline path is refused, untrusted rows never reach a reader ==="
+nl_dir="$WORK/wt/evil"$'\n'"row"
+mkdir -p "$nl_dir" && echo x >"$nl_dir/f.txt"
+idx_before=$(cksum <"$SHARE_ROOT/index.tsv")
+out=$(bash "$SH" add "$nl_dir/f.txt" 2>&1 1>/dev/null); rc=$?
+check "a newline in a parent folder is refused" "1" "$rc"
+check "the refusal names paths" "1" "$(grep -c 'paths with tabs or newlines' <<<"$out")"
+check "the refusal leaves the index unchanged" "$idx_before" "$(cksum <"$SHARE_ROOT/index.tsv")"
+{
+  printf '..\tforged-dotdot\t/x\t2026-01-01\t0\thost=dd.example.test\n'                     # id is not 6 hex
+  printf 'f0f0f1\tforged-main\thttp://127.0.0.1:19993\t2026-01-01\t0\tlive host=%s\n' "$SHARE_HOSTNAME"
+  printf 'f0f0f2\tforged-badhost\t/x\t2026-01-01\t0\thost=Bad_Host{\n'                     # not a hostname
+} >>"$SHARE_ROOT/index.tsv"
+bash "$SH" refresh "$(cut -d/ -f4 <<<"$md_url")" >/dev/null 2>&1   # re-renders the Caddyfile with the forged rows present
+check "forged rows absent from ls" "0" "$(bash "$SH" ls | grep -c 'forged-\|f0f0f\|dd\.example')"
+check "forged rows absent from the Caddyfile" "0" "$(grep -c "dd\.example\.test\|19993\|Bad_Host\|http://$SHARE_HOSTNAME:" "$SHARE_ROOT/Caddyfile")"
+bash "$SH" state >"$WORK/forged.json"
+check "forged rows absent from state" "0" "$(jq '[.shares[] | select(.name | startswith("forged-"))] | length' "$WORK/forged.json")"
+check "forged rows counted in skipped" "3" "$(jq '.skipped' "$WORK/forged.json")"
+grep -v $'\tforged-' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
+hostrm_probe="$WORK/hostrm-probe.sh"
+{
+  sed -n '/^die() {/p' "$SH"
+  sed -n '/^host_rm() {/,/^}/p' "$SH"
+  # shellcheck disable=SC2016 # literal code for the probe script, not this shell's expansion
+  echo 'host_name="$1" root="$2" SHARE_HOST_DRY=1; host_lock() { :; }; host_unlock() { :; }; host_rm "$1"'
+} >"$hostrm_probe"
+out=$(bash "$hostrm_probe" "$SHARE_HOSTNAME" "$WORK/hostrm-root" 2>&1); rc=$?
+check "host_rm refuses the main hostname" "1" "$rc"
+check "host_rm refusal names it" "1" "$(grep -c 'is the main hostname' <<<"$out")"
+check "host_rm refusal made no call" "0" "$([[ -e $WORK/hostrm-root/host-calls.log ]] && echo 1 || echo 0)"
+
 echo "=== serving ==="
 check "folder page" 200 "$(code "$dir_url")"
 check "asset" 200 "$(code "${dir_url}img/a.txt")"
@@ -242,7 +274,7 @@ caddy_ids() { sed -n 's|^	handle_path /\([0-9a-f]*\)/\* {$|\1|p' "$SHARE_ROOT/Ca
 md_id=$(cut -d/ -f4 <<<"$md_url")
 # Inert rows (no payload, not live, never expire) stretch every render to ~100ms, so the
 # first remover can be caught mid-publish below.
-for n in $(seq 100 159); do printf 'pad%s\tpad\t/nonexistent\t2026-01-01\t0\t\n' "$n"; done >>"$SHARE_ROOT/index.tsv"
+for n in $(seq 100 159); do printf 'fad%s\tpad\t/nonexistent\t2026-01-01\t0\t\n' "$n"; done >>"$SHARE_ROOT/index.tsv"
 first_gone() { # first_gone <ids>: one of the ids no longer in the index
   awk -F'\t' -v ids="$1" 'BEGIN {n = split(ids, a, " "); for (i = 1; i <= n; i++) w[a[i]] = 1}
     {delete w[$1]} END {for (k in w) {print k; exit}}' "$SHARE_ROOT/index.tsv"
@@ -281,7 +313,7 @@ for round in 1 2; do
   check "round $round: Caddyfile lists exactly the surviving live ids" "$(live_ids)" "$(caddy_ids)"
   check "round $round: no lock left behind" "0" "$(lock_count)"
 done
-grep -v '^pad' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
+grep -v $'\tpad\t' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
 
 sh -c 'exit 0' & dead=$!; wait "$dead"
 ln -s "$dead" "$SHARE_ROOT/.lock-index"
@@ -587,26 +619,26 @@ check "newline name refused" "1" "$rc"
 check "newline name message" "1" "$(grep -c 'tabs or newlines' <<<"$out")"
 
 echo "--- rm refuses an own-host removal it cannot finish; prune does not ---"
-mkdir -p "$SHARE_ROOT/pub/nocred1" "$SHARE_ROOT/pub/nocred2"
-echo x >"$SHARE_ROOT/pub/nocred1/f.txt"
-echo x >"$SHARE_ROOT/pub/nocred2/f.txt"
-printf 'nocred1\tnocred1\t/nonexistent\t2026-01-01\t0\thost=nocred1.example.test\n' >>"$SHARE_ROOT/index.tsv"
-printf 'nocred2\tnocred2\t/nonexistent\t2026-01-01\t1\thost=nocred2.example.test\n' >>"$SHARE_ROOT/index.tsv"
+mkdir -p "$SHARE_ROOT/pub/c0c0c1" "$SHARE_ROOT/pub/c0c0c2"
+echo x >"$SHARE_ROOT/pub/c0c0c1/f.txt"
+echo x >"$SHARE_ROOT/pub/c0c0c2/f.txt"
+printf 'c0c0c1\tnocred1\t/nonexistent\t2026-01-01\t0\thost=nocred1.example.test\n' >>"$SHARE_ROOT/index.tsv"
+printf 'c0c0c2\tnocred2\t/nonexistent\t2026-01-01\t1\thost=nocred2.example.test\n' >>"$SHARE_ROOT/index.tsv"
 
-out=$(env -u CLOUDFLARE_API_TOKEN bash "$SH" rm nocred1 2>&1 1>/dev/null); rc=$?
+out=$(env -u CLOUDFLARE_API_TOKEN bash "$SH" rm c0c0c1 2>&1 1>/dev/null); rc=$?
 check "rm refuses an own-host removal with no credential" "1" "$rc"
 check "refusal names the host" "1" "$(grep -c 'no Cloudflare credential for nocred1.example.test' <<<"$out")"
-check "row stays after refused rm" "1" "$(grep -c '^nocred1' "$SHARE_ROOT/index.tsv")"
-check "payload stays after refused rm" "1" "$([[ -d $SHARE_ROOT/pub/nocred1 ]] && echo 1 || echo 0)"
+check "row stays after refused rm" "1" "$(grep -c '^c0c0c1' "$SHARE_ROOT/index.tsv")"
+check "payload stays after refused rm" "1" "$([[ -d $SHARE_ROOT/pub/c0c0c1 ]] && echo 1 || echo 0)"
 
 out=$(env -u CLOUDFLARE_API_TOKEN bash "$SH" prune 2>&1 1>/dev/null); rc=$?
 check "prune exits 0 despite no credential" "0" "$rc"
 check "prune warns DNS stays behind" "1" "$(grep -c 'no Cloudflare credential; DNS and ingress' <<<"$out")"
-check "prune still removes the expired row" "0" "$(grep -c '^nocred2' "$SHARE_ROOT/index.tsv")"
-check "prune still removes the payload" "0" "$([[ -d $SHARE_ROOT/pub/nocred2 ]] && echo 1 || echo 0)"
+check "prune still removes the expired row" "0" "$(grep -c '^c0c0c2' "$SHARE_ROOT/index.tsv")"
+check "prune still removes the payload" "0" "$([[ -d $SHARE_ROOT/pub/c0c0c2 ]] && echo 1 || echo 0)"
 
-SHARE_HOST_DRY=1 bash "$SH" rm nocred1 >/dev/null 2>&1
-check "cleanup: nocred1 row gone" "0" "$(grep -c '^nocred1' "$SHARE_ROOT/index.tsv")"
+SHARE_HOST_DRY=1 bash "$SH" rm c0c0c1 >/dev/null 2>&1
+check "cleanup: nocred1 row gone" "0" "$(grep -c '^c0c0c1' "$SHARE_ROOT/index.tsv")"
 
 echo "=== TASK-005: share state ==="
 state_schema_ok() { # state_schema_ok <json-file> <expected-state>: the full field/type contract
@@ -664,12 +696,12 @@ echo x >"$WORK/state-src/hostfile.txt"
 env "${st_env[@]}" SHARE_HOST_DRY=1 bash "$SH" add "$WORK/state-src/hostfile.txt" --host state-host.example.test >/dev/null 2>&1
 host_id=$(awk -F'\t' '$6 ~ /host=state-host\.example\.test/ {print $1}' "$ST_ROOT/index.tsv")
 # captured now, before the synthetic rows below and the marker: `share ls` runs
-# cmd_prune, which would otherwise remove the expire1 row and rewrite the index
+# cmd_prune, which would otherwise remove the e0e0e1 row and rewrite the index
 # and Caddyfile right in the window the "writes nothing" check watches.
 ls_out=$(stsh ls)
 {
-  printf 'expire1\texpired.txt\t/nonexistent\t2020-01-01\t1\t\n'   # expired, not yet pruned
-  printf 'legacy1\tlegacy.txt\t/nonexistent\t2020-01-01\t0\n'      # 5-field, v0.1.x shape
+  printf 'e0e0e1\texpired.txt\t/nonexistent\t2020-01-01\t1\t\n'   # expired, not yet pruned
+  printf '1e9ac1\tlegacy.txt\t/nonexistent\t2020-01-01\t0\n'      # 5-field, v0.1.x shape
   printf 'bad1\tbadrow\n'                                          # malformed: 2 fields
 } >>"$ST_ROOT/index.tsv"
 
@@ -691,10 +723,10 @@ check "serving: exit 0" "0" "$rc"
 check "serving: schema valid" "0" "$(state_schema_ok "$WORK/state-serving.json" serving; echo $?)"
 check "serving: ready true under SHARE_TUNNEL=0" "true" "$(jq -c .ready "$WORK/state-serving.json")"
 check "serving: writes nothing" "" "$(find "$ST_ROOT" "$ST_CFG" -newer "$st_marker" 2>/dev/null)"
-check "serving: 5-field legacy row appears" "1" "$(jq '[.shares[] | select(.id == "legacy1")] | length' "$WORK/state-serving.json")"
-check "serving: expired-not-pruned row appears" "1" "$(jq '[.shares[] | select(.id == "expire1")] | length' "$WORK/state-serving.json")"
+check "serving: 5-field legacy row appears" "1" "$(jq '[.shares[] | select(.id == "1e9ac1")] | length' "$WORK/state-serving.json")"
+check "serving: expired-not-pruned row appears" "1" "$(jq '[.shares[] | select(.id == "e0e0e1")] | length' "$WORK/state-serving.json")"
 check "serving: malformed row counted in skipped" "1" "$(jq '.skipped' "$WORK/state-serving.json")"
-check "serving: shares ordered newest-first" "legacy1 expire1 $host_id $live_id $snap_id" \
+check "serving: shares ordered newest-first" "1e9ac1 e0e0e1 $host_id $live_id $snap_id" \
   "$(jq -r '[.shares[].id] | join(" ")' "$WORK/state-serving.json")"
 
 check "snapshot kind" "snapshot" "$(jq -r --arg id "$snap_id" '.shares[] | select(.id==$id) | .kind' "$WORK/state-serving.json")"
@@ -716,7 +748,7 @@ stsh stop >/dev/null
 echo "--- 500-row index answers fast ---"
 PERF_ROOT="$WORK/state-perf-root"; PERF_CFG="$WORK/state-perf-config"
 mkdir -p "$PERF_ROOT" "$PERF_CFG"
-for n in $(seq 1 500); do printf 'p%05x\tfile%d.txt\t/nonexistent/file%d.txt\t2026-01-01\t0\t\n' "$n" "$n" "$n"; done >"$PERF_ROOT/index.tsv"
+for n in $(seq 1 500); do printf '%06x\tfile%d.txt\t/nonexistent/file%d.txt\t2026-01-01\t0\t\n' "$n" "$n" "$n"; done >"$PERF_ROOT/index.tsv"
 TIMEFORMAT='%R'
 { time env SHARE_ROOT="$PERF_ROOT" SHARE_CONFIG_DIR="$PERF_CFG" SHARE_HOSTNAME=perf.example.test SHARE_HOSTS="$h" SHARE_TUNNEL=0 \
     bash "$SH" state >"$WORK/state-perf.json"; } 2>"$WORK/state-perf.time"

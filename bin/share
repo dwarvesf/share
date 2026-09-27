@@ -43,13 +43,26 @@ die() { echo "share: $*" >&2; exit 1; }
 this_host() { local h; h="$(uname -n)"; echo "${h%%.*}"; }
 host_ok() { case " $hosts " in *" $(this_host) "*) return 0 ;; esac; return 1; }
 running() { [[ -f $pidfile ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; }
-row() { [[ -f $index ]] && awk -F'\t' -v id="$1" '(NF == 5 || NF == 6) && $1 == id' "$index"; }
+rows() { # the only index reader: a forged row (bad id, main or malformed host=) never reaches a path, Caddyfile, or Cloudflare call
+  [[ -f $index ]] || return 0
+  # no {n} intervals: mawk lacks them; the host regex is setup's hostname check
+  awk -F'\t' -v main="$host_name" '
+    (NF == 5 || NF == 6) && length($1) == 6 && $1 !~ /[^0-9a-f]/ {
+      n = split($6, a, " ")
+      for (i = 1; i <= n; i++) if (substr(a[i], 1, 5) == "host=") {
+        h = substr(a[i], 6)
+        if (h == main || h !~ /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z][a-z]+$/) next
+      }
+      print
+    }' "$index"
+}
+row() { rows | awk -F'\t' -v id="$1" '$1 == id'; }
 id_of() { # accept an id or a pasted share link: https://host/<id>/name -> <id>; a bare https://<fqdn>/ resolves to the host row
   case ${1:-} in
     *://*)
       local p="${1#*://}"; local h="${p%%/*}" rest="${p#*/}"
       if [[ $p == "$h" || -z $rest ]] && [[ -f $index ]]; then
-        awk -F'\t' -v h="$h" '(NF==5||NF==6){n=split($6,a," "); for(i=1;i<=n;i++) if(a[i]=="host=" h){print $1; exit}}' "$index"
+        rows | awk -F'\t' -v h="$h" '{n=split($6,a," "); for(i=1;i<=n;i++) if(a[i]=="host=" h){print $1; exit}}'
       else
         echo "${rest%%/*}"
       fi ;;
@@ -351,7 +364,7 @@ cmd_add() {
     name="localhost:$tport"; src="http://127.0.0.1:$tport"; opts="live"
   else
     src="$(realpath "$target")"; name="$(basename "$src")"
-    case $name in *$'\t'*|*$'\n'*) die "names with tabs or newlines are not supported" ;; esac
+    case $src in *$'\t'*|*$'\n'*) die "paths with tabs or newlines are not supported" ;; esac
   fi
   [[ -n $noindex ]] && opts="${opts:+$opts }noindex"
   if [[ -n $host_fqdn ]]; then
@@ -402,7 +415,7 @@ cmd_ls() {
       gone=""; [[ -e $src ]] || gone="  (source gone, snapshot still served)"
       echo "    id=$id  size=${size:-?}  added=$date  expires=$until  from=$src$gone"
     fi
-  done < <(awk -F'\t' 'NF==5||NF==6' "$index")   # a 5-field row (v0.1.x) reads with opts empty; malformed rows are skipped
+  done < <(rows)   # a 5-field row (v0.1.x) reads with opts empty; malformed rows are skipped
 }
 
 cmd_refresh() {
@@ -451,7 +464,7 @@ cmd_prune() { # unpublish every share past its expiry
   local now ids id
   now="$(date +%s)"
   # a for loop, not `| while`: bash 5.3 skips the EXIT trap of a lock taken in a while-loop subshell
-  ids="$(awk -F'\t' -v now="$now" '(NF==5||NF==6) && $5 > 0 && $5 < now {print $1}' "$index")"
+  ids="$(rows | awk -F'\t' -v now="$now" '$5 > 0 && $5 < now {print $1}')"
   for id in $ids; do
     cmd_rm "$id" prune | sed 's/$/ (expired)/'
   done
@@ -497,7 +510,7 @@ EOF
         if has_opt live "$opts" && [[ -z $fqdn ]]; then
           printf '\thandle_path /%s/* {\n\t\treverse_proxy http://127.0.0.1:%s\n\t}\n' "$id" "${src##*:}"
         fi
-      done < <(awk -F'\t' 'NF==5||NF==6' "$index")
+      done < <(rows)
     fi
     cat <<EOF
 	handle /healthz {
@@ -536,7 +549,7 @@ EOF
           printf '\tfile_server {\n\t\tindex index.html README.html\n\t}\n'
         fi
         printf '}\n'
-      done < <(awk -F'\t' 'NF==5||NF==6' "$index")
+      done < <(rows)
     fi
   } >"$tmp"
   mv -f "$tmp" "$root/Caddyfile"
@@ -824,7 +837,7 @@ cmd_state() { # read-only JSON snapshot for the menu bar app: never prunes, writ
   # skipped_n is computed here, not inside the pipeline below: a `{ } | jq` pipeline
   # forks the left side, so an assignment made there never reaches this shell's copy
   # of the variable, and jq's --argjson would see only the local's initial "0".
-  [[ -s $index ]] && skipped_n="$(awk -F'\t' 'NF>0 && NF!=5 && NF!=6{c++} END{print c+0}' "$index")"
+  [[ -s $index ]] && skipped_n=$(($(awk 'length {c++} END {print c+0}' "$index") - $(rows | awk 'END {print NR}')))
   {
     if [[ -s $index ]]; then
       local id name src date exp opts kind own_host line rows=() i
@@ -835,7 +848,7 @@ cmd_state() { # read-only JSON snapshot for the menu bar app: never prunes, writ
         share_url "$id" "$name" "$opts"
         printf -v line '%s\t%s\t%s\t%s\t%s\t%s' "$id" "$name" "$share_url_out" "$kind" "$own_host" "${exp:-0}"
         rows+=("$line")
-      done < <(awk -F'\t' 'NF==5||NF==6' "$index")
+      done < <(rows)
       for ((i = ${#rows[@]} - 1; i >= 0; i--)); do printf '%s\n' "${rows[i]}"; done
     fi
   } | jq -nR \
@@ -1076,6 +1089,7 @@ host_add() { # host_add <fqdn>: collision guard, ingress rule, then the CNAME
 
 host_rm() { # host_rm <fqdn>: delete the CNAME, then the ingress rule; missing counts as done
   local fqdn="$1" cfg_json rec="" rid="" out
+  [[ $fqdn != "$host_name" ]] || die "$fqdn is the main hostname; host_rm never touches it"
   host_lock
   if [[ ${SHARE_HOST_DRY:-0} == 1 ]]; then
     echo "DELETE CNAME" >>"$root/host-calls.log"
@@ -1087,7 +1101,11 @@ host_rm() { # host_rm <fqdn>: delete the CNAME, then the ingress rule; missing c
     host_zone
     host_auth
     rec="$(cf GET "/zones/$zone_id/dns_records?name=$fqdn")"
-    rid="$(jq -r '.result[0].id // empty' <<<"$rec")"
+    # only a record pointing at this tunnel is ours to delete, as host_add checks before it creates one
+    rid="$(jq -r --arg t "$tun_id.cfargotunnel.com" 'first(.result[] | select(.content == $t) | .id) // empty' <<<"$rec")"
+    if [[ -z $rid ]] && jq -e '.result | length > 0' <<<"$rec" >/dev/null; then
+      echo "share: $fqdn has a DNS record that does not point at this tunnel; left alone" >&2
+    fi
     if [[ -n $rid ]]; then
       if ! out="$(cf DELETE "/zones/$zone_id/dns_records/$rid" 2>&1)"; then
         if [[ $auth == login ]]; then
@@ -1255,12 +1273,12 @@ cmd_teardown() {
       while IFS=$'\t' read -r _ _hn _hs _hd _he hopts; do
         hfqdn="$(opt_val host "$hopts" || true)"
         [[ -n $hfqdn ]] && host_rm "$hfqdn" && echo "dns:     deleted $hfqdn"
-      done <"$index"
+      done < <(rows)
     fi
   elif [[ -f $cert ]]; then
     cf_token="$(cert_field apiToken)"; account="$(cf_token_account)"
     echo "dns:     the login token cannot delete DNS records. Delete the CNAME $host_name in the Cloudflare dashboard, or rerun with CLOUDFLARE_API_TOKEN."
-    if [[ -s $index ]] && awk -F'\t' '$6 ~ /host=/ {f=1} END {exit !f}' "$index"; then
+    if [[ -s $index ]] && rows | awk -F'\t' '$6 ~ /host=/ {f=1} END {exit !f}'; then
       echo "dns:     host shares in $index keep their records; remove them in the dashboard or rerun with CLOUDFLARE_API_TOKEN."
     fi
   else
