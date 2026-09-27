@@ -828,6 +828,12 @@ echo "=== process leaks ==="
 # The live-share backend fixture is the last suite-spawned process left; kill it
 # now (the EXIT trap would) so the checks below can assert NOTHING is alive.
 kill "$fix_pid" 2>/dev/null; wait "$fix_pid" 2>/dev/null
+
+echo "=== stale pidfile, pid reused by another process ==="
+sleep 20 & other_pid=$!
+echo "$other_pid" >"$SHARE_ROOT/serve.pid"
+check "a reused pid is not a running server" "0" "$(bash "$SH" status | grep -c '^serving' || true)"
+kill "$other_pid" 2>/dev/null; wait "$other_pid" 2>/dev/null; rm -f "$SHARE_ROOT/serve.pid"
 # Every serve path above ends in stop, die, or teardown: after all of them,
 # nothing the suite spawned may still be alive. A leaked caddy holds the port
 # (SO_REUSEPORT lets the next run bind anyway, so this is the only check that
