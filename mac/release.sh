@@ -55,9 +55,7 @@ cask "$CASK_NAME" do
 
   uninstall quit: "foundation.d.share.bar"
 
-  zap trash: [
-    "~/Library/Preferences/foundation.d.share.bar.plist",
-  ]
+  zap trash: "~/Library/Preferences/foundation.d.share.bar.plist"
 end
 RUBY
 }
