@@ -204,6 +204,30 @@ curl -s -o /dev/null "$(local_url "${hits_url}hello.txt")"
 sleep 0.3
 check "hits counts live share" "1" "$(bash "$SH" hits "$hits_id" | grep -cE '^2 hits, [0-9]+ visitors?')"
 
+echo "=== TASK-004: hits streams the access log ==="
+old_hits_jq() { # old_hits_jq <log> <id> <fqdn>: the pre-streaming jq -rs program, kept as the reference
+  jq -rs --arg p "/$2/" --arg h "$3" '
+    def n($k; $w): "\($k) \($w)\(if $k == 1 then "" else "s" end)";
+    map(select((if $h == "" then (.request.uri | startswith($p)) else .request.host == $h end) and .status < 400)) as $h
+    | n($h | length; "hit") + ", "
+      + n($h | map(.request.headers["Cf-Connecting-Ip"][0] // .request.remote_ip) | unique | length; "visitor")
+      + (if ($h | length) > 0 then ", last \($h[-1].ts | floor | strflocaltime("%F %H:%M"))" else "" end)' "$1"
+}
+new_hits_jq() { # new_hits_jq <log> <id> <fqdn>: the streamed program bin/share's cmd_hits now runs
+  jq -rn --arg p "/$2/" --arg h "$3" '
+    def n($k; $w): "\($k) \($w)\(if $k == 1 then "" else "s" end)";
+    [inputs | select((if $h == "" then (.request.uri | startswith($p)) else .request.host == $h end) and .status < 400)] as $h
+    | n($h | length; "hit") + ", "
+      + n($h | map(.request.headers["Cf-Connecting-Ip"][0] // .request.remote_ip) | unique | length; "visitor")
+      + (if ($h | length) > 0 then ", last \($h[-1].ts | floor | strflocaltime("%F %H:%M"))" else "" end)' "$1"
+}
+: >"$WORK/hits-empty.log"
+check "streamed hits == slurped, empty log" "$(old_hits_jq "$WORK/hits-empty.log" abc123 "")" "$(new_hits_jq "$WORK/hits-empty.log" abc123 "")"
+printf '{"request":{"uri":"/other000/x","host":"s.example.test","headers":{"Cf-Connecting-Ip":["1.2.3.4"]}},"status":200,"ts":1700000000}\n' >"$WORK/hits-nomatch.log"
+check "streamed hits == slurped, non-matching share" "$(old_hits_jq "$WORK/hits-nomatch.log" notpresent "")" "$(new_hits_jq "$WORK/hits-nomatch.log" notpresent "")"
+check "streamed hits == slurped, real access log" "$(old_hits_jq "$SHARE_ROOT/access.log" "$hits_id" "")" "$(new_hits_jq "$SHARE_ROOT/access.log" "$hits_id" "")"
+check "share hits (now streamed) matches the slurped reference" "$(old_hits_jq "$SHARE_ROOT/access.log" "$hits_id" "")" "$(bash "$SH" hits "$hits_id")"
+
 bash "$SH" add 19991 >"$WORK/o19" 2>"$WORK/e19"; rc=$?
 dead_url=$(head -1 "$WORK/o19")
 check "dead backend still adds" "0" "$rc"

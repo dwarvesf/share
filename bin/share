@@ -462,9 +462,9 @@ cmd_hits() {
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
   fqdn="$(opt_val host "$opts" || true)"
   [[ -s $log ]] || { echo "0 hits"; return 0; }
-  jq -rs --arg p "/$1/" --arg h "$fqdn" '
+  jq -rn --arg p "/$1/" --arg h "$fqdn" '
     def n($k; $w): "\($k) \($w)\(if $k == 1 then "" else "s" end)";
-    map(select((if $h == "" then (.request.uri | startswith($p)) else .request.host == $h end) and .status < 400)) as $h
+    [inputs | select((if $h == "" then (.request.uri | startswith($p)) else .request.host == $h end) and .status < 400)] as $h
     | n($h | length; "hit") + ", "
       + n($h | map(.request.headers["Cf-Connecting-Ip"][0] // .request.remote_ip) | unique | length; "visitor")
       + (if ($h | length) > 0 then ", last \($h[-1].ts | floor | strflocaltime("%F %H:%M"))" else "" end)' "$log"

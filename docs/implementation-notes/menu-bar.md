@@ -119,3 +119,7 @@ TASK-002: no deviations; matches the spec verbatim.
 - Impact: none behavioral. `cmd_ls` output is unchanged for every existing fixture (full suite green); a name with `#`, `?`, `%`, or non-ASCII bytes now links correctly instead of 404ing.
 - Verified with a negative control: adding `#` to `urlenc`'s keep-set makes the new jq-vs-bash encoder comparison fail under both `bash` and `/bin/bash` (`urlenc(bash) [a#b?c%d&e+f=g]: want [a%23b%3Fc%25d%26e%2Bf%3Dg] got [a#b%3Fc%25d%26e%2Bf%3Dg]`); restoring the keep-set turns the suite green again (178 ok, 0 FAIL).
 - Open questions: none.
+
+## 2026-09-27 TASK-004: streamed hits
+
+TASK-004: no deviations. `cmd_hits` swaps `jq -rs` (slurp) plus `map(select(...))` for `jq -rn` plus `[inputs | select(...)]`; otherwise the program is unchanged. Verified against the pre-change program (kept in `tests/share.sh` as `old_hits_jq`, the streamed one as `new_hits_jq`) over an empty log, a log holding only a non-matching share, and the suite's real `access.log`: all three byte-identical, plus a check that `share hits` itself (now streamed) matches the reference on the real log.
