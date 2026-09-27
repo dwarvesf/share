@@ -1,0 +1,105 @@
+# Proof of done: menu bar app
+
+Date: 2026-09-27
+Branch: feat/menu-bar-app
+Spec: `docs/specs/SPEC-003-menu-bar.md` (17 tasks, AMEND-001, AMEND-002)
+Pre-build base: 91e9a5b
+
+## Green run (final, fresh re-audit at 88c8306)
+
+```
+Command: /bin/bash -n bin/share && shellcheck bin/share install.sh tests/share.sh tests/e2e.sh demo/render.sh mac/*.sh && bash tests/share.sh
+Exit:    0
+Checks:  215 ok, 0 FAIL (PASS)
+Verdict: PASS
+
+Command: swift test --package-path mac
+Exit:    0
+Output:  Executed 104 tests, with 0 failures (0 unexpected)
+Verdict: PASS
+
+Command: swift build -c release --package-path mac && strings <bin>/ShareBar | grep -c SHAREBAR_DEBUG_ADD_PATHS
+Exit:    0 (build); count 0 (the debug build prints 1, so the grep can find it)
+Verdict: PASS, the debug entry does not ship
+
+Command: RELEASE_DRY=1 NOTARY_KEY_OP=op://x/y/z NOTARY_KEY_ID=K NOTARY_ISSUER=I bash mac/release.sh v0.0.0   (stub op on PATH writes a marker when called)
+Exit:    0; marker absent
+Verdict: PASS, a dry release never reads the key
+```
+
+The commit after the re-audit, 5b969f9, changes only the identity match in `bin/release` (capture, then match, no pipe); `bash -n` and shellcheck pass on it.
+
+## Notarized build
+
+```
+Command: NOTARY_KEY=<p8> NOTARY_KEY_ID=<id> NOTARY_ISSUER=<issuer> bash mac/build.sh --sign --notarize 0.1.0
+Result:  notarytool status: Accepted; xcrun stapler validate: The validate action worked!;
+         spctl -a -vv: accepted, source=Notarized Developer ID; lipo -archs: x86_64 arm64
+```
+
+## Negative controls (each went red)
+
+| Control | Where | Result |
+|---|---|---|
+| `cmd_prune` at the top of `cmd_state` | fresh scratch clone at 88c8306 | suite exit 1, 19 FAIL incl. `serving: writes nothing` |
+| No index lock in `cmd_rm` | TASK-001 | parallel add/rm row checks fail in both rounds |
+| Caddyfile rendered after the lock is released | TASK-001 | Caddyfile check fails in 5 of 6 rounds (2 rounds per run) |
+| Old `\| while` prune loop under bash 5 | TASK-001 | prune lock check fails |
+| Old rm/refresh ordering | leak fix c0e372b | `refresh racing rm` fails (170 ok + 1 FAIL) |
+| `urlenc` keeps `#` | TASK-003 | encoder comparison fails under both shells |
+| Doc missing `own_host` | TASK-015 | field-coverage check fails |
+| Rounding instead of floor for time left | TASK-007 | 3 floor tests fail |
+| Reentrant `MutationQueue`, uncoalesced `state` | TASK-006 | order test and spawn-count test fail |
+| `depends_on macos: ">= :ventura"` | TASK-014 | `brew style` flags OSDependsOn |
+
+## Tasks
+
+| Task | Commits | Verifier | Fresh re-audit |
+|---|---|---|---|
+| 001 locks and publish section | b7c0d06 | PASS 6/6 (Opus) | PASS |
+| leak fix: refresh racing rm | c0e372b | PASS 2/2 | PASS |
+| 002 quick.url lifecycle | 92b22c8 | PASS 2/2 | PASS |
+| 003 pure-bash urlenc | 9907e04 | PASS 4/4 | PASS |
+| 004 streamed hits | e25b3c4 | PASS 1/1 | PASS |
+| 005 `share state` | 30edf55, 4065d9e | PASS 7/7 (500 rows 0.55 to 1.25s) | PASS |
+| 006 CLI runner | a8b5461 | PASS 5/5 | PASS |
+| 007 model | e47258b, 605167b, c5a4046 | FAIL (double prefix) then PASS 7/7 | FAIL (no floor test) then fixed with mutation proof |
+| 008 menu rendering | fb69b65, f0f868e, 1e8d741 | PASS 4/4 | PASS; cold-launch header fixed in 009 |
+| 009 read and app actions | 791c847, f2466a0 | FAIL (cache cleared only on close) then PASS 4/4 | PASS |
+| 010 drop target | 3ae7a27 | PASS 4/4 by code and shared tested logic | PASS |
+| 011 setup window | 43fe5cc | PASS 4/4 | PASS |
+| 012 build and notarize | b13fd33, 992dd2a | FAIL (key mode) then AMEND-001 then PASS | recorded path overwritten; substitute check on the 0.1.0 zip passed |
+| 013 CI | 8341eac | PASS 1/1 | PASS |
+| 014 release and cask | ec13440, 974a0cc, 54db7ec, 0600277, 5b969f9 | PASS 3/3; AMEND-002 PASS 6/6 | PASS |
+| 015 docs | 92510eb | PASS 3/3 | PASS |
+| 016 small CLI hardening | 849b823 | PASS | PASS (lead ran the suite alone: 168 ok) |
+| 017 mutating actions | 5491a68, 88c8306 | FAIL (debug entry in release) then PASS 7/7 | PASS |
+
+Integration verifier: PASS, 24 of 24 components reach their activation point, 6 of 6 end-to-end chains connect (app verbs to CLI dispatch, snapshot fields to `cmd_state`, old-CLI mapping, locks, build to release to cask names, CI, docs strings).
+
+## Live checks (accessibility, no screenshots)
+
+Screen Recording is not granted to these sessions, so `screencapture` returns black frames. The menu was read through System Events instead; `docs/verification/menu-bar-menu.txt` holds the dump for serving, stopped, and 30 shares (25 rows plus `5 more (share ls)`).
+
+| Check | Result |
+|---|---|
+| No Dock icon; accessibility label mirrors the header | pass |
+| Open menu updates in place when `state` returns; 60s poll fires | pass |
+| Copy Link to the pasteboard; hits line replaces Loading…; cancel on switch | pass |
+| Loading… on a cold launch before a slow `state` | pass |
+| Open at Login toggle (registered, then unregistered again) | pass |
+| Remove confirm, Stop Waiting after 60s, private-repo warning, not-serving-here alert, folder confirm | pass |
+| Setup window: stream, Cancel and Quit kill the whole process group | pass |
+
+## Not verified here (needs a human)
+
+| Check | Why |
+|---|---|
+| A real Finder drag of a file, a folder, and a Mail or Photos item onto the icon | no way to synthesize a Finder drag from these sessions |
+| Refresh after sleep and wake | the shared Mac cannot be put to sleep from a session |
+| The `.requiresApproval` login-item wording | needs a GUI approval revoke |
+| The icon and menu look | no Screen Recording permission |
+
+## Rollback
+
+Every change is on `feat/menu-bar-app`. The CLI changes are additive (a new verb) or internal (locks, encoding, streaming); reverting the merge commit restores v0.5.1 behavior. A published cask is removed by reverting its tap commit in `dwarvesf/homebrew-tools`.
