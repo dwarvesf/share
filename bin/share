@@ -1729,7 +1729,7 @@ access_gate() { # access_gate <id> <aud> [fqdn]: every gated URL must pass three
   local wait="$access_wait" poll="${SHARE_ACCESS_POLL:-10}" start now streak=0 last_msg=0 urls s
   urls="https://$host_name/$1/ https://$host_name/$1"
   [[ -n ${3:-} ]] && urls="$urls https://$3/"
-  start="$(date +%s)"
+  start="$(date +%s)"; last_msg="$start"   # the first notice comes after 60 s of waiting, not on round one
   while :; do
     # shellcheck disable=SC2086 # the url list is space-separated on purpose
     if access_probe_round "$2" $urls; then

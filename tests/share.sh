@@ -1054,7 +1054,7 @@ adry="$SHARE_ROOT/.access-dry"
 afix="$SHARE_ROOT/access-probe-fixture"
 gfix="$SHARE_ROOT/access-groups-fixture.json"
 apending="$SHARE_ROOT/access-pending"
-acc() { SHARE_ACCESS_DRY=1 SHARE_ACCESS_POLL=0 CLOUDFLARE_API_TOKEN=faketoken bash "$SH" "$@"; }
+acc() { SHARE_ACCESS_DRY=1 SHARE_ACCESS_POLL="${SHARE_ACCESS_POLL:-0}" CLOUDFLARE_API_TOKEN=faketoken bash "$SH" "$@"; }   # a caller's POLL wins
 aline() { grep -n "$1" "$alog" | head -1 | cut -d: -f1; }   # first line number of a log entry
 alast() { grep -n "$1" "$alog" | tail -1 | cut -d: -f1; }  # last line number
 row_of() { awk -F'\t' -v id="$1" '$1 == id' "$SHARE_ROOT/index.tsv"; }
@@ -1390,7 +1390,8 @@ echo "--- row 33: share api-token with no argument opens the prefilled form and 
 if command -v expect >/dev/null; then
   mkdir -p "$WORK/fakeopen"
   # shellcheck disable=SC2016 # literal code for the stub, not this shell's expansion
-  printf '#!/bin/bash\nprintf "%%s\\n" "$@" >>"${OPEN_LOG:?}"\n' >"$WORK/fakeopen/open"
+  # the pty closes the moment share exits and HUPs the backgrounded opener; the stub must still land its line
+  printf '#!/bin/bash\ntrap "" HUP\nprintf "%%s\\n" "$@" >>"${OPEN_LOG:?}"\n' >"$WORK/fakeopen/open"
   cp "$WORK/fakeopen/open" "$WORK/fakeopen/xdg-open"; chmod +x "$WORK/fakeopen/open" "$WORK/fakeopen/xdg-open"
   cat >"$WORK/tty.exp" <<'EXP'
 set timeout 20
