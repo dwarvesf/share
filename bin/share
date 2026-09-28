@@ -181,11 +181,13 @@ lock_release() { # lock_release <name>: only a link that still names this pid is
   held_locks="${held_locks// $1/}"
 }
 held_fqdn=""   # a --host name whose ingress rule and CNAME exist but whose row does not yet; the trap removes them
+held_access_id=""   # a gated add inside its wait; on a die the trap says where its app went
 release_locks() { # the EXIT trap: every held lock, a stage still outside pub, and a routed fqdn with no row (an add that died in its wait)
   local n f; for n in $held_locks; do lock_release "$n"; done
   [[ -n $stage_out && -d $stage_out ]] && rm -rf "$stage_out"
   stage_out=""
   if [[ -n $held_fqdn ]]; then f="$held_fqdn"; held_fqdn=""; host_rm "$f" || true; fi
+  if [[ -n $held_access_id ]]; then echo "share: nothing was published; the Access app of $held_access_id waits in access-pending, the next $me add --access or $me prune with a token removes it" >&2; held_access_id=""; fi
   return 0
 }
 
@@ -477,7 +479,7 @@ cmd_add() {
   if [[ -n $access ]] && ! access_gate "$id" "$access_aud" "$host_fqdn"; then
     local left=""
     [[ -n $host_fqdn ]] && { held_fqdn=""; host_rm "$host_fqdn"; }
-    if access_delete "$access_app" "$id"; then lock_take index; pending_drop "$id" "$access_app"; lock_release index
+    if access_delete "$access_app" "$id"; then lock_take index; pending_drop "$id" "$access_app"; lock_release index; held_access_id=""
     else left="; the app stays in access-pending for the next '$me prune' with the token"; fi
     die "Cloudflare Access did not enforce on $host_name/$id within ${access_wait}s; nothing was published$left; rerun the same $me add (Access can take several minutes on a new app)"
   fi
@@ -491,7 +493,7 @@ cmd_add() {
   write_caddyfile
   caddy_reload
   [[ -n $access ]] && pending_drop "$id" "$access_app"
-  held_fqdn=""
+  held_fqdn="" held_access_id=""
   lock_release index   # before cmd_start: serve's startup render takes the lock itself
   share_url "$id" "$name" "$opts"
   url="$share_url_out"
@@ -569,7 +571,7 @@ cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so ex
   echo "unpublished $1"
   [[ -n $app ]] || return 0
   if [[ -z $api_token ]]; then
-    echo "share: Access app for $1 awaits deletion; run '$me prune' with CLOUDFLARE_API_TOKEN" >&2
+    echo "share: Access app for $1 awaits deletion; run '$me prune' with a token (the stored one, or CLOUDFLARE_API_TOKEN)" >&2
   elif access_delete "$app" "$1"; then
     lock_take index; pending_drop_id "$1" "$app"; lock_release index
   else
@@ -586,7 +588,9 @@ cmd_prune() { # cmd_prune [quiet|listing]: unpublish every share past its expiry
     listing) api_token_resolve env ;;
     *) api_token_resolve ;;
   esac
-  if [[ -n $api_token && -s $pending && -n $host_name ]]; then access_account; access_sweep; fi
+  if [[ -n $api_token && -s $pending && -n $host_name ]]; then
+    if [[ ${1:-} == listing ]]; then access_account soft && access_sweep; else access_account; access_sweep; fi
+  fi
   [[ -s $index ]] || return 0
   local now ids id
   now="$(date +%s)"
@@ -1510,15 +1514,28 @@ cf_dry() { # the SHARE_ACCESS_DRY answers: fixtures and knobs in, one log line p
   return 0
 }
 
-access_account() { # acct: the account of the ONE active zone that owns the main hostname; needs the resolved token
+access_account() { # access_account [soft]: acct, the account of the ONE active zone that owns the main hostname; needs the resolved token.
+  # soft (a listing): a token for another account warns in one line and returns 1, so ls and status never die on it
   [[ -n $acct ]] && return 0
   [[ -n $api_token ]] || { access_no_token >&2; exit 1; }
-  host_zone
+  local n why=""
+  if [[ ${1:-} == soft ]]; then zone_name="${zone_name:-$(cfg zone || true)}"; zone_name="${zone_name:-${host_name#*.}}"; else host_zone; fi
   cf_try GET "/zones?name=$zone_name&status=active"
-  local n; n="$(jq -r '.result | length' <<<"$cf_body" 2>/dev/null || echo 0)"
-  [[ $cf_code == 200 ]] || die "$(access_scope_line 'Zone: Read')"
-  [[ $n == 1 ]] || die "the token sees $n active zones named $zone_name; use a token scoped to the account that owns $host_name"
+  n="$(jq -r '.result | length' <<<"$cf_body" 2>/dev/null || echo 0)"
+  if [[ $cf_code != 200 ]]; then why="$(access_scope_line 'Zone: Read')"
+  elif [[ $n != 1 ]]; then why="the token sees $n active zones named $zone_name; use a token scoped to the account that owns $host_name"; fi
+  if [[ -n $why ]]; then
+    [[ ${1:-} == soft ]] || die "$why"
+    echo "share: $why; skipping the Access check" >&2; return 1
+  fi
   acct="$(jq -r '.result[0].account.id' <<<"$cf_body")"
+}
+access_read_proven=0
+access_proof() { # once per process: a token without the Access read scope answers 404 to any app id, so a 404 proves nothing until this passes
+  [[ $access_read_proven == 1 ]] && return 0
+  cf_try GET "/accounts/$acct/access/organizations"
+  [[ $cf_code == 200 ]] || return 1
+  access_read_proven=1
 }
 access_preflight() { # read-only, safe to rerun: the token source, then one call per scope, one line each on stderr; 0 only when every line is ok.
   # The Apps Edit probe is an invalid body ({}): a 400 with code 12130 proves the scope without creating anything (measured on a live account).
@@ -1678,7 +1695,7 @@ access_create() { # access_create <id> [fqdn]: the intent line, the app, its uui
 access_delete() { # access_delete <uuid> <share id>: only an app whose name says it is this share's; 404 is done; anything else (000 included) is not
   local name
   cf_try GET "/accounts/$acct/access/apps/$1"
-  [[ $cf_code != 404 ]] || return 0
+  if [[ $cf_code == 404 ]]; then access_proof; return; fi   # done only once Access read is proven: a scope-less token 404s on every id
   [[ $cf_code == 200 ]] || return 1
   name="$(jq -r '.result.name // empty' <<<"$cf_body")"
   if [[ $name != "share $2 $host_name "* ]]; then   # a forged row or line must never delete a foreign app with an account-wide token
@@ -1729,7 +1746,9 @@ access_gate() { # access_gate <id> <aud> [fqdn]: every gated URL must pass three
   local wait="$access_wait" poll="${SHARE_ACCESS_POLL:-10}" start now streak=0 last_msg=0 urls s
   urls="https://$host_name/$1/ https://$host_name/$1"
   [[ -n ${3:-} ]] && urls="$urls https://$3/"
-  start="$(date +%s)"; last_msg="$start"   # the first notice comes after 60 s of waiting, not on round one
+  start="$(date +%s)"; last_msg="$start"   # the next notice comes after 60 s of waiting
+  echo "share: waiting up to ${wait}s for Cloudflare Access to enforce on $host_name/$1 (a new app can take minutes; Ctrl-C is safe: nothing is published, the next add or prune removes the app)" >&2
+  held_access_id="$1"
   while :; do
     # shellcheck disable=SC2086 # the url list is space-separated on purpose
     if access_probe_round "$2" $urls; then
@@ -1751,7 +1770,7 @@ access_sweep() { # every pending line: a live owner is skipped, a finished add's
   # (orphaned bytes trashed first), then each app deleted with no lock held. A line that is not done stays claimed by
   # this process; once it exits, the next sweep sees a dead owner and retries.
   [[ -s $pending ]] || return 0
-  local id app pid st created tmp reload=0 claimed="" uuid proven=0
+  local id app pid st created tmp reload=0 claimed="" uuid
   lock_take index
   tmp="$(mktemp "$root/.pending.XXXXXX")"
   while IFS=$'\t' read -r id app pid st created; do
@@ -1773,11 +1792,7 @@ access_sweep() { # every pending line: a live owner is skipped, a finished add's
     [[ -n $id ]] || continue
     uuid="$app"
     if [[ $app == -:* ]]; then
-      if [[ $proven == 0 ]]; then   # an app list read without the scope is empty and proves nothing
-        cf_try GET "/accounts/$acct/access/organizations"
-        [[ $cf_code == 200 ]] || continue
-        proven=1
-      fi
+      access_proof || continue   # an app list read without the scope is empty and proves nothing
       access_find_by_nonce "${app#-:}" || continue
       uuid="$access_found"
       if [[ -z $uuid ]]; then   # a POST can still commit after the client timeout: only an old line is forgotten
@@ -1792,7 +1807,7 @@ access_sweep() { # every pending line: a live owner is skipped, a finished add's
 
 access_pending_note() { # ls and status: apps waiting for a token, and lines no sweep will ever touch
   local n b; n="$(pending_count live)"; b="$(pending_count bad)"
-  [[ $n -gt 0 ]] && echo "share: $n Access app(s) await deletion; run '$me prune' with CLOUDFLARE_API_TOKEN" >&2
+  [[ $n -gt 0 ]] && echo "share: $n Access app(s) await deletion; run '$me prune' with a token (the stored one, or CLOUDFLARE_API_TOKEN)" >&2
   [[ $b -gt 0 ]] && echo "share: $b malformed line(s) in $pending; a sweep never acts on them; remove them by hand" >&2
   return 0
 }
@@ -1802,7 +1817,8 @@ access_ls_check() { # with an exported CLOUDFLARE_API_TOKEN only (never op read 
   [[ -n $api_token && -n $host_name ]] || return 0
   pairs="$(rows | awk -F'\t' '{n = split($6, a, " "); for (i = 1; i <= n; i++) if (substr(a[i], 1, 7) == "access=") print $1, substr(a[i], 8)}')"
   [[ -n $pairs ]] || return 0
-  access_account
+  access_account soft || return 0
+  access_proof || return 0   # a 404 from a token without the Access read scope would call every gated link PUBLIC
   while read -r id app; do
     [[ -n $id ]] || continue
     cf_try GET "/accounts/$acct/access/apps/$app"
@@ -2000,7 +2016,7 @@ cmd_teardown() {
   n_apps=$(( $(wc -w <<<"$gated") + $(pending_count) ))
   if [[ $n_apps -gt 0 ]]; then
     api_token_resolve
-    [[ -n $api_token ]] || die "teardown would orphan $n_apps Access app(s); rerun with CLOUDFLARE_API_TOKEN"
+    [[ -n $api_token ]] || { access_no_token >&2; die "teardown would orphan $n_apps Access app(s); rerun with CLOUDFLARE_API_TOKEN"; }
     local gid
     for gid in $gated; do cmd_rm "$gid" | sed 's/$/ (gated: unpublished before the tunnel goes)/'; done
     access_account; access_sweep

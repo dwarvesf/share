@@ -137,7 +137,7 @@ Three ways to hand it over, first hit wins, per profile:
 | Source | How |
 |---|---|
 | `api_token_cmd=<command>` in the profile's config | `share api-token --cmd 'op read "op://<vault>/<item>/credential"'`; share runs the command and uses its output. Any existing token with the scopes above works. |
-| Keychain item `share-api[.<profile>]:<hostname>` (Linux: `~/.config/share/api-token`, mode 600) | `share api-token` with no argument opens the prefilled token form (`https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=...&name=share access (<profile>)`), prompts for a hidden paste, and stores it through stdin. Over ssh or with no display it prints the URL instead of opening it. |
+| Keychain item `share-api[.<profile>]:<hostname>` (Linux: `<config dir>/api-token`, mode 600) | `share api-token` with no argument opens the prefilled token form (`https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=...&name=share access (<profile>)`), prompts for a hidden paste, and stores it through stdin. Over ssh or with no display it prints the URL instead of opening it. |
 | `CLOUDFLARE_API_TOKEN` in the environment | used only when the profile stores nothing, so a broad shell token never silently replaces the profile's own |
 
 Every form ends with a read-only preflight (`share api-token --check` reruns it): one line per scope, `ok` or `MISSING` with the scope's dashboard name, and a fix line with the token page. The Apps Edit check sends an invalid body (`{}`), which the API refuses with code 12130 without creating anything.
@@ -151,7 +151,8 @@ A rule group for `group:<name>`: Zero Trust > Access controls > Policies > Rule 
 | `Cloudflare Access is not enabled on the account` | code 9999 | enable Zero Trust for the account in the dashboard |
 | `no Access group named '<name>'` | no rule group of that exact name on the account that owns the zone | create it (above) and rerun the same add |
 | `did not enforce on <host>/<id> within 900s; nothing was published` | the edge took longer than `SHARE_ACCESS_WAIT` | rerun the same add; a new app can take several minutes |
-| `<n> Access app(s) await deletion` in `ls` or `status` | gated shares expired under the login service, which holds no token | `share prune` with the token |
+| `<n> Access app(s) await deletion` in `ls` or `status` | gated shares expired under the login service or a `status` run, neither of which consults a token | `share prune` (the stored token is used; none stored: `share api-token` first, or export `CLOUDFLARE_API_TOKEN`) |
+| `skipping the Access check` on `ls` | the exported `CLOUDFLARE_API_TOKEN` belongs to another account or zone | unset it, or store the right token with `share api-token` |
 | `Access app for <id> is gone; the link is PUBLIC` (`ls` with `CLOUDFLARE_API_TOKEN` exported) | the app was deleted in the dashboard | `share rm <id>` |
 
 ## 5. Serve from a different machine

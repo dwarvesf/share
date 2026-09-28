@@ -20,7 +20,8 @@ Delta from `docs/specs/SPEC-004-access.md`. Decisions already in the spec are re
 - The name of the account-token form for the default profile is `share access (default)`; the spec fixes the form only for a named profile.
 - The dry seam sits inside `cf_try` (`cf_dry`): every Access call, the group paging, the read-back, and the lost-POST lookup run the real code paths against fixture answers, instead of separate dry branches per function. Preflight outcomes are environment knobs (`SHARE_ACCESS_DRY_ZONES`, `_ORGS`, `_APPS`) rather than fixture files.
 - `access_ls_check` (the PUBLIC warning) and the pending-count note run from `cmd_ls`, so `status` gets both through its `cmd_ls` call.
-- `cmd_prune` takes a mode: `serve` (no token from any source), `listing` (`ls`, `status`: the exported environment token only), bare (`share prune`: the full resolver). The spec names the outcome; the mode is how the one function serves the three callers.
+- `cmd_prune` takes a mode: `quiet` (`serve`, `status`: no token from any source), `listing` (`ls`: the exported environment token only, with a soft account lookup), bare (`share prune`: the full resolver). The spec names the outcome; the mode is how the one function serves the three callers.
+- The preflight stays verbose on every gated add (the advisor lens asked for a quiet form): the spec pins the lines, and a gated add is a rare, deliberate act where seeing the scopes pass is worth four lines.
 
 ## Deviations
 

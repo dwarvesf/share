@@ -1192,6 +1192,7 @@ printf 'fail\n' >"$afix"
 idx_before=$(cksum <"$SHARE_ROOT/index.tsv")
 out=$(SHARE_ACCESS_WAIT=2 SHARE_ACCESS_POLL=1 acc add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null); rc=$?
 check "timeout: exit 1 naming the wait and the rerun" "1" "$([[ $rc == 1 ]] && grep -c "did not enforce on $SHARE_HOSTNAME/[0-9a-f]* within 2s; nothing was published; rerun the same share add (Access can take several minutes on a new app)" <<<"$out")"
+check "timeout: the gate said up front how long and that Ctrl-C is safe" "1" "$(grep -c 'waiting up to 2s for Cloudflare Access to enforce on .* Ctrl-C is safe: nothing is published' <<<"$out")"
 check "timeout: DELETE app logged, no PUBLISH" "1" "$([[ $(grep -c 'DELETE app' "$alog") == 1 && $(grep -c PUBLISH "$alog") == 0 ]] && echo 1 || echo 0)"
 check "timeout: no row" "$idx_before" "$(cksum <"$SHARE_ROOT/index.tsv")"
 t8_id=$(sed -n 's/^DELETE app 00000000-0000-4000-8000-000000//p' "$alog")
@@ -1212,14 +1213,22 @@ areset
 d_app=$(app_of "$d_id")
 awk -F'\t' -v OFS='\t' -v id="$d_id" '$1 == id {$5 = 1} {print}' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
 out=$(env -u CLOUDFLARE_API_TOKEN SHARE_ACCESS_DRY=1 bash "$SH" prune 2>&1 1>/dev/null); rc=$?
-check "prune without a token: exit 0, names the deferred app" "1" "$([[ $rc == 0 ]] && grep -c "Access app for $d_id awaits deletion; run 'share prune' with CLOUDFLARE_API_TOKEN" <<<"$out")"
+check "prune without a token: exit 0, names the deferred app" "1" "$([[ $rc == 0 ]] && grep -c "Access app for $d_id awaits deletion; run 'share prune' with a token (the stored one, or CLOUDFLARE_API_TOKEN)" <<<"$out")"
 check "prune without a token: row and bytes gone" "1" "$([[ -z $(row_of "$d_id") && ! -e $SHARE_ROOT/pub/$d_id ]] && echo 1 || echo 0)"
 check "prune without a token: the app waits in access-pending" "1" "$(grep -c "^$d_id	$d_app	" "$apending")"
 check "prune without a token: no DELETE" "0" "$(grep -c 'DELETE app' "$alog")"
-check "status prints the pending count" "1" "$(env -u CLOUDFLARE_API_TOKEN bash "$SH" status 2>&1 >/dev/null | grep -c "1 Access app(s) await deletion; run 'share prune' with CLOUDFLARE_API_TOKEN")"
+check "status prints the pending count" "1" "$(env -u CLOUDFLARE_API_TOKEN bash "$SH" status 2>&1 >/dev/null | grep -c "1 Access app(s) await deletion; run 'share prune' with a token (the stored one, or CLOUDFLARE_API_TOKEN)")"
+check "ls with a token for another account warns and skips, exit 0" "1" "$(SHARE_ACCESS_DRY=1 SHARE_ACCESS_DRY_ZONES=0 CLOUDFLARE_API_TOKEN=faketoken bash "$SH" ls 2>&1 >/dev/null; echo "rc=$?" | grep -c 'rc=0')"
+check "ls with a token for another account names the skip" "1" "$(SHARE_ACCESS_DRY=1 SHARE_ACCESS_DRY_ZONES=0 CLOUDFLARE_API_TOKEN=faketoken bash "$SH" ls 2>&1 >/dev/null | grep -c 'skipping the Access check')"
+check "ls with an unproven read never calls a link PUBLIC" "0" "$(SHARE_ACCESS_DRY=1 SHARE_ACCESS_DRY_ORGS=deny CLOUDFLARE_API_TOKEN=faketoken bash "$SH" ls 2>&1 >/dev/null | grep -c 'PUBLIC')"
 check "state counts it" "1" "$(bash "$SH" state | jq .access_pending)"
 acc prune >/dev/null 2>&1
 check "row 11: prune with the token deletes that app" "1" "$(grep -c "^DELETE app $d_app$" "$alog")"
+: >"$alog"; printf 'c4c4c4\t00000000-0000-4000-8000-000000c4c4c4\t0\t-\t%s\n' "$(date +%s)" >"$apending"   # no dry app: a 404
+SHARE_ACCESS_DRY_ORGS=deny acc prune >/dev/null 2>&1
+check "a 404 with an unproven Access read is not 'done': the line stays" "1" "$(grep -c '^c4c4c4' "$apending")"
+acc prune >/dev/null 2>&1
+check "the same 404 once the read is proven drops the line" "0" "$(grep -c '^c4c4c4' "$apending")"
 check "row 11: access-pending empty" "0" "$(awk 'NF' "$apending" | wc -l | tr -d ' ')"
 areset
 mkdir -p "$SHARE_ROOT/pub/b1b1b1" && echo x >"$SHARE_ROOT/pub/b1b1b1/f.txt"
@@ -1410,6 +1419,12 @@ EXP
   : >"$WORK/open.log"; : >"$WORK/sec.log"
   tty_out=$(tty_run DISPLAY=:0 SSH_CONNECTION=)
   for _ in $(seq 1 50); do [[ -s $WORK/open.log ]] && break; sleep 0.1; done
+  if [[ ! -s $WORK/open.log ]]; then   # diagnostic on the failure path only
+    echo "  (open.log empty; tty_out head: $(head -c 400 <<<"$tty_out" | tr '\n' '|')"
+    # shellcheck disable=SC2016 # $0 is the script path handed to bash -c, not this shell's
+    env DISPLAY=:0 SSH_CONNECTION= OPEN_LOG="$WORK/open.log" PATH="$WORK/fakeopen:$WORK/fakesec:$PATH" bash -x -c 'source <(sed -n "/^access_open_url() {/,/^}/p" "$0"); access_open_url https://diag/' "$SH" 2>&1 | sed 's/^/  (diag) /'
+    sleep 0.5; echo "  (diag) open.log after a direct call: $(cat "$WORK/open.log")"
+  fi
   check "tty: the opener ran once with the template URL as its only argument" "1" "$([[ $(wc -l <"$WORK/open.log" | tr -d ' ') == 1 ]] && grep -c '^https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=.*&name=share%20access%20%28default%29$' "$WORK/open.log")"
   check "tty: the prompt appeared and the token did not echo" "1" "$([[ $(grep -c 'Paste the new token (input hidden):' <<<"$tty_out") == 1 && $(grep -c 'tty-token' <<<"$tty_out") == 0 ]] && echo 1 || echo 0)"
   check "tty: the token was stored and the preflight ran" "1" "$([[ $(grep -c "^add-generic-password share-api:$SHARE_HOSTNAME$" "$WORK/sec.log") == 1 ]] && grep -c 'token found (keychain' <<<"$tty_out")"
@@ -1469,6 +1484,7 @@ printf 'hostname=%s\ntunnel_id=abc123\ntunnel_name=share-test\nauth=api\nhosts=%
 cfg_before=$(cksum <"$SHARE_CONFIG_DIR/config")
 out=$(env -u CLOUDFLARE_API_TOKEN SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" SHARE_ACCESS_DRY=1 bash "$SH" teardown --yes 2>&1 1>/dev/null); rc=$?
 check "row 12: teardown without a token dies before any change" "1" "$([[ $rc == 1 ]] && grep -c 'teardown would orphan 1 Access app(s); rerun with CLOUDFLARE_API_TOKEN$' <<<"$out")"
+check "row 12: teardown printed the guided block first" "1" "$(grep -c 'needs a Cloudflare API token' <<<"$out")"
 check "row 12: config, row, bytes, server intact" "1" "$([[ $(cksum <"$SHARE_CONFIG_DIR/config") == "$cfg_before" && -n $(row_of "$t_id") && -e $SHARE_ROOT/pub/$t_id ]] && bash "$SH" status | grep -c '^serving')"
 plant_app f3f3f3 "chat-staff"
 printf 'f3f3f3\t00000000-0000-4000-8000-000000f3f3f3\t0\t-\t%s\n' "$(date +%s)" >"$apending"

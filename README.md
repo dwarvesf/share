@@ -113,7 +113,7 @@ Share a link that only named people can open (Cloudflare Access, email one-time 
    share add ./report.pdf --access email:a@example.com,b@example.com
    ```
 
-   or for everyone at one email domain: `--access domain:example.com`. The link prints once Cloudflare enforces the login, which can take a few minutes the first time.
+   or for everyone at one email domain: `--access domain:example.com` (share warns that this admits every address at the domain, contractors included). The link prints once Cloudflare enforces the login, which can take a few minutes the first time; Ctrl-C during the wait is safe, nothing is published.
 
 3. Next step, a reusable list: create a rule group once in the Cloudflare dashboard (Zero Trust > Access controls > Policies > Rule groups > Add a group; include each person's email), then:
 
