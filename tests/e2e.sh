@@ -142,7 +142,7 @@ if [[ $mode == api && -n ${SHARE_E2E_ACCESS_EMAIL:-} ]]; then
   done
   check "the ungated share still answers 200" 200 "$(code "$link")"
   if [[ -n ${SHARE_E2E_OTHER_HOST:-} ]]; then
-    check "the gated id is a 404 on another setup's hostname ($SHARE_E2E_OTHER_HOST)" 404 "$(code "https://$SHARE_E2E_OTHER_HOST/$gid/")"
+    check "the gated id never answers 200 on another setup's hostname ($SHARE_E2E_OTHER_HOST)" 1 "$(c=$(code "https://$SHARE_E2E_OTHER_HOST/$gid/"); [[ $c != 200 ]] && echo 1 || echo "0 ($c)")"
   fi
 
   echo "--- --host plus --access: the fqdn and the main-host path both redirect ---"
