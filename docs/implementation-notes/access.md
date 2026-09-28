@@ -11,7 +11,8 @@ Delta from `docs/specs/SPEC-004-access.md`. Decisions already in the spec are re
 | `GET /zones?name=d.foundation&status=active` | exactly one zone, account Dwarves LLC (the 4-account token sees no duplicate). |
 | `GET access/groups?name=dwarves-ops` | one group, 8 include entries, 1 page. |
 | Access org, IdPs | org 200; IdPs `[onetimepin]` only. |
-| inline `policies` on app create, the `kid == aud` delay on an already-routed host | recorded below once the e2e gated leg runs. |
+| inline `policies` on app create | accepted: the e2e apps were created with an inline allow policy and read back intact. |
+| the `kid == aud` delay on an already-routed host | measured end to end on a NEW hostname (the stronger case): `share add --access` took 37-38 s from start to the printed link, three passing probe rounds included. See `docs/verification/access.md`. |
 
 ## Decisions made without the operator
 
@@ -51,3 +52,13 @@ Delta from `docs/specs/SPEC-004-access.md`. Decisions already in the spec are re
 - `${4:-$$}` turns an empty fourth argument back into this pid; a "no owner" line needs `${4-$$}` then `${o:-0}` (the re-validation caught it: serve's own prune was still pinning lines).
 - Sites that share a port land in one adapted Caddy server, each site's routes nested under a host-matched subroute, so a route-order check has to walk `..` in document order rather than the top-level `routes[]`.
 - `env -u X func` fails: `env` cannot exec a shell function; the test passes `VAR=` as an empty assignment instead.
+
+## Found while finishing the build (the second green pass and the live legs)
+
+- `api_token_store` ran inside `$( )` in `cmd_api_token`, so its `die` killed only the substitution: a token outside `[A-Za-z0-9_-]` printed the refusal, stored nothing, then ran the preflight and exited 0. The store now reports through `api_token_store_out` and is called directly. The same footgun pattern (`die` under `$( )`) is worth grepping for when a new "refuse" path lands.
+- An `ls` or `status` holding an exported `CLOUDFLARE_API_TOKEN` really sweeps: the deferred app in the suite's expiry test was deleted by a later `ls`, not by `prune`. A test that asserts a pending count must read it before any token-holding `ls`.
+- `access_account soft` used to warn once per caller, so `ls` printed the skip line twice (once for the prune pass, once for the per-row check). It now warns once per process.
+- `stage_publish` logs `PUBLISH` before the `mv`, not after: a watcher that polls "pub changed while the marker is absent" races a microsecond window otherwise and flaked red once.
+- `access_open_url` backgrounds the opener in a subshell that sets `trap "" HUP` and execs through `nohup`: under a pty the process group can get a HUP before a bare `( cmd & )` child installs its own trap, which is how the row-33 leg lost its opener.
+- The `share state` row loop reads `host=`/`access_rule=` with `${opts#*...=}` expansion, not `$(opt_val ...)`: two subshells per row doubled the 500-row time. The perf check now takes the min of two runs; a loaded machine still inflates it.
+- e2e fixture: the backend caddy was addressed `http://127.0.0.1:<port>`, which answers only `Host: 127.0.0.1`. share's `--host` proxy passes the visitor's Host upstream, so the fixture answered an empty 200 forever. The fixture now binds the bare port. If a real upstream is host-strict the same symptom appears live: a 200 with `Content-Length: 0` and `Via: 1.1 Caddy`.
