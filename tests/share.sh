@@ -108,7 +108,7 @@ check "the refusal leaves the index unchanged" "$idx_before" "$(cksum <"$SHARE_R
 } >>"$SHARE_ROOT/index.tsv"
 bash "$SH" refresh "$(cut -d/ -f4 <<<"$md_url")" >/dev/null 2>&1   # re-renders the Caddyfile with the forged rows present
 check "forged rows absent from ls" "0" "$(bash "$SH" ls | grep -c 'forged-\|f0f0f\|dd\.example')"
-check "forged rows absent from the Caddyfile" "0" "$(grep -c "dd\.example\.test\|19993\|Bad_Host\|http://$SHARE_HOSTNAME:" "$SHARE_ROOT/Caddyfile")"
+check "forged rows absent from the Caddyfile" "0" "$(grep -c "dd\.example\.test\|19993\|Bad_Host\|^http://$SHARE_HOSTNAME:$SHARE_PORT {" "$SHARE_ROOT/Caddyfile")"
 bash "$SH" state >"$WORK/forged.json"
 check "forged rows absent from state" "0" "$(jq '[.shares[] | select(.name | startswith("forged-"))] | length' "$WORK/forged.json")"
 check "forged rows counted in skipped" "3" "$(jq '.skipped' "$WORK/forged.json")"
@@ -1059,7 +1059,7 @@ aline() { grep -n "$1" "$alog" | head -1 | cut -d: -f1; }   # first line number 
 alast() { grep -n "$1" "$alog" | tail -1 | cut -d: -f1; }  # last line number
 row_of() { awk -F'\t' -v id="$1" '$1 == id' "$SHARE_ROOT/index.tsv"; }
 app_of() { row_of "$1" | sed -n 's/.*access=\([^ ]*\).*/\1/p'; }
-areset() { : >"$alog"; rm -rf "$adry" "$afix" "$gfix"; : >"$apending"; }
+areset() { : >"$alog"; rm -rf "$afix" "$gfix"; : >"$apending"; }   # the dry app store stays: it is the account
 plant_app() { # plant_app <id> [name]: the dry answer for GET app <uuid of id>, so a hand-seeded line can be deleted
   mkdir -p "$adry"; jq -nc --arg id "00000000-0000-4000-8000-000000$1" --arg n "${2:-share $1 $SHARE_HOSTNAME 00000000}" '{id:$id, name:$n}' >"$adry/00000000-0000-4000-8000-000000$1.json"
 }
@@ -1262,7 +1262,7 @@ echo pct >"$WORK/50%.v1.txt"
 pct_url=$(bash "$SH" add "$WORK/50%.v1.txt" 2>/dev/null | head -1)
 check "a %25 in a file name is not an encoded separator" "200" "$(wait_code 200 "$pct_url")"
 check "a %2F in the query string passes" "200" "$(rawcode "/$g_id/gated.txt?next=%2Fhome")"
-check "the @encsep route precedes file_server in the adapted config" "1" "$(caddy adapt --config "$SHARE_ROOT/Caddyfile" --adapter caddyfile 2>/dev/null | jq -r '[.apps.http.servers[] | select(.listen[0] | endswith(":'"$SHARE_PORT"'")) | .. | objects | select(has("handle")) | if ((.match[0].expression.expr? // "") | test("%2f")) then "encsep" elif any(.handle[]; .handler == "file_server") then "file_server" else empty end] | join(" ")' | grep -c '^encsep .*file_server')"
+check "the @encsep route precedes file_server in the adapted config" "1" "$(caddy adapt --config "$SHARE_ROOT/Caddyfile" --adapter caddyfile 2>/dev/null | jq -r '[.apps.http.servers[] | select(.listen[0] | endswith(":'"$SHARE_PORT"'")) | .routes[] | select(.match[0].host? // [] | index("'"$SHARE_HOSTNAME"'")) | .. | objects | select(has("handle")) | if ((.match[0].expression.expr? // "") | test("%2f")) then "encsep" elif any(.handle[]; .handler == "file_server") then "file_server" else empty end] | join(" ")' | grep -c '^encsep .*file_server')"
 
 echo "--- rows 23, 23b, 23c, 23d: a lost POST is found by its nonce, only after Access read is proven ---"
 areset
@@ -1464,7 +1464,7 @@ areset
 acc rm "$g_id" >/dev/null 2>&1; acc rm "$p_id" >/dev/null 2>&1; acc rm "$o6_id" >/dev/null 2>&1; acc rm "$l6_id" >/dev/null 2>&1
 : >"$alog"
 t_url=$(acc add "$WORK/gated.txt" --access email:a@x.io 2>/dev/null | head -1); t_id=$(cut -d/ -f4 <<<"$t_url"); t_app=$(app_of "$t_id")
-printf 'hostname=%s\ntunnel_id=abc123\ntunnel_name=share-test\nauth=api\nhosts=%s\nport=%s\n' "$SHARE_HOSTNAME" "$SHARE_HOSTS" "$SHARE_PORT" >"$SHARE_CONFIG_DIR/config"
+printf 'hostname=%s\ntunnel_id=abc123\ntunnel_name=share-test\nauth=api\nhosts=%s\nport=%s\nzone=example.test\n' "$SHARE_HOSTNAME" "$SHARE_HOSTS" "$SHARE_PORT" >"$SHARE_CONFIG_DIR/config"
 cfg_before=$(cksum <"$SHARE_CONFIG_DIR/config")
 out=$(env -u CLOUDFLARE_API_TOKEN SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" SHARE_ACCESS_DRY=1 bash "$SH" teardown --yes 2>&1 1>/dev/null); rc=$?
 check "row 12: teardown without a token dies before any change" "1" "$([[ $rc == 1 ]] && grep -c 'teardown would orphan 1 Access app(s); rerun with CLOUDFLARE_API_TOKEN$' <<<"$out")"
