@@ -376,11 +376,11 @@ stage_copy() { # stage_copy <src> [opts]: the copy into a stage, sets stage_out;
   has_opt noindex "${2:-}" || gen_index "$payload"
 }
 stage_publish() { # stage_publish <id>: the atomic swap of stage_out into pub/<id>; from here the bytes are reachable
+  dry_log "PUBLISH $1"   # before the mv, so a watcher can never see pub/ change ahead of this line
   [[ -d $pub/$1 ]] && mv "$pub/$1" "$stage_out.old"
   mv "$stage_out" "$pub/$1"
   rm -rf "$stage_out.old"
   stage_out=""
-  dry_log "PUBLISH $1"
 }
 
 warn_private() { # a share out of a private GitHub repo is almost always a mistake
@@ -994,8 +994,10 @@ cmd_state() { # read-only JSON snapshot for the menu bar app: never prunes, writ
       local id name src date exp opts kind own_host rule line rows=() i
       while IFS=$'\t' read -r id name src date exp opts; do
         kind="snapshot"; has_opt live "$opts" && kind="live"
-        own_host="$(opt_val host "$opts" || true)"
-        rule="$(opt_val access_rule "$opts" || true)"
+        own_host="${opts#*host=}"
+        [[ $own_host == "$opts" ]] && own_host="" || own_host="${own_host%% *}"
+        rule="${opts#*access_rule=}"
+        [[ $rule == "$opts" ]] && rule="" || rule="${rule%% *}"
         share_url "$id" "$name" "$opts"
         printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s' "$id" "$name" "$share_url_out" "$kind" "$own_host" "${exp:-0}" "$rule"
         rows+=("$line")
@@ -1517,6 +1519,7 @@ cf_dry() { # the SHARE_ACCESS_DRY answers: fixtures and knobs in, one log line p
 access_account() { # access_account [soft]: acct, the account of the ONE active zone that owns the main hostname; needs the resolved token.
   # soft (a listing): a token for another account warns in one line and returns 1, so ls and status never die on it
   [[ -n $acct ]] && return 0
+  [[ ${1:-} == soft && -n ${access_soft_warned:-} ]] && return 1   # a soft miss already warned once this run
   [[ -n $api_token ]] || { access_no_token >&2; exit 1; }
   local n why=""
   if [[ ${1:-} == soft ]]; then zone_name="${zone_name:-$(cfg zone || true)}"; zone_name="${zone_name:-${host_name#*.}}"; else host_zone; fi
@@ -1526,7 +1529,8 @@ access_account() { # access_account [soft]: acct, the account of the ONE active 
   elif [[ $n != 1 ]]; then why="the token sees $n active zones named $zone_name; use a token scoped to the account that owns $host_name"; fi
   if [[ -n $why ]]; then
     [[ ${1:-} == soft ]] || die "$why"
-    echo "share: $why; skipping the Access check" >&2; return 1
+    [[ -z ${access_soft_warned:-} ]] && echo "share: $why; skipping the Access check" >&2
+    access_soft_warned=1; return 1
   fi
   acct="$(jq -r '.result[0].account.id' <<<"$cf_body")"
 }
@@ -1863,7 +1867,7 @@ access_open_url() { # the platform opener, backgrounded; skipped over ssh or wit
   if [[ $(uname -s) == Darwin ]]; then opener=open
   else [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] || return 0; opener=xdg-open; fi
   command -v "$opener" >/dev/null || return 0
-  ("$opener" "$1" >/dev/null 2>&1 &)
+  ( trap "" HUP; nohup "$opener" "$1" >/dev/null 2>&1 & )   # survives the terminal closing mid-run
   return 0
 }
 
