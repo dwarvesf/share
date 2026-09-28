@@ -43,5 +43,10 @@ Delta from `docs/specs/SPEC-004-access.md`. Decisions already in the spec are re
 
 ## Landmines found while building
 
-- `case` patterns: `*/access/apps?*` also matches `/access/apps/<uuid>` because `?` is a glob wildcard; the id pattern comes first and the list pattern escapes the `?`.
+- `case` patterns: `*/access/apps?*` also matches `/access/apps/<uuid>` because `?` is a glob wildcard; the id pattern comes first and the list pattern quotes the `?` (a quoted `\?` is a literal backslash, which matched nothing and read Zone: Read as MISSING for one run).
 - `rows()` validates `access=` and `access_rule=` in awk with `index`/`substr`/`length` only: mawk has no `{n}` intervals and no `\b`.
+- macOS BSD `grep` treats a `$` before `\|` as a literal, so a combined `a$\|b` pattern silently loses its first alternative; the suite uses one `-e` per pattern.
+- `script -q /dev/null cmd` with the paste piped on stdin races its EOF against the data on macOS (the pty echoed `^D` then the token, and `read -rs` saw EOF); the pseudo-terminal test drives the prompt with `expect` and skips when it is absent.
+- `${4:-$$}` turns an empty fourth argument back into this pid; a "no owner" line needs `${4-$$}` then `${o:-0}` (the re-validation caught it: serve's own prune was still pinning lines).
+- Sites that share a port land in one adapted Caddy server, each site's routes nested under a host-matched subroute, so a route-order check has to walk `..` in document order rather than the top-level `routes[]`.
+- `env -u X func` fails: `env` cannot exec a shell function; the test passes `VAR=` as an empty assignment instead.
