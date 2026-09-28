@@ -8,6 +8,8 @@
 #   share add [--ttl 7d|12h|never] [--no-index] <file|dir>   copy it in, print + copy the link, auto-start
 #   share add <port|localhost:port|http://localhost:port>    live proxy at https://<host>/<id>/
 #   share add ... --host <name>.<zone>                       give the share its own hostname
+#   share add ... --access group:<name>|email:<a>[,<b>...]|domain:<domain>   a login gate (Cloudflare Access) on this link
+#   share api-token [--cmd '<command>' | --check]   the Cloudflare API token --access needs: prefilled form + paste, or point at one you have
 #   share ls                  list shares: link, size, source, expiry
 #   share refresh <id|link>   re-copy from the source path (same link)
 #   share rm <id|link>        unpublish (moves the copy to the Trash)
@@ -52,6 +54,7 @@ root="${SHARE_ROOT:-$HOME/share${profile:+/profiles/$profile}}"
 pub="$root/pub"            # served tree; nothing else is reachable from the tunnel
 index="$root/index.tsv"    # id, name, source, added date, expiry epoch (0 = never)
 pidfile="$root/serve.pid"
+pending="$root/access-pending"   # every Access app not, or no longer, backed by a finished row: id, app or -:<nonce>, owner pid, owner start, created
 host_name="${SHARE_HOSTNAME:-$(cfg hostname || true)}"
 port="${SHARE_PORT:-$(cfg port || true)}"; port="${port:-8787}"
 [[ $port =~ ^[1-9][0-9]*$ ]] || die "port '$port' is not a number (port= in $config, or SHARE_PORT)"   # no leading zero: $(( )) would read octal
@@ -68,16 +71,38 @@ running() { # the pid must still be a share serve: an unclean exit leaves the fi
   local pid; pid="$(cat "$pidfile")"
   kill -0 "$pid" 2>/dev/null && [[ $(ps -o command= -p "$pid" 2>/dev/null) == *share*serve* ]]
 }
-rows() { # the only index reader: a forged row (bad id, main or malformed host=) never reaches a path, Caddyfile, or Cloudflare call
+rows() { # the only index reader: a forged row (bad id, main or malformed host=, a bad access= or access_rule=) never reaches a path, Caddyfile, or Cloudflare call
   [[ -f $index ]] || return 0
-  # no {n} intervals: mawk lacks them; the host regex is setup's hostname check
+  # no {n} intervals: mawk lacks them; the host regex is setup's hostname check; the rule grammar is access_parse's
   awk -F'\t' -v main="$host_name" '
-    (NF == 5 || NF == 6) && length($1) == 6 && $1 !~ /[^0-9a-f]/ {
-      n = split($6, a, " ")
-      for (i = 1; i <= n; i++) if (substr(a[i], 1, 5) == "host=") {
-        h = substr(a[i], 6)
-        if (h == main || h !~ /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z][a-z]+$/) next
+    function hostname(h) { return h ~ /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z][a-z]+$/ }
+    function uuid(u) { return length(u) == 36 && u !~ /[^0-9a-f-]/ && substr(u, 9, 1) == "-" && substr(u, 14, 1) == "-" && substr(u, 19, 1) == "-" && substr(u, 24, 1) == "-" && gsub(/-/, "-", u) == 4 }
+    function rule(r,   k, v, m, e, j, at) {
+      if (index(r, ":") < 2) return 0
+      k = substr(r, 1, index(r, ":") - 1); v = substr(r, index(r, ":") + 1)
+      if (v == "") return 0
+      if (k == "group") return length(v) <= 64 && v !~ /[^A-Za-z0-9._-]/
+      if (k == "domain") return hostname(v)
+      if (k != "email") return 0
+      m = split(v, e, ",")
+      if (m > 50) return 0
+      for (j = 1; j <= m; j++) {
+        at = index(e[j], "@")
+        if (at < 2 || index(substr(e[j], at + 1), "@") || substr(e[j], 1, at - 1) ~ /[^a-z0-9._%+-]/ || !hostname(substr(e[j], at + 1))) return 0
       }
+      return 1
+    }
+    (NF == 5 || NF == 6) && length($1) == 6 && $1 !~ /[^0-9a-f]/ {
+      n = split($6, a, " "); app = 0; rl = 0
+      for (i = 1; i <= n; i++) {
+        if (substr(a[i], 1, 5) == "host=") {
+          h = substr(a[i], 6)
+          if (h == main || !hostname(h)) next
+        }
+        if (substr(a[i], 1, 7) == "access=") { if (!uuid(substr(a[i], 8))) next; app = 1 }
+        if (substr(a[i], 1, 12) == "access_rule=") { if (!rule(substr(a[i], 13))) next; rl = 1 }
+      }
+      if (app != rl) next   # a gated row carries both, or it is a hand edit
       print
     }' "$index"
 }
@@ -107,7 +132,8 @@ rand_id() { # loops past a collision with an existing row or an orphaned pub/<id
     else
       id="$(rand_id_raw)"
     fi
-    [[ -z "$(row "$id")" && ! -e $pub/$id ]] && { echo "$id"; return; }
+    # an id named in access-pending has an Access app waiting: a new share must never land behind it
+    [[ -z "$(row "$id")" && ! -e $pub/$id ]] && ! grep -q "^$id"$'\t' "$pending" 2>/dev/null && { echo "$id"; return; }
   done
 }
 has_opt() { case " $2 " in *" $1 "*) return 0 ;; esac; return 1; }
@@ -154,7 +180,12 @@ lock_release() { # lock_release <name>: only a link that still names this pid is
   [[ "$(readlink "$root/.lock-$1" 2>/dev/null)" == "$$" ]] && rm -f "$root/.lock-$1"
   held_locks="${held_locks// $1/}"
 }
-release_locks() { local n; for n in $held_locks; do lock_release "$n"; done; }
+release_locks() { # the EXIT trap: every held lock, and a stage still outside pub (a gated add that died in its wait)
+  local n; for n in $held_locks; do lock_release "$n"; done
+  [[ -n $stage_out && -d $stage_out ]] && rm -rf "$stage_out"
+  stage_out=""
+  return 0
+}
 
 # the public hostname share links use: the configured hostname in named mode,
 # the fqdn cloudflared printed in quick mode (empty while not serving)
@@ -320,26 +351,32 @@ gen_index() { # gen_index <stage>: a folder with no index of its own gets a gene
   } >"$1/index.html"
 }
 
-copy() { # copy <src> <id> [opts]: regular files only, so dotfiles (.git, .env) and symlinks (to ~/.ssh) never ship
+stage_out=""   # the stage of the share being built, outside pub; release_locks removes it on a die
+stage_copy() { # stage_copy <src> [opts]: the copy into a stage, sets stage_out; regular files only, so dotfiles (.git, .env) and symlinks (to ~/.ssh) never ship
   local parent name stage skipped
   parent="$(dirname "$1")"; name="$(basename "$1")"
   mkdir -p "$pub"
   stage="$(mktemp -d "$root/.stage.XXXXXX")"
+  stage_out="$stage"; trap release_locks EXIT
   (cd "$parent" && find "$name" -name '.*' -prune -o -type f -print | while IFS= read -r f; do
     mkdir -p "$stage/$(dirname "$f")" && cp -p "$f" "$stage/$f"
   done)
   skipped="$(cd "$parent" && find "$name" -name '.*' -prune -o -type l -print | wc -l | tr -d ' ')"
   [[ $skipped -gt 0 ]] && echo "share: skipped $skipped symlink(s)" >&2
   if [[ -z "$(find "$stage" -type f | head -1)" ]]; then
-    rm -rf "$stage"; die "nothing to share in $1 (dotfiles and symlinks are skipped)"
+    rm -rf "$stage"; stage_out=""; die "nothing to share in $1 (dotfiles and symlinks are skipped)"
   fi
   render_md "$stage"          # a rendered README.md makes README.html, which suppresses gen_index
   local payload="$stage"      # a folder is listed at its own root; a bare file lists under <id>
   [[ -d $stage/$name ]] && payload="$stage/$name"
-  has_opt noindex "${3:-}" || gen_index "$payload"
-  [[ -d $pub/$2 ]] && mv "$pub/$2" "$stage.old"
-  mv "$stage" "$pub/$2"
-  rm -rf "$stage.old"
+  has_opt noindex "${2:-}" || gen_index "$payload"
+}
+stage_publish() { # stage_publish <id>: the atomic swap of stage_out into pub/<id>; from here the bytes are reachable
+  [[ -d $pub/$1 ]] && mv "$pub/$1" "$stage_out.old"
+  mv "$stage_out" "$pub/$1"
+  rm -rf "$stage_out.old"
+  stage_out=""
+  dry_log "PUBLISH $1"
 }
 
 warn_private() { # a share out of a private GitHub repo is almost always a mistake
@@ -368,12 +405,13 @@ parse_target() { # parse_target <arg>: "live <port>" for a port/localhost shape,
 }
 
 cmd_add() {
-  local ttl="${SHARE_TTL:-$(cfg ttl || true)}"; ttl="${ttl:-30d}" noindex="" host_fqdn="" target="" ntargets=0
-  local usage="usage: share add [--ttl 7d] [--host <name>.<zone>] [--no-index] <file|dir|port|localhost:port|http://localhost:port>"
+  local ttl="${SHARE_TTL:-$(cfg ttl || true)}"; ttl="${ttl:-30d}" noindex="" host_fqdn="" target="" ntargets=0 access=""
+  local usage="usage: share add [--ttl 7d] [--host <name>.<zone>] [--no-index] [--access <rule>] <file|dir|port|localhost:port|http://localhost:port>"
   while [[ $# -gt 0 ]]; do
     case $1 in
       --ttl) ttl="${2:-}"; shift 2 || die "$usage" ;;
       --host) host_fqdn="${2:-}"; shift 2 || die "$usage" ;;
+      --access) access="${2:-}"; shift 2 || die "$usage"; [[ -n $access ]] || die "$access_usage" ;;
       --no-index) noindex=1; shift ;;
       --*) die "$usage" ;;
       *) target="$1"; ntargets=$((ntargets + 1)); shift ;;
@@ -381,6 +419,11 @@ cmd_add() {
   done
   [[ $ntargets == 1 ]] || die "$usage"
   [[ -z $host_fqdn || $mode != quick ]] || die "--host needs a named tunnel: '$me teardown', then '$me setup <hostname>'"
+  if [[ -n $access ]]; then   # every refusal before any write
+    access_parse "$access"
+    [[ $mode != quick ]] || die "--access needs a named tunnel on a Cloudflare account with Access: '$me teardown', then '$me setup <hostname>'"
+    [[ ${SHARE_ACCESS_DRY:-0} != 1 || $tunnel == 0 ]] || die "SHARE_ACCESS_DRY=1 is a test seam for SHARE_TUNNEL=0 only; nothing was published"
+  fi
   local pt kind tport="" src name id exp=0 url opts="" secs
   pt="$(parse_target "$target")" || die "$usage"
   if [[ $pt == snapshot ]]; then
@@ -407,23 +450,44 @@ cmd_add() {
     host_check "$host_fqdn"
     opts="${opts:+$opts }host=$host_fqdn"
   fi
+  if [[ -n $access ]]; then   # token, scopes, group: all settled before the copy, and before any Cloudflare write
+    mk_root
+    access_prepare
+  fi
   id="$(rand_id)"
   [[ $secs -gt 0 ]] && exp=$(($(date +%s) + secs))
   mk_root; mkdir -p "$pub"
-  # stage the payload before any Cloudflare write: a copy failure must not orphan DNS or ingress
+  # stage the payload before any Cloudflare write: a copy failure must not orphan DNS, ingress, or an Access app
   if [[ $kind == live ]]; then
     echo "share: live share: anyone with the link reaches 127.0.0.1:$tport while this machine is awake" >&2
     [[ -z $host_fqdn && $mode != quick ]] && echo "share: apps that use absolute asset paths (/static/...) break under a path prefix; use --host <name>.<zone>" >&2
     curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$tport/" || echo "share: nothing answers on 127.0.0.1:$tport yet" >&2
   else
-    copy "$src" "$id" "$opts"
-    warn_private "$src" "$id"
+    stage_copy "$src" "$opts"
+    if [[ -z $access ]]; then stage_publish "$id"; warn_private "$src" "$id"; fi   # a gated copy stays outside pub until the gate is observed
+  fi
+  if [[ -n $access ]]; then
+    access_create "$id" "$host_fqdn"   # intent line, the app, its id into the line, read-back
+    opts="${opts:+$opts }access=$access_app access_rule=$access_rule"
   fi
   [[ -n $host_fqdn ]] && host_add "$host_fqdn"
+  if [[ -n $access ]] && ! access_gate "$id" "$access_aud" "$host_fqdn"; then
+    local left=""
+    [[ -n $host_fqdn ]] && host_rm "$host_fqdn"
+    if access_delete "$access_app"; then lock_take index; pending_drop "$id" "$access_app"; lock_release index
+    else left="; the app stays in access-pending for the next '$me prune' with the token"; fi
+    die "Cloudflare Access did not enforce on $host_name/$id within ${SHARE_ACCESS_WAIT:-900}s; nothing was published$left; rerun the same $me add (Access can take several minutes on a new app)"
+  fi
   lock_take index   # publish: row, render, reload as one step, so no writer's row or render is lost
+  if [[ -n $access ]]; then
+    # only while this process's exact pending line is still there: a sweep that claimed it may have deleted the app
+    pending_has "$id" "$access_app" || { lock_release index; die "the Access app of $id was claimed by a sweep during the wait; nothing was published; rerun the same $me add"; }
+    [[ $kind == snapshot ]] && stage_publish "$id"
+  fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$src" "$(date +%F)" "$exp" "$opts" >>"$index"
   write_caddyfile
   caddy_reload
+  [[ -n $access ]] && pending_drop "$id" "$access_app"
   lock_release index   # before cmd_start: serve's startup render takes the lock itself
   share_url "$id" "$name" "$opts"
   url="$share_url_out"
@@ -437,6 +501,7 @@ cmd_add() {
 }
 
 cmd_ls() {
+  access_pending_note
   [[ -s $index ]] || { echo "no shares"; return 0; }
   local id name src date exp opts size until gone
   while IFS=$'\t' read -r id name src date exp opts; do
@@ -444,14 +509,16 @@ cmd_ls() {
     share_url "$id" "$name" "$opts"
     echo "$share_url_out"
     if has_opt live "$opts"; then
-      echo "    id=$id  live -> $src  added=$date  expires=$until"
+      echo "    id=$id  live -> $src  added=$date  expires=$until$(access_col "$opts")"
     else
       size="$(du -sh "$pub/$id" 2>/dev/null | cut -f1 | tr -d ' ')"
       gone=""; [[ -e $src ]] || gone="  (source gone, snapshot still served)"
-      echo "    id=$id  size=${size:-?}  added=$date  expires=$until  from=$src$gone"
+      echo "    id=$id  size=${size:-?}  added=$date  expires=$until$(access_col "$opts")  from=$src$gone"
     fi
   done < <(rows)   # a 5-field row (v0.1.x) reads with opts empty; malformed rows are skipped
+  access_ls_check
 }
+access_col() { local r; r="$(opt_val access_rule "$1" || true)"; [[ -n $r ]] && printf '  access=%s' "$r"; return 0; }
 
 cmd_refresh() {
   local r src opts
@@ -460,7 +527,7 @@ cmd_refresh() {
   if has_opt live "$opts"; then echo "live share, nothing to refresh" >&2; return 0; fi
   src="$(cut -f3 <<<"$r")"
   [[ -e $src ]] || die "source is gone: $src (the snapshot keeps serving; $me rm $1 to unpublish)"
-  copy "$src" "$1" "$opts"
+  stage_copy "$src" "$opts"; stage_publish "$1"
   lock_take index
   # a concurrent rm may have dropped the row while copy ran outside the lock;
   # recheck it here before trusting the fresh mv into $pub/$1 (see cmd_rm).
@@ -476,12 +543,19 @@ cmd_refresh() {
 }
 
 cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so expiry is never blocked (DEC-016)
-  local r opts fqdn="" tmp
+  local r opts fqdn="" app="" tmp
   r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
   fqdn="$(opt_val host "$opts" || true)"
+  app="$(opt_val access "$opts" || true)"
   if [[ ${SHARE_HOST_DRY:-0} != 1 && -n $fqdn && ${2:-} != prune && -z ${CLOUDFLARE_API_TOKEN:-} && ! -f $cert ]]; then
     die "no Cloudflare credential for $fqdn; set CLOUDFLARE_API_TOKEN or run $me setup --login, then rm again"
+  fi
+  if [[ -n $app ]]; then
+    # the gate goes last: bytes first, row, then the app. rm needs the token before any change; prune defers the app
+    [[ ${2:-} == prune ]] || { api_token_resolve; [[ -n $api_token ]] || { access_no_token >&2; exit 1; }; }
+    if [[ -n $api_token ]]; then access_account; access_sweep; fi
+    lock_take index; pending_has_id "$1" || pending_add "$1" "$app"; lock_release index
   fi
   [[ -n $fqdn ]] && host_rm "$fqdn"
   lock_take index
@@ -493,9 +567,25 @@ cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so ex
   caddy_reload
   lock_release index
   echo "unpublished $1"
+  [[ -n $app ]] || return 0
+  if [[ -z $api_token ]]; then
+    echo "share: Access app for $1 awaits deletion; run '$me prune' with CLOUDFLARE_API_TOKEN" >&2
+  elif access_delete "$app"; then
+    lock_take index; pending_drop_id "$1" "$app"; lock_release index
+  else
+    die "could not delete the Access app for $1 (HTTP $cf_code); it stays in access-pending for the next '$me prune' with the token"
+  fi
 }
 
-cmd_prune() { # unpublish every share past its expiry
+cmd_prune() { # cmd_prune [serve|listing]: unpublish every share past its expiry; sweep waiting Access apps when a token resolves
+  # serve: the daemon never touches Access. listing (ls, status): only an exported CLOUDFLARE_API_TOKEN,
+  # never api_token_cmd or the Keychain, so a listing never runs `op read`. bare: the full resolver.
+  case ${1:-} in
+    serve) api_token="" ;;
+    listing) api_token_resolve env ;;
+    *) api_token_resolve ;;
+  esac
+  if [[ -n $api_token && -s $pending && -n $host_name ]]; then access_account; access_sweep; fi
   [[ -s $index ]] || return 0
   local now ids id
   now="$(date +%s)"
@@ -539,7 +629,13 @@ http://:$port {
 		output file "$root/access.log"
 		format json
 	}
+	@encsep expression {http.request.uri}.matches("^[^?]*(?i:%2f|%5c|%2e)")
+	handle @encsep {
+		respond 400
+	}
 EOF
+    # the encoded-separator reject: the Access edge matches a path app after normalizing, but does not decode %2F or %5C;
+    # Caddy would, so /x/..%2F<id>/f reaches pub/<id>/f past the gate. A handle block, because a bare respond sorts after handle.
     if [[ -s $index ]]; then
       while IFS=$'\t' read -r id name src date exp opts; do
         fqdn="$(opt_val host "$opts" || true)"
@@ -592,6 +688,7 @@ EOF
 }
 
 caddy_reload() { # apply Caddyfile changes over the admin socket; a failure warns, never kills
+  dry_log RELOAD
   running || return 0
   local err
   if ! err="$(caddy reload --config "$root/Caddyfile" --adapter caddyfile 2>&1)"; then
@@ -602,8 +699,9 @@ caddy_reload() { # apply Caddyfile changes over the admin socket; a failure warn
 cmd_serve() {
   host_ok || die "$(this_host) is not in hosts=$hosts; serve from one machine only (a second one splits requests)"
   running && die "already serving (pid $(cat "$pidfile"))"
+  export SHARE_API_TOKEN_OFF=1   # the daemon and its hourly prune never make an Access call, from any token source
   mk_root; mkdir -p "$pub"
-  cmd_prune   # before the render, so the Caddyfile never carries expired rows
+  cmd_prune serve   # before the render, so the Caddyfile never carries expired rows
   # locks are taken only here, before serve's own EXIT trap replaces release_locks
   lock_take index
   write_caddyfile
@@ -847,7 +945,7 @@ cmd_stop() {
 }
 
 cmd_status() {
-  cmd_prune
+  cmd_prune listing
   if running; then
     if [[ $mode == quick ]]; then
       echo "serving (pid $(cat "$pidfile")) on https://$(serving_host) (quick tunnel; the URL changes on every start)"
@@ -883,13 +981,13 @@ cmd_state() { # read-only JSON snapshot for the menu bar app: never prunes, writ
   [[ -s $index ]] && skipped_n=$(($(awk 'length {c++} END {print c+0}' "$index") - $(rows | awk 'END {print NR}')))
   {
     if [[ -s $index ]]; then
-      local id name src date exp opts kind own_host line rows=() i
+      local id name src date exp opts kind own_host rule line rows=() i
       while IFS=$'\t' read -r id name src date exp opts; do
         kind="snapshot"; has_opt live "$opts" && kind="live"
-        own_host="${opts#*host=}"
-        [[ $own_host == "$opts" ]] && own_host="" || own_host="${own_host%% *}"
+        own_host="$(opt_val host "$opts" || true)"
+        rule="$(opt_val access_rule "$opts" || true)"
         share_url "$id" "$name" "$opts"
-        printf -v line '%s\t%s\t%s\t%s\t%s\t%s' "$id" "$name" "$share_url_out" "$kind" "$own_host" "${exp:-0}"
+        printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s' "$id" "$name" "$share_url_out" "$kind" "$own_host" "${exp:-0}" "$rule"
         rows+=("$line")
       done < <(rows)
       for ((i = ${#rows[@]} - 1; i >= 0; i--)); do printf '%s\n' "${rows[i]}"; done
@@ -897,12 +995,13 @@ cmd_state() { # read-only JSON snapshot for the menu bar app: never prunes, writ
   } | jq -nR \
     --arg state "$state_val" --argjson ready "$ready_val" --arg mode "$mode_val" \
     --arg host "$host_val" --arg hosts "$hosts" --argjson serves_here "$serves_val" \
-    --argjson service "$service_val" --argjson skipped "$skipped_n" '
+    --argjson service "$service_val" --argjson skipped "$skipped_n" --argjson access_pending "$(pending_count)" '
     def row: split("\t") | {id: .[0], name: .[1], url: .[2], kind: .[3],
-      own_host: (if .[4] == "" then null else .[4] end), expires: (.[5] | tonumber)};
+      own_host: (if .[4] == "" then null else .[4] end), expires: (.[5] | tonumber),
+      access: (if .[6] == "" then null else .[6] end)};
     {schema: 1, state: $state, ready: $ready, mode: $mode,
      host: (if $host == "" then null else $host end), hosts: $hosts,
-     serves_here: $serves_here, service: $service,
+     serves_here: $serves_here, service: $service, access_pending: $access_pending,
      shares: [inputs | select(length > 0) | row]}
     + (if $skipped > 0 then {skipped: $skipped} else {} end)'
 }
@@ -1054,8 +1153,8 @@ cmd_setup_quick() {
   echo "ready:      https://$q/ is live. The URL changes on every start. Next: $me add <file|dir>"
 }
 
-write_config() { # write_config <tunnel_id> <tunnel_name>; keeps a token_cmd line if there was one
-  local keep; keep="$(cfg token_cmd || true)"
+write_config() { # write_config <tunnel_id> <tunnel_name>; keeps a token_cmd and an api_token_cmd line if there was one
+  local keep keep_api; keep="$(cfg token_cmd || true)"; keep_api="$(cfg api_token_cmd || true)"
   hosts="${hosts:-$(this_host)}"
   mkdir -p "$config_dir"
   {
@@ -1067,6 +1166,7 @@ write_config() { # write_config <tunnel_id> <tunnel_name>; keeps a token_cmd lin
     echo "port=$port"
     [[ -n $zone_name ]] && echo "zone=$zone_name"
     [[ -n $keep ]] && echo "token_cmd=$keep"
+    [[ -n $keep_api ]] && echo "api_token_cmd=$keep_api"
   } >"$config.tmp"
   mv -f "$config.tmp" "$config"
 }
@@ -1081,7 +1181,7 @@ host_zone() { # the zone every --host name lives under; learned once, kept in co
   [[ -n $zone_name ]] && return 0
   zone_name="$(cfg zone || true)"
   if [[ -z $zone_name ]]; then
-    if [[ ${SHARE_HOST_DRY:-0} == 1 ]]; then zone_name="${host_name#*.}"
+    if [[ ${SHARE_HOST_DRY:-0} == 1 || ${SHARE_ACCESS_DRY:-0} == 1 ]]; then zone_name="${host_name#*.}"
     else zone_name="$(public_zone "$host_name")"; fi
     [[ -n $zone_name ]] || die "cannot find the DNS zone of $host_name; is the domain on Cloudflare?"
     mkdir -p "$config_dir"; grep -q '^zone=' "$config" 2>/dev/null || echo "zone=$zone_name" >>"$config"
@@ -1217,6 +1317,495 @@ host_rm() { # host_rm <fqdn>: delete the CNAME, then the ingress rule; missing c
   cfg_json="$(jq -c --arg h "$fqdn" '.config.ingress |= map(select(.hostname != $h))' <<<"$cfg_json")"
   ingress_put "$cfg_json" "-1"
   host_unlock
+}
+
+# --- login gate: one Cloudflare Access app per share (ADR-0006) ---
+#
+# The bytes go public only after the gate is observed at the edge, and the gate goes
+# only after the bytes are gone. Every app is tracked in $pending from the intent line
+# before the POST until the line is dropped after the DELETE. SHARE_ACCESS_DRY=1 (with
+# SHARE_TUNNEL=0 only) answers every Access call from fixtures and logs each one, one
+# per line, in $root/access-calls.log.
+
+access_usage="usage: --access group:<name> | email:<a>[,<b>...] | domain:<domain>"
+access_rule="" access_include="" access_app="" access_aud="" access_group_out="" access_found="" acct=""
+api_token="" api_token_src="" own_start_v="" probe_round=0
+api_token_file="$config_dir/api-token"
+api_token_key() { echo "share-api${profile:+.$profile}:$host_name"; }
+dry_log() { [[ ${SHARE_ACCESS_DRY:-0} == 1 ]] && echo "$*" >>"$root/access-calls.log"; return 0; }
+hostname_ok() { [[ $1 =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z][a-z]+$ ]]; }
+
+access_parse() { # access_parse <rule>: validates and normalizes into access_rule; the include JSON waits for the account (group: is resolved by name)
+  local kind="${1%%:*}" v="${1#*:}" e lp dom out="" list=()
+  [[ $1 == *:* && -n $kind && -n $v ]] || die "$access_usage"
+  case $kind in
+    group)
+      [[ ${#v} -le 64 ]] || die "$access_usage"
+      case $v in *[!A-Za-z0-9._-]*) die "$access_usage" ;; esac
+      access_rule="group:$v" ;;
+    email)
+      v="$(tr '[:upper:]' '[:lower:]' <<<"$v")"
+      IFS=, read -ra list <<<"$v"
+      [[ ${#list[@]} -ge 1 && ${#list[@]} -le 50 ]] || die "$access_usage"
+      for e in "${list[@]}"; do
+        lp="${e%%@*}"; dom="${e#*@}"
+        [[ $e == *@* && -n $lp && $dom != *@* ]] || die "$access_usage"
+        case $lp in *[!a-z0-9._%+-]*) die "$access_usage" ;; esac
+        hostname_ok "$dom" || die "$access_usage"
+        out="${out:+$out,}$e"
+      done
+      access_rule="email:$out" ;;
+    domain)
+      v="$(tr '[:upper:]' '[:lower:]' <<<"$v")"
+      hostname_ok "$v" || die "$access_usage"
+      echo "share: --access domain:$v admits every address at $v, contractors included; use group: to narrow it" >&2
+      access_rule="domain:$v" ;;
+    *) die "$access_usage" ;;
+  esac
+}
+access_include_json() { # the policy include for access_rule; group: from access_group_out
+  local kind="${access_rule%%:*}" v="${access_rule#*:}"
+  case $kind in
+    group) access_include="$(jq -nc --arg id "$access_group_out" '[{group:{id:$id}}]')" ;;
+    email) access_include="$(jq -nc --arg v "$v" '[$v | split(",")[] | {email:{email:.}}]')" ;;
+    domain) access_include="$(jq -nc --arg v "$v" '[{email_domain:{domain:$v}}]')" ;;
+  esac
+}
+
+# the API token, one resolver for every Access path: the stored source wins over the shell,
+# so a broad token exported in a shell never silently replaces the profile's own
+api_token_resolve() { # api_token_resolve [env]: sets api_token and api_token_src; api_token_cmd, then the Keychain item or 600 file, then CLOUDFLARE_API_TOKEN.
+  # `env`: the environment only (a listing never runs op read or prompts). Nothing from any source under SHARE_API_TOKEN_OFF (share serve). Never exported.
+  local cmd rc=0
+  api_token="" api_token_src=""
+  [[ ${SHARE_API_TOKEN_OFF:-0} == 1 ]] && return 0
+  if [[ ${1:-} != env ]]; then
+    cmd="$(cfg api_token_cmd || true)"
+    if [[ -n $cmd ]]; then
+      api_token="$(eval "$cmd" 2>/dev/null)" || rc=$?
+      [[ $rc == 0 && -n $api_token ]] || die "api_token_cmd failed (exit $rc); run it by hand to see why, or replace it: $me api-token --cmd '<command>'"
+      api_token_src="api_token_cmd"; return 0
+    fi
+    if command -v security >/dev/null; then
+      api_token="$(security find-generic-password -a share -s "$(api_token_key)" -w 2>/dev/null || true)"
+      [[ -n $api_token ]] && { api_token_src="keychain $(api_token_key)"; return 0; }
+    fi
+    if [[ -f $api_token_file ]]; then
+      api_token="$(cat "$api_token_file")"
+      [[ -n $api_token ]] && { api_token_src="$api_token_file"; return 0; }
+    fi
+  fi
+  [[ -n ${CLOUDFLARE_API_TOKEN:-} ]] && { api_token="$CLOUDFLARE_API_TOKEN"; api_token_src="CLOUDFLARE_API_TOKEN"; }
+  return 0
+}
+api_token_store() { # api_token_store <token>: through stdin into the Keychain, or a 600 file; never argv
+  if command -v security >/dev/null; then
+    printf 'add-generic-password -U -a share -s "%s" -w "%s"\n' "$(api_token_key)" "$1" | security -i >/dev/null
+    echo "stored in the keychain (service $(api_token_key))"
+  else
+    (umask 077 && printf '%s' "$1" >"$api_token_file")
+    echo "stored in $api_token_file (mode 600)"
+  fi
+}
+api_token_forget() {
+  if command -v security >/dev/null; then security delete-generic-password -a share -s "$(api_token_key)" >/dev/null 2>&1 || true; fi
+  [[ -f $api_token_file ]] && to_trash "$api_token_file"
+  return 0
+}
+access_token_url() { # the account-token template URL (Cloudflare docs, "API token template URLs"): the three permission keys, named for the profile
+  printf 'https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=%s&name=share%%20access%%20%%28%s%%29' \
+    '%5B%7B%22key%22%3A%22access%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22access_acct%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22read%22%7D%5D' \
+    "${profile:-default}"
+}
+access_no_token() { # the guided block when no token source resolves; callers send it to stderr
+  local z; z="$(cfg zone || true)"; z="${z:-${host_name#*.}}"
+  cat <<EOF
+share: --access needs a Cloudflare API token for $host_name${profile:+ (profile $profile)}; none is set.
+  New token (opens the prefilled form, then paste):  $me api-token
+  Already have a token with Access scopes:          $me api-token --cmd 'op read "op://<vault>/<item>/credential"'
+  Form link, pick the account that owns $z:
+     $(access_token_url)
+EOF
+}
+access_scope_line() { echo "the token lacks '$1'; add it at https://dash.cloudflare.com/?to=/:account/api-tokens (account API tokens), then: $me api-token --check"; }
+access_enable_line() { echo "Cloudflare Access is not enabled on the account that owns $zone_name; enable Zero Trust for this account in the Cloudflare dashboard, then: $me api-token --check"; }
+
+cf_try() { # cf_try METHOD PATH [JSON]: like cf() but never dies; sets cf_body, cf_code (HTTP status, 000 on transport failure), cf_err (first errors[].code).
+  # Call it directly, never inside $( ): globals set in a command substitution are lost. The token goes through a header file, never argv.
+  local out
+  cf_body="" cf_code=000 cf_err=""
+  if [[ ${SHARE_ACCESS_DRY:-0} == 1 ]]; then cf_dry "$@"; return 0; fi
+  out="$(curl -sS --max-time 30 -w '\n%{http_code}' -X "$1" "$api$2" -H @<(printf 'Authorization: Bearer %s\n' "$api_token") \
+    -H 'Content-Type: application/json' ${3:+--data "$3"} 2>/dev/null)" || return 0
+  cf_code="${out##*$'\n'}"; cf_body="${out%$'\n'*}"
+  cf_err="$(jq -r '.errors[0].code // empty' <<<"$cf_body" 2>/dev/null || true)"
+}
+cf_dry() { # the SHARE_ACCESS_DRY answers: fixtures and knobs in, one log line per call; created apps live in $root/.access-dry
+  local d="$root/.access-dry" name id nonce uuid page
+  mkdir -p "$d"
+  cf_code=200 cf_err="" cf_body='{"success":true,"result":[]}'
+  case "$1 $2" in
+    "GET /zones?"*)
+      dry_log "GET zones"
+      case ${SHARE_ACCESS_DRY_ZONES:-1} in
+        0) cf_body='{"success":true,"result":[]}' ;;
+        1) cf_body='{"success":true,"result":[{"id":"zone-dry","account":{"id":"acct-dry"}}]}' ;;
+        *) cf_body='{"success":true,"result":[{"id":"zone-dry","account":{"id":"acct-dry"}},{"id":"zone-dry2","account":{"id":"acct-dry2"}}]}' ;;
+      esac ;;
+    "GET "*/access/organizations)
+      dry_log "GET orgs"
+      case ${SHARE_ACCESS_DRY_ORGS:-ok} in
+        deny) cf_code=403 cf_err=10000 cf_body='{"success":false,"errors":[{"code":10000}]}' ;;
+        off) cf_code=403 cf_err=9999 cf_body='{"success":false,"errors":[{"code":9999}]}' ;;
+      esac ;;
+    "GET "*/access/groups?*)
+      dry_log "GET groups"
+      page="${2#*&page=}"; page="${page%%&*}"
+      # the name filter is ignored on purpose: the client-side exact match over every page is what gets exercised
+      [[ -f $root/access-groups-fixture.json ]] && cf_body="$(jq -c --argjson p "$page" \
+        '{success:true, result: .[($p - 1) * 100:$p * 100], result_info:{total_pages: (((length + 99) / 100 | floor) | if . < 1 then 1 else . end)}}' "$root/access-groups-fixture.json")" ;;
+    "POST "*/access/apps)
+      if [[ ${3:-} == '{}' ]]; then
+        dry_log "POST app {}"
+        case ${SHARE_ACCESS_DRY_APPS:-ok} in
+          deny) cf_code=403 cf_err=10000 cf_body='{"success":false,"errors":[{"code":10000}]}' ;;
+          off) cf_code=403 cf_err=9999 cf_body='{"success":false,"errors":[{"code":9999}]}' ;;
+          *) cf_code=400 cf_err=12130 cf_body='{"success":false,"errors":[{"code":12130,"message":"access.api.error.invalid_request: app type is missing or invalid"}]}' ;;
+        esac
+      elif [[ ${SHARE_ACCESS_DRY_POST:-} == lost ]]; then
+        dry_log "POST app (lost) $3"; printf '%s' "$3" >"$d/lost.json"; cf_code=000 cf_body=""
+      else
+        name="$(jq -r .name <<<"$3")"; id="$(awk '{print $2}' <<<"$name")"; nonce="${name##* }"
+        uuid="00000000-0000-4000-8000-000000$id"
+        jq -c --arg id "$uuid" --arg aud "aud-$nonce" '. + {id:$id, aud:$aud}' <<<"$3" >"$d/$uuid.json"
+        cf_code=201 cf_body="{\"success\":true,\"result\":$(cat "$d/$uuid.json")}"
+        dry_log "POST app"
+      fi ;;
+    "GET "*/access/apps/*)
+      uuid="${2##*/}"; dry_log "GET app $uuid"
+      if [[ -f $d/$uuid.json ]]; then cf_body="{\"success\":true,\"result\":$(cat "$d/$uuid.json")}"
+      else cf_code=404 cf_body='{"success":false,"errors":[{"code":12103}]}' cf_err=12103; fi ;;
+    "GET "*/access/apps\?*)
+      dry_log "GET apps"
+      [[ -f $d/lost.json ]] && cf_body="$(jq -c '{success:true, result:[{id:"00000000-0000-4000-8000-000000001057", name:.name}], result_info:{total_pages:1}}' "$d/lost.json")" ;;
+    "DELETE "*/access/apps/*)
+      uuid="${2##*/}"
+      if [[ ${SHARE_ACCESS_DRY_DELETE:-} == lost ]]; then dry_log "DELETE app $uuid (lost)"; cf_code=000 cf_body=""
+      else dry_log "DELETE app $uuid"; rm -f "$d/$uuid.json"; [[ $uuid == *001057 ]] && rm -f "$d/lost.json"; fi ;;
+    *) dry_log "$1 $2" ;;
+  esac
+  return 0
+}
+
+access_account() { # acct: the account of the ONE active zone that owns the main hostname; needs the resolved token
+  [[ -n $acct ]] && return 0
+  [[ -n $api_token ]] || { access_no_token >&2; exit 1; }
+  host_zone
+  cf_try GET "/zones?name=$zone_name&status=active"
+  local n; n="$(jq -r '.result | length' <<<"$cf_body" 2>/dev/null || echo 0)"
+  [[ $cf_code == 200 ]] || die "$(access_scope_line 'Zone: Read')"
+  [[ $n == 1 ]] || die "the token sees $n active zones named $zone_name; use a token scoped to the account that owns $host_name"
+  acct="$(jq -r '.result[0].account.id' <<<"$cf_body")"
+}
+access_preflight() { # read-only, safe to rerun: the token source, then one call per scope, one line each on stderr; 0 only when every line is ok.
+  # The Apps Edit probe is an invalid body ({}): a 400 with code 12130 proves the scope without creating anything (measured on a live account).
+  local fails=0 n
+  api_token_resolve
+  host_zone
+  echo "share: checking the API token for profile ${profile:-default} (zone $zone_name)" >&2
+  if [[ -z $api_token ]]; then
+    printf '  %-8s token found\n' MISSING >&2
+    access_no_token >&2
+    return 1
+  fi
+  printf '  %-8s token found (%s)\n' ok "$api_token_src" >&2
+  cf_try GET "/zones?name=$zone_name&status=active"
+  n="$(jq -r '.result | length' <<<"$cf_body" 2>/dev/null || echo 0)"
+  if [[ $cf_code == 200 && $n == 1 ]]; then
+    acct="$(jq -r '.result[0].account.id' <<<"$cf_body")"
+    printf '  %-8s %-62s GET /zones?name=%s -> 1 zone\n' ok "Zone: Read" "$zone_name" >&2
+  elif [[ $cf_code == 200 && $n -gt 1 ]]; then
+    printf '  %-8s ambiguous: %s active zones named %s; use a token scoped to the account that owns %s\n' MISSING "$n" "$zone_name" "$host_name" >&2; fails=1
+  else
+    printf '  %-8s %-62s GET /zones?name=%s -> %s\n' MISSING "Zone: Read" "$zone_name" "$cf_code" >&2; fails=1
+  fi
+  if [[ -n $acct ]]; then
+    cf_try GET "/accounts/$acct/access/organizations"
+    if [[ $cf_code == 200 ]]; then
+      printf '  %-8s %-62s GET /accounts/<acct>/access/organizations -> 200\n' ok "Access: Organizations, Identity Providers, and Groups Read" >&2
+    elif [[ $cf_err == 9999 ]]; then
+      printf '  %-8s %s\n' MISSING "$(access_enable_line)" >&2; fails=1
+    else
+      printf '  %-8s %-62s GET /accounts/<acct>/access/organizations -> %s\n' MISSING "Access: Organizations, Identity Providers, and Groups Read" "${cf_err:-$cf_code}" >&2; fails=1
+    fi
+    cf_try POST "/accounts/$acct/access/apps" '{}'
+    if [[ $cf_code == 400 && $cf_err == 12130 ]]; then
+      printf '  %-8s %-62s POST /accounts/<acct>/access/apps {} -> 400 (12130, nothing created)\n' ok "Access: Apps and Policies Edit" >&2
+    elif [[ $cf_err == 9999 ]]; then
+      printf '  %-8s %s\n' MISSING "$(access_enable_line)" >&2; fails=1
+    elif [[ $cf_err == 10000 ]]; then
+      printf '  %-8s %-62s POST /accounts/<acct>/access/apps {} -> 10000\n' MISSING "Access: Apps and Policies Edit" >&2; fails=1
+    else
+      printf '  could not check  Access: Apps and Policies Edit (%s); rerun: %s api-token --check\n' "$cf_code${cf_err:+/$cf_err}" "$me" >&2; fails=1
+    fi
+  fi
+  [[ $fails == 0 ]] && return 0
+  echo "  fix: add the missing permission to this token at https://dash.cloudflare.com/?to=/:account/api-tokens (account API tokens), then run: $me api-token --check" >&2
+  return 1
+}
+access_prepare() { # for add --access, before any write: the preflight (the guided block or a scope line), the sweep, then the include JSON
+  access_preflight || exit 1
+  access_sweep
+  [[ ${access_rule%%:*} == group ]] && access_group_id "${access_rule#*:}"
+  access_include_json
+}
+access_group_id() { # access_group_id <name>: sets access_group_out from an exact name match over every page; none or two is a refusal
+  local page=1 pages=1 ids="" n
+  while :; do
+    cf_try GET "/accounts/$acct/access/groups?name=$1&page=$page&per_page=100"
+    [[ $cf_code == 200 ]] || die "$(access_scope_line 'Access: Organizations, Identity Providers, and Groups Read')"
+    ids="$ids $(jq -r --arg n "$1" '.result[] | select(.name == $n) | .id' <<<"$cf_body" | tr '\n' ' ')"
+    pages="$(jq -r '.result_info.total_pages // 1' <<<"$cf_body")"
+    [[ $page -lt $pages ]] || break
+    page=$((page + 1))
+  done
+  n="$(wc -w <<<"$ids" | tr -d ' ')"
+  case $n in
+    0) access_group_missing "$1" >&2; exit 1 ;;
+    1) access_group_out="${ids// /}" ;;
+    *) die "two Access groups are named '$1'; rename one" ;;
+  esac
+}
+access_group_missing() { # the dashboard path is quoted from Cloudflare docs, "Rule groups"
+  cat <<EOF
+share: no Access group named '$1' on the account that owns $zone_name.
+  Create it once (share never creates groups):
+  Cloudflare dashboard > Zero Trust > Access controls > Policies > Rule groups tab > Add a group
+    Name: $1
+    Include > Selector: Emails > Value: each address (one per entry)
+    Save
+  then rerun the same $me add.
+EOF
+}
+
+# the pending file: <share id>\t<app uuid or -:<nonce>>\t<owner pid>\t<owner start>\t<created epoch>; every read and write under the index lock
+proc_start() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }
+own_start() { [[ -n $own_start_v ]] || own_start_v="$(proc_start $$)"; echo "$own_start_v"; }
+pending_add() { printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$$" "$(own_start)" "${3:-$(date +%s)}" >>"$pending"; }
+pending_has() { grep -qF "$(printf '%s\t%s\t%s\t%s\t' "$1" "$2" "$$" "$(own_start)")" "$pending" 2>/dev/null; }
+pending_has_id() { grep -q "^$1"$'\t' "$pending" 2>/dev/null; }
+pending_drop() { # pending_drop <id> <app>: this process's exact line only
+  [[ -f $pending ]] || return 0
+  local tmp; tmp="$(mktemp "$root/.pending.XXXXXX")"
+  grep -vF "$(printf '%s\t%s\t%s\t%s\t' "$1" "$2" "$$" "$(own_start)")" "$pending" >"$tmp" || true
+  mv -f "$tmp" "$pending"
+}
+pending_drop_id() { # pending_drop_id <id> <app>: every line for that app, whoever owns it; the app is gone
+  [[ -f $pending ]] || return 0
+  local tmp; tmp="$(mktemp "$root/.pending.XXXXXX")"
+  awk -F'\t' -v id="$1" -v app="$2" '!($1 == id && $2 == app)' "$pending" >"$tmp"
+  mv -f "$tmp" "$pending"
+}
+pending_set_app() { # pending_set_app <id> <old> <new>: rewrite this process's exact line; 1 when a sweep claimed or removed it
+  pending_has "$1" "$2" || return 1
+  local tmp; tmp="$(mktemp "$root/.pending.XXXXXX")"
+  awk -F'\t' -v OFS='\t' -v id="$1" -v old="$2" -v new="$3" -v pid="$$" -v st="$(own_start)" \
+    '$1 == id && $2 == old && $3 == pid && $4 == st {$2 = new} {print}' "$pending" >"$tmp"
+  mv -f "$tmp" "$pending"
+}
+pending_count() { [[ -f $pending ]] && awk 'NF {c++} END {print c + 0}' "$pending" || echo 0; }
+owner_live() { # owner_live <pid> <start>: alive, a share process, and the same start time (pid reuse, share serve included)
+  kill -0 "$1" 2>/dev/null && [[ $(ps -o command= -p "$1" 2>/dev/null) == *share* && "$(proc_start "$1")" == "$2" ]]
+}
+
+access_create() { # access_create <id> [fqdn]: the intent line, the app, its uuid into the line, then a read-back; sets access_app and access_aud
+  local nonce name dests body
+  nonce="$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+  name="share $1 $host_name $nonce"   # the nonce is the last word: a lookup by name can never match an older app for the same id
+  lock_take index; pending_add "$1" "-:$nonce"; lock_release index
+  dests="[{\"type\":\"public\",\"uri\":\"$host_name/$1\"},{\"type\":\"public\",\"uri\":\"$host_name/$1/*\"}]"
+  [[ -n ${2:-} ]] && dests="$(jq -c --arg u "$2" '. + [{type:"public", uri:$u}]' <<<"$dests")"
+  body="$(jq -nc --arg name "$name" --arg pname "share $1" --argjson d "$dests" --argjson inc "$access_include" \
+    '{name:$name, type:"self_hosted", destinations:$d, app_launcher_visible:false, session_duration:"24h",
+      policies:[{name:$pname, decision:"allow", include:$inc, precedence:1}]}')"
+  cf_try POST "/accounts/$acct/access/apps" "$body"
+  [[ $cf_code != 000 ]] || die "the Cloudflare API did not answer the Access app create for $1; nothing was published (the next '$me prune' with the token finds or forgets it); rerun the same $me add"
+  [[ $cf_err != 9999 ]] || die "$(access_enable_line)"
+  [[ $cf_err != 10000 ]] || die "$(access_scope_line 'Access: Apps and Policies Edit')"
+  [[ $cf_code == 2* ]] || die "Cloudflare API POST access/apps failed ($cf_code): $(jq -c '.errors' <<<"$cf_body" 2>/dev/null || head -c 300 <<<"$cf_body"); rerun the same $me add"
+  access_app="$(jq -r '.result.id // empty' <<<"$cf_body")"; access_aud="$(jq -r '.result.aud // empty' <<<"$cf_body")"
+  [[ $access_app =~ ^[0-9a-f-]{36}$ && -n $access_aud ]] || die "the Access app create for $1 answered without an id or aud; see '$me prune' with the token to clean up; rerun the same $me add"
+  lock_take index
+  if ! pending_set_app "$1" "-:$nonce" "$access_app"; then
+    lock_release index; access_delete "$access_app" || true
+    die "a sweep claimed the Access app of $1 while it was created; nothing was published; rerun the same $me add"
+  fi
+  lock_release index
+  cf_try GET "/accounts/$acct/access/apps/$access_app"   # a stored app is checked, not assumed
+  if ! jq -e --argjson d "$dests" '([.result.destinations[].uri] | sort) == ([$d[].uri] | sort) and ((.result.policies // []) | length) > 0' <<<"$cf_body" >/dev/null 2>&1; then
+    if access_delete "$access_app"; then lock_take index; pending_drop "$1" "$access_app"; lock_release index; fi
+    die "the Access app for $1 did not read back as sent (destinations or policy); it was deleted, nothing was published; rerun the same $me add"
+  fi
+}
+access_delete() { # access_delete <uuid>: 2xx or 404 is done; anything else (000 included) is not
+  cf_try DELETE "/accounts/$acct/access/apps/$1"
+  [[ $cf_code == 2* || $cf_code == 404 ]]
+}
+access_find_by_nonce() { # access_find_by_nonce <nonce>: sets access_found to the app whose name ends in " <nonce>", over every page; 1 when the list could not be read
+  local page=1 pages
+  access_found=""
+  while :; do
+    cf_try GET "/accounts/$acct/access/apps?page=$page&per_page=100"
+    [[ $cf_code == 200 ]] || return 1
+    access_found="$(jq -r --arg s " $1" 'first(.result[] | select(.name | endswith($s)) | .id) // empty' <<<"$cf_body")"
+    [[ -n $access_found ]] && return 0
+    pages="$(jq -r '.result_info.total_pages // 1' <<<"$cf_body")"
+    [[ $page -lt $pages ]] || return 0
+    page=$((page + 1))
+  done
+}
+
+access_probe_round() { # access_probe_round <aud> <url>...: one probe per url; 0 when every one redirects to Access with kid == aud
+  local aud="$1" u out code redir host rest kid ok=1 result; shift
+  probe_round=$((probe_round + 1))
+  if [[ ${SHARE_ACCESS_DRY:-0} == 1 ]]; then   # the fixture's next line, the last one repeating; nothing there is a pass
+    result="$(sed -n "${probe_round}p" "$root/access-probe-fixture" 2>/dev/null || true)"
+    [[ -n $result ]] || result="$(tail -1 "$root/access-probe-fixture" 2>/dev/null || true)"
+    result="${result:-pass}"
+    dry_log "PROBE $result"
+    [[ $result == pass ]]; return
+  fi
+  for u in "$@"; do
+    host="${u#https://}"; host="${host%%/*}"
+    out="$(curl -s -o /dev/null --max-time 10 --doh-url https://1.1.1.1/dns-query -w '%{http_code} %{redirect_url}' "$u?share_gate=$(rand_id_raw)" 2>/dev/null ||
+      curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' "$u?share_gate=$(rand_id_raw)" 2>/dev/null || true)"
+    code="${out%% *}"; redir="${out#* }"
+    [[ $code == 30? && $redir =~ ^https://[a-z0-9-]+\.cloudflareaccess\.com/cdn-cgi/access/login/ ]] || { ok=0; continue; }
+    rest="${redir#*/cdn-cgi/access/login/}"
+    [[ ${rest%%[/?]*} == "$host" ]] || ok=0
+    kid="$(sed -n 's/.*[?&]kid=\([^&]*\).*/\1/p' <<<"$redir")"
+    [[ $kid == "$aud" ]] || ok=0
+  done
+  [[ $ok == 1 ]]
+}
+access_gate() { # access_gate <id> <aud> [fqdn]: every gated URL must pass three rounds in a row; 1 when SHARE_ACCESS_WAIT runs out
+  local wait="${SHARE_ACCESS_WAIT:-900}" poll="${SHARE_ACCESS_POLL:-10}" start now streak=0 last_msg=0 urls s
+  urls="https://$host_name/$1/ https://$host_name/$1"
+  [[ -n ${3:-} ]] && urls="$urls https://$3/"
+  start="$(date +%s)"
+  while :; do
+    # shellcheck disable=SC2086 # the url list is space-separated on purpose
+    if access_probe_round "$2" $urls; then
+      streak=$((streak + 1)); [[ $streak -ge 3 ]] && return 0
+    else
+      streak=0
+    fi
+    now="$(date +%s)"
+    [[ $((now - start)) -lt $wait ]] || return 1
+    if [[ $((now - last_msg)) -ge 60 ]]; then
+      echo "share: waiting for Cloudflare Access to enforce on $host_name/$1 (new apps can take several minutes)" >&2; last_msg="$now"
+    fi
+    s=5; [[ $streak == 0 || ${SHARE_ACCESS_DRY:-0} == 1 ]] && s="$poll"   # confirmation rounds 5 s apart; the poll interval until the first pass
+    sleep "$s"
+  done
+}
+
+access_sweep() { # every pending line: a live owner is skipped, a finished add's stale line dropped, the rest claimed under the lock
+  # (orphaned bytes trashed first), then each app deleted with no lock held. A line that is not done stays claimed by
+  # this process; once it exits, the next sweep sees a dead owner and retries.
+  [[ -s $pending ]] || return 0
+  local id app pid st created tmp reload=0 claimed="" uuid proven=0
+  lock_take index
+  tmp="$(mktemp "$root/.pending.XXXXXX")"
+  while IFS=$'\t' read -r id app pid st created; do
+    [[ -n $id && -n $app ]] || continue
+    if owner_live "$pid" "$st"; then printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$app" "$pid" "$st" "$created" >>"$tmp"; continue; fi
+    [[ "$(opt_val access "$(row "$id" | cut -f6)" || true)" == "$app" ]] && continue   # the add finished: a stale line
+    printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$app" "$$" "$(own_start)" "$created" >>"$tmp"
+    claimed="$claimed$id $app $created"$'\n'
+    if [[ -z "$(row "$id")" && -e $pub/$id ]]; then to_trash "$pub/$id"; dry_log "TRASH $id"; reload=1; fi
+  done <"$pending"
+  mv -f "$tmp" "$pending"
+  [[ $reload == 1 ]] && { write_caddyfile; caddy_reload; }
+  lock_release index
+  while read -r id app created; do
+    [[ -n $id ]] || continue
+    uuid="$app"
+    if [[ $app == -:* ]]; then
+      if [[ $proven == 0 ]]; then   # an app list read without the scope is empty and proves nothing
+        cf_try GET "/accounts/$acct/access/organizations"
+        [[ $cf_code == 200 ]] || continue
+        proven=1
+      fi
+      access_find_by_nonce "${app#-:}" || continue
+      uuid="$access_found"
+      if [[ -z $uuid ]]; then   # a POST can still commit after the client timeout: only an old line is forgotten
+        [[ $(( $(date +%s) - created )) -gt 600 ]] || continue
+        lock_take index; pending_drop "$id" "$app"; lock_release index
+        continue
+      fi
+    fi
+    if access_delete "$uuid"; then lock_take index; pending_drop "$id" "$app"; lock_release index; fi
+  done <<<"$claimed"
+}
+
+access_pending_note() { # ls and status: apps waiting for a token
+  local n; n="$(pending_count)"
+  [[ $n -gt 0 ]] && echo "share: $n Access app(s) await deletion; run '$me prune' with CLOUDFLARE_API_TOKEN" >&2
+  return 0
+}
+access_ls_check() { # with an exported CLOUDFLARE_API_TOKEN only (never op read or a prompt from a listing): a gated row whose app is gone is PUBLIC
+  local pairs id app
+  api_token_resolve env
+  [[ -n $api_token && -n $host_name ]] || return 0
+  pairs="$(rows | awk -F'\t' '{n = split($6, a, " "); for (i = 1; i <= n; i++) if (substr(a[i], 1, 7) == "access=") print $1, substr(a[i], 8)}')"
+  [[ -n $pairs ]] || return 0
+  access_account
+  while read -r id app; do
+    [[ -n $id ]] || continue
+    cf_try GET "/accounts/$acct/access/apps/$app"
+    [[ $cf_code == 404 ]] && echo "share: Access app for $id is gone; the link is PUBLIC; $me rm $id" >&2
+  done <<<"$pairs"
+  return 0
+}
+
+cmd_api_token() { # cmd_api_token [--cmd '<command>' | --check]: store a token command, a hidden paste, or stdin; then the read-only preflight
+  need_host
+  [[ $mode != quick ]] || die "--access needs a named tunnel on a Cloudflare account with Access: '$me teardown', then '$me setup <hostname>'"
+  local usage="usage: share api-token [--cmd '<command>' | --check]" tok="" url
+  case ${1:-} in
+    --check) [[ $# -eq 1 ]] || die "$usage" ;;
+    --cmd)
+      [[ $# -eq 2 && -n $2 ]] || die "$usage"
+      mkdir -p "$config_dir"
+      { [[ -f $config ]] && { grep -v '^api_token_cmd=' "$config" || true; }; echo "api_token_cmd=$2"; } >"$config.tmp"
+      mv -f "$config.tmp" "$config"
+      echo "token:      api_token_cmd stored in $config (no secret written)" ;;
+    "")
+      url="$(access_token_url)"
+      if [[ -t 0 ]]; then
+        echo "Create the token in the Cloudflare dashboard: the form is prefilled, pick the account that owns $host_name, click Create."
+        echo "  $url"
+        access_open_url "$url"
+        read -rs -p "Paste the new token (input hidden): " tok; echo
+      else
+        IFS= read -r tok || true
+      fi
+      [[ -n $tok ]] || die "no token entered; rerun: $me api-token"
+      echo "token:      $(api_token_store "$tok")"
+      tok="" ;;
+    *) die "$usage" ;;
+  esac
+  access_preflight
+}
+access_open_url() { # the platform opener, backgrounded; skipped over ssh or with no display, so a text browser never fights the hidden prompt
+  local opener
+  [[ -z ${SSH_CONNECTION:-} ]] || return 0
+  if [[ $(uname -s) == Darwin ]]; then opener=open
+  else [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]] || return 0; opener=xdg-open; fi
+  command -v "$opener" >/dev/null || return 0
+  ("$opener" "$1" >/dev/null 2>&1 &)
+  return 0
 }
 
 cmd_setup() {
@@ -1362,6 +1951,17 @@ cmd_teardown() {
     local a; read -rp "Delete the tunnel and DNS record for $host_name? Shares in $root stay. [y/N] " a
     [[ $a == y* || $a == Y* ]] || die "aborted"
   fi
+  # a gated share never survives teardown: pub/ and the index stay, so a later setup would serve it with no app
+  local gated n_apps
+  gated="$(rows | awk -F'\t' '$6 ~ /(^| )access=/ {print $1}')"
+  n_apps=$(( $(wc -w <<<"$gated") + $(pending_count) ))
+  if [[ $n_apps -gt 0 ]]; then
+    api_token_resolve
+    [[ -n $api_token ]] || die "teardown would orphan $n_apps Access app(s); rerun with CLOUDFLARE_API_TOKEN"
+    local gid
+    for gid in $gated; do cmd_rm "$gid" | sed 's/$/ (gated: unpublished before the tunnel goes)/'; done
+    access_account; access_sweep
+  fi
   svc_uninstall
   cmd_stop >/dev/null
   local zone za rec rid _zn
@@ -1393,7 +1993,7 @@ cmd_teardown() {
   cf DELETE "/accounts/$account/cfd_tunnel/$tid/connections" >/dev/null 2>&1 || true
   cf DELETE "/accounts/$account/cfd_tunnel/$tid" >/dev/null
   echo "tunnel:  deleted"
-  token_forget; echo "token:   removed"
+  token_forget; api_token_forget; echo "token:   removed"
   echo "service: removed"
   [[ -f $cert ]] && to_trash "$cert"
   rm -f "$config_dir/cert.zone"
@@ -1429,6 +2029,8 @@ Publish snapshots of local files/folders, or proxy a running `localhost` server,
 | `share add <port>` | Live proxy `https://<host>/<id>/` -> `127.0.0.1:<port>` (also `localhost:port`, `http://localhost:port`) |
 | `share add ... --host <name>.<zone>` | Own hostname, e.g. `dev.example.com`; needed for apps that emit absolute asset paths, and for SPA deep links |
 | `share add <dir> --no-index` | No generated file listing at the folder link |
+| `share add ... --access email:<a>,<b>` / `--access domain:<d>` / `--access group:<name>` | A login gate (Cloudflare Access, one-time PIN by email): only those addresses, everyone at that domain, or the members of an Access rule group can open the link. The link prints once the edge enforces it (minutes on a first app). Named setup only, never quick mode |
+| `share api-token [--cmd '<command>' \| --check]` | The Cloudflare API token `--access` needs, once per profile: with no argument it opens the prefilled token form and reads a hidden paste; `--cmd` points share at a command that prints a token you already have (`op read ...`); `--check` reruns the scope preflight |
 | `share ls` / `share hits <id>` | List shares / request + unique-visitor counts |
 | `share refresh <id>` | Re-copy a snapshot from its source (no-op for live shares) |
 | `share rm <id>` | Unpublish; for `--host` shares also deletes the CNAME and tunnel rule |
@@ -1444,6 +2046,7 @@ Publish snapshots of local files/folders, or proxy a running `localhost` server,
 - Links die when the machine sleeps. If a link 404s or the visitor sees Cloudflare 530, run `share status`.
 - In quick mode (`setup --quick`) the `trycloudflare.com` URL is new on every `share start` and every login-service restart: an old link is dead forever, always read the current one from `share status` or the `add` output. `--host` is refused in quick mode.
 - `rm`/`hits`/`refresh` accept the pasted link as well as the bare id.
+- A gated link (`--access`) needs the API token first; if `share add --access` prints a "needs a Cloudflare API token" block, run the `share api-token` command it names (or `--cmd` with a token the user already has) and rerun the add. `share rm` of a gated share needs the same token; `share status` shows Access apps waiting for deletion.
 EOF
   [[ -n $d ]] && echo "installed $out"
 }
@@ -1453,7 +2056,8 @@ case "${1:-status}" in
   teardown) cmd_teardown "${2:-}" ;;
   service) cmd_service "${2:-}" ;;
   add) shift; cmd_add "$@" ;;
-  ls) cmd_prune; cmd_ls ;;
+  api-token) shift; cmd_api_token "$@" ;;
+  ls) cmd_prune listing; cmd_ls ;;
   skill) cmd_skill "${2:-}" ;;
   refresh) cmd_refresh "$(id_of "${2:-}")" ;;
   rm) cmd_rm "$(id_of "${2:-}")" ;;
