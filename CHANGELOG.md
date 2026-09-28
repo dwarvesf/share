@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Features
+
+- per-link Cloudflare Access login gate: `share add --access`, `share api-token` (#38)
+
 ## [v0.6.0] - 2026-09-28
 
 ### Features
