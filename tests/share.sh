@@ -1545,7 +1545,9 @@ check "no listener on the share port" "0" "$(lsof -nP -iTCP:"$SHARE_PORT" -sTCP:
 check "no stray suite processes" "0" "$(pgrep -f "$WORK" | grep -vc $$ || true)"
 check "no suite serve still running" "0" "$(pgrep -f "$SH serve" | grep -vc $$ || true)"
 check "no cloudflared on the suite ports" "0" "$(pgrep -f "cloudflared.*$SHARE_PORT\|cloudflared.*$((SHARE_PORT + 1))" | grep -c . || true)"
-check "no fake tunnel idlers" "0" "$(pgrep -f "sleep 600" | grep -c . || true)"
+# only an ORPHANED idler counts: a live serve's fake tunnel is still its own child (see the
+# orphaned-prune-sleep comment below); this is what keeps a second suite's own idler off this count.
+check "no fake tunnel idlers" "0" "$(ps -eo ppid,command | awk '$1==1 && $2=="sleep" && $3=="600"' | grep -c . || true)"
 # only an ORPHANED sleep counts: a live service's prune loop keeps its own
 check "no orphaned prune sleeps" "0" "$(ps -eo ppid,command | awk '$1==1 && $2=="sleep" && $3=="3600"' | grep -c . || true)"
 check "serve.pid removed" "0" "$([[ -f $SHARE_ROOT/serve.pid ]] && echo 1 || echo 0)"

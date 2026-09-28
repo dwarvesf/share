@@ -1107,13 +1107,13 @@ live_shared() { # live_shared <p>: p is a live share's port in any profile's ind
   done
   return 1
 }
-free_port() { # the lowest odd port from 8789 whose pair (port, metrics) no other profile claims or live-shares and nothing listens on
-  local p
-  for ((p = 8789; p < 65000; p += 2)); do
+free_port() { # the lowest odd port from 8789 (SHARE_TEST_PORT_BASE test seam) whose pair (port, metrics) no other profile claims or live-shares and nothing listens on
+  local p base=${SHARE_TEST_PORT_BASE:-8789}
+  for ((p = base; p < 65000; p += 2)); do
     port_claimed "$p" || port_claimed "$((p + 1))" || live_shared "$p" || live_shared "$((p + 1))" ||
       listening "$p" || listening "$((p + 1))" || { echo "$p"; return 0; }
   done
-  die "no free port pair from 8789 up"
+  die "no free port pair from $base up"
 }
 profile_port() { # a named profile's first setup picks its own port pair, before any Cloudflare call; the config keeps it from then on
   [[ -n $profile && -z ${SHARE_PORT:-} && -z "$(cfg port || true)" ]] || return 0
