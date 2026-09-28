@@ -15,12 +15,16 @@
    share serve (pid in ~/share/serve.pid)          │
      ├─ cloudflared tunnel run  ────────────────────┘   (TUNNEL_TOKEN from Keychain / file / token_cmd)
      ├─ caddy on 127.0.0.1:<port>
-     │     default site: handle_path /<id>/* → reverse_proxy 127.0.0.1:<live port>  (live shares)
+     │     main site (s.example.com, plus 127.0.0.1 and localhost for local probes; quick
+     │     mode: any Host, its name is unknown at render time):
+     │                   handle_path /<id>/* → reverse_proxy 127.0.0.1:<live port>  (live shares)
      │                   handle /healthz → respond "ok" 200                         (health probe)
      │                   handle → file_server over ~/share/pub                      (snapshots)
      │     per --host share: site block on <fqdn>:<port> → reverse_proxy or file_server
      │                   + a tunnel ingress rule pinning httpHostHeader to <fqdn>
      │                   + a CNAME <fqdn> → <tunnel>.cfargotunnel.com
+     │     any other Host (named mode): a catch-all site answers 404, so a name routed
+     │                   here before its own block exists never reaches the pub tree
      │     headers: Cache-Control no-store, X-Robots-Tag noindex
      │     main host: a raw path with %2F, %5C, or %2E answers 400 (@encsep, the first
      │     handle): the Access edge does not decode those, Caddy would, so an encoded

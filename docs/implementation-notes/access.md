@@ -24,7 +24,22 @@ Delta from `docs/specs/SPEC-004-access.md`. Decisions already in the spec are re
 
 ## Deviations
 
-- None from the behavior contract so far; the test rows are the check.
+- Round 8 of the spec's Decision Log records what the build-time review changed: the
+  main Caddy site is bound to the hostname with a 404 catch-all (a security BLOCKER: the
+  any-Host default site served the whole `pub` tree to a `--host` name during the gate
+  wait); every delete reads the app and requires the `share <id> <host> ` name; the sweep
+  never acts on a malformed line; a deferred delete is owned by pid 0; `refresh` swaps
+  under the lock; `status` never sweeps; the hourly prune inherits `SHARE_API_TOKEN_OFF`
+  (the spec's `access_sweep` paragraph said it "sweeps normally"; the Onboarding section,
+  written later, says the service and its prune never make an Access call, and the code
+  follows that). The spec was amended before the live legs ran, and a fresh-context
+  validator re-read the amended sections.
+- Not done from the review: extracting the gated publish steps out of `cmd_add` into a
+  helper (a shape change with no behavior behind it; `cmd_add` is 95 lines and reads top
+  to bottom in the spec's own order).
+- Row 20 (two profiles on two zones) runs as "the gated id is a 404 on another setup's
+  hostname" with `SHARE_E2E_OTHER_HOST` (the operator's `s.han.ws`, another account and
+  machine); no second zone token exists for a same-machine two-profile leg.
 
 ## Landmines found while building
 
