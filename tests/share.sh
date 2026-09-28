@@ -138,7 +138,10 @@ check "admin socket, not admin off" "0" "$(grep -c 'admin off' "$SHARE_ROOT/Cadd
 check "admin socket exists" "1" "$([[ -S $SHARE_ROOT/admin.sock ]] && echo 1 || echo 0)"
 check "/healthz responds ok" 200 "$(code "https://$SHARE_HOSTNAME/healthz")"
 check "main host block has handle /healthz before the catch-all" "1" \
-  "$(awk '/^http:\/\/:/{f=1} f && /handle \/healthz/{print NR; exit} f && /^\thandle \{/{exit}' "$SHARE_ROOT/Caddyfile" | grep -c .)"
+  "$(awk '/^http:\/\//{f=1} f && /handle \/healthz/{print NR; exit} f && /^\thandle \{/{exit}' "$SHARE_ROOT/Caddyfile" | grep -c .)"
+check "main host block names the hostname and loopback, never any Host" "1" "$(grep -c "^http://$SHARE_HOSTNAME:$SHARE_PORT, http://127.0.0.1:$SHARE_PORT, http://localhost:$SHARE_PORT {" "$SHARE_ROOT/Caddyfile")"
+check "a foreign Host gets the 404 catch-all, not the pub tree" 404 "$(hcode "$dir_url" other.example.test)"
+check "the hostname itself answers" 200 "$(hcode "$dir_url" "$SHARE_HOSTNAME")"
 
 echo "=== markdown ==="
 if command -v pandoc >/dev/null; then
@@ -1057,6 +1060,9 @@ alast() { grep -n "$1" "$alog" | tail -1 | cut -d: -f1; }  # last line number
 row_of() { awk -F'\t' -v id="$1" '$1 == id' "$SHARE_ROOT/index.tsv"; }
 app_of() { row_of "$1" | sed -n 's/.*access=\([^ ]*\).*/\1/p'; }
 areset() { : >"$alog"; rm -rf "$adry" "$afix" "$gfix"; : >"$apending"; }
+plant_app() { # plant_app <id> [name]: the dry answer for GET app <uuid of id>, so a hand-seeded line can be deleted
+  mkdir -p "$adry"; jq -nc --arg id "00000000-0000-4000-8000-000000$1" --arg n "${2:-share $1 $SHARE_HOSTNAME 00000000}" '{id:$id, name:$n}' >"$adry/00000000-0000-4000-8000-000000$1.json"
+}
 bash "$SH" start >/dev/null 2>&1   # the main server, SHARE_TUNNEL=0, in case an earlier section left it down
 echo asset >"$WORK/gated.txt"
 
@@ -1087,7 +1093,7 @@ echo "--- row 2: a bad rule is refused before any write ---"
 areset
 idx_before=$(cksum <"$SHARE_ROOT/index.tsv")
 many=$(for i in $(seq 1 51); do printf 'u%s@x.io,' "$i"; done); many="${many%,}"
-for bad in bad 'group:' 'email:nope' 'domain:-x' "email:$many" 'group:a b' 'email:a@x' 'nope:x'; do
+for bad in bad 'group:' 'email:nope' 'domain:-x' "email:$many" 'group:a b' 'email:a@x' 'nope:x' $'email:a@x.io\nb@y.io'; do
   out=$(acc add "$WORK/gated.txt" --access "$bad" 2>&1 1>/dev/null); rc=$?
   check "--access '${bad:0:24}' exits 1 with the usage line" "1" "$([[ $rc == 1 ]] && grep -c 'usage: --access group:<name> | email:<a>\[,<b>...\] | domain:<domain>' <<<"$out")"
 done
@@ -1167,8 +1173,16 @@ check "row 6: five probe rounds (2 fail, 3 pass)" "fail fail pass pass pass" "$(
 check "row 6: pub/<id> absent while a PROBE fail was logged" "0" "$([[ -e $watch_bad ]] && echo 1 || echo 0)"
 check "row 6: the gated file answers after the gate" "200" "$(wait_code 200 "$o6_url")"
 areset
-printf 'fail\npass\n' >"$afix"
-l6_url=$(acc add "$FIX_PORT" --access email:a@x.io 2>/dev/null | head -1); l6_id=$(cut -d/ -f4 <<<"$l6_url")
+printf 'fail\nfail\npass\n' >"$afix"
+rows_before="$(cut -f1 "$SHARE_ROOT/index.tsv" | sort)"
+rm -f "$watch_bad"
+( while ! grep -q PUBLISH "$alog" 2>/dev/null && ! grep -q 'PROBE pass' "$alog" 2>/dev/null; do
+    if grep -q 'PROBE fail' "$alog" 2>/dev/null && [[ "$(cut -f1 "$SHARE_ROOT/index.tsv" | sort)" != "$rows_before" ]]; then echo bad >"$watch_bad"; fi
+    sleep 0.05
+  done ) & watch_pid=$!
+l6_url=$(SHARE_ACCESS_POLL=1 acc add "$FIX_PORT" --access email:a@x.io 2>/dev/null | head -1); l6_id=$(cut -d/ -f4 <<<"$l6_url")
+kill "$watch_pid" 2>/dev/null; wait "$watch_pid" 2>/dev/null
+check "row 7: no row while a PROBE fail was logged" "0" "$([[ -e $watch_bad ]] && echo 1 || echo 0)"
 check "row 7: the live row and its handle_path land after the last PROBE pass" "1" "$([[ -n $(row_of "$l6_id") && $(alast 'PROBE pass') -lt $(alast 'RELOAD') ]] && grep -c "handle_path /$l6_id/\*" "$SHARE_ROOT/Caddyfile")"
 check "row 7: the live gated share proxies" "hello fixture" "$(wait_code 200 "${l6_url}hello.txt" >/dev/null; curl -s "$(local_url "${l6_url}hello.txt")")"
 
@@ -1209,11 +1223,22 @@ check "row 11: prune with the token deletes that app" "1" "$(grep -c "^DELETE ap
 check "row 11: access-pending empty" "0" "$(awk 'NF' "$apending" | wc -l | tr -d ' ')"
 areset
 mkdir -p "$SHARE_ROOT/pub/b1b1b1" && echo x >"$SHARE_ROOT/pub/b1b1b1/f.txt"
+plant_app b1b1b1
 sh -c 'exit 0' & dead=$!; wait "$dead"
 printf 'b1b1b1\t00000000-0000-4000-8000-000000b1b1b1\t%s\tMon Jan  1 00:00:00 2001\t%s\n' "$dead" "$(date +%s)" >"$apending"
 acc prune >/dev/null 2>&1
 check "row 11b: orphaned bytes are trashed before the app is deleted" "1" "$([[ $(aline 'TRASH b1b1b1') -lt $(aline 'DELETE app') && ! -e $SHARE_ROOT/pub/b1b1b1 ]] && echo 1 || echo 0)"
 check "row 11b: the line is gone" "0" "$(awk 'NF' "$apending" | wc -l | tr -d ' ')"
+areset
+plant_app f0f0f0 "chat-staff"
+printf 'f0f0f0\t00000000-0000-4000-8000-000000f0f0f0\t%s\tMon Jan  1 00:00:00 2001\t%s\n' "$dead" "$(date +%s)" >"$apending"
+printf '..\t00000000-0000-4000-8000-000000f0f0f1\t0\t-\t%s\n' "$(date +%s)" >>"$apending"
+printf 'f0f0f2\tnot-a-uuid\t0\t-\t%s\n' "$(date +%s)" >>"$apending"
+out=$(acc prune 2>&1 1>/dev/null)
+check "a pending line whose app is not this share's is never deleted" "1" "$([[ $(grep -c 'DELETE app' "$alog") == 0 ]] && grep -c "Access app 00000000-0000-4000-8000-000000f0f0f0 is not the app of share f0f0f0 (its name is 'chat-staff'); left alone" <<<"$out")"
+check "malformed pending lines are kept and never acted on" "3" "$(awk 'NF' "$apending" | wc -l | tr -d ' ')"
+check "the share root survived a '..' id" "1" "$([[ -d $SHARE_ROOT/pub && -f $SHARE_ROOT/index.tsv ]] && echo 1 || echo 0)"
+: >"$apending"
 
 echo "--- row 13: a forged access= or access_rule= row never reaches a reader ---"
 {
@@ -1275,6 +1300,7 @@ check "row 23c: no stage left" "0" "$(find "$SHARE_ROOT" -maxdepth 1 -name '.sta
 
 echo "--- rows 24, 25, 25b: pending ids are skipped, a live owner is never swept, a reused pid is dead ---"
 areset
+plant_app abc123
 printf 'abc123\t00000000-0000-4000-8000-000000abc123\t%s\tMon Jan  1 00:00:00 2001\t%s\n' "$dead" "$(date +%s)" >"$apending"
 r24_url=$(SHARE_TEST_IDS="abc123 abc124" bash "$SH" add "$WORK/gated.txt" 2>/dev/null | head -1)
 check "row 24: a pending id is never handed out" "1" "$(grep -c '/abc124/' <<<"$r24_url")"
@@ -1290,6 +1316,7 @@ check "row 25: the add then published" "1" "$([[ $rc == 0 ]] && grep -c PUBLISH 
 acc rm "$(cut -d/ -f4 <"$WORK/c25.out")" >/dev/null 2>&1
 areset
 serve_pid="$(cat "$SHARE_ROOT/serve.pid")"
+plant_app d5d5d5
 printf 'd5d5d5\t00000000-0000-4000-8000-000000d5d5d5\t%s\tMon Jan  1 00:00:00 2001\t%s\n' "$serve_pid" "$(date +%s)" >"$apending"
 acc prune >/dev/null 2>&1
 check "row 25b: serve's pid with another start time is a dead owner" "1" "$(grep -c '^DELETE app 00000000-0000-4000-8000-000000d5d5d5$' "$alog")"
@@ -1297,11 +1324,20 @@ check "row 25b: serve's pid with another start time is a dead owner" "1" "$(grep
 
 echo "--- serve never sweeps: a pending line survives a start with the token in the environment ---"
 areset
+plant_app e6e6e6
 printf 'e6e6e6\t00000000-0000-4000-8000-000000e6e6e6\t%s\tMon Jan  1 00:00:00 2001\t%s\n' "$dead" "$(date +%s)" >"$apending"
 bash "$SH" stop >/dev/null
 SHARE_LIVE_CHECK=0 acc start >/dev/null 2>&1
 check "serve's startup prune makes no Access call" "0" "$(grep -c 'GET orgs\|DELETE app' "$alog")"
 check "the line is still there" "1" "$(grep -c '^e6e6e6' "$apending")"
+: >"$apending"; areset
+x_url=$(acc add "$WORK/gated.txt" --access email:a@x.io 2>/dev/null | head -1); x_id=$(cut -d/ -f4 <<<"$x_url"); x_app=$(app_of "$x_id")
+awk -F'\t' -v OFS='\t' -v id="$x_id" '$1 == id {$5 = 1} {print}' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
+bash "$SH" stop >/dev/null; : >"$alog"
+SHARE_LIVE_CHECK=0 acc start >/dev/null 2>&1   # serve's startup prune expires it with no token
+check "serve's own expiry defers the app with no live owner" "1" "$(grep -c "^$x_id	$x_app	0	-	" "$apending")"
+acc prune >/dev/null 2>&1
+check "the next interactive prune deletes it" "1" "$(grep -c "^DELETE app $x_app$" "$alog")"
 : >"$apending"
 
 echo "--- rows 28, 29: share api-token stores, then the read-only preflight names each scope ---"
@@ -1321,7 +1357,7 @@ check "stdin: the preflight ran and read the keychain item" "1" "$([[ $rc == 0 ]
 check "the stored token wins over the environment" "1" "$(SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" SEC_ITEM=stored acc api-token --check 2>&1 1>/dev/null | grep -c 'token found (keychain')"
 # shellcheck disable=SC2069 # stderr only, on purpose: the preflight prints there
 pre() { SHARE_ACCESS_DRY=1 CLOUDFLARE_API_TOKEN=faketoken "$@" bash "$SH" api-token --check 2>&1 1>/dev/null; }
-mark="$WORK/pre-marker"; touch "$mark"; sleep 1.1
+mark="$WORK/pre-marker"; touch "$mark"; sleep 1.1; : >"$alog"
 out=$(pre env); rc=$?
 check "--check all ok: exit 0" "0" "$rc"
 check "--check: identical output on a rerun" "$out" "$(pre env)"
@@ -1404,6 +1440,7 @@ check "shim: three probe rounds hit the edge URLs" "1" "$([[ $(grep -c '^https:/
 SHIM_LOG="$WORK/shim.log" SHIM_STATE="$WORK/shim-state" PATH="$WORK/shimcurl:$PATH" CLOUDFLARE_API_TOKEN=sentinel-t0k3n bash "$SH" rm "$s26_id" >/dev/null 2>&1
 check "shim: rm deleted the app through the shim" "1" "$([[ ! -e $WORK/shim-state/app.json && -z $(row_of "$s26_id") ]] && echo 1 || echo 0)"
 check "shim: the sentinel token never appeared in argv" "0" "$(grep -c 'sentinel-t0k3n' "$WORK/shim.log")"
+check "shim: nor in share's own stdout or stderr" "0" "$(grep -c 'sentinel-t0k3n' "$WORK/s26.err" <<<"$s26_url" | awk '{s += $1} END {print s + 0}')"
 check "shim: every API call carried the token through a header file" "1" "$([[ $(grep -c '^-H$' "$WORK/shim.log") -ge 8 && $(grep -c '^@/dev/fd/' "$WORK/shim.log") -ge 8 ]] && echo 1 || echo 0)"
 rm -f "$SHARE_CONFIG_DIR/config"   # host_zone learned zone= through the shim's DoH answer
 
