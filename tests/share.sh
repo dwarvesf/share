@@ -14,6 +14,24 @@ export SHARE_TUNNEL=0 SHARE_CLIPBOARD=0 SHARE_HOSTNAME=s.example.test
 # A label no machine has, so an installed share service is never started or stopped by the test.
 export SHARE_SERVICE_LABEL="share-selftest-$$"
 h="$(uname -n)"; export SHARE_HOSTS="${h%%.*}"
+# The suite must never reach the real launchctl or systemctl: a fake HOME does not stop
+# `launchctl bootstrap` from loading a plist into the real login session (a profile's job
+# once outlived its mktemp HOME, exit 78). Stubs shadow both for the whole run, and the
+# guard at the end reads the real job list and fails the run on any share job that appeared.
+real_launchctl="$(command -v launchctl || true)"; real_systemctl="$(command -v systemctl || true)"
+real_jobs() { # every foundation.d.share* job the real launchd or systemd --user knows
+  {
+    [[ -n $real_launchctl ]] && "$real_launchctl" list 2>/dev/null | awk '$3 ~ /^foundation\.d\.share/ {print $3}'
+    [[ -n $real_systemctl ]] && "$real_systemctl" --user list-units --all --no-legend 'foundation.d.share*' 2>/dev/null | awk '{print $1}'
+  } | sort
+}
+jobs_before="$(real_jobs)"
+mkdir -p "$WORK/stubsvc"
+# shellcheck disable=SC2016 # literal code for the stub, not this shell's expansion
+printf '#!/bin/bash\n[[ $1 == print ]] && exit 1\nexit 0\n' >"$WORK/stubsvc/launchctl"   # print fails, so the unload wait returns at once
+printf '#!/bin/bash\nexit 0\n' >"$WORK/stubsvc/systemctl"
+chmod +x "$WORK/stubsvc/launchctl" "$WORK/stubsvc/systemctl"
+export PATH="$WORK/stubsvc:$PATH"
 fix_pid=""
 trap 'bash "$SH" stop >/dev/null 2>&1; [[ -n $fix_pid ]] && kill "$fix_pid" 2>/dev/null; rm -rf "$WORK"' EXIT
 
@@ -737,13 +755,8 @@ check "rm under a leaves b's row" "1" "$(psh b state | jq '.shares | length')"
 check "b's share still answers" "200" "$(code "http://127.0.0.1:$pb/$pb_id/outside.txt")"
 
 echo "--- the service file of a profile carries SHARE_PROFILE (stubbed launchctl/systemctl) ---"
-mkdir -p "$WORK/fakesvc"
-# shellcheck disable=SC2016 # literal code for the stub, not this shell's expansion
-printf '#!/bin/bash\n[[ $1 == print ]] && exit 1\nexit 0\n' >"$WORK/fakesvc/launchctl"
-printf '#!/bin/bash\nexit 0\n' >"$WORK/fakesvc/systemctl"
-chmod +x "$WORK/fakesvc/launchctl" "$WORK/fakesvc/systemctl"
 # profile c never serves: install writes the file, then the 10s wait for a server dies (exit 1), which is expected here
-PATH="$WORK/fakesvc:$QPATH" psh c service install >/dev/null 2>&1
+psh c service install >/dev/null 2>&1
 svc_file=""
 for f in "$PHOME/Library/LaunchAgents/foundation.d.share.c.plist" "$PHOME/.config/systemd/user/foundation.d.share.c.service"; do [[ -f $f ]] && svc_file="$f"; done
 check "profile c's service file uses the suffixed label" "1" "$([[ -n $svc_file ]] && echo 1 || echo 0)"
@@ -1068,6 +1081,9 @@ check "no fake tunnel idlers" "0" "$(pgrep -f "sleep 600" | grep -c . || true)"
 # only an ORPHANED sleep counts: a live service's prune loop keeps its own
 check "no orphaned prune sleeps" "0" "$(ps -eo ppid,command | awk '$1==1 && $2=="sleep" && $3=="3600"' | grep -c . || true)"
 check "serve.pid removed" "0" "$([[ -f $SHARE_ROOT/serve.pid ]] && echo 1 || echo 0)"
+# The stubs above keep every service verb off the real launchd and systemd; this is the
+# proof. A job listed here and not before the run was bootstrapped from a fake HOME.
+check "no real launchd or systemd share job appeared during the run" "$jobs_before" "$(real_jobs)"
 
 echo
 if [[ $fails -gt 0 ]]; then
