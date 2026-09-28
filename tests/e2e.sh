@@ -78,7 +78,7 @@ cat >"$WORK/BeCaddyfile" <<EOF
 	admin off
 	auto_https off
 }
-http://127.0.0.1:$BPORT {
+http://:$BPORT {
 	bind 127.0.0.1
 	root * "$WORK/be"
 	file_server
