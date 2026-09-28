@@ -40,6 +40,7 @@ share profiles                                                       # default a
 | **Always on** | a login service (launchd/systemd) brings links back after reboot |
 | **Menu bar app** | Share Bar shows what's shared and lets you drag a file onto the icon to publish it |
 | **Profiles** | `share --profile work ...` runs a second setup (another account or hostname) beside the first, on its own port and service |
+| **Private links** | `--access email:a@x,b@y`, `domain:example.com`, or `group:<rule group>` puts a Cloudflare Access login (one-time PIN) on one link; the other links stay public. See [Private links](#private-links) |
 
 Links are live only while the machine is awake; visitors get Cloudflare 530 when it sleeps. `https://<hostname>/healthz` answers `ok` while share is serving; the site root 404s by design.
 
@@ -78,6 +79,8 @@ From a clone: `git clone https://github.com/dwarvesf/share.git && cd share && ./
 ```sh
 share setup s.example.com   # one-time: tunnel, DNS, login service (--quick: no domain; --no-service: no login service)
 share add <file|dir|port>   # publish, print + copy the link
+share add ... --access <rule>   # a login gate on this link: email:a@x,b@y | domain:example.com | group:<name>
+share api-token             # once per profile, the Cloudflare API token --access needs (--cmd '<command>' | --check)
 share ls                    # shares with link, size, source, expiry
 share refresh <id|link>     # re-copy from source under the same link
 share rm <id|link>          # unpublish (copy goes to Trash)
@@ -89,6 +92,36 @@ share --profile <name> ...  # any command against another setup (or SHARE_PROFIL
 ```
 
 A share from a private GitHub repo prints a warning; the content is public to anyone with the link.
+
+## Private links
+
+Share a link that only named people can open (Cloudflare Access, email one-time PIN). This needs a named setup (`share setup <hostname>`, not `--quick`) on a Cloudflare account with Zero Trust enabled. If that host is not your default profile, put `--profile <name>` before the verb in every command below.
+
+1. Give share a Cloudflare API token, once per profile.
+
+   Already have a token with Access permissions (Apps and Policies Edit; Organizations, Identity Providers, and Groups Read; Zone Read)? Point share at it:
+
+   ```sh
+   share api-token --cmd 'op read "op://Private/cloudflare token/credential"'
+   ```
+
+   Otherwise run `share api-token`: it opens the Cloudflare token form with those permissions filled in. Click Create, paste the token, done. share checks the permissions either way.
+
+2. Publish for named people:
+
+   ```sh
+   share add ./report.pdf --access email:a@example.com,b@example.com
+   ```
+
+   or for everyone at one email domain: `--access domain:example.com`. The link prints once Cloudflare enforces the login, which can take a few minutes the first time.
+
+3. Next step, a reusable list: create a rule group once in the Cloudflare dashboard (Zero Trust > Access controls > Policies > Rule groups > Add a group; include each person's email), then:
+
+   ```sh
+   share add ./report.pdf --access group:<group name>
+   ```
+
+`share rm` of a gated link removes its Access app too (it needs the same token). A link that expires while nobody holds the token keeps its app in a waiting list; `share status` shows the count and the next `share prune` with the token clears it. Detail: [docs/how-it-works.md](docs/how-it-works.md#a-gated-share---access), scopes and troubleshooting: [docs/setup.md](docs/setup.md#4e-private-links-the-api-token-for---access).
 
 ## Menu bar app
 

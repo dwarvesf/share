@@ -1045,8 +1045,388 @@ sed 's/own_host/XXX/g' "$doc" >"$WORK/how-it-works.missing-field"
 check "negative control: doc missing own_host fails the check" "1" "$(doc_covers_fields "$WORK/how-it-works.missing-field"; echo $?)"
 check "the real doc (restored by never touching it) still passes" "0" "$(doc_covers_fields "$doc"; echo $?)"
 
+echo "=== access: a login gate per link (SHARE_ACCESS_DRY=1, every Cloudflare call answered from fixtures) ==="
+alog="$SHARE_ROOT/access-calls.log"
+adry="$SHARE_ROOT/.access-dry"
+afix="$SHARE_ROOT/access-probe-fixture"
+gfix="$SHARE_ROOT/access-groups-fixture.json"
+apending="$SHARE_ROOT/access-pending"
+acc() { SHARE_ACCESS_DRY=1 SHARE_ACCESS_POLL=0 CLOUDFLARE_API_TOKEN=faketoken bash "$SH" "$@"; }
+aline() { grep -n "$1" "$alog" | head -1 | cut -d: -f1; }   # first line number of a log entry
+alast() { grep -n "$1" "$alog" | tail -1 | cut -d: -f1; }  # last line number
+row_of() { awk -F'\t' -v id="$1" '$1 == id' "$SHARE_ROOT/index.tsv"; }
+app_of() { row_of "$1" | sed -n 's/.*access=\([^ ]*\).*/\1/p'; }
+areset() { : >"$alog"; rm -rf "$adry" "$afix" "$gfix"; : >"$apending"; }
+bash "$SH" start >/dev/null 2>&1   # the main server, SHARE_TUNNEL=0, in case an earlier section left it down
+echo asset >"$WORK/gated.txt"
+
+echo "--- row 1: the three rule forms, normalized into the row and the policy include ---"
+areset
+e_url=$(acc add "$WORK/gated.txt" --access email:A@X.io,b@y.io 2>"$WORK/acc.err" | head -1); e_id=$(cut -d/ -f4 <<<"$e_url")
+check "email: add prints a link" "1" "$(grep -cE "^https://$SHARE_HOSTNAME/[0-9a-f]{6}/gated\.txt$" <<<"$e_url")"
+check "email: row carries the lowercased rule" "1" "$(row_of "$e_id" | grep -c 'access_rule=email:a@x.io,b@y.io')"
+check "email: row carries the app uuid" "1" "$(row_of "$e_id" | grep -cE "access=00000000-0000-4000-8000-000000$e_id")"
+check "email: include is one email object per address" '[{"email":{"email":"a@x.io"}},{"email":{"email":"b@y.io"}}]' "$(jq -c '.policies[0].include' "$adry/$(app_of "$e_id").json")"
+check "email: destinations are <host>/<id> and <host>/<id>/*" "$SHARE_HOSTNAME/$e_id $SHARE_HOSTNAME/$e_id/*" "$(jq -r '[.destinations[].uri] | join(" ")' "$adry/$(app_of "$e_id").json")"
+check "email: app name is 'share <id> <host> <nonce>'" "1" "$(jq -r .name "$adry/$(app_of "$e_id").json" | grep -cE "^share $e_id $SHARE_HOSTNAME [0-9a-f]{8}$")"
+check "email: the preflight ran first (zones, orgs, the {} probe before POST app)" "1" "$([[ $(aline 'GET zones') -lt $(aline 'POST app$') && $(aline 'POST app {}') -lt $(aline 'POST app$') ]] && echo 1 || echo 0)"
+check "email: the gated file answers locally" "200" "$(wait_code 200 "$e_url")"
+check "email: ls shows access= after expires=" "1" "$(acc ls 2>/dev/null | grep -c "id=$e_id .*expires=[^ ]*  access=email:a@x.io,b@y.io")"
+d_url=$(acc add "$WORK/gated.txt" --access domain:D.Foundation 2>"$WORK/acc.err" | head -1); d_id=$(cut -d/ -f4 <<<"$d_url")
+check "domain: row carries the lowercased rule" "1" "$(row_of "$d_id" | grep -c 'access_rule=domain:d.foundation')"
+check "domain: include is email_domain" '[{"email_domain":{"domain":"d.foundation"}}]' "$(jq -c '.policies[0].include' "$adry/$(app_of "$d_id").json")"
+check "domain: warns that it admits everyone at the domain" "1" "$(grep -c 'admits every address at d.foundation, contractors included' "$WORK/acc.err")"
+jq -nc '[{id:"11111111-2222-4333-8444-555555555555", name:"dwarves-ops"}, {id:"aaaaaaaa-2222-4333-8444-555555555555", name:"other"}]' >"$gfix"
+g_url=$(acc add "$WORK/gated.txt" --access group:dwarves-ops 2>"$WORK/acc.err" | head -1); g_id=$(cut -d/ -f4 <<<"$g_url")
+check "group: row carries the rule" "1" "$(row_of "$g_id" | grep -c 'access_rule=group:dwarves-ops')"
+check "group: include is the group id from the lookup" '[{"group":{"id":"11111111-2222-4333-8444-555555555555"}}]' "$(jq -c '.policies[0].include' "$adry/$(app_of "$g_id").json")"
+check "row 14: state carries the rule per share and access_pending" "email:a@x.io,b@y.io|null|0" "$(acc state | jq -r --arg e "$e_id" --arg m "$md_id" '[(.shares[] | select(.id == $e) | .access), (.shares[] | select(.id == $m) | .access), .access_pending] | map(tostring) | join("|")')"
+check "row 14: schema stays 1" "1" "$(acc state | jq .schema)"
+
+echo "--- row 2: a bad rule is refused before any write ---"
+areset
+idx_before=$(cksum <"$SHARE_ROOT/index.tsv")
+many=$(for i in $(seq 1 51); do printf 'u%s@x.io,' "$i"; done); many="${many%,}"
+for bad in bad 'group:' 'email:nope' 'domain:-x' "email:$many" 'group:a b' 'email:a@x' 'nope:x'; do
+  out=$(acc add "$WORK/gated.txt" --access "$bad" 2>&1 1>/dev/null); rc=$?
+  check "--access '${bad:0:24}' exits 1 with the usage line" "1" "$([[ $rc == 1 ]] && grep -c 'usage: --access group:<name> | email:<a>\[,<b>...\] | domain:<domain>' <<<"$out")"
+done
+check "row 2: no row was written" "$idx_before" "$(cksum <"$SHARE_ROOT/index.tsv")"
+check "row 2: no POST app was logged" "0" "$(grep -c 'POST app' "$alog")"
+
+echo "--- row 3: quick mode and the seam with the tunnel on are refused ---"
+printf 'mode=quick\n' >"$SHARE_CONFIG_DIR/config"
+out=$(acc add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null); rc=$?
+check "quick mode refuses --access" "1" "$([[ $rc == 1 ]] && grep -c "needs a named tunnel on a Cloudflare account with Access: 'share teardown', then 'share setup <hostname>'" <<<"$out")"
+out=$(SHARE_ACCESS_DRY=1 SHARE_TUNNEL=1 CLOUDFLARE_API_TOKEN=faketoken bash "$SH" api-token --check 2>&1 1>/dev/null); rc=$?
+check "api-token refuses quick mode too" "1" "$([[ $rc == 1 ]] && grep -c 'needs a named tunnel' <<<"$out")"
+rm -f "$SHARE_CONFIG_DIR/config"
+out=$(SHARE_ACCESS_DRY=1 SHARE_TUNNEL=1 CLOUDFLARE_API_TOKEN=faketoken bash "$SH" add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null); rc=$?
+check "the dry seam dies with the tunnel on" "1" "$([[ $rc == 1 ]] && grep -c 'SHARE_ACCESS_DRY=1 is a test seam for SHARE_TUNNEL=0 only' <<<"$out")"
+check "row 3: nothing logged, no row" "$idx_before" "$([[ ! -s $alog ]] && cksum <"$SHARE_ROOT/index.tsv")"
+
+echo "--- rows 4 and 27: no token source prints the guided block and leaves no stage ---"
+mkdir -p "$WORK/fakesec"
+cat >"$WORK/fakesec/security" <<'EOF'
+#!/bin/bash
+# records the verb and the -s service name it was asked for, never the -w value; find answers nothing unless SEC_ITEM is set
+log="${SEC_LOG:?}"
+if [[ $1 == -i ]]; then
+  while IFS= read -r line; do svc="${line#*-s \"}"; echo "${line%% *} ${svc%%\"*}" >>"$log"; done
+  exit 0
+fi
+prev=""; for a in "$@"; do [[ $prev == -s ]] && echo "$1 $a" >>"$log"; prev="$a"; done
+[[ $1 == find-generic-password ]] && { [[ -n ${SEC_ITEM:-} ]] && echo "$SEC_ITEM"; exit 0; }
+exit 0
+EOF
+chmod +x "$WORK/fakesec/security"
+: >"$WORK/sec.log"
+out=$(env -u CLOUDFLARE_API_TOKEN SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" bash "$SH" add "$WORK/gated.txt" --access group:dwarves-ops 2>&1 1>/dev/null); rc=$?
+check "no token: exit 1" "1" "$rc"
+check "no token: the block names the host and the two api-token forms" "3" "$(grep -c "needs a Cloudflare API token for $SHARE_HOSTNAME; none is set\|^  New token (opens the prefilled form, then paste):  share api-token$\|^  Already have a token with Access scopes:          share api-token --cmd 'op read \"op://<vault>/<item>/credential\"'$" <<<"$out")"
+o1_url=$(grep -o 'https://dash.cloudflare.com/[^ ]*' <<<"$out")
+check "no token: the template URL is the account-token form" "1" "$(grep -c '^https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=' <<<"$o1_url")"
+urldec() { local s="${1//+/ }"; printf '%b' "${s//%/\\x}"; }
+keys=$(sed -n 's/.*permissionGroupKeys=\([^&]*\).*/\1/p' <<<"$o1_url")
+check "no token: the keys decode to exactly the three key/type pairs" '[{"key":"access","type":"edit"},{"key":"access_acct","type":"read"},{"key":"zone","type":"read"}]' "$(urldec "$keys" | jq -c .)"
+check "no token: name decodes to 'share access (default)'" "share access (default)" "$(urldec "$(sed -n 's/.*&name=\([^&]*\).*/\1/p' <<<"$o1_url")")"
+check "no token: no stage left under the root" "0" "$(find "$SHARE_ROOT" -maxdepth 1 -name '.stage.*' | grep -c .)"
+check "no token: no row, no call" "$idx_before" "$([[ ! -s $alog ]] && cksum <"$SHARE_ROOT/index.tsv")"
+check "no token: the profile form names --profile" "2" "$(env -u CLOUDFLARE_API_TOKEN SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" SHARE_PROFILE=dfoundation SHARE_HOSTNAME=s.d.foundation bash "$SH" add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null | grep -c 'share --profile dfoundation api-token')"
+
+echo "--- row 5: group lookup by exact name over every page ---"
+areset
+jq -nc '[{id:"aaaaaaaa-2222-4333-8444-555555555555", name:"other"}]' >"$gfix"
+out=$(acc add "$WORK/gated.txt" --access group:dwarves-ops 2>&1 1>/dev/null); rc=$?
+check "missing group: exit 1 with the rule-group path" "1" "$([[ $rc == 1 ]] && grep -c "no Access group named 'dwarves-ops' on the account that owns example.test" <<<"$out")"
+check "missing group: the block names where to create it and to rerun" "3" "$(grep -c 'Zero Trust > Access controls > Policies > Rule groups tab > Add a group\|^    Name: dwarves-ops$\|then rerun the same share add' <<<"$out")"
+check "missing group: no POST app" "0" "$(grep -c 'POST app$' "$alog")"
+jq -nc '[{id:"a", name:"dwarves-ops"}, {id:"b", name:"dwarves-ops"}]' >"$gfix"
+out=$(acc add "$WORK/gated.txt" --access group:dwarves-ops 2>&1 1>/dev/null); rc=$?
+check "two groups of one name: refused by name" "1" "$([[ $rc == 1 ]] && grep -c "two Access groups are named 'dwarves-ops'; rename one" <<<"$out")"
+check "two groups: no POST app" "0" "$(grep -c 'POST app$' "$alog")"
+jq -nc '[range(0; 120) | {id: ("g" + tostring), name: ("group" + tostring)}] + [{id:"cccccccc-2222-4333-8444-555555555555", name:"dwarves-ops"}]' >"$gfix"
+: >"$alog"
+p_url=$(acc add "$WORK/gated.txt" --access group:dwarves-ops 2>/dev/null | head -1); p_id=$(cut -d/ -f4 <<<"$p_url")
+check "paged group: found on page 2, two GET groups logged" "2" "$(grep -c 'GET groups' "$alog")"
+check "paged group: include carries its id" '[{"group":{"id":"cccccccc-2222-4333-8444-555555555555"}}]' "$(jq -c '.policies[0].include' "$adry/$(app_of "$p_id").json")"
+
+echo "--- rows 6 and 7: the bytes go public only after the gate is observed ---"
+areset
+printf 'fail\nfail\npass\npass\npass\n' >"$afix"
+pub_before="$(find "$SHARE_ROOT/pub" -maxdepth 1 | sort)"
+watch_bad="$WORK/watch.bad"; rm -f "$watch_bad"
+( while ! grep -q PUBLISH "$alog" 2>/dev/null; do
+    if grep -q 'PROBE fail' "$alog" 2>/dev/null && [[ "$(find "$SHARE_ROOT/pub" -maxdepth 1 | sort)" != "$pub_before" ]]; then echo bad >"$watch_bad"; fi
+    sleep 0.05
+  done ) & watch_pid=$!
+o6_url=$(SHARE_ACCESS_POLL=1 acc add "$WORK/gated.txt" --access email:a@x.io 2>/dev/null | head -1); o6_id=$(cut -d/ -f4 <<<"$o6_url")
+kill "$watch_pid" 2>/dev/null; wait "$watch_pid" 2>/dev/null
+check "row 6: POST app < every PROBE < PUBLISH" "1" "$([[ $(aline 'POST app$') -lt $(aline 'PROBE') && $(alast 'PROBE') -lt $(aline 'PUBLISH') ]] && echo 1 || echo 0)"
+check "row 6: five probe rounds (2 fail, 3 pass)" "fail fail pass pass pass" "$(sed -n 's/^PROBE //p' "$alog" | tr '\n' ' ' | sed 's/ $//')"
+check "row 6: pub/<id> absent while a PROBE fail was logged" "0" "$([[ -e $watch_bad ]] && echo 1 || echo 0)"
+check "row 6: the gated file answers after the gate" "200" "$(wait_code 200 "$o6_url")"
+areset
+printf 'fail\npass\n' >"$afix"
+l6_url=$(acc add "$FIX_PORT" --access email:a@x.io 2>/dev/null | head -1); l6_id=$(cut -d/ -f4 <<<"$l6_url")
+check "row 7: the live row and its handle_path land after the last PROBE pass" "1" "$([[ -n $(row_of "$l6_id") && $(alast 'PROBE pass') -lt $(alast 'RELOAD') ]] && grep -c "handle_path /$l6_id/\*" "$SHARE_ROOT/Caddyfile")"
+check "row 7: the live gated share proxies" "hello fixture" "$(wait_code 200 "${l6_url}hello.txt" >/dev/null; curl -s "$(local_url "${l6_url}hello.txt")")"
+
+echo "--- row 8: a gate that never passes publishes nothing and deletes the app ---"
+areset
+printf 'fail\n' >"$afix"
+idx_before=$(cksum <"$SHARE_ROOT/index.tsv")
+out=$(SHARE_ACCESS_WAIT=2 SHARE_ACCESS_POLL=1 acc add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null); rc=$?
+check "timeout: exit 1 naming the wait and the rerun" "1" "$([[ $rc == 1 ]] && grep -c "did not enforce on $SHARE_HOSTNAME/[0-9a-f]* within 2s; nothing was published; rerun the same share add (Access can take several minutes on a new app)" <<<"$out")"
+check "timeout: DELETE app logged, no PUBLISH" "1" "$([[ $(grep -c 'DELETE app' "$alog") == 1 && $(grep -c PUBLISH "$alog") == 0 ]] && echo 1 || echo 0)"
+check "timeout: no row" "$idx_before" "$(cksum <"$SHARE_ROOT/index.tsv")"
+t8_id=$(sed -n 's/^DELETE app 00000000-0000-4000-8000-000000//p' "$alog")
+check "timeout: no pub/<id>, no stage, pending empty" "1" "$([[ ! -e $SHARE_ROOT/pub/$t8_id && -z $(find "$SHARE_ROOT" -maxdepth 1 -name '.stage.*') && ! -s $apending ]] && echo 1 || echo 0)"
+
+echo "--- row 9: rm removes the bytes and the row, then the app ---"
+areset
+acc rm "$e_id" >/dev/null 2>"$WORK/acc.err"; rc=$?
+check "rm gated: exit 0" "0" "$rc"
+check "rm gated: RELOAD precedes DELETE app" "1" "$([[ $(aline RELOAD) -lt $(aline 'DELETE app') ]] && echo 1 || echo 0)"
+check "rm gated: the link 404s" "404" "$(wait_code 404 "$e_url")"
+check "rm gated: access-pending empty after" "0" "$(awk 'NF' "$apending" | wc -l | tr -d ' ')"
+out=$(env -u CLOUDFLARE_API_TOKEN SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" bash "$SH" rm "$d_id" 2>&1 1>/dev/null); rc=$?
+check "rm gated without a token: refused with the guided block, row intact" "1" "$([[ $rc == 1 && -n $(row_of "$d_id") ]] && grep -c 'needs a Cloudflare API token' <<<"$out")"
+
+echo "--- rows 10 and 11: expiry without a token defers the app; prune with the token sweeps it ---"
+areset
+d_app=$(app_of "$d_id")
+awk -F'\t' -v OFS='\t' -v id="$d_id" '$1 == id {$5 = 1} {print}' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
+out=$(env -u CLOUDFLARE_API_TOKEN SHARE_ACCESS_DRY=1 bash "$SH" prune 2>&1 1>/dev/null); rc=$?
+check "prune without a token: exit 0, names the deferred app" "1" "$([[ $rc == 0 ]] && grep -c "Access app for $d_id awaits deletion; run 'share prune' with CLOUDFLARE_API_TOKEN" <<<"$out")"
+check "prune without a token: row and bytes gone" "1" "$([[ -z $(row_of "$d_id") && ! -e $SHARE_ROOT/pub/$d_id ]] && echo 1 || echo 0)"
+check "prune without a token: the app waits in access-pending" "1" "$(grep -c "^$d_id	$d_app	" "$apending")"
+check "prune without a token: no DELETE" "0" "$(grep -c 'DELETE app' "$alog")"
+check "status prints the pending count" "1" "$(env -u CLOUDFLARE_API_TOKEN bash "$SH" status 2>&1 >/dev/null | grep -c "1 Access app(s) await deletion; run 'share prune' with CLOUDFLARE_API_TOKEN")"
+check "state counts it" "1" "$(bash "$SH" state | jq .access_pending)"
+acc prune >/dev/null 2>&1
+check "row 11: prune with the token deletes that app" "1" "$(grep -c "^DELETE app $d_app$" "$alog")"
+check "row 11: access-pending empty" "0" "$(awk 'NF' "$apending" | wc -l | tr -d ' ')"
+areset
+mkdir -p "$SHARE_ROOT/pub/b1b1b1" && echo x >"$SHARE_ROOT/pub/b1b1b1/f.txt"
+sh -c 'exit 0' & dead=$!; wait "$dead"
+printf 'b1b1b1\t00000000-0000-4000-8000-000000b1b1b1\t%s\tMon Jan  1 00:00:00 2001\t%s\n' "$dead" "$(date +%s)" >"$apending"
+acc prune >/dev/null 2>&1
+check "row 11b: orphaned bytes are trashed before the app is deleted" "1" "$([[ $(aline 'TRASH b1b1b1') -lt $(aline 'DELETE app') && ! -e $SHARE_ROOT/pub/b1b1b1 ]] && echo 1 || echo 0)"
+check "row 11b: the line is gone" "0" "$(awk 'NF' "$apending" | wc -l | tr -d ' ')"
+
+echo "--- row 13: a forged access= or access_rule= row never reaches a reader ---"
+{
+  printf 'f1f1f1\tforged-app\t/x\t2026-01-01\t0\taccess=../x access_rule=email:a@x.io\n'
+  printf 'f1f1f2\tforged-rule\t/x\t2026-01-01\t0\taccess=00000000-0000-4000-8000-000000f1f1f2 access_rule=group:a/b\n'
+  printf 'f1f1f3\tforged-half\t/x\t2026-01-01\t0\taccess=00000000-0000-4000-8000-000000f1f1f3\n'
+} >>"$SHARE_ROOT/index.tsv"
+check "forged gated rows absent from ls" "0" "$(bash "$SH" ls | grep -c 'forged-')"
+check "forged gated rows counted in skipped" "3" "$(bash "$SH" state | jq .skipped)"
+grep -v $'\tforged-' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
+
+echo "--- row 22: Caddy answers 400 to an encoded separator on the main host ---"
+rawcode() { curl -s -o /dev/null -w '%{http_code}' --path-as-is "http://127.0.0.1:$SHARE_PORT$1"; }
+for p in "/x/..%2F$g_id/gated.txt" "/%2f$g_id/gated.txt" "/x/..%5C$g_id/gated.txt" "/x/%2e%2e/$g_id/gated.txt" "/x/..%2F$l6_id/"; do
+  check "encoded path $p answers 400" "400" "$(rawcode "$p")"
+done
+check "the plain link still answers" "200" "$(rawcode "/$g_id/gated.txt")"
+echo pct >"$WORK/50%.v1.txt"
+pct_url=$(bash "$SH" add "$WORK/50%.v1.txt" 2>/dev/null | head -1)
+check "a %25 in a file name is not an encoded separator" "200" "$(wait_code 200 "$pct_url")"
+check "a %2F in the query string passes" "200" "$(rawcode "/$g_id/gated.txt?next=%2Fhome")"
+check "the @encsep route precedes file_server in the adapted config" "1" "$(caddy adapt --config "$SHARE_ROOT/Caddyfile" --adapter caddyfile 2>/dev/null | jq -r '.apps.http.servers[] | select(.listen[0] | endswith(":'"$SHARE_PORT"'")) | .routes[] | if (.match[0].expression // "" | test("%2f")) then "encsep" elif ([.. | .handler? | select(. == "file_server")] | length) > 0 then "file_server" else empty end' | tr '\n' ' ' | grep -c '^encsep .*file_server')"
+
+echo "--- rows 23, 23b, 23c, 23d: a lost POST is found by its nonce, only after Access read is proven ---"
+areset
+out=$(SHARE_ACCESS_DRY_POST=lost acc add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null); rc=$?
+check "lost POST: the add dies naming the rerun" "1" "$([[ $rc == 1 ]] && grep -c 'did not answer the Access app create.*rerun the same share add' <<<"$out")"
+nonce=$(awk -F'\t' '{print $2}' "$apending" | sed -n 's/^-://p')
+check "lost POST: the pending line is -:<nonce>" "1" "$(grep -cE "^[0-9a-f]{6}	-:[0-9a-f]{8}	" "$apending")"
+check "lost POST: the logged body's name ends in that nonce" "1" "$(sed -n 's/^POST app (lost) //p' "$alog" | jq -r .name | grep -c " $nonce\$")"
+check "lost POST: no PUBLISH, no row" "0" "$(grep -c PUBLISH "$alog")"
+awk -F'\t' -v OFS='\t' '{$5 = $5 - 660} {print}' "$apending" >"$WORK/p" && mv "$WORK/p" "$apending"   # forged 11 minutes old
+: >"$alog"
+SHARE_ACCESS_DRY_ORGS=deny acc prune >/dev/null 2>&1
+check "row 23b: an unproven sweep looks up nothing and deletes nothing" "0" "$(grep -c 'GET apps\|DELETE app' "$alog")"
+check "row 23b: the -:<nonce> line stays" "1" "$(grep -c "^[0-9a-f]*	-:$nonce	" "$apending")"
+: >"$alog"
+acc prune >/dev/null 2>&1
+check "row 23: a proven sweep logs GET orgs, then the name lookup, then DELETE app" "1" "$([[ $(aline 'GET orgs') -lt $(aline 'GET apps') && $(aline 'GET apps') -lt $(aline 'DELETE app') ]] && echo 1 || echo 0)"
+check "row 23: the file is empty after" "0" "$(awk 'NF' "$apending" | wc -l | tr -d ' ')"
+: >"$alog"; rm -rf "$adry"
+printf 'c3c3c3\t-:0badc0de\t%s\tMon Jan  1 00:00:00 2001\t%s\n' "$dead" "$(( $(date +%s) - 60 ))" >"$apending"
+acc prune >/dev/null 2>&1
+check "row 23d: a young no-match line is kept, nothing deleted" "1" "$([[ $(grep -c 'DELETE' "$alog") == 0 ]] && grep -c '^c3c3c3	-:0badc0de	' "$apending")"
+: >"$apending"
+areset
+printf 'fail\nfail\nfail\nfail\npass\n' >"$afix"
+SHARE_ACCESS_POLL=1 acc add "$WORK/gated.txt" --access email:a@x.io >"$WORK/c23.out" 2>"$WORK/c23.err" & add23=$!
+for _ in $(seq 1 50); do grep -q 'PROBE fail' "$alog" 2>/dev/null && break; sleep 0.1; done
+awk -F'\t' -v OFS='\t' -v d="$dead" '{$3 = d} {print}' "$apending" >"$WORK/p" && mv "$WORK/p" "$apending"   # the owner forged dead
+SHARE_ACCESS_DRY_DELETE=lost acc prune >/dev/null 2>&1
+wait "$add23"; rc=$?
+check "row 23c: the prune claimed the line (a lost DELETE keeps it)" "1" "$(grep -c 'DELETE app .* (lost)' "$alog")"
+check "row 23c: the add finds its line gone, publishes nothing, dies" "1" "$([[ $rc == 1 && $(grep -c PUBLISH "$alog") == 0 ]] && grep -c 'claimed by a sweep during the wait; nothing was published' "$WORK/c23.err")"
+check "row 23c: no row for it" "0" "$(grep -c 'access_rule=email:a@x.io' "$SHARE_ROOT/index.tsv" | awk '{print ($1 > 1) ? 1 : 0}')"
+check "row 23c: no stage left" "0" "$(find "$SHARE_ROOT" -maxdepth 1 -name '.stage.*' | grep -c .)"
+: >"$apending"
+
+echo "--- rows 24, 25, 25b: pending ids are skipped, a live owner is never swept, a reused pid is dead ---"
+areset
+printf 'abc123\t00000000-0000-4000-8000-000000abc123\t%s\tMon Jan  1 00:00:00 2001\t%s\n' "$dead" "$(date +%s)" >"$apending"
+r24_url=$(SHARE_TEST_IDS="abc123 abc124" bash "$SH" add "$WORK/gated.txt" 2>/dev/null | head -1)
+check "row 24: a pending id is never handed out" "1" "$(grep -c '/abc124/' <<<"$r24_url")"
+bash "$SH" rm abc124 >/dev/null; : >"$apending"
+areset
+printf 'fail\nfail\npass\n' >"$afix"
+SHARE_ACCESS_POLL=1 acc add "$WORK/gated.txt" --access email:a@x.io >"$WORK/c25.out" 2>/dev/null & add25=$!
+for _ in $(seq 1 50); do grep -q 'PROBE fail' "$alog" 2>/dev/null && break; sleep 0.1; done
+acc prune >/dev/null 2>&1
+wait "$add25"; rc=$?
+check "row 25: the prune skipped the live owner's line (no DELETE)" "0" "$(grep -c 'DELETE app' "$alog")"
+check "row 25: the add then published" "1" "$([[ $rc == 0 ]] && grep -c PUBLISH "$alog")"
+areset
+serve_pid="$(cat "$SHARE_ROOT/serve.pid")"
+printf 'd5d5d5\t00000000-0000-4000-8000-000000d5d5d5\t%s\tMon Jan  1 00:00:00 2001\t%s\n' "$serve_pid" "$(date +%s)" >"$apending"
+acc prune >/dev/null 2>&1
+check "row 25b: serve's pid with another start time is a dead owner" "1" "$(grep -c '^DELETE app 00000000-0000-4000-8000-000000d5d5d5$' "$alog")"
+: >"$apending"
+
+echo "--- serve never sweeps: a pending line survives a start with the token in the environment ---"
+areset
+printf 'e6e6e6\t00000000-0000-4000-8000-000000e6e6e6\t%s\tMon Jan  1 00:00:00 2001\t%s\n' "$dead" "$(date +%s)" >"$apending"
+bash "$SH" stop >/dev/null
+SHARE_LIVE_CHECK=0 acc start >/dev/null 2>&1
+check "serve's startup prune makes no Access call" "0" "$(grep -c 'GET orgs\|DELETE app' "$alog")"
+check "the line is still there" "1" "$(grep -c '^e6e6e6' "$apending")"
+: >"$apending"
+
+echo "--- rows 28, 29: share api-token stores, then the read-only preflight names each scope ---"
+areset
+rm -f "$SHARE_CONFIG_DIR/config"
+out=$(acc api-token --cmd 'printf faketoken' 2>&1 1>/dev/null); rc=$?
+check "--cmd: exit 0, config has one api_token_cmd line" "1" "$([[ $rc == 0 ]] && grep -c '^api_token_cmd=printf faketoken$' "$SHARE_CONFIG_DIR/config")"
+check "--cmd: the preflight names the source and every scope ok" "4" "$(grep -c '^  ok       token found (api_token_cmd)$\|^  ok       Zone: Read\|^  ok       Access: Organizations, Identity Providers, and Groups Read\|^  ok       Access: Apps and Policies Edit' <<<"$out")"
+acc api-token --cmd 'printf faketoken' >/dev/null 2>&1
+check "--cmd rerun replaces, never duplicates" "1" "$(grep -c '^api_token_cmd=' "$SHARE_CONFIG_DIR/config")"
+rm -f "$SHARE_CONFIG_DIR/config"
+: >"$WORK/sec.log"
+out=$(printf 'tok-from-stdin' | SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" SEC_ITEM=tok-from-stdin acc api-token 2>&1 1>/dev/null); rc=$?
+check "stdin: stored through the Keychain under share-api:<host>" "1" "$(grep -c "^add-generic-password share-api:$SHARE_HOSTNAME$" "$WORK/sec.log")"
+check "stdin: the value never reached the stub's argv or log" "0" "$(grep -c 'tok-from-stdin' "$WORK/sec.log")"
+check "stdin: the preflight ran and read the keychain item" "1" "$([[ $rc == 0 ]] && grep -c "^  ok       token found (keychain share-api:$SHARE_HOSTNAME)$" <<<"$out")"
+check "the stored token wins over the environment" "1" "$(SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" SEC_ITEM=stored acc api-token --check 2>&1 1>/dev/null | grep -c 'token found (keychain')"
+# shellcheck disable=SC2069 # stderr only, on purpose: the preflight prints there
+pre() { SHARE_ACCESS_DRY=1 CLOUDFLARE_API_TOKEN=faketoken "$@" bash "$SH" api-token --check 2>&1 1>/dev/null; }
+mark="$WORK/pre-marker"; touch "$mark"; sleep 1.1
+out=$(pre env); rc=$?
+check "--check all ok: exit 0" "0" "$rc"
+check "--check: identical output on a rerun" "$out" "$(pre env)"
+check "--check: no write other than the {} probe in the call log" "GET zones GET orgs POST app {} GET zones GET orgs POST app {}" "$(tr '\n' ' ' <"$alog" | sed 's/ $//')"
+check "--check: nothing written under the root or the config dir" "" "$(find "$SHARE_ROOT" "$SHARE_CONFIG_DIR" -newer "$mark" ! -name '*.log' 2>/dev/null)"
+out=$(pre env SHARE_ACCESS_DRY_ORGS=deny); rc=$?
+check "Groups Read denied: MISSING names the scope, exit 1" "1" "$([[ $rc == 1 ]] && grep -c '^  MISSING  Access: Organizations, Identity Providers, and Groups Read' <<<"$out")"
+out=$(pre env SHARE_ACCESS_DRY_APPS=deny); rc=$?
+check "Apps Edit denied: MISSING names the scope, exit 1" "1" "$([[ $rc == 1 ]] && grep -c '^  MISSING  Access: Apps and Policies Edit .*-> 10000$' <<<"$out")"
+check "a MISSING line ends with the fix command" "1" "$(grep -c "then run: share api-token --check$" <<<"$out")"
+out=$(pre env SHARE_ACCESS_DRY_ORGS=off); rc=$?
+check "Access not enabled: the enable hint, exit 1" "1" "$([[ $rc == 1 ]] && grep -c 'enable Zero Trust for this account in the Cloudflare dashboard, then: share api-token --check$' <<<"$out")"
+out=$(pre env SHARE_ACCESS_DRY_ZONES=2); rc=$?
+check "two active zones: ambiguous, exit 1" "1" "$([[ $rc == 1 ]] && grep -c '^  MISSING  ambiguous: 2 active zones named example.test' <<<"$out")"
+out=$(pre env SHARE_ACCESS_DRY_ZONES=0); rc=$?
+check "no zone: Zone: Read MISSING, exit 1" "1" "$([[ $rc == 1 ]] && grep -c '^  MISSING  Zone: Read' <<<"$out")"
+
+echo "--- row 32: every error line names its fix (a command or a URL) ---"
+printf 'api_token_cmd=false\n' >"$SHARE_CONFIG_DIR/config"
+out=$(acc add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null)
+check "api_token_cmd failure names the exit code and the replacement" "1" "$(grep -c "api_token_cmd failed (exit 1); run it by hand to see why, or replace it: share api-token --cmd '<command>'$" <<<"$out")"
+rm -f "$SHARE_CONFIG_DIR/config"
+fix_lines() { grep -E '^share: |^  MISSING|^  fix:' | grep -vE '(share (api-token|add|prune|teardown|setup|rm)[^;]*|https?://[^ ]+|\(hostname\)>'"'"'|share add \(Access can take several minutes on a new app\))$' ; }
+check "no fix-naming line ends without a command or a URL" "" "$( { pre env SHARE_ACCESS_DRY_APPS=deny; pre env SHARE_ACCESS_DRY_ORGS=off; SHARE_ACCESS_WAIT=1 SHARE_ACCESS_POLL=1 acc add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null; printf 'mode=quick\n' >"$SHARE_CONFIG_DIR/config"; acc add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null; rm -f "$SHARE_CONFIG_DIR/config"; } | fix_lines)"
+rm -f "$afix"
+
+echo "--- row 33: share api-token with no argument opens the prefilled form and reads a hidden paste ---"
+mkdir -p "$WORK/fakeopen"
+# shellcheck disable=SC2016 # literal code for the stub, not this shell's expansion
+printf '#!/bin/bash\nprintf "%%s\\n" "$@" >>"${OPEN_LOG:?}"\n' >"$WORK/fakeopen/open"
+cp "$WORK/fakeopen/open" "$WORK/fakeopen/xdg-open"; chmod +x "$WORK/fakeopen/open" "$WORK/fakeopen/xdg-open"
+: >"$WORK/open.log"; : >"$WORK/sec.log"
+tty_run() { # tty_run <cmd...>: under a pseudo-TTY, the token on stdin
+  if [[ $(uname -s) == Darwin ]]; then printf 'tty-token\n' | script -q /dev/null "$@"
+  else printf 'tty-token\n' | script -qc "$*" /dev/null; fi
+}
+tty_out=$(OPEN_LOG="$WORK/open.log" SEC_LOG="$WORK/sec.log" SEC_ITEM=tty-token DISPLAY=:0 PATH="$WORK/fakeopen:$WORK/fakesec:$PATH" \
+  env -u SSH_CONNECTION SHARE_ACCESS_DRY=1 CLOUDFLARE_API_TOKEN=faketoken tty_run bash "$SH" api-token 2>&1 | tr -d '\r')
+for _ in $(seq 1 50); do [[ -s $WORK/open.log ]] && break; sleep 0.1; done
+check "tty: the opener ran once with the template URL as its only argument" "1" "$([[ $(wc -l <"$WORK/open.log" | tr -d ' ') == 1 ]] && grep -c '^https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=.*&name=share%20access%20%28default%29$' "$WORK/open.log")"
+check "tty: the prompt appeared and the token did not echo" "1" "$([[ $(grep -c 'Paste the new token (input hidden):' <<<"$tty_out") == 1 && $(grep -c 'tty-token' <<<"$tty_out") == 0 ]] && echo 1 || echo 0)"
+check "tty: the token was stored and the preflight ran" "1" "$([[ $(grep -c "^add-generic-password share-api:$SHARE_HOSTNAME$" "$WORK/sec.log") == 1 ]] && grep -c 'token found (keychain' <<<"$tty_out")"
+: >"$WORK/open.log"
+tty_out=$(OPEN_LOG="$WORK/open.log" SEC_LOG="$WORK/sec.log" SEC_ITEM=tty-token SSH_CONNECTION="1.2.3.4 1 5.6.7.8 22" PATH="$WORK/fakeopen:$WORK/fakesec:$PATH" \
+  SHARE_ACCESS_DRY=1 CLOUDFLARE_API_TOKEN=faketoken tty_run bash "$SH" api-token 2>&1 | tr -d '\r')
+check "tty over ssh: the URL is printed, the opener is not called, the prompt still appears" "1" "$([[ ! -s $WORK/open.log && $(grep -c 'https://dash.cloudflare.com/' <<<"$tty_out") -ge 1 ]] && grep -c 'Paste the new token (input hidden):' <<<"$tty_out")"
+
+echo "--- row 26: the token never appears in argv (a curl shim on PATH, dry mode off) ---"
+mkdir -p "$WORK/shimcurl"
+cat >"$WORK/shimcurl/curl" <<'CURLEOF'
+#!/bin/bash
+# records argv, then answers as the Cloudflare API or the Access edge would
+printf '%s\n' "$@" >>"${SHIM_LOG:?}"
+url="" data="" method=GET fmt=""; prev=""
+for a in "$@"; do
+  case $prev in --data) data="$a" ;; -X) method="$a" ;; -w) fmt="$a" ;; esac
+  case $a in http*) url="$a" ;; esac
+  prev="$a"
+done
+st="${SHIM_STATE:?}"; mkdir -p "$st"
+case "$method $url" in
+  "GET https://api.cloudflare.com/client/v4/zones?"*) body='{"success":true,"result":[{"id":"z1","account":{"id":"a1"}}]}'; code=200 ;;
+  "GET "*/access/organizations) body='{"success":true,"result":{}}'; code=200 ;;
+  "POST "*/access/apps)
+    if [[ $data == '{}' ]]; then body='{"success":false,"errors":[{"code":12130}]}'; code=400
+    else body="$(jq -c '{success:true, result: (. + {id:"11111111-1111-4111-8111-111111111111", aud:"aud-shim"})}' <<<"$data")"; printf '%s' "$body" >"$st/app.json"; code=201; fi ;;
+  "GET "*/access/apps/*) body="$(cat "$st/app.json" 2>/dev/null || echo '{"success":false,"errors":[{"code":12103}]}')"; code=200; [[ -s $st/app.json ]] || code=404 ;;
+  "DELETE "*/access/apps/*) rm -f "$st/app.json"; body='{"success":true}'; code=200 ;;
+  "GET https://s.example.test/"*) printf '302 https://team.cloudflareaccess.com/cdn-cgi/access/login/s.example.test?kid=aud-shim'; exit 0 ;;
+  *) exit 0 ;;
+esac
+[[ $fmt == *http_code* ]] && printf '%s\n%s' "$body" "$code" || printf '%s' "$body"
+CURLEOF
+chmod +x "$WORK/shimcurl/curl"
+: >"$WORK/shim.log"; rm -rf "$WORK/shim-state"
+s26_url=$(SHIM_LOG="$WORK/shim.log" SHIM_STATE="$WORK/shim-state" PATH="$WORK/shimcurl:$PATH" CLOUDFLARE_API_TOKEN=sentinel-t0k3n SHARE_ACCESS_POLL=0 SHARE_CLIPBOARD=0 bash "$SH" add "$WORK/gated.txt" --access email:a@x.io 2>"$WORK/s26.err" | head -1); s26_id=$(cut -d/ -f4 <<<"$s26_url")
+check "shim: the gated add went through the real cf_try path and published" "1" "$([[ -n $s26_id ]] && row_of "$s26_id" | grep -c 'access=11111111-1111-4111-8111-111111111111')"
+check "shim: three probe rounds hit the edge URLs" "1" "$([[ $(grep -c '^https://s.example.test/' "$WORK/shim.log") -ge 6 ]] && echo 1 || echo 0)"
+SHIM_LOG="$WORK/shim.log" SHIM_STATE="$WORK/shim-state" PATH="$WORK/shimcurl:$PATH" CLOUDFLARE_API_TOKEN=sentinel-t0k3n bash "$SH" rm "$s26_id" >/dev/null 2>&1
+check "shim: rm deleted the app through the shim" "1" "$([[ ! -e $WORK/shim-state/app.json && -z $(row_of "$s26_id") ]] && echo 1 || echo 0)"
+check "shim: the sentinel token never appeared in argv" "0" "$(grep -c 'sentinel-t0k3n' "$WORK/shim.log")"
+check "shim: every API call carried the token through a header file" "1" "$([[ $(grep -c '^-H$' "$WORK/shim.log") -ge 8 && $(grep -c '^@/dev/fd/' "$WORK/shim.log") -ge 8 ]] && echo 1 || echo 0)"
+
+echo "--- rows 12 and 12b: teardown never leaves a gated share behind ---"
+areset
+acc rm "$g_id" >/dev/null 2>&1; acc rm "$p_id" >/dev/null 2>&1; acc rm "$o6_id" >/dev/null 2>&1; acc rm "$l6_id" >/dev/null 2>&1
+: >"$alog"
+t_url=$(acc add "$WORK/gated.txt" --access email:a@x.io 2>/dev/null | head -1); t_id=$(cut -d/ -f4 <<<"$t_url"); t_app=$(app_of "$t_id")
+printf 'hostname=%s\ntunnel_id=abc123\ntunnel_name=share-test\nauth=api\nhosts=%s\nport=%s\n' "$SHARE_HOSTNAME" "$SHARE_HOSTS" "$SHARE_PORT" >"$SHARE_CONFIG_DIR/config"
+cfg_before=$(cksum <"$SHARE_CONFIG_DIR/config")
+out=$(env -u CLOUDFLARE_API_TOKEN SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" SHARE_ACCESS_DRY=1 bash "$SH" teardown --yes 2>&1 1>/dev/null); rc=$?
+check "row 12: teardown without a token dies before any change" "1" "$([[ $rc == 1 ]] && grep -c 'teardown would orphan 1 Access app(s); rerun with CLOUDFLARE_API_TOKEN' <<<"$out")"
+check "row 12: config, row, bytes, server intact" "1" "$([[ $(cksum <"$SHARE_CONFIG_DIR/config") == "$cfg_before" && -n $(row_of "$t_id") && -e $SHARE_ROOT/pub/$t_id ]] && bash "$SH" status | grep -c '^serving')"
+# the Access legs run dry; the tunnel legs after them hit cf() for real, so a curl that answers `success:false` ends teardown there
+mkdir -p "$WORK/nocurl"; printf '#!/bin/bash\necho "{\\"success\\":false,\\"errors\\":[{\\"code\\":0}]}"\n' >"$WORK/nocurl/curl"; chmod +x "$WORK/nocurl/curl"
+PATH="$WORK/nocurl:$PATH" acc teardown --yes >"$WORK/td.out" 2>&1
+check "row 12b: the gated row and its bytes are gone, DELETE app logged" "1" "$([[ -z $(row_of "$t_id") && ! -e $SHARE_ROOT/pub/$t_id ]] && grep -c "^DELETE app $t_app$" "$alog")"
+check "row 12b: the ungated row and its bytes stay" "1" "$([[ -n $(row_of "$md_id") && -e $SHARE_ROOT/pub/$md_id ]] && echo 1 || echo 0)"
+check "row 12b: access-pending empty" "0" "$(awk 'NF' "$apending" 2>/dev/null | wc -l | tr -d ' ')"
+rm -f "$SHARE_CONFIG_DIR/config"; : >"$apending"
+SHARE_LIVE_CHECK=0 bash "$SH" start >/dev/null 2>&1
+bash "$SH" rm "$(cut -d/ -f4 <<<"$pct_url")" >/dev/null 2>&1
+check "help shows the --access and api-token lines" "2" "$(bash "$SH" --help | grep -c '^  share add ... --access\|^  share api-token')"
+
 echo "=== skill ==="
 check "skill prints a SKILL.md" "1" "$(bash "$SH" skill | grep -c '^name: share')"
+check "skill teaches --access and api-token" "2" "$(bash "$SH" skill | grep -c -- '--access email:<a>,<b>\|share api-token \[--cmd')"
 check "skill teaches --profile and share profiles" "1" "$(bash "$SH" skill | grep -c -- '--profile <name> <command>.*share profiles')"
 SHARE_SKILL_DIR="$WORK/skilldir" bash "$SH" skill --install >/dev/null
 check "skill --install writes SKILL.md" "share" "$(sed -n 's/^name: //p' "$WORK/skilldir/SKILL.md")"

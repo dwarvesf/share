@@ -1445,7 +1445,7 @@ cf_dry() { # the SHARE_ACCESS_DRY answers: fixtures and knobs in, one log line p
   mkdir -p "$d"
   cf_code=200 cf_err="" cf_body='{"success":true,"result":[]}'
   case "$1 $2" in
-    "GET /zones?"*)
+    "GET /zones\?"*)
       dry_log "GET zones"
       case ${SHARE_ACCESS_DRY_ZONES:-1} in
         0) cf_body='{"success":true,"result":[]}' ;;
