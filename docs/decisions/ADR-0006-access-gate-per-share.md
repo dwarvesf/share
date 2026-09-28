@@ -36,6 +36,11 @@ new hostname).
 - Caddy answers 400 on the main hostname to a raw path carrying `%2F`, `%5C`, or `%2E`, the
   one measured way past a path-scoped app. `--host` sites are host-wide gates and keep
   their paths.
+- In named mode the main Caddy site is bound to its hostname (plus loopback for local
+  probes) and a catch-all site answers 404, so a `--host` name routed before its own block
+  exists, during a gate wait of up to fifteen minutes, never reaches the `pub` tree.
+- Every delete reads the app first and requires the name `share <id> <host> ...`; a forged
+  row or pending line plus an account-wide token can never delete a foreign app.
 - The API token comes from one resolver per profile: `api_token_cmd` in the config, the
   Keychain item `share-api[.<profile>]:<host>` (a mode-600 file on Linux), then
   `CLOUDFLARE_API_TOKEN`. `share serve` exports `SHARE_API_TOKEN_OFF=1`, so the login

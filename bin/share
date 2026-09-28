@@ -448,13 +448,13 @@ cmd_add() {
     case $name in *[{}\"\\]*) die "names with { } \" or \\ are not supported" ;; esac
   fi
   [[ -n $noindex ]] && opts="${opts:+$opts }noindex"
+  if [[ -n $access ]]; then   # token, scopes, group: all settled before the copy, before host_check, and before any Cloudflare write
+    mk_root
+    access_prepare
+  fi
   if [[ -n $host_fqdn ]]; then
     host_check "$host_fqdn"
     opts="${opts:+$opts }host=$host_fqdn"
-  fi
-  if [[ -n $access ]]; then   # token, scopes, group: all settled before the copy, and before any Cloudflare write
-    mk_root
-    access_prepare
   fi
   id="$(rand_id)"
   [[ $secs -gt 0 ]] && exp=$(($(date +%s) + secs))
@@ -573,7 +573,7 @@ cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so ex
   elif access_delete "$app" "$1"; then
     lock_take index; pending_drop_id "$1" "$app"; lock_release index
   else
-    die "could not delete the Access app for $1 (HTTP $cf_code); it stays in access-pending for the next '$me prune' with the token"
+    die "could not delete the Access app for $1 (HTTP $cf_code, or the app is not this share's, see above); it stays in access-pending for the next '$me prune' with the token"
   fi
 }
 
@@ -905,7 +905,7 @@ cmd_start() {
       systemctl --user start "$svc_label.service"
     fi
   else
-    env -u CLOUDFLARE_API_TOKEN nohup bash "$0" serve >>"$root/serve.log" 2>&1 &   # the daemon never holds an API token
+    nohup bash "$0" serve >>"$root/serve.log" 2>&1 &   # serve exports SHARE_API_TOKEN_OFF: an inherited token serves --host cleanup only, never Access
   fi
   wait_running 10 || die "server did not start, see $root/serve.log"
   warn_not_live
@@ -1606,7 +1606,7 @@ EOF
 proc_start() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }
 own_start() { [[ -n $own_start_v ]] || own_start_v="$(proc_start $$)"; echo "$own_start_v"; }
 pending_add() { # pending_add <id> <app> [created] [owner pid]: an owner of 0 (a deferred delete) is dead by definition, so the next sweep claims it
-  local o="${4:-$$}" st="-"
+  local o="${4-$$}" st="-"; o="${o:-0}"   # an empty fourth argument means "no owner", never this pid
   [[ $o == 0 ]] || st="$(own_start)"
   printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$o" "$st" "${3:-$(date +%s)}" >>"$pending"
 }
@@ -1631,7 +1631,16 @@ pending_set_app() { # pending_set_app <id> <old> <new>: rewrite this process's e
     '$1 == id && $2 == old && $3 == pid && $4 == st {$2 = new} {print}' "$pending" >"$tmp"
   mv -f "$tmp" "$pending"
 }
-pending_count() { [[ -f $pending ]] && awk 'NF {c++} END {print c + 0}' "$pending" || echo 0; }
+pending_line_ok() { [[ $1 =~ ^[0-9a-f]{6}$ ]] && [[ $2 =~ ^[0-9a-f-]{36}$ || $2 =~ ^-:[0-9a-f]{8}$ ]] && [[ $3 =~ ^[0-9]+$ ]]; }
+pending_count() { # pending_count [live|bad]: every non-empty line; `live` the well-formed ones a sweep can act on; `bad` the hand-edited rest
+  local id app pid st created n=0 bad=0
+  [[ -f $pending ]] || { echo 0; return 0; }
+  while IFS=$'\t' read -r id app pid st created; do
+    [[ -n $id ]] || continue
+    n=$((n + 1)); pending_line_ok "$id" "$app" "$created" || bad=$((bad + 1))
+  done <"$pending"
+  case ${1:-} in live) echo $((n - bad)) ;; bad) echo "$bad" ;; *) echo "$n" ;; esac
+}
 owner_live() { # owner_live <pid> <start>: alive, a share process, and the same start time (pid reuse, share serve included)
   [[ $1 != 0 ]] || return 1   # kill -0 0 would signal the process group and answer yes
   kill -0 "$1" 2>/dev/null && [[ $(ps -o command= -p "$1" 2>/dev/null) == *share* && "$(proc_start "$1")" == "$2" ]]
@@ -1748,7 +1757,7 @@ access_sweep() { # every pending line: a live owner is skipped, a finished add's
   while IFS=$'\t' read -r id app pid st created; do
     [[ -n $id && -n $app ]] || continue
     # a hand-edited line is kept but never acted on: its id would become a path, its app a DELETE
-    if [[ ! $id =~ ^[0-9a-f]{6}$ ]] || [[ ! $app =~ ^[0-9a-f-]{36}$ && ! $app =~ ^-:[0-9a-f]{8}$ ]] || [[ ! $created =~ ^[0-9]+$ ]]; then
+    if ! pending_line_ok "$id" "$app" "$created"; then
       printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$app" "$pid" "$st" "$created" >>"$tmp"; continue
     fi
     if owner_live "$pid" "$st"; then printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$app" "$pid" "$st" "$created" >>"$tmp"; continue; fi
@@ -1781,9 +1790,10 @@ access_sweep() { # every pending line: a live owner is skipped, a finished add's
   done <<<"$claimed"
 }
 
-access_pending_note() { # ls and status: apps waiting for a token
-  local n; n="$(pending_count)"
+access_pending_note() { # ls and status: apps waiting for a token, and lines no sweep will ever touch
+  local n b; n="$(pending_count live)"; b="$(pending_count bad)"
   [[ $n -gt 0 ]] && echo "share: $n Access app(s) await deletion; run '$me prune' with CLOUDFLARE_API_TOKEN" >&2
+  [[ $b -gt 0 ]] && echo "share: $b malformed line(s) in $pending; a sweep never acts on them; remove them by hand" >&2
   return 0
 }
 access_ls_check() { # with an exported CLOUDFLARE_API_TOKEN only (never op read or a prompt from a listing): a gated row whose app is gone is PUBLIC
@@ -1994,6 +2004,8 @@ cmd_teardown() {
     local gid
     for gid in $gated; do cmd_rm "$gid" | sed 's/$/ (gated: unpublished before the tunnel goes)/'; done
     access_account; access_sweep
+    n_apps="$(pending_count live)"
+    [[ $n_apps == 0 ]] || die "$n_apps Access app(s) could not be deleted (see above); teardown stops before the tunnel goes; fix the cause, then rerun $me teardown"
   fi
   # a hand-edited gated row that rows() rejects keeps its bytes in pub; a later setup would serve them ungated
   if [[ -s $index ]]; then

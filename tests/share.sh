@@ -1129,7 +1129,7 @@ chmod +x "$WORK/fakesec/security"
 : >"$WORK/sec.log"
 out=$(env -u CLOUDFLARE_API_TOKEN SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" bash "$SH" add "$WORK/gated.txt" --access group:dwarves-ops 2>&1 1>/dev/null); rc=$?
 check "no token: exit 1" "1" "$rc"
-check "no token: the block names the host and the two api-token forms" "3" "$(grep -c "needs a Cloudflare API token for $SHARE_HOSTNAME; none is set\|^  New token (opens the prefilled form, then paste):  share api-token$\|^  Already have a token with Access scopes:          share api-token --cmd 'op read \"op://<vault>/<item>/credential\"'$" <<<"$out")"
+check "no token: the block names the host and the two api-token forms" "3" "$(grep -c -e "needs a Cloudflare API token for $SHARE_HOSTNAME; none is set" -e '^  New token (opens the prefilled form, then paste):  share api-token$' -e '^  Already have a token with Access scopes:          share api-token --cmd '"'"'op read "op://<vault>/<item>/credential"'"'"'$' <<<"$out")"
 o1_url=$(grep -o 'https://dash.cloudflare.com/[^ ]*' <<<"$out")
 check "no token: the template URL is the account-token form" "1" "$(grep -c '^https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=' <<<"$o1_url")"
 urldec() { local s="${1//+/ }"; printf '%b' "${s//%/\\x}"; }
@@ -1145,7 +1145,7 @@ areset
 jq -nc '[{id:"aaaaaaaa-2222-4333-8444-555555555555", name:"other"}]' >"$gfix"
 out=$(acc add "$WORK/gated.txt" --access group:dwarves-ops 2>&1 1>/dev/null); rc=$?
 check "missing group: exit 1 with the rule-group path" "1" "$([[ $rc == 1 ]] && grep -c "no Access group named 'dwarves-ops' on the account that owns example.test" <<<"$out")"
-check "missing group: the block names where to create it and to rerun" "3" "$(grep -c 'Zero Trust > Access controls > Policies > Rule groups tab > Add a group\|^    Name: dwarves-ops$\|then rerun the same share add' <<<"$out")"
+check "missing group: the block names where to create it and to rerun" "3" "$(grep -c -e 'Zero Trust > Access controls > Policies > Rule groups tab > Add a group' -e '^    Name: dwarves-ops$' -e 'then rerun the same share add' <<<"$out")"
 check "missing group: no POST app" "0" "$(grep -c 'POST app$' "$alog")"
 jq -nc '[{id:"a", name:"dwarves-ops"}, {id:"b", name:"dwarves-ops"}]' >"$gfix"
 out=$(acc add "$WORK/gated.txt" --access group:dwarves-ops 2>&1 1>/dev/null); rc=$?
@@ -1237,6 +1237,8 @@ printf 'f0f0f2\tnot-a-uuid\t0\t-\t%s\n' "$(date +%s)" >>"$apending"
 out=$(acc prune 2>&1 1>/dev/null)
 check "a pending line whose app is not this share's is never deleted" "1" "$([[ $(grep -c 'DELETE app' "$alog") == 0 ]] && grep -c "Access app 00000000-0000-4000-8000-000000f0f0f0 is not the app of share f0f0f0 (its name is 'chat-staff'); left alone" <<<"$out")"
 check "malformed pending lines are kept and never acted on" "3" "$(awk 'NF' "$apending" | wc -l | tr -d ' ')"
+check "ls counts the malformed lines apart and names them as the user's to remove" "1" "$(bash "$SH" ls 2>&1 >/dev/null | grep -c "2 malformed line(s) in $apending; a sweep never acts on them; remove them by hand")"
+check "state counts every line" "3" "$(bash "$SH" state | jq .access_pending)"
 check "the share root survived a '..' id" "1" "$([[ -d $SHARE_ROOT/pub && -f $SHARE_ROOT/index.tsv ]] && echo 1 || echo 0)"
 : >"$apending"
 
@@ -1260,7 +1262,7 @@ echo pct >"$WORK/50%.v1.txt"
 pct_url=$(bash "$SH" add "$WORK/50%.v1.txt" 2>/dev/null | head -1)
 check "a %25 in a file name is not an encoded separator" "200" "$(wait_code 200 "$pct_url")"
 check "a %2F in the query string passes" "200" "$(rawcode "/$g_id/gated.txt?next=%2Fhome")"
-check "the @encsep route precedes file_server in the adapted config" "1" "$(caddy adapt --config "$SHARE_ROOT/Caddyfile" --adapter caddyfile 2>/dev/null | jq -r '.apps.http.servers[] | select(.listen[0] | endswith(":'"$SHARE_PORT"'")) | .routes[] | if ((.match[0].expression.expr? // "") | test("%2f")) then "encsep" elif ([.. | objects | .handler? | select(. == "file_server")] | length) > 0 then "file_server" else empty end' | tr '\n' ' ' | grep -c '^encsep .*file_server')"
+check "the @encsep route precedes file_server in the adapted config" "1" "$(caddy adapt --config "$SHARE_ROOT/Caddyfile" --adapter caddyfile 2>/dev/null | jq -r '[.apps.http.servers[] | select(.listen[0] | endswith(":'"$SHARE_PORT"'")) | .. | objects | select(has("handle")) | if ((.match[0].expression.expr? // "") | test("%2f")) then "encsep" elif any(.handle[]; .handler == "file_server") then "file_server" else empty end] | join(" ")' | grep -c '^encsep .*file_server')"
 
 echo "--- rows 23, 23b, 23c, 23d: a lost POST is found by its nonce, only after Access read is proven ---"
 areset
@@ -1345,7 +1347,7 @@ areset
 rm -f "$SHARE_CONFIG_DIR/config"
 out=$(acc api-token --cmd 'printf faketoken' 2>&1 1>/dev/null); rc=$?
 check "--cmd: exit 0, config has one api_token_cmd line" "1" "$([[ $rc == 0 ]] && grep -c '^api_token_cmd=printf faketoken$' "$SHARE_CONFIG_DIR/config")"
-check "--cmd: the preflight names the source and every scope ok" "4" "$(grep -c '^  ok       token found (api_token_cmd)$\|^  ok       Zone: Read\|^  ok       Access: Organizations, Identity Providers, and Groups Read\|^  ok       Access: Apps and Policies Edit' <<<"$out")"
+check "--cmd: the preflight names the source and every scope ok" "4" "$(grep -c -e '^  ok       token found (api_token_cmd)$' -e '^  ok       Zone: Read' -e '^  ok       Access: Organizations, Identity Providers, and Groups Read' -e '^  ok       Access: Apps and Policies Edit' <<<"$out")"
 acc api-token --cmd 'printf faketoken' >/dev/null 2>&1
 check "--cmd rerun replaces, never duplicates" "1" "$(grep -c '^api_token_cmd=' "$SHARE_CONFIG_DIR/config")"
 rm -f "$SHARE_CONFIG_DIR/config"
@@ -1385,25 +1387,37 @@ check "no fix-naming line ends without a command or a URL" "" "$( { pre env SHAR
 rm -f "$afix"
 
 echo "--- row 33: share api-token with no argument opens the prefilled form and reads a hidden paste ---"
-mkdir -p "$WORK/fakeopen"
-# shellcheck disable=SC2016 # literal code for the stub, not this shell's expansion
-printf '#!/bin/bash\nprintf "%%s\\n" "$@" >>"${OPEN_LOG:?}"\n' >"$WORK/fakeopen/open"
-cp "$WORK/fakeopen/open" "$WORK/fakeopen/xdg-open"; chmod +x "$WORK/fakeopen/open" "$WORK/fakeopen/xdg-open"
-: >"$WORK/open.log"; : >"$WORK/sec.log"
-tty_run() { # tty_run <cmd...>: under a pseudo-TTY, the token on stdin
-  if [[ $(uname -s) == Darwin ]]; then printf 'tty-token\n' | script -q /dev/null "$@"
-  else printf 'tty-token\n' | script -qc "$*" /dev/null; fi
+if command -v expect >/dev/null; then
+  mkdir -p "$WORK/fakeopen"
+  # shellcheck disable=SC2016 # literal code for the stub, not this shell's expansion
+  printf '#!/bin/bash\nprintf "%%s\\n" "$@" >>"${OPEN_LOG:?}"\n' >"$WORK/fakeopen/open"
+  cp "$WORK/fakeopen/open" "$WORK/fakeopen/xdg-open"; chmod +x "$WORK/fakeopen/open" "$WORK/fakeopen/xdg-open"
+  cat >"$WORK/tty.exp" <<'EXP'
+set timeout 20
+log_user 1
+spawn bash [lindex $argv 0] api-token
+expect {
+  "Paste the new token (input hidden): " { send "tty-token\r" }
+  timeout { puts "NO-PROMPT"; exit 2 }
 }
-tty_out=$(OPEN_LOG="$WORK/open.log" SEC_LOG="$WORK/sec.log" SEC_ITEM=tty-token DISPLAY=:0 PATH="$WORK/fakeopen:$WORK/fakesec:$PATH" \
-  SSH_CONNECTION='' SHARE_ACCESS_DRY=1 CLOUDFLARE_API_TOKEN=faketoken tty_run bash "$SH" api-token 2>&1 | tr -d '\r')
-for _ in $(seq 1 50); do [[ -s $WORK/open.log ]] && break; sleep 0.1; done
-check "tty: the opener ran once with the template URL as its only argument" "1" "$([[ $(wc -l <"$WORK/open.log" | tr -d ' ') == 1 ]] && grep -c '^https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=.*&name=share%20access%20%28default%29$' "$WORK/open.log")"
-check "tty: the prompt appeared and the token did not echo" "1" "$([[ $(grep -c 'Paste the new token (input hidden):' <<<"$tty_out") == 1 && $(grep -c 'tty-token' <<<"$tty_out") == 0 ]] && echo 1 || echo 0)"
-check "tty: the token was stored and the preflight ran" "1" "$([[ $(grep -c "^add-generic-password share-api:$SHARE_HOSTNAME$" "$WORK/sec.log") == 1 ]] && grep -c 'token found (keychain' <<<"$tty_out")"
-: >"$WORK/open.log"
-tty_out=$(OPEN_LOG="$WORK/open.log" SEC_LOG="$WORK/sec.log" SEC_ITEM=tty-token SSH_CONNECTION="1.2.3.4 1 5.6.7.8 22" PATH="$WORK/fakeopen:$WORK/fakesec:$PATH" \
-  SHARE_ACCESS_DRY=1 CLOUDFLARE_API_TOKEN=faketoken tty_run bash "$SH" api-token 2>&1 | tr -d '\r')
-check "tty over ssh: the URL is printed, the opener is not called, the prompt still appears" "1" "$([[ ! -s $WORK/open.log && $(grep -c 'https://dash.cloudflare.com/' <<<"$tty_out") -ge 1 ]] && grep -c 'Paste the new token (input hidden):' <<<"$tty_out")"
+expect eof
+EXP
+  tty_run() { # tty_run [VAR=value]...: share api-token under a pseudo-terminal, the token typed at the prompt
+    env "$@" OPEN_LOG="$WORK/open.log" SEC_LOG="$WORK/sec.log" SEC_ITEM=tty-token PATH="$WORK/fakeopen:$WORK/fakesec:$PATH" \
+      SHARE_ACCESS_DRY=1 CLOUDFLARE_API_TOKEN=faketoken expect -f "$WORK/tty.exp" "$SH" 2>&1 | tr -d '\r'
+  }
+  : >"$WORK/open.log"; : >"$WORK/sec.log"
+  tty_out=$(tty_run DISPLAY=:0 SSH_CONNECTION=)
+  for _ in $(seq 1 50); do [[ -s $WORK/open.log ]] && break; sleep 0.1; done
+  check "tty: the opener ran once with the template URL as its only argument" "1" "$([[ $(wc -l <"$WORK/open.log" | tr -d ' ') == 1 ]] && grep -c '^https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=.*&name=share%20access%20%28default%29$' "$WORK/open.log")"
+  check "tty: the prompt appeared and the token did not echo" "1" "$([[ $(grep -c 'Paste the new token (input hidden):' <<<"$tty_out") == 1 && $(grep -c 'tty-token' <<<"$tty_out") == 0 ]] && echo 1 || echo 0)"
+  check "tty: the token was stored and the preflight ran" "1" "$([[ $(grep -c "^add-generic-password share-api:$SHARE_HOSTNAME$" "$WORK/sec.log") == 1 ]] && grep -c 'token found (keychain' <<<"$tty_out")"
+  : >"$WORK/open.log"
+  tty_out=$(tty_run SSH_CONNECTION="1.2.3.4 1 5.6.7.8 22")
+  check "tty over ssh: the URL is printed, the opener is not called, the prompt still appears" "1" "$([[ ! -s $WORK/open.log && $(grep -c 'https://dash.cloudflare.com/' <<<"$tty_out") -ge 1 ]] && grep -c 'Paste the new token (input hidden):' <<<"$tty_out")"
+else
+  echo "  skip  expect not installed (the pseudo-terminal paste is covered on macOS)"
+fi
 
 echo "--- row 26: the token never appears in argv (a curl shim on PATH, dry mode off) ---"
 mkdir -p "$WORK/shimcurl"
@@ -1441,7 +1455,8 @@ SHIM_LOG="$WORK/shim.log" SHIM_STATE="$WORK/shim-state" PATH="$WORK/shimcurl:$PA
 check "shim: rm deleted the app through the shim" "1" "$([[ ! -e $WORK/shim-state/app.json && -z $(row_of "$s26_id") ]] && echo 1 || echo 0)"
 check "shim: the sentinel token never appeared in argv" "0" "$(grep -c 'sentinel-t0k3n' "$WORK/shim.log")"
 check "shim: nor in share's own stdout or stderr" "0" "$(grep -c 'sentinel-t0k3n' "$WORK/s26.err" <<<"$s26_url" | awk '{s += $1} END {print s + 0}')"
-check "shim: every API call carried the token through a header file" "1" "$([[ $(grep -c '^-H$' "$WORK/shim.log") -ge 8 && $(grep -c '^@/dev/fd/' "$WORK/shim.log") -ge 8 ]] && echo 1 || echo 0)"
+check "shim: every API call carried the token through a header file" "$(grep -c '^https://api.cloudflare.com/' "$WORK/shim.log")" "$(grep -c '^@/dev/fd/' "$WORK/shim.log")"
+check "shim: at least the add's five calls and rm's three reached the API" "1" "$([[ $(grep -c '^https://api.cloudflare.com/' "$WORK/shim.log") -ge 8 ]] && echo 1 || echo 0)"
 rm -f "$SHARE_CONFIG_DIR/config"   # host_zone learned zone= through the shim's DoH answer
 
 echo "--- rows 12 and 12b: teardown never leaves a gated share behind ---"
@@ -1452,8 +1467,14 @@ t_url=$(acc add "$WORK/gated.txt" --access email:a@x.io 2>/dev/null | head -1); 
 printf 'hostname=%s\ntunnel_id=abc123\ntunnel_name=share-test\nauth=api\nhosts=%s\nport=%s\n' "$SHARE_HOSTNAME" "$SHARE_HOSTS" "$SHARE_PORT" >"$SHARE_CONFIG_DIR/config"
 cfg_before=$(cksum <"$SHARE_CONFIG_DIR/config")
 out=$(env -u CLOUDFLARE_API_TOKEN SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" SHARE_ACCESS_DRY=1 bash "$SH" teardown --yes 2>&1 1>/dev/null); rc=$?
-check "row 12: teardown without a token dies before any change" "1" "$([[ $rc == 1 ]] && grep -c 'teardown would orphan 1 Access app(s); rerun with CLOUDFLARE_API_TOKEN' <<<"$out")"
+check "row 12: teardown without a token dies before any change" "1" "$([[ $rc == 1 ]] && grep -c 'teardown would orphan 1 Access app(s); rerun with CLOUDFLARE_API_TOKEN$' <<<"$out")"
 check "row 12: config, row, bytes, server intact" "1" "$([[ $(cksum <"$SHARE_CONFIG_DIR/config") == "$cfg_before" && -n $(row_of "$t_id") && -e $SHARE_ROOT/pub/$t_id ]] && bash "$SH" status | grep -c '^serving')"
+plant_app f3f3f3 "chat-staff"
+printf 'f3f3f3\t00000000-0000-4000-8000-000000f3f3f3\t0\t-\t%s\n' "$(date +%s)" >"$apending"
+out=$(acc teardown --yes 2>&1 1>/dev/null); rc=$?
+check "row 38: teardown dies before the tunnel goes when a delete is refused" "1" "$([[ $rc == 1 ]] && grep -c '1 Access app(s) could not be deleted (see above); teardown stops before the tunnel goes' <<<"$out")"
+check "row 38: the refused app was named, config and server intact" "1" "$([[ $(cksum <"$SHARE_CONFIG_DIR/config") == "$cfg_before" ]] && grep -c "not the app of share f3f3f3" <<<"$out")"
+: >"$apending"
 # the Access legs run dry; the tunnel legs after them hit cf() for real, so a curl that answers `success:false` ends teardown there
 mkdir -p "$WORK/nocurl"; printf '#!/bin/bash\necho "{\\"success\\":false,\\"errors\\":[{\\"code\\":0}]}"\n' >"$WORK/nocurl/curl"; chmod +x "$WORK/nocurl/curl"
 PATH="$WORK/nocurl:$PATH" acc teardown --yes >"$WORK/td.out" 2>&1
