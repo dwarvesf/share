@@ -1235,7 +1235,7 @@ echo pct >"$WORK/50%.v1.txt"
 pct_url=$(bash "$SH" add "$WORK/50%.v1.txt" 2>/dev/null | head -1)
 check "a %25 in a file name is not an encoded separator" "200" "$(wait_code 200 "$pct_url")"
 check "a %2F in the query string passes" "200" "$(rawcode "/$g_id/gated.txt?next=%2Fhome")"
-check "the @encsep route precedes file_server in the adapted config" "1" "$(caddy adapt --config "$SHARE_ROOT/Caddyfile" --adapter caddyfile 2>/dev/null | jq -r '.apps.http.servers[] | select(.listen[0] | endswith(":'"$SHARE_PORT"'")) | .routes[] | if (.match[0].expression // "" | test("%2f")) then "encsep" elif ([.. | .handler? | select(. == "file_server")] | length) > 0 then "file_server" else empty end' | tr '\n' ' ' | grep -c '^encsep .*file_server')"
+check "the @encsep route precedes file_server in the adapted config" "1" "$(caddy adapt --config "$SHARE_ROOT/Caddyfile" --adapter caddyfile 2>/dev/null | jq -r '.apps.http.servers[] | select(.listen[0] | endswith(":'"$SHARE_PORT"'")) | .routes[] | if ((.match[0].expression.expr? // "") | test("%2f")) then "encsep" elif ([.. | objects | .handler? | select(. == "file_server")] | length) > 0 then "file_server" else empty end' | tr '\n' ' ' | grep -c '^encsep .*file_server')"
 
 echo "--- rows 23, 23b, 23c, 23d: a lost POST is found by its nonce, only after Access read is proven ---"
 areset
@@ -1261,6 +1261,7 @@ check "row 23d: a young no-match line is kept, nothing deleted" "1" "$([[ $(grep
 : >"$apending"
 areset
 printf 'fail\nfail\nfail\nfail\npass\n' >"$afix"
+rows23=$(grep -c . "$SHARE_ROOT/index.tsv")
 SHARE_ACCESS_POLL=1 acc add "$WORK/gated.txt" --access email:a@x.io >"$WORK/c23.out" 2>"$WORK/c23.err" & add23=$!
 for _ in $(seq 1 50); do grep -q 'PROBE fail' "$alog" 2>/dev/null && break; sleep 0.1; done
 awk -F'\t' -v OFS='\t' -v d="$dead" '{$3 = d} {print}' "$apending" >"$WORK/p" && mv "$WORK/p" "$apending"   # the owner forged dead
@@ -1268,7 +1269,7 @@ SHARE_ACCESS_DRY_DELETE=lost acc prune >/dev/null 2>&1
 wait "$add23"; rc=$?
 check "row 23c: the prune claimed the line (a lost DELETE keeps it)" "1" "$(grep -c 'DELETE app .* (lost)' "$alog")"
 check "row 23c: the add finds its line gone, publishes nothing, dies" "1" "$([[ $rc == 1 && $(grep -c PUBLISH "$alog") == 0 ]] && grep -c 'claimed by a sweep during the wait; nothing was published' "$WORK/c23.err")"
-check "row 23c: no row for it" "0" "$(grep -c 'access_rule=email:a@x.io' "$SHARE_ROOT/index.tsv" | awk '{print ($1 > 1) ? 1 : 0}')"
+check "row 23c: no row for it" "$rows23" "$(grep -c . "$SHARE_ROOT/index.tsv")"
 check "row 23c: no stage left" "0" "$(find "$SHARE_ROOT" -maxdepth 1 -name '.stage.*' | grep -c .)"
 : >"$apending"
 
@@ -1286,6 +1287,7 @@ acc prune >/dev/null 2>&1
 wait "$add25"; rc=$?
 check "row 25: the prune skipped the live owner's line (no DELETE)" "0" "$(grep -c 'DELETE app' "$alog")"
 check "row 25: the add then published" "1" "$([[ $rc == 0 ]] && grep -c PUBLISH "$alog")"
+acc rm "$(cut -d/ -f4 <"$WORK/c25.out")" >/dev/null 2>&1
 areset
 serve_pid="$(cat "$SHARE_ROOT/serve.pid")"
 printf 'd5d5d5\t00000000-0000-4000-8000-000000d5d5d5\t%s\tMon Jan  1 00:00:00 2001\t%s\n' "$serve_pid" "$(date +%s)" >"$apending"
@@ -1342,7 +1344,7 @@ printf 'api_token_cmd=false\n' >"$SHARE_CONFIG_DIR/config"
 out=$(acc add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null)
 check "api_token_cmd failure names the exit code and the replacement" "1" "$(grep -c "api_token_cmd failed (exit 1); run it by hand to see why, or replace it: share api-token --cmd '<command>'$" <<<"$out")"
 rm -f "$SHARE_CONFIG_DIR/config"
-fix_lines() { grep -E '^share: |^  MISSING|^  fix:' | grep -vE '(share (api-token|add|prune|teardown|setup|rm)[^;]*|https?://[^ ]+|\(hostname\)>'"'"'|share add \(Access can take several minutes on a new app\))$' ; }
+fix_lines() { grep -E '^share: |^  fix:' | grep -v 'checking the API token\|waiting for Cloudflare Access' | grep -vE '(share (api-token|add|prune|teardown|setup|rm)[^;]*|https?://[^ ]+|\(hostname\)>'"'"'|share add \(Access can take several minutes on a new app\))$' ; }
 check "no fix-naming line ends without a command or a URL" "" "$( { pre env SHARE_ACCESS_DRY_APPS=deny; pre env SHARE_ACCESS_DRY_ORGS=off; SHARE_ACCESS_WAIT=1 SHARE_ACCESS_POLL=1 acc add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null; printf 'mode=quick\n' >"$SHARE_CONFIG_DIR/config"; acc add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null; rm -f "$SHARE_CONFIG_DIR/config"; } | fix_lines)"
 rm -f "$afix"
 
@@ -1357,7 +1359,7 @@ tty_run() { # tty_run <cmd...>: under a pseudo-TTY, the token on stdin
   else printf 'tty-token\n' | script -qc "$*" /dev/null; fi
 }
 tty_out=$(OPEN_LOG="$WORK/open.log" SEC_LOG="$WORK/sec.log" SEC_ITEM=tty-token DISPLAY=:0 PATH="$WORK/fakeopen:$WORK/fakesec:$PATH" \
-  env -u SSH_CONNECTION SHARE_ACCESS_DRY=1 CLOUDFLARE_API_TOKEN=faketoken tty_run bash "$SH" api-token 2>&1 | tr -d '\r')
+  SSH_CONNECTION='' SHARE_ACCESS_DRY=1 CLOUDFLARE_API_TOKEN=faketoken tty_run bash "$SH" api-token 2>&1 | tr -d '\r')
 for _ in $(seq 1 50); do [[ -s $WORK/open.log ]] && break; sleep 0.1; done
 check "tty: the opener ran once with the template URL as its only argument" "1" "$([[ $(wc -l <"$WORK/open.log" | tr -d ' ') == 1 ]] && grep -c '^https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=.*&name=share%20access%20%28default%29$' "$WORK/open.log")"
 check "tty: the prompt appeared and the token did not echo" "1" "$([[ $(grep -c 'Paste the new token (input hidden):' <<<"$tty_out") == 1 && $(grep -c 'tty-token' <<<"$tty_out") == 0 ]] && echo 1 || echo 0)"
@@ -1381,6 +1383,7 @@ for a in "$@"; do
 done
 st="${SHIM_STATE:?}"; mkdir -p "$st"
 case "$method $url" in
+  "GET https://cloudflare-dns.com/dns-query?"*) printf '{"Authority":[{"name":"example.test.","type":6}]}'; exit 0 ;;
   "GET https://api.cloudflare.com/client/v4/zones?"*) body='{"success":true,"result":[{"id":"z1","account":{"id":"a1"}}]}'; code=200 ;;
   "GET "*/access/organizations) body='{"success":true,"result":{}}'; code=200 ;;
   "POST "*/access/apps)
@@ -1402,6 +1405,7 @@ SHIM_LOG="$WORK/shim.log" SHIM_STATE="$WORK/shim-state" PATH="$WORK/shimcurl:$PA
 check "shim: rm deleted the app through the shim" "1" "$([[ ! -e $WORK/shim-state/app.json && -z $(row_of "$s26_id") ]] && echo 1 || echo 0)"
 check "shim: the sentinel token never appeared in argv" "0" "$(grep -c 'sentinel-t0k3n' "$WORK/shim.log")"
 check "shim: every API call carried the token through a header file" "1" "$([[ $(grep -c '^-H$' "$WORK/shim.log") -ge 8 && $(grep -c '^@/dev/fd/' "$WORK/shim.log") -ge 8 ]] && echo 1 || echo 0)"
+rm -f "$SHARE_CONFIG_DIR/config"   # host_zone learned zone= through the shim's DoH answer
 
 echo "--- rows 12 and 12b: teardown never leaves a gated share behind ---"
 areset

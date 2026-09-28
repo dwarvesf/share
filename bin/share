@@ -1509,16 +1509,17 @@ access_account() { # acct: the account of the ONE active zone that owns the main
 }
 access_preflight() { # read-only, safe to rerun: the token source, then one call per scope, one line each on stderr; 0 only when every line is ok.
   # The Apps Edit probe is an invalid body ({}): a 400 with code 12130 proves the scope without creating anything (measured on a live account).
-  local fails=0 n
+  local fails=0 n z
   api_token_resolve
-  host_zone
-  echo "share: checking the API token for profile ${profile:-default} (zone $zone_name)" >&2
-  if [[ -z $api_token ]]; then
+  z="$(cfg zone || true)"; z="${z:-${host_name#*.}}"
+  echo "share: checking the API token for profile ${profile:-default} (zone $z)" >&2
+  if [[ -z $api_token ]]; then   # before any lookup: the guided block needs no network
     printf '  %-8s token found\n' MISSING >&2
     access_no_token >&2
     return 1
   fi
   printf '  %-8s token found (%s)\n' ok "$api_token_src" >&2
+  host_zone
   cf_try GET "/zones?name=$zone_name&status=active"
   n="$(jq -r '.result | length' <<<"$cf_body" 2>/dev/null || echo 0)"
   if [[ $cf_code == 200 && $n == 1 ]]; then
