@@ -98,6 +98,7 @@ else
   check "host link is the fqdn" "https://$hhost/" "$hlink"
   n=0; until [[ $(code "$hlink") == 200 || $n -ge 30 ]]; do sleep 2; n=$((n + 1)); done
   check "host share answers" 200 "$(code "$hlink")"
+  n=0; until [[ $(fetch "$hlink") == "e2e live $mode" || $n -ge 30 ]]; do sleep 2; n=$((n + 1)); done
   check "host share content" "e2e live $mode" "$(fetch "$hlink")"
   "$share" rm "$hlink" >/dev/null
   check "no DNS record left" 0 "$(api "/zones/$zone/dns_records?name=$hhost" | jq '.result | length')"
@@ -128,7 +129,7 @@ if [[ $mode == api && -n ${SHARE_E2E_ACCESS_EMAIL:-} ]]; then
   echo "  | gated add took ${gate_secs}s from start to the printed link (app $gapp)"
   check "gated add printed a link" "https://$host/$gid/gated/" "$glink"
   check "the preflight passed every scope" 3 "$(grep -c '^  ok       \(Zone\|Access\)' "$WORK/gate.err")"
-  check "no 200 on the link during the wait" 0 "$(wc -l <"$WORK/gate.seen" 2>/dev/null | tr -d ' ' || echo 0)"
+  check "no 200 on the link during the wait" 0 "$(cat "$WORK/gate.seen" 2>/dev/null | wc -l | tr -d ' ')"
   check "the app reads back with an aud" 1 "$([[ -n $gaud ]] && echo 1 || echo 0)"
   probe() { fetch -o /dev/null -w '%{http_code} %{redirect_url}' --path-as-is "$1"; }
   gid_up="$(tr '[:lower:]' '[:upper:]' <<<"$gid")"
