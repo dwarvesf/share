@@ -62,3 +62,9 @@ Delta from `docs/specs/SPEC-004-access.md`. Decisions already in the spec are re
 - `access_open_url` backgrounds the opener in a subshell that sets `trap "" HUP` and execs through `nohup`: under a pty the process group can get a HUP before a bare `( cmd & )` child installs its own trap, which is how the row-33 leg lost its opener.
 - The `share state` row loop reads `host=`/`access_rule=` with `${opts#*...=}` expansion, not `$(opt_val ...)`: two subshells per row doubled the 500-row time. The perf check now takes the min of two runs; a loaded machine still inflates it.
 - e2e fixture: the backend caddy was addressed `http://127.0.0.1:<port>`, which answers only `Host: 127.0.0.1`. share's `--host` proxy passes the visitor's Host upstream, so the fixture answered an empty 200 forever. The fixture now binds the bare port. If a real upstream is host-strict the same symptom appears live: a 200 with `Content-Length: 0` and `Via: 1.1 Caddy`.
+
+## Warnings from the proof run
+
+- The profiles section of `tests/share.sh` ignores `SHARE_TEST_PORT_BASE`: it runs `share` with no port override under a private `HOME`, so the picked ports collide when two suites run at once. Four parallel runs (bases 12000, 24000, 36000, 48000) each showed one to nine profile FAILs; the same tree run alone is 499 ok, 0 FAIL. Negative controls ran in parallel anyway and list those FAILs as noise; the green that counts is the solo run.
+- `tests/share.sh` has no section filter, so each negative control is a full 185 s run.
+- The e2e live run's per-check output was not kept; `docs/verification/access.md` lists the rerun as open before release, beside rows 20, 21, 30, and 31.
