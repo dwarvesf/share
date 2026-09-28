@@ -1413,14 +1413,14 @@ api_token_resolve() { # api_token_resolve [env]: sets api_token and api_token_sr
   [[ -n ${CLOUDFLARE_API_TOKEN:-} ]] && { api_token="$CLOUDFLARE_API_TOKEN"; api_token_src="CLOUDFLARE_API_TOKEN"; }
   return 0
 }
-api_token_store() { # api_token_store <token>: through stdin into the Keychain, or a 600 file; never argv
+api_token_store() { # api_token_store <token>: through stdin into the Keychain, or a 600 file; never argv. Called direct, never in $( ): a die must kill this process.
   [[ $1 =~ ^[A-Za-z0-9_-]+$ ]] || die "that does not look like a Cloudflare API token (letters, digits, - and _ only); rerun: $me api-token"
   if command -v security >/dev/null; then
     printf 'add-generic-password -U -a share -s "%s" -w "%s"\n' "$(api_token_key)" "$1" | security -i >/dev/null
-    echo "stored in the keychain (service $(api_token_key))"
+    api_token_store_out="stored in the keychain (service $(api_token_key))"
   else
     (umask 077 && printf '%s' "$1" >"$api_token_file")
-    echo "stored in $api_token_file (mode 600)"
+    api_token_store_out="stored in $api_token_file (mode 600)"
   fi
 }
 api_token_forget() {
@@ -1855,7 +1855,8 @@ cmd_api_token() { # cmd_api_token [--cmd '<command>' | --check]: store a token c
         IFS= read -r tok || true
       fi
       [[ -n $tok ]] || die "no token entered; rerun: $me api-token"
-      echo "token:      $(api_token_store "$tok")"
+      api_token_store "$tok"   # direct call: a bad token dies here, never reaches the preflight
+      echo "token:      $api_token_store_out"
       tok="" ;;
     *) die "$usage" ;;
   esac
