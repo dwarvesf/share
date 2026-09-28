@@ -1445,7 +1445,7 @@ cf_dry() { # the SHARE_ACCESS_DRY answers: fixtures and knobs in, one log line p
   mkdir -p "$d"
   cf_code=200 cf_err="" cf_body='{"success":true,"result":[]}'
   case "$1 $2" in
-    "GET /zones\?"*)
+    "GET /zones?"*)
       dry_log "GET zones"
       case ${SHARE_ACCESS_DRY_ZONES:-1} in
         0) cf_body='{"success":true,"result":[]}' ;;
@@ -1485,7 +1485,7 @@ cf_dry() { # the SHARE_ACCESS_DRY answers: fixtures and knobs in, one log line p
       uuid="${2##*/}"; dry_log "GET app $uuid"
       if [[ -f $d/$uuid.json ]]; then cf_body="{\"success\":true,\"result\":$(cat "$d/$uuid.json")}"
       else cf_code=404 cf_body='{"success":false,"errors":[{"code":12103}]}' cf_err=12103; fi ;;
-    "GET "*/access/apps\?*)
+    "GET "*"/access/apps?"*)
       dry_log "GET apps"
       [[ -f $d/lost.json ]] && cf_body="$(jq -c '{success:true, result:[{id:"00000000-0000-4000-8000-000000001057", name:.name}], result_info:{total_pages:1}}' "$d/lost.json")" ;;
     "DELETE "*/access/apps/*)
