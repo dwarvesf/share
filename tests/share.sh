@@ -1516,6 +1516,12 @@ acc rm "$g_id" >/dev/null 2>&1; acc rm "$p_id" >/dev/null 2>&1; acc rm "$o6_id" 
 t_url=$(acc add "$WORK/gated.txt" --access email:a@x.io 2>/dev/null | head -1); t_id=$(cut -d/ -f4 <<<"$t_url"); t_app=$(app_of "$t_id")
 printf 'hostname=%s\ntunnel_id=abc123\ntunnel_name=share-test\nauth=api\nhosts=%s\nport=%s\nzone=example.test\n' "$SHARE_HOSTNAME" "$SHARE_HOSTS" "$SHARE_PORT" >"$SHARE_CONFIG_DIR/config"
 cfg_before=$(cksum <"$SHARE_CONFIG_DIR/config")
+# the tunnel legs call cf() for real, so a curl that answers `success:false` ends a setup that got past the refusal
+mkdir -p "$WORK/nocurl"; printf '#!/bin/bash\necho "{\\"success\\":false,\\"errors\\":[{\\"code\\":0}]}"\n' >"$WORK/nocurl/curl"; chmod +x "$WORK/nocurl/curl"
+out=$(PATH="$WORK/nocurl:$PATH" acc setup other.example.test --no-service 2>&1 1>/dev/null); rc=$?
+check "row 12: setup with a new hostname over a gated share is refused before any change" "1" "$([[ $rc == 1 && $(cksum <"$SHARE_CONFIG_DIR/config") == "$cfg_before" && -n $(row_of "$t_id") ]] && grep -c "$SHARE_HOSTNAME has gated shares or Access apps awaiting deletion" <<<"$out")"
+out=$(PATH="$WORK/nocurl:$PATH" acc setup "$SHARE_HOSTNAME" --no-service 2>&1 1>/dev/null)
+check "row 12: setup with the same hostname is not refused for a gated share" "0" "$(grep -c 'has gated shares' <<<"$out")"
 out=$(env -u CLOUDFLARE_API_TOKEN SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" SHARE_ACCESS_DRY=1 bash "$SH" teardown --yes 2>&1 1>/dev/null); rc=$?
 check "row 12: teardown without a token dies before any change" "1" "$([[ $rc == 1 ]] && grep -c 'teardown would orphan 1 Access app(s); rerun with CLOUDFLARE_API_TOKEN$' <<<"$out")"
 check "row 12: teardown printed the guided block first" "1" "$(grep -c 'needs a Cloudflare API token' <<<"$out")"
