@@ -1,10 +1,26 @@
 # Changelog
 
-## [Unreleased]
+## [v0.7.0] - 2026-09-29
 
 ### Features
 
-- per-link Cloudflare Access login gate: `share add --access`, `share api-token` (#38)
+- per-link Cloudflare Access login gate (#38)
+- --profile runs a second share setup beside the default (#35)
+- **release:** find the notary key item by title suffix (#33)
+
+### Fixes
+
+- **test:** keep the deliberate cat in two count checks lint-clean (#39)
+- **test:** keep the suite off the real launchctl and systemctl (#37)
+- **test:** probe the file mode with GNU stat first (#36)
+
+### Documentation
+
+- retro for the Share Bar cycle (#32)
+
+### Tests
+
+- suite ports derive from one overridable base (#34)
 
 ## [v0.6.0] - 2026-09-28
 
@@ -12,6 +28,10 @@
 
 - **mac:** About Share Bar in the menu (#31)
 - Share Bar, a menu bar app for share (#29)
+
+### Documentation
+
+- changelog for v0.6.0
 
 ## [v0.5.2] - 2026-09-27
 
