@@ -129,6 +129,7 @@ if [[ $mode == api && -n ${SHARE_E2E_ACCESS_EMAIL:-} ]]; then
   echo "  | gated add took ${gate_secs}s from start to the printed link (app $gapp)"
   check "gated add printed a link" "https://$host/$gid/gated/" "$glink"
   check "the preflight passed every scope" 3 "$(grep -c '^  ok       \(Zone\|Access\)' "$WORK/gate.err")"
+  # shellcheck disable=SC2002 # cat keeps a missing file a count of 0; a redirect would fail instead
   check "no 200 on the link during the wait" 0 "$(cat "$WORK/gate.seen" 2>/dev/null | wc -l | tr -d ' ')"
   check "the app reads back with an aud" 1 "$([[ -n $gaud ]] && echo 1 || echo 0)"
   probe() { fetch -o /dev/null -w '%{http_code} %{redirect_url}' --path-as-is "$1"; }
