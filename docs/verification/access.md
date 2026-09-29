@@ -53,8 +53,8 @@ The `=== access ===` section runs with `SHARE_TUNNEL=0` and `SHARE_ACCESS_DRY=1`
 | 24, 25, 25b | pending ids, live owner, reused pid | `row 24:`, `row 25:`, `row 25b:` |
 | 26 | token never in argv | `shim:` checks (sentinel token through a `curl` shim) |
 | 28, 29 | api-token store, preflight | rows 28 and 29 section (`--cmd`, stored-once, scope lines, MISSING lines, idempotent output) |
-| 30 | clean-HOME walkthrough | open: by hand before release |
-| 31 | gauntlet | card staged at `docs/verification/gauntlet/2026-09-28-readme-quickstart-access/card.md`; no round run yet |
+| 30 | clean-HOME walkthrough | proven live against the Dwarves account, below |
+| 31 | gauntlet | one round at `docs/verification/gauntlet/2026-09-28-readme-quickstart-access/card.md`, PASS on the first try, below |
 | 32 | error lines name a fix | `no fix-naming line ends without a command or a URL` |
 | 33 | api-token with no argument | row 33 section (`expect` drives the prompt; `expect` present on this machine, so it ran) |
 | 34 | Host binding | `main host block names the hostname and loopback, never any Host`, `a foreign Host gets the 404 catch-all, not the pub tree` |
@@ -128,12 +128,40 @@ The leg also asserts the rows 17 to 19 checks (redirect with `kid == aud` on the
 
 The spike answers (empty-body probe 400 plus 12130, token verify, zone lookup, group paging, org and IdP reads) are in the notes' TASK-1 table.
 
+## Row 30: clean-HOME walkthrough (live, Dwarves account)
+
+A fresh `HOME`/`SHARE_CONFIG_DIR`/`SHARE_ROOT` under a mktemp dir, `share setup share-e2e.d.foundation --no-service` with the real `op://Toolkit/cf-api-token/credential` token as the stated precondition, then `CLOUDFLARE_API_TOKEN` unset and the README "Private links" steps run verbatim (`SHARE_TUNNEL=0` for the gated adds, permitted since Access enforcement is edge-side and does not need a live local tunnel). `op` and `security` were stubbed inside the mktemp `HOME` only: a mktemp `HOME` has no real 1Password session, and the real Keychain pops a GUI ACL prompt (`SecurityAgent`) on a first `add-generic-password` from a script context with no one to click it, confirmed by direct reproduction and killed by hand the first time. The stub `op` echoed the same real token (read once via Connect, passed through an env var, never a literal in the file); the stub `security` file-backed the round trip so the real Cloudflare calls still ran for real.
+
+```
+1. share setup share-e2e.d.foundation --no-service   exit 0
+   tunnel: created share-share-e2e-d-foundation; dns: created CNAME; token: stored (stub keychain); live check passed
+2. share add ./x --access email:tester@example.com   (no token source)   exit 1
+   the O1 block: "none is set", the New-token and --cmd lines, the prefilled form URL
+3. share api-token --cmd 'op read "op://Toolkit/cf-api-token/credential"'   exit 0
+   ok  Zone: Read | ok  Access: Organizations, Identity Providers, and Groups Read | ok  Access: Apps and Policies Edit
+4. share add ./report.pdf --access email:a@example.com,b@example.com   exit 0
+   https://share-e2e.d.foundation/<id>/report.pdf
+5. share add ./report.pdf --access group:dwarves-ops   exit 0
+   https://share-e2e.d.foundation/<id>/report.pdf
+6. curl (GET, headers only, --doh-url like access_probe_round) on both links: HTTP/2 302, both
+   location: https://dwarves.cloudflareaccess.com/cdn-cgi/access/login/share-e2e.d.foundation?kid=...
+7. share ls: both rows present, access= as set
+8. share teardown --yes (real CLOUDFLARE_API_TOKEN)   exit 0
+   both gated rows unpublished before the tunnel went; dns deleted; tunnel deleted; token removed
+```
+
+Verdict: PASS. Cleanup confirmed from outside: the account holds exactly its 4 pre-existing Access apps, no DNS record or tunnel for `share-e2e.d.foundation`, no stray Keychain item.
+
+## Row 31: gauntlet round
+
+One round, `kit:gauntlet`-shaped: a fresh-context subagent (no history, no other repo context) got only the task card text and its own `README.md`/`report.pdf` under a real, already-`share setup`-serving `share-e2e.d.foundation` (same real Dwarves account and token). It read only the README's Private Links section, never the script, never `--help` first.
+
+Result: PASS on the first round. It ran `api-token --cmd`, both gated adds, `share ls`, and verified both links 302 to `*.cloudflareaccess.com` (it hit a local DNS-resolution quirk with plain `curl`, diagnosed it itself as environmental via `dig`, and retried with `--resolve`; not a README gap). The only friction it named was substituting the task card's real `op://Toolkit/...` ref for the README's placeholder `op://Private/...` example, which it called unambiguous. No stuck point, so no README fix and no second round were needed. Cleaned up the same way as row 30 (teardown, symlink and files restored); confirmed from outside: 4 pre-existing Access apps, no DNS record or tunnel left.
+
 ## Open before release
 
 | Item | Owner |
 |---|---|
 | Row 21 UAT: a `group:dwarves-ops` link, a group address gets the PIN, a contractor address gets none | Han |
-| Row 30 clean-HOME walkthrough of the README "Private links" steps | by hand |
-| Row 31 gauntlet round on the staged card | `/kit:gauntlet` |
 | Row 20 on a second zone (`SHARE_E2E_OTHER_HOST`) | by hand |
 | `tests/e2e.sh` rerun with its output pasted above | by hand |
