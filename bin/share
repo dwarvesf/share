@@ -585,14 +585,15 @@ cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so ex
 cmd_prune() { # cmd_prune [quiet|listing]: unpublish every share past its expiry; sweep waiting Access apps when a token resolves
   # quiet (serve, status): no token from any source, so neither touches Access; an expired gated share defers its
   # app. listing (ls): only an exported CLOUDFLARE_API_TOKEN, never api_token_cmd or the Keychain, so a listing
-  # never runs `op read`. bare (the prune verb): the full resolver.
+  # never runs `op read`. bare (the prune verb): the full resolver, soft on a failing api_token_cmd. A token for another
+  # account warns and skips the sweep in every mode: expiry is never blocked.
   case ${1:-} in
     quiet) api_token="" ;;
     listing) api_token_resolve env ;;
-    *) api_token_resolve ;;
+    *) api_token_resolve soft ;;
   esac
   if [[ -n $api_token && -s $pending && -n $host_name ]]; then
-    if [[ ${1:-} == listing ]]; then access_account soft && access_sweep; else access_account; access_sweep; fi
+    access_account soft && access_sweep
   fi
   [[ -s $index ]] || return 0
   local now ids id
@@ -1392,8 +1393,9 @@ access_include_json() { # the policy include for access_rule; group: from access
 
 # the API token, one resolver for every Access path: the stored source wins over the shell,
 # so a broad token exported in a shell never silently replaces the profile's own
-api_token_resolve() { # api_token_resolve [env]: sets api_token and api_token_src; api_token_cmd, then the Keychain item or 600 file, then CLOUDFLARE_API_TOKEN.
-  # `env`: the environment only (a listing never runs op read or prompts). Nothing from any source under SHARE_API_TOKEN_OFF (share serve). Never exported.
+api_token_resolve() { # api_token_resolve [env|soft]: sets api_token and api_token_src; api_token_cmd, then the Keychain item or 600 file, then CLOUDFLARE_API_TOKEN.
+  # `env`: the environment only (a listing never runs op read or prompts). `soft` (the prune verb): a failing api_token_cmd warns and
+  # resolves nothing, so expiry is never blocked. Nothing from any source under SHARE_API_TOKEN_OFF (share serve). Never exported.
   local cmd rc=0
   api_token="" api_token_src=""
   [[ ${SHARE_API_TOKEN_OFF:-0} == 1 ]] && return 0
@@ -1401,7 +1403,12 @@ api_token_resolve() { # api_token_resolve [env]: sets api_token and api_token_sr
     cmd="$(cfg api_token_cmd || true)"
     if [[ -n $cmd ]]; then
       api_token="$(eval "$cmd" 2>/dev/null)" || rc=$?
-      [[ $rc == 0 && -n $api_token ]] || die "api_token_cmd failed (exit $rc); run it by hand to see why, or replace it: $me api-token --cmd '<command>'"
+      if [[ $rc != 0 || -z $api_token ]]; then
+        api_token=""
+        [[ ${1:-} == soft ]] || die "api_token_cmd failed (exit $rc); run it by hand to see why, or replace it: $me api-token --cmd '<command>'"
+        echo "share: api_token_cmd failed (exit $rc); expired shares are still unpublished and their Access apps wait; run it by hand to see why, then: $me prune" >&2
+        return 0
+      fi
       api_token_src="api_token_cmd"; return 0
     fi
     if command -v security >/dev/null; then

@@ -1518,6 +1518,21 @@ check "ls, expired gated row, another account's token: exit 0 and the list print
 check "ls, expired gated row: unpublished, the app waits with no owner, no DELETE" "1" "$([[ -z $(row_of "$x2_id") && ! -e $SHARE_ROOT/pub/$x2_id && $(grep -c 'DELETE app' "$alog") == 0 ]] && grep -c "^$x2_id	$x2_app	0	" "$apending")"
 acc prune >/dev/null 2>&1
 
+echo "--- bare prune with a failing api_token_cmd still expires ---"
+areset
+x7_url=$(acc add "$WORK/gated.txt" --access email:a@x.io 2>/dev/null | head -1); x7_id=$(cut -d/ -f4 <<<"$x7_url"); x7_app=$(app_of "$x7_id")
+awk -F'\t' -v OFS='\t' -v id="$x7_id" '$1 == id {$5 = 1} {print}' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
+printf 'api_token_cmd=false\n' >"$SHARE_CONFIG_DIR/config"
+out=$(env -u CLOUDFLARE_API_TOKEN SHARE_ACCESS_DRY=1 bash "$SH" prune 2>&1 1>/dev/null); rc=$?
+rm -f "$SHARE_CONFIG_DIR/config"
+check "prune, api_token_cmd fails: exit 0, one warning naming it" "1" "$([[ $rc == 0 ]] && grep -c 'api_token_cmd failed (exit 1)' <<<"$out")"
+check "prune, api_token_cmd fails: row and bytes gone, the app waits" "1" "$([[ -z $(row_of "$x7_id") && ! -e $SHARE_ROOT/pub/$x7_id ]] && grep -c "^$x7_id	$x7_app	0	" "$apending")"
+y7_url=$(acc add "$WORK/gated.txt" --access email:a@x.io 2>/dev/null | head -1); y7_id=$(cut -d/ -f4 <<<"$y7_url")
+awk -F'\t' -v OFS='\t' -v id="$y7_id" '$1 == id {$5 = 1} {print}' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
+SHARE_ACCESS_DRY=1 SHARE_ACCESS_DRY_ZONES=0 CLOUDFLARE_API_TOKEN=faketoken bash "$SH" prune >/dev/null 2>&1; rc=$?
+check "prune, pending apps and another account's token: exit 0, the expired row still goes" "1" "$([[ $rc == 0 && -z $(row_of "$y7_id") ]] && echo 1 || echo 0)"
+acc prune >/dev/null 2>&1
+
 echo "--- rows 12 and 12b: teardown never leaves a gated share behind ---"
 areset
 acc rm "$g_id" >/dev/null 2>&1; acc rm "$p_id" >/dev/null 2>&1; acc rm "$o6_id" >/dev/null 2>&1; acc rm "$l6_id" >/dev/null 2>&1
