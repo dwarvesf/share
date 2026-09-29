@@ -1498,7 +1498,8 @@ shim() { SHIM_LOG="$WORK/shim.log" SHIM_STATE="$WORK/shim-state" PATH="$WORK/shi
 for edge in kid host 200 offsite; do
   rm -rf "$WORK/shim-state"; : >"$apending"
   idx_before=$(cksum <"$SHARE_ROOT/index.tsv"); pub_before="$(find "$SHARE_ROOT/pub" -maxdepth 1 | sort)"
-  out=$(SHIM_EDGE=$edge SHARE_ACCESS_WAIT=1 shim add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null); rc=$?
+  # 12 s fits three passing rounds 5 s apart, so a parser that accepted this answer would publish before the timeout
+  out=$(SHIM_EDGE=$edge SHARE_ACCESS_WAIT=12 shim add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null); rc=$?
   check "edge $edge: refused, no row, no pub/<id>, app deleted, pending empty" "1" "$([[ $rc == 1 && $(cksum <"$SHARE_ROOT/index.tsv") == "$idx_before" && "$(find "$SHARE_ROOT/pub" -maxdepth 1 | sort)" == "$pub_before" && ! -e $WORK/shim-state/app.json && ! -s $apending ]] && grep -c 'did not enforce on' <<<"$out")"
 done
 
