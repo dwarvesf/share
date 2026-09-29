@@ -1533,6 +1533,21 @@ SHARE_ACCESS_DRY=1 SHARE_ACCESS_DRY_ZONES=0 CLOUDFLARE_API_TOKEN=faketoken bash 
 check "prune, pending apps and another account's token: exit 0, the expired row still goes" "1" "$([[ $rc == 0 && -z $(row_of "$y7_id") ]] && echo 1 || echo 0)"
 acc prune >/dev/null 2>&1
 
+echo "--- a failed Caddy reload on rm keeps a live gated share's app ---"
+areset
+r5_url=$(acc add "$FIX_PORT" --access email:a@x.io 2>/dev/null | head -1); r5_id=$(cut -d/ -f4 <<<"$r5_url"); r5_app=$(app_of "$r5_id")
+mkdir -p "$WORK/badcaddy"
+# shellcheck disable=SC2016 # literal code for the stub, not this shell's expansion
+printf '#!/bin/bash\n[[ $1 == reload ]] && { echo "reload refused" >&2; exit 1; }\nexec "%s" "$@"\n' "$(command -v caddy)" >"$WORK/badcaddy/caddy"; chmod +x "$WORK/badcaddy/caddy"
+out=$(PATH="$WORK/badcaddy:$PATH" acc rm "$r5_id" 2>&1 1>/dev/null); rc=$?
+check "reload fails on rm of a live gated share: exit 1, no DELETE app, the app waits" "1" "$([[ $rc == 1 && $(grep -c 'DELETE app' "$alog") == 0 ]] && grep -c "^$r5_id	$r5_app	" "$apending")"
+check "reload fails on rm: the stale route still proxies, which is why the gate stays" "hello fixture" "$(curl -s "$(local_url "${r5_url}hello.txt")")"
+PATH="$WORK/badcaddy:$PATH" acc prune >/dev/null 2>&1
+check "a sweep whose reload fails keeps the app too" "0" "$(grep -c 'DELETE app' "$alog")"
+acc prune >/dev/null 2>&1
+check "a sweep with a working reload drops the route, then deletes the app" "1" "$([[ $(alast RELOAD) -lt $(aline 'DELETE app') && $(grep -c "^$r5_id	" "$apending") == 0 ]] && echo 1 || echo 0)"
+check "the live gated link is gone after that sweep" "404" "$(wait_code 404 "${r5_url}hello.txt")"
+
 echo "--- rows 12 and 12b: teardown never leaves a gated share behind ---"
 areset
 acc rm "$g_id" >/dev/null 2>&1; acc rm "$p_id" >/dev/null 2>&1; acc rm "$o6_id" >/dev/null 2>&1; acc rm "$l6_id" >/dev/null 2>&1

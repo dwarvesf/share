@@ -491,7 +491,7 @@ cmd_add() {
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$src" "$(date +%F)" "$exp" "$opts" >>"$index"
   write_caddyfile
-  caddy_reload
+  caddy_reload || true   # the row stays: the next reload or serve restart renders it
   [[ -n $access ]] && pending_drop "$id" "$access_app"
   held_fqdn="" held_access_id=""
   lock_release index   # before cmd_start: serve's startup render takes the lock itself
@@ -539,13 +539,13 @@ cmd_refresh() {
   [[ -n "$(row "$1")" ]] || { lock_release index; die "$1 was removed during refresh"; }
   stage_publish "$1"
   write_caddyfile   # a refresh can add or remove index.html, which flips try_files
-  caddy_reload
+  caddy_reload || true
   lock_release index
   echo "refreshed $1 from $src"
 }
 
 cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so expiry is never blocked (DEC-016)
-  local r opts fqdn="" app="" tmp
+  local r opts fqdn="" app="" tmp reloaded=1
   r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
   fqdn="$(opt_val host "$opts" || true)"
@@ -569,11 +569,13 @@ cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so ex
   tmp="$(mktemp "$root/.index.XXXXXX")"
   awk -F'\t' -v id="$1" '$1 != id' "$index" >"$tmp" && mv -f "$tmp" "$index"
   write_caddyfile
-  caddy_reload
+  caddy_reload || reloaded=0
   lock_release index
   echo "unpublished $1"
   [[ -n $app ]] || return 0
-  if [[ -z $api_token ]]; then
+  if [[ $reloaded == 0 ]] && has_opt live "$opts"; then   # the running Caddy still proxies /<id>/*: the app is the only gate left
+    die "Caddy did not reload, so the live route for $1 may still answer; its Access app stays in access-pending; fix Caddy (see $root/caddy.log), then: $me prune"
+  elif [[ -z $api_token ]]; then
     echo "share: Access app for $1 awaits deletion; run '$me prune' with a token (the stored one, or CLOUDFLARE_API_TOKEN)" >&2
   elif access_delete "$app" "$1"; then
     lock_take index; pending_drop_id "$1" "$app"; lock_release index
@@ -701,12 +703,13 @@ EOF
   mv -f "$tmp" "$root/Caddyfile"
 }
 
-caddy_reload() { # apply Caddyfile changes over the admin socket; a failure warns, never kills
+caddy_reload() { # apply Caddyfile changes over the admin socket; a failure warns and returns 1, never kills
   dry_log RELOAD
   running || return 0
   local err
   if ! err="$(caddy reload --config "$root/Caddyfile" --adapter caddyfile 2>&1)"; then
     echo "share: caddy reload failed: $err; see $root/caddy.log" >&2
+    return 1
   fi
 }
 
@@ -1798,10 +1801,16 @@ access_sweep() { # every pending line: a live owner is skipped, a finished add's
     [[ "$(opt_val access "$(row "$id" | cut -f6)" || true)" == "$app" ]] && continue   # the add finished: a stale line
     printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$app" "$$" "$(own_start)" "$created" >>"$tmp"
     claimed="$claimed$id $app $created"$'\n'
-    if [[ -z "$(row "$id")" && -e $pub/$id ]]; then to_trash "$pub/$id"; dry_log "TRASH $id"; reload=1; fi
+    if [[ -z "$(row "$id")" ]]; then   # orphaned bytes, or a live route an rm whose reload failed left in the running Caddy
+      [[ -e $pub/$id ]] && { to_trash "$pub/$id"; dry_log "TRASH $id"; }
+      reload=1
+    fi
   done <"$pending"
   mv -f "$tmp" "$pending"
-  [[ $reload == 1 ]] && { write_caddyfile; caddy_reload; }
+  if [[ $reload == 1 ]]; then
+    write_caddyfile
+    caddy_reload || { lock_release index; echo "share: the waiting Access apps stay until Caddy reloads (see $root/caddy.log), then: $me prune" >&2; return 0; }
+  fi
   lock_release index
   while read -r id app created; do
     [[ -n $id ]] || continue
