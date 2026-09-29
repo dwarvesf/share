@@ -1555,6 +1555,15 @@ out=$(SHARE_TUNNEL=1 SHARE_ACCESS_DRY=1 CLOUDFLARE_API_TOKEN=faketoken bash "$SH
 check "dry seam, tunnel on: rm refuses, row and app intact, no DELETE" "1" "$([[ $rc == 1 && -n $(row_of "$g9_id") && -e $adry/$(app_of "$g9_id").json && $(grep -c 'DELETE app' "$alog") == 0 ]] && grep -c 'SHARE_ACCESS_DRY=1 is a test seam for SHARE_TUNNEL=0 only' <<<"$out")"
 acc rm "$g9_id" >/dev/null 2>&1
 
+echo "--- a token file wider than 600 is tightened on store (no security binary) ---"
+mkdir -p "$WORK/nosec"
+for f in /usr/bin/*; do [[ ${f##*/} == security ]] || ln -sf "$f" "$WORK/nosec/${f##*/}"; done
+nosec_path="$WORK/nosec:$(dirname "$(command -v jq)"):$(dirname "$(command -v caddy)"):/bin:/usr/sbin:/sbin"
+(umask 022; echo old >"$SHARE_CONFIG_DIR/api-token")
+echo newtok | env PATH="$nosec_path" SHARE_ACCESS_DRY=1 CLOUDFLARE_API_TOKEN=faketoken bash "$SH" api-token >/dev/null 2>&1
+check "an existing 644 token file is 600 after a store" "600 newtok" "$(perm "$SHARE_CONFIG_DIR/api-token") $(cat "$SHARE_CONFIG_DIR/api-token")"
+rm -f "$SHARE_CONFIG_DIR/api-token"
+
 echo "--- rows 12 and 12b: teardown never leaves a gated share behind ---"
 areset
 acc rm "$g_id" >/dev/null 2>&1; acc rm "$p_id" >/dev/null 2>&1; acc rm "$o6_id" >/dev/null 2>&1; acc rm "$l6_id" >/dev/null 2>&1
