@@ -1370,6 +1370,7 @@ check "stdin: the preflight ran and read the keychain item" "1" "$([[ $rc == 0 ]
 check "the stored token wins over the environment" "1" "$(SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" SEC_ITEM=stored acc api-token --check 2>&1 1>/dev/null | grep -c 'token found (keychain')"
 out=$(acc api-token --cmd $'printf a\nprintf b' 2>&1 1>/dev/null); rc=$?
 check "row 37: api-token --cmd with a line break is refused" "1" "$([[ $rc == 1 ]] && grep -c 'usage: share api-token' <<<"$out")"
+# shellcheck disable=SC2002 # cat keeps a missing file a count of 0; a redirect would fail instead
 check "row 37: the refused --cmd wrote no config line" "0" "$(cat "$SHARE_CONFIG_DIR/config" 2>/dev/null | grep -c '^api_token_cmd=')"
 seclines=$(wc -l <"$WORK/sec.log" | tr -d ' ')
 out=$(printf %s "bad'token" | SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" acc api-token 2>&1 1>/dev/null); rc=$?
