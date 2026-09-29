@@ -1735,8 +1735,9 @@ access_probe_round() { # access_probe_round <aud> <url>...: one probe per url; 0
   fi
   for u in "$@"; do
     host="${u#https://}"; host="${host%%/*}"
-    out="$(curl -s -o /dev/null --max-time 10 --doh-url https://1.1.1.1/dns-query -w '%{http_code} %{redirect_url}' "$u?share_gate=$(rand_id_raw)" 2>/dev/null ||
-      curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' "$u?share_gate=$(rand_id_raw)" 2>/dev/null || true)"
+    # a failed curl still prints its -w line ("000 "), so the fallback replaces the output instead of appending to it
+    out="$(curl -s -o /dev/null --max-time 10 --doh-url https://1.1.1.1/dns-query -w '%{http_code} %{redirect_url}' "$u?share_gate=$(rand_id_raw)" 2>/dev/null)" ||
+      out="$(curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' "$u?share_gate=$(rand_id_raw)" 2>/dev/null)" || out=""
     code="${out%% *}"; redir="${out#* }"
     [[ $code == 30? && $redir =~ ^https://[a-z0-9-]+\.cloudflareaccess\.com/cdn-cgi/access/login/ ]] || { ok=0; continue; }
     rest="${redir#*/cdn-cgi/access/login/}"

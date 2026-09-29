@@ -1466,13 +1466,14 @@ case "$method $url" in
     else body="$(jq -c '{success:true, result: (. + {id:"11111111-1111-4111-8111-111111111111", aud:"aud-shim"})}' <<<"$data")"; printf '%s' "$body" >"$st/app.json"; code=201; fi ;;
   "GET "*/access/apps/*) body="$(cat "$st/app.json" 2>/dev/null || echo '{"success":false,"errors":[{"code":12103}]}')"; code=200; [[ -s $st/app.json ]] || code=404 ;;
   "DELETE "*/access/apps/*) rm -f "$st/app.json"; body='{"success":true}'; code=200 ;;
-  "GET https://s.example.test/"*)   # SHIM_EDGE: an edge answer the probe must refuse
+  "GET https://s.example.test/"*)   # SHIM_EDGE: an edge answer the probe must refuse, or dohfail (a network that blocks DoH)
     login="https://team.cloudflareaccess.com/cdn-cgi/access/login/s.example.test?kid=aud-shim"
     case ${SHIM_EDGE:-} in
       kid) login="${login%=*}=aud-other" ;;
       host) login="${login/login\/s.example.test/login/other.example.test}" ;;
       offsite) login="${login/team.cloudflareaccess.com/team.example.com}" ;;
       200) printf '200 '; exit 0 ;;
+      dohfail) [[ " $* " == *" --doh-url "* ]] && { printf '000 '; exit 6; } ;;
     esac
     printf '302 %s' "$login"; exit 0 ;;
   *) exit 0 ;;
@@ -1500,6 +1501,13 @@ for edge in kid host 200 offsite; do
   out=$(SHIM_EDGE=$edge SHARE_ACCESS_WAIT=1 shim add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null); rc=$?
   check "edge $edge: refused, no row, no pub/<id>, app deleted, pending empty" "1" "$([[ $rc == 1 && $(cksum <"$SHARE_ROOT/index.tsv") == "$idx_before" && "$(find "$SHARE_ROOT/pub" -maxdepth 1 | sort)" == "$pub_before" && ! -e $WORK/shim-state/app.json && ! -s $apending ]] && grep -c 'did not enforce on' <<<"$out")"
 done
+
+echo "--- a network that blocks DoH: the probe falls back to the system resolver ---"
+rm -rf "$WORK/shim-state"
+d4_url=$(SHIM_EDGE=dohfail SHARE_ACCESS_WAIT=40 shim add "$WORK/gated.txt" --access email:a@x.io 2>/dev/null | head -1); d4_id=$(cut -d/ -f4 <<<"$d4_url")
+check "DoH blocked: the gated add passes through the fallback probe and publishes" "1" "$([[ -n $d4_id ]] && row_of "$d4_id" | grep -c 'access=11111111-1111-4111-8111-111111111111')"
+[[ -n $d4_id ]] && shim rm "$d4_id" >/dev/null 2>&1
+rm -f "$SHARE_CONFIG_DIR/config"
 
 echo "--- rows 12 and 12b: teardown never leaves a gated share behind ---"
 areset
