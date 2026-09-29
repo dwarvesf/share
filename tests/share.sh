@@ -1466,7 +1466,15 @@ case "$method $url" in
     else body="$(jq -c '{success:true, result: (. + {id:"11111111-1111-4111-8111-111111111111", aud:"aud-shim"})}' <<<"$data")"; printf '%s' "$body" >"$st/app.json"; code=201; fi ;;
   "GET "*/access/apps/*) body="$(cat "$st/app.json" 2>/dev/null || echo '{"success":false,"errors":[{"code":12103}]}')"; code=200; [[ -s $st/app.json ]] || code=404 ;;
   "DELETE "*/access/apps/*) rm -f "$st/app.json"; body='{"success":true}'; code=200 ;;
-  "GET https://s.example.test/"*) printf '302 https://team.cloudflareaccess.com/cdn-cgi/access/login/s.example.test?kid=aud-shim'; exit 0 ;;
+  "GET https://s.example.test/"*)   # SHIM_EDGE: an edge answer the probe must refuse
+    login="https://team.cloudflareaccess.com/cdn-cgi/access/login/s.example.test?kid=aud-shim"
+    case ${SHIM_EDGE:-} in
+      kid) login="${login%=*}=aud-other" ;;
+      host) login="${login/login\/s.example.test/login/other.example.test}" ;;
+      offsite) login="${login/team.cloudflareaccess.com/team.example.com}" ;;
+      200) printf '200 '; exit 0 ;;
+    esac
+    printf '302 %s' "$login"; exit 0 ;;
   *) exit 0 ;;
 esac
 [[ $fmt == *http_code* ]] && printf '%s\n%s' "$body" "$code" || printf '%s' "$body"
@@ -1483,6 +1491,15 @@ check "shim: nor in share's own stdout or stderr" "0" "$(grep -c 'sentinel-t0k3n
 check "shim: every API call carried the token through a header file" "$(grep -c '^https://api.cloudflare.com/' "$WORK/shim.log")" "$(grep -c '^@/dev/fd/' "$WORK/shim.log")"
 check "shim: at least the add's five calls and rm's three reached the API" "1" "$([[ $(grep -c '^https://api.cloudflare.com/' "$WORK/shim.log") -ge 8 ]] && echo 1 || echo 0)"
 rm -f "$SHARE_CONFIG_DIR/config"   # host_zone learned zone= through the shim's DoH answer
+
+echo "--- the real probe parser: every wrong edge answer keeps the share unpublished and deletes the app ---"
+shim() { SHIM_LOG="$WORK/shim.log" SHIM_STATE="$WORK/shim-state" PATH="$WORK/shimcurl:$PATH" CLOUDFLARE_API_TOKEN=sentinel-t0k3n SHARE_ACCESS_POLL=1 SHARE_CLIPBOARD=0 bash "$SH" "$@"; }
+for edge in kid host 200 offsite; do
+  rm -rf "$WORK/shim-state"; : >"$apending"
+  idx_before=$(cksum <"$SHARE_ROOT/index.tsv"); pub_before="$(find "$SHARE_ROOT/pub" -maxdepth 1 | sort)"
+  out=$(SHIM_EDGE=$edge SHARE_ACCESS_WAIT=1 shim add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null); rc=$?
+  check "edge $edge: refused, no row, no pub/<id>, app deleted, pending empty" "1" "$([[ $rc == 1 && $(cksum <"$SHARE_ROOT/index.tsv") == "$idx_before" && "$(find "$SHARE_ROOT/pub" -maxdepth 1 | sort)" == "$pub_before" && ! -e $WORK/shim-state/app.json && ! -s $apending ]] && grep -c 'did not enforce on' <<<"$out")"
+done
 
 echo "--- rows 12 and 12b: teardown never leaves a gated share behind ---"
 areset
