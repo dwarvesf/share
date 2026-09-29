@@ -121,6 +121,40 @@ share profiles                                                       # default a
 
 A profile is a second, independent share: its own config dir (`~/.config/share/profiles/work`), root (`~/share/profiles/work`), login service (`foundation.d.share.work`), Keychain item (`share-tunnel.work:<hostname>`), and port (picked at the first setup, then kept in its config). `SHARE_PROFILE=work` selects it from the environment; the flag goes before the verb. The default setup never moves, so an existing install needs nothing. A named profile needs its own credential at setup: an API token for that account, or the browser login (each profile keeps its own `cert.pem`). `share --profile work teardown` removes only that profile. Share Bar shows the default profile only; to watch a named profile, watch its launchd label. Detail: [how-it-works.md](how-it-works.md#profiles).
 
+## 4e. Private links: the API token for `--access`
+
+`share add ... --access <rule>` puts a Cloudflare Access application on one link. It needs a named setup on an account with Zero Trust enabled (the free plan is enough), and an API token share reads only at command time, never from the login service.
+
+| Scope (as the dashboard names it) | Needed for |
+|---|---|
+| Access: Apps and Policies: Edit | every `--access` create, read-back, delete |
+| Access: Organizations, Identity Providers, and Groups: Read | the `group:` lookup, and the sweep's proof of Access read before it trusts an app list |
+| Zone: Zone: Read | the zone to account lookup |
+| Cloudflare Tunnel: Edit, DNS: Edit | only with `--host` (as today) |
+
+Three ways to hand it over, first hit wins, per profile:
+
+| Source | How |
+|---|---|
+| `api_token_cmd=<command>` in the profile's config | `share api-token --cmd 'op read "op://<vault>/<item>/credential"'`; share runs the command and uses its output. Any existing token with the scopes above works. |
+| Keychain item `share-api[.<profile>]:<hostname>` (Linux: `<config dir>/api-token`, mode 600) | `share api-token` with no argument opens the prefilled token form (`https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=...&name=share access (<profile>)`), prompts for a hidden paste, and stores it through stdin. Over ssh or with no display it prints the URL instead of opening it. |
+| `CLOUDFLARE_API_TOKEN` in the environment | used only when the profile stores nothing, so a broad shell token never silently replaces the profile's own |
+
+Every form ends with a read-only preflight (`share api-token --check` reruns it): one line per scope, `ok` or `MISSING` with the scope's dashboard name, and a fix line with the token page. The Apps Edit check sends an invalid body (`{}`), which the API refuses with code 12130 without creating anything.
+
+A rule group for `group:<name>`: Zero Trust > Access controls > Policies > Rule groups tab > Add a group; Name as you will pass it; Include > Selector: Emails > one entry per address; Save. share never creates or edits groups.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `--access needs a Cloudflare API token ... none is set` | no token source for this profile | the block names both `share api-token` forms and the form link |
+| `MISSING  Access: ...` in the preflight | the token lacks that scope | add it on the token page the line names, then `share api-token --check` |
+| `Cloudflare Access is not enabled on the account` | code 9999 | enable Zero Trust for the account in the dashboard |
+| `no Access group named '<name>'` | no rule group of that exact name on the account that owns the zone | create it (above) and rerun the same add |
+| `did not enforce on <host>/<id> within 900s; nothing was published` | the edge took longer than `SHARE_ACCESS_WAIT` | rerun the same add; a new app can take several minutes |
+| `<n> Access app(s) await deletion` in `ls` or `status` | gated shares expired under the login service or a `status` run, neither of which consults a token | `share prune` (the stored token is used; none stored: `share api-token` first, or export `CLOUDFLARE_API_TOKEN`) |
+| `skipping the Access check` on `ls` | the exported `CLOUDFLARE_API_TOKEN` belongs to another account or zone | unset it, or store the right token with `share api-token` |
+| `Access app for <id> is gone; the link is PUBLIC` (`ls` with `CLOUDFLARE_API_TOKEN` exported) | the app was deleted in the dashboard | `share rm <id>` |
+
 ## 5. Serve from a different machine
 
 Only machines listed in `hosts` serve. Two machines on one tunnel would split requests between two different `~/share` folders, so links would fail at random.
@@ -134,7 +168,7 @@ share teardown          # asks for confirmation
 share teardown --yes
 ```
 
-Teardown removes the service, stops serving, deletes the tunnel, removes the stored token and the login certificate, and moves the config to the Trash. Shares in `~/share` stay on disk.
+Teardown removes the service, stops serving, deletes the tunnel, removes the stored tokens (tunnel and API) and the login certificate, and moves the config to the Trash. Shares in `~/share` stay on disk, except gated ones (`--access`): those are unpublished first, with their Access apps deleted, and teardown refuses without an API token while any exists, so a later setup never serves them ungated.
 
 The DNS record depends on the path. With `CLOUDFLARE_API_TOKEN` set, teardown deletes it (only when it still points at this tunnel). The browser-login token cannot delete DNS records, so teardown tells you to remove the CNAME in the dashboard. Until you do, the hostname returns a Cloudflare error.
 

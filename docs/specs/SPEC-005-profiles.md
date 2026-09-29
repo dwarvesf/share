@@ -200,11 +200,11 @@ verb, and one skill row.
   bare `share <verb>` hint outside the usage header and the skill text, so a hint for a
   named profile never points at the default install (DEC-008).
 - Cloudflare credentials are per invocation (`CLOUDFLARE_API_TOKEN`) or per profile
-  config (`token_cmd`, the login certificate). When SPEC-004's `share api-token` stores an
-  API token (a token command or a Keychain item, on the tunnel token's pattern), that
-  storage is namespaced per profile the same way: the config dir and the Keychain service
-  name carry the profile, so two profiles never share or clobber an API token. The login
-  service never reads an API token; it reads only the tunnel run token.
+  config (`token_cmd`, the login certificate). SPEC-004's `share api-token` stores an
+  API token (a token command, or a Keychain item `share-api.<p>:<host>` / a 600 file, on
+  the tunnel token's pattern), namespaced per profile the same way: the config dir and the
+  Keychain service name carry the profile, so two profiles never share or clobber an API
+  token. The login service never reads an API token; it reads only the tunnel run token.
 
 ## Failure modes
 
