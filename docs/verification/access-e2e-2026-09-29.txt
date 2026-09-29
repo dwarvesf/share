@@ -1,0 +1,100 @@
+# tests/e2e.sh live run, Dwarves Cloudflare account (zone d.foundation)
+# Tree: 8417b04 (bin/share as of 0d2705d, every review fix in), run 2026-09-29 on the Mac Mini
+# Command: SHARE_BIN=<worktree>/bin/share SHARE_E2E_HOST=share-e2e.d.foundation SHARE_E2E_ACCESS_EMAIL=share-e2e@example.com tests/e2e.sh
+# Token: op://Toolkit/cf-api-token/credential read through 1Password Connect, passed as CLOUDFLARE_API_TOKEN, never printed.
+# HOME: a mktemp dir. security: a file-backed stub first on PATH (the real Keychain pops a GUI ACL prompt from a script),
+#   plus a curl link in the same dir so the service PATH that svc_path builds finds the stub before /usr/bin under launchd.
+# The outside checks before and after were run by the harness through the API, launchctl, and the real Keychain.
+
+--- outside check: before ---
+access apps: 4 (0 named share *)
+dns share-e2e.d.foundation: 0
+dns x-share-e2e.d.foundation: 0
+dns g-share-e2e.d.foundation: 0
+live tunnels named share-share-e2e-d-foundation: 0
+launchd jobs foundation.d.share-e2e: 0
+real keychain items for share-e2e.d.foundation: 0
+
+=== setup (api) ===
+  | auth:       API token (active)
+  | zone:       d.foundation
+  | tunnel:     created share-share-e2e-d-foundation
+  | route:      share-e2e.d.foundation -> 127.0.0.1:8797
+  | dns:        created CNAME share-e2e.d.foundation
+  | token:      stored in keychain (service share-tunnel:share-e2e.d.foundation)
+  | service:    runs at login (foundation.d.share-e2e)
+  | ready:      https://share-e2e.d.foundation/ is live. Next: share add <file|dir>
+  ok    setup succeeded
+  ok    service is running
+=== rerun setup (must reuse) ===
+  ok    tunnel reused
+=== publish ===
+  ok    link answers
+  ok    content is the snapshot
+  ok    dotfile not served
+  ok    no-store header
+=== restart (links must answer the moment start returns) ===
+  ok    links down after stop
+  ok    link answers right after start
+  ok    link answers right after a service reinstall
+=== own hostname (--host) ===
+share: live share: anyone with the link reaches 127.0.0.1:8998 while this machine is awake
+  ok    host link is the fqdn
+  ok    host share answers
+  ok    host share content
+  ok    no DNS record left
+  ok    no ingress rule left
+=== private link (--access): the bytes are never public, the gate is this app's, rm leaves no app ===
+  | gated add took 37s from start to the printed link (app 822d8d4d-6a2c-4d74-a9bf-a9ad04666da5)
+  ok    gated add printed a link
+  ok    the preflight passed every scope
+  ok    no 200 on the link during the wait
+  ok    the app reads back with an aud
+  ok    /c48816/ redirects to Access with kid == aud
+  ok    /c48816 redirects to Access with kid == aud
+  ok    /C48816/ redirects to Access with kid == aud
+  ok    /%6348816/ redirects to Access with kid == aud
+  ok    //c48816/ redirects to Access with kid == aud
+  ok    /x/%2e%2e/c48816/ redirects to Access with kid == aud
+  ok    /x/..%2Fc48816/gated/index.html answers 400
+  ok    /%2Fc48816/gated/index.html answers 400
+  ok    /x/..%5Cc48816/gated/index.html answers 400
+  ok    the ungated share still answers 200
+--- --host plus --access: the fqdn and the main-host path both redirect ---
+  ok    host gated link is the fqdn
+  ok    https://g-share-e2e.d.foundation/ redirects to Access
+  ok    https://share-e2e.d.foundation/aa078a/ redirects to Access
+  ok    host gated rm: no DNS record left
+  ok    host gated rm: app gone (GET 404)
+--- rm: the app is gone and the link never answers 200 ---
+  ok    rm gated exits 0
+  ok    GET access/apps/<app> is 404
+  ok    no app named for this share remains
+  ok    no app named for the host share remains
+  ok    the link never answers 200 after rm
+  ok    access-pending is empty
+=== remove ===
+  ok    rm takes the link down
+=== teardown ===
+  | dns:     deleted share-e2e.d.foundation
+  | tunnel:  deleted
+  | token:   removed
+  | service: removed
+  | config:  moved to the Trash
+  ok    DNS record removed
+  ok    tunnel deleted
+  ok    service removed
+
+PASS (api)
+exit 0
+
+--- outside check: after ---
+access apps: 4 (0 named share *)
+dns share-e2e.d.foundation: 0
+dns x-share-e2e.d.foundation: 0
+dns g-share-e2e.d.foundation: 0
+live tunnels named share-share-e2e-d-foundation: 0
+launchd jobs foundation.d.share-e2e: 0
+real keychain items for share-e2e.d.foundation: 0
+stub keychain entries left: 0
+token in transcript: 0

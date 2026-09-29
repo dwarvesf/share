@@ -43,10 +43,10 @@ The `=== access ===` section runs with `SHARE_TUNNEL=0` and `SHARE_ACCESS_DRY=1`
 | 14 | state | `row 14:` |
 | 15 | compat | the whole pre-existing suite, green |
 | 16 | negative control | negative control A below |
-| 17 | e2e gated leg | `tests/e2e.sh` private-link leg, live (below) |
-| 18 | e2e `--host` plus `--access` | e2e `--host plus --access` leg, live (below) |
-| 19 | e2e rm | e2e `GET access/apps/<app> is 404`, `no app named for this share remains`, live (below) |
-| 20 | two zones | e2e check behind `SHARE_E2E_OTHER_HOST` (deviation in the notes); not in the recorded live run |
+| 17 | e2e gated leg | `tests/e2e.sh` private-link leg, live, proven on the fixed tree (`access-e2e-2026-09-29.txt`) |
+| 18 | e2e `--host` plus `--access` | e2e `--host plus --access` leg, live, proven on the fixed tree (`access-e2e-2026-09-29.txt`) |
+| 19 | e2e rm | e2e `GET access/apps/<app> is 404`, `no app named for this share remains`, live, proven on the fixed tree (`access-e2e-2026-09-29.txt`) |
+| 20 | two zones | open: the e2e check behind `SHARE_E2E_OTHER_HOST` needs a second setup on another zone (deviation in the notes); not in either live run |
 | 21 | UAT | open: Han opens a `group:dwarves-ops` link |
 | 22 | Caddy encoded separators | row 22 section (five encoded paths, plain link, `%25` file, query, adapted route order); negative control B |
 | 23, 23b, 23c, 23d | lost POST, unproven list, lost DELETE, young no-match | `lost POST:`, `row 23:`, `row 23b:`, `row 23c:`, `row 23d:` |
@@ -116,6 +116,58 @@ Result:  GREEN, 499 ok, 0 FAIL, exit 0, at 37a85d5, tree 444975f
 Verdict: PASS (mutate -> RED -> restore) for A, B, C
 ```
 
+## Review fixes (PR #38 review)
+
+Each finding got its check first, then the fix, one commit per finding. The red run is the final `tests/share.sh` against `bin/share` from c4bc1ce (the reviewed head); the green run is the whole suite at 8417b04, run alone.
+
+| Finding | Commit | Check (red at c4bc1ce, green at 8417b04) |
+|---|---|---|
+| 1 HIGH: `setup` with a new hostname served gated shares ungated | 3c2f23e | `row 12: setup with a new hostname over a gated share is refused before any change` (red: expected 1, got 0) |
+| 2 HIGH: `ls` died on an expired gated row and a foreign token | 51a9455 | `ls, expired gated row, another account's token: exit 0 and the list printed`, `ls, expired gated row: unpublished, the app waits with no owner, no DELETE` (both red, empty) |
+| 4 MEDIUM: the DoH probe fallback never ran | 17a5957 | `DoH blocked: the gated add passes through the fallback probe and publishes` (red, empty: the add timed out) |
+| 5 MEDIUM: a failed Caddy reload left a live gated share public | 723a7d8 | `reload fails on rm of a live gated share: exit 1, no DELETE app, the app waits` (red), `a sweep whose reload fails keeps the app too` (red: got 1), `the live gated link is gone after that sweep` (red: got 200, the route was still up with no app) |
+| 6 MEDIUM: the real gate parser was never exercised on failure | 98f82fd, 8417b04 | `edge kid`, `edge host`, `edge 200`, `edge offsite`: refused, no row, no pub/<id>, app deleted, pending empty. Test-only, so the red is a negative control (below) |
+| 7 MEDIUM: bare `prune` died when `api_token_cmd` failed | 904f5f8 | `prune, api_token_cmd fails: exit 0, one warning naming it`, `prune, api_token_cmd fails: row and bytes gone, the app waits`, `prune, pending apps and another account's token: exit 0, the expired row still goes` (all red) |
+| LOW: `SHARE_ACCESS_DRY=1` on a real install faked deletes | 8ec0491 | `dry seam, tunnel on: rm refuses, row and app intact, no DELETE` (red) |
+| LOW: a token file wider than 600 was never tightened | 0d2705d | `an existing 644 token file is 600 after a store` (red: got '644 newtok') |
+
+The other two LOW findings are recorded in the notes' Follow-ups as `not worth now`.
+
+### Red
+
+```
+Command: bash tests/share.sh (final tests, bin/share from c4bc1ce), SHARE_TEST_PORT_BASE=48000, in a copy without .git
+Exit:    1
+Result:  14 FAILED: the 12 checks named in the table above for findings 1, 2, 4, 5, 7 and the two LOW fixes,
+         plus 2 noise lines (v0.5.1 CLI: git show fetched the old script, state exits 1), which need a .git the copy lacks
+```
+
+### Negative control for finding 6
+
+```
+Mutation: access_probe_round ends in `true` instead of `[[ $ok == 1 ]]` (the probe trusts any answer)
+First cut (SHARE_ACCESS_WAIT=1): the four edge checks stayed GREEN under the mutation: the add timed out before
+          a second passing round. Fixed in 8417b04 (wait 12 s, room for three passing rounds 5 s apart).
+After:    the edge checks alone (the suite's shim, same env), mutated: FAIL edge kid, host, 200, offsite (rc=0, one row
+          each: the share was published); unmutated: ok for all four
+```
+
+### Green
+
+```
+Command: bash tests/share.sh (run alone)
+Exit:    0
+Checks:  518 ok, 0 FAIL (PASS), at 8417b04, tree 9021b1e
+Tail:    === process leaks ===
+           ok    serve.pid removed
+           ok    no real launchd or systemd share job appeared during the run
+         PASS
+Duration: 261 s (the four edge checks add about 48 s)
+Verdict: PASS
+```
+
+`shellcheck bin/share tests/share.sh tests/e2e.sh` and `/bin/bash -n bin/share` clean on the same tree.
+
 ## Live legs (Dwarves Cloudflare account, `tests/e2e.sh` with `SHARE_E2E_ACCESS_EMAIL`)
 
 | Leg | Result |
@@ -124,7 +176,26 @@ Verdict: PASS (mutate -> RED -> restore) for A, B, C
 | inline allow policy on app create | accepted; the app read back intact |
 | cleanup, checked from outside | the account holds only its four pre-existing Access apps; no share DNS record or tunnel remains |
 
-The leg also asserts the rows 17 to 19 checks (redirect with `kid == aud` on the link variants, 400 on encoded separators, `--host` redirects, the app 404 after `rm`). The live run needed two e2e fixture fixes (20e1448, 4e33026); its per-check output was not kept in the repo, so rerun `tests/e2e.sh` before release and paste the result here.
+The leg also asserts the rows 17 to 19 checks (redirect with `kid == aud` on the link variants, 400 on encoded separators, `--host` redirects, the app 404 after `rm`). The first live run needed two e2e fixture fixes (20e1448, 4e33026) and its per-check output was not kept.
+
+### Rerun on the fixed tree (after the review fixes)
+
+Transcript, per-check output kept: [`access-e2e-2026-09-29.txt`](access-e2e-2026-09-29.txt).
+
+```
+Command: tests/e2e.sh with SHARE_BIN=<worktree>/bin/share, SHARE_E2E_HOST=share-e2e.d.foundation,
+         SHARE_E2E_ACCESS_EMAIL set, a mktemp HOME, the Toolkit token through 1Password Connect
+Tree:    8417b04 (bin/share as of 0d2705d)
+Exit:    0
+Checks:  44 ok, 0 FAIL, PASS (api)
+Gate:    the gated add printed its link 37 s after start
+Outside: before and after, the account holds 4 Access apps (none named share *); no DNS record for
+         share-e2e, x-share-e2e, or g-share-e2e; no live tunnel share-share-e2e-d-foundation; no
+         foundation.d.share-e2e launchd job; no real Keychain item for the e2e hostname; the token
+         string is absent from the transcript
+```
+
+The first rerun on the same tree failed 15 checks, all harness: the launchd job read the real Keychain instead of the stub, found no tunnel token, and every link answered 530 (see the notes). Its own teardown left the same clean outside state. The Access checks in that run passed anyway, since the gate is enforced at the edge.
 
 The spike answers (empty-body probe 400 plus 12130, token verify, zone lookup, group paging, org and IdP reads) are in the notes' TASK-1 table.
 
@@ -163,5 +234,4 @@ Result: PASS on the first round. It ran `api-token --cmd`, both gated adds, `sha
 | Item | Owner |
 |---|---|
 | Row 21 UAT: a `group:dwarves-ops` link, a group address gets the PIN, a contractor address gets none | Han |
-| Row 20 on a second zone (`SHARE_E2E_OTHER_HOST`) | by hand |
-| `tests/e2e.sh` rerun with its output pasted above | by hand |
+| Row 20 on a second zone (`SHARE_E2E_OTHER_HOST`): needs a second setup on another zone and account; this machine has no second zone token | by hand |

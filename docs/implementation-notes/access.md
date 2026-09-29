@@ -67,4 +67,23 @@ Delta from `docs/specs/SPEC-004-access.md`. Decisions already in the spec are re
 
 - The profiles section of `tests/share.sh` ignores `SHARE_TEST_PORT_BASE`: it runs `share` with no port override under a private `HOME`, so the picked ports collide when two suites run at once. Four parallel runs (bases 12000, 24000, 36000, 48000) each showed one to nine profile FAILs; the same tree run alone is 499 ok, 0 FAIL. Negative controls ran in parallel anyway and list those FAILs as noise; the green that counts is the solo run.
 - `tests/share.sh` has no section filter, so each negative control is a full 185 s run.
-- The e2e live run's per-check output was not kept; `docs/verification/access.md` lists the rerun as open before release, beside rows 20, 21, 30, and 31.
+- The e2e live run's per-check output was not kept at the time; the rerun on the fixed tree is kept at `docs/verification/access-e2e-2026-09-29.txt` (44 ok, PASS).
+
+## Review fixes (PR #38 review)
+
+Each fix landed test first; the red and green runs are in `docs/verification/access.md`, "Review fixes".
+
+- Two siblings of the named findings were fixed in the same commits. A bare `share prune` with a token for another account died in the pending sweep before it expired anything, so the sweep uses the soft account lookup in every prune mode. A sweep now reloads Caddy before it deletes the app of any row-less line, and deletes nothing when that reload fails: otherwise the next prune after a failed `rm` reload would still delete the app while the stale live route answered.
+- `caddy_reload` returns 1 on failure. `add` and `refresh` ignore it, as before; only `rm` of a live gated row and the sweep act on it.
+- The first cut of the parser tests used `SHARE_ACCESS_WAIT=1`, which timed out before a second passing round, so the checks stayed green with a probe that accepted every answer. The negative control caught it; the wait is now 12 s, enough for three passing rounds 5 s apart.
+- e2e harness under a mktemp `HOME`: a `security` stub first on `PATH` covers the foreground commands but not the launchd job. `svc_path` builds the service `PATH` in tool order, so curl's `/usr/bin` came before the stub's directory, the job read the real Keychain, found no tunnel token, and every link answered 530 (the first rerun, 15 FAIL, cleaned up by its own teardown). A `curl` link in the stub's directory puts it first; the second rerun passed.
+- The dry-seam guard refuses with `cf_code=000` and one stderr line instead of dying: `cf_try` never dies, and `ls` must not die on an exported `SHARE_ACCESS_DRY=1`. A delete treats 000 as not done, so nothing is faked.
+
+## Follow-ups
+
+| Item | Outcome |
+|---|---|
+| Paging trusts `result_info.total_pages // 1` (`access_group_id`, `access_find_by_nonce`) | not worth now: every list read on the live account carried `total_pages`; a missing field reads one page, which fails visibly (a group refusal, or a lost-POST line that `ls` keeps counting until it is forgotten) |
+| A definite create failure (a 4xx after the intent line) leaves a `-:<nonce>` line for 10 minutes | not worth now: the line gates nothing, `ls` counts it as awaiting deletion, and the first sweep with a token after 10 minutes finds no app by the nonce and drops it |
+| An existing token file wider than 600 was never tightened | fixed: `chmod 600` after every file store (0d2705d) |
+| `SHARE_ACCESS_DRY=1` on a real install faked deletes | fixed: `cf_try` refuses unless `SHARE_TUNNEL=0`, the seam's marker (8ec0491) |
