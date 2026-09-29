@@ -1432,7 +1432,7 @@ api_token_store() { # api_token_store <token>: through stdin into the Keychain, 
     printf 'add-generic-password -U -a share -s "%s" -w "%s"\n' "$(api_token_key)" "$1" | security -i >/dev/null
     api_token_store_out="stored in the keychain (service $(api_token_key))"
   else
-    (umask 077 && printf '%s' "$1" >"$api_token_file") && chmod 600 "$api_token_file"   # umask sets the mode of a new file only
+    (umask 077 && printf '%s' "$1" >"$api_token_file.$$") && mv -f "$api_token_file.$$" "$api_token_file"   # a fresh 600 file replaces any wider one; the token never sits in a readable file
     api_token_store_out="stored in $api_token_file (mode 600)"
   fi
 }
@@ -1918,7 +1918,7 @@ cmd_setup() {
   local old_host; old_host="$(cfg hostname || true)"
   if [[ -n $old_host && $old_host != "$host_name" ]]; then   # the main site would answer the new name for the whole pub tree; the apps cover only the old one
     [[ -z "$(host_name="$old_host" rows | awk -F'\t' '$6 ~ /(^| )access=/')" && $(pending_count) == 0 ]] ||
-      die "$old_host has gated shares or Access apps awaiting deletion; under $host_name they would be served with no gate; remove them first ('$me rm <id>', see '$me ls', then '$me prune' with the token) or run '$me teardown'"
+      die "$old_host has gated shares or Access apps awaiting deletion; under $host_name they would be served with no gate; remove them first ('$me rm <id>', see '$me ls', then '$me prune' with the token; a line prune reports as malformed is yours to delete from $pending) or run '$me teardown'"
   fi
   tunnel_name="${tunnel_name:-share-${host_name//./-}}"
   local other   # two profiles on one hostname or one tunnel name would reuse, then delete, one tunnel
