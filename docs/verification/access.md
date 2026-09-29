@@ -47,7 +47,7 @@ The `=== access ===` section runs with `SHARE_TUNNEL=0` and `SHARE_ACCESS_DRY=1`
 | 18 | e2e `--host` plus `--access` | e2e `--host plus --access` leg, live, proven on the fixed tree (`access-e2e-2026-09-29.txt`) |
 | 19 | e2e rm | e2e `GET access/apps/<app> is 404`, `no app named for this share remains`, live, proven on the fixed tree (`access-e2e-2026-09-29.txt`) |
 | 20 | two zones | open: the e2e check behind `SHARE_E2E_OTHER_HOST` needs a second setup on another zone (deviation in the notes); not in either live run |
-| 21 | UAT | open: Han opens a `group:dwarves-ops` link |
+| 21 | UAT | proven 2026-09-29: Han opened https://s.d.foundation/a68960/support-ticket-guide/ (gated `group:dwarves-ops`, profile dfoundation), logged in with the emailed PIN and saw the guide; he reported the non-member check passing too. An anonymous request gets 302 to dwarves.cloudflareaccess.com and `..%2F` gets 400 |
 | 22 | Caddy encoded separators | row 22 section (five encoded paths, plain link, `%25` file, query, adapted route order); negative control B |
 | 23, 23b, 23c, 23d | lost POST, unproven list, lost DELETE, young no-match | `lost POST:`, `row 23:`, `row 23b:`, `row 23c:`, `row 23d:` |
 | 24, 25, 25b | pending ids, live owner, reused pid | `row 24:`, `row 25:`, `row 25b:` |
