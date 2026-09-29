@@ -556,7 +556,10 @@ cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so ex
   if [[ -n $app ]]; then
     # the gate goes last: bytes first, row, then the app. rm needs the token before any change; prune defers the app
     [[ ${2:-} == prune ]] || { api_token_resolve; [[ -n $api_token ]] || { access_no_token >&2; exit 1; }; }
-    if [[ -n $api_token ]]; then access_account; access_sweep; fi
+    if [[ -n $api_token ]]; then   # prune never dies on a token for another account: the app waits for a later prune
+      if [[ ${2:-} == prune ]]; then access_account soft || api_token=""; else access_account; fi
+      [[ -z $api_token ]] || access_sweep
+    fi
     lock_take index; pending_has_id "$1" || pending_add "$1" "$app" "" "${api_token:+$$}"; lock_release index
   fi
   [[ -n $fqdn ]] && host_rm "$fqdn"
@@ -597,7 +600,7 @@ cmd_prune() { # cmd_prune [quiet|listing]: unpublish every share past its expiry
   # a for loop, not `| while`: bash 5.3 skips the EXIT trap of a lock taken in a while-loop subshell
   ids="$(rows | awk -F'\t' -v now="$now" '$5 > 0 && $5 < now {print $1}')"
   for id in $ids; do
-    cmd_rm "$id" prune | sed 's/$/ (expired)/'
+    cmd_rm "$id" prune | sed 's/$/ (expired)/' || true   # a listing never dies on one row
   done
 }
 

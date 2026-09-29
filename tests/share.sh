@@ -1509,6 +1509,15 @@ check "DoH blocked: the gated add passes through the fallback probe and publishe
 [[ -n $d4_id ]] && shim rm "$d4_id" >/dev/null 2>&1
 rm -f "$SHARE_CONFIG_DIR/config"
 
+echo "--- ls with an expired gated row and another account's token still lists ---"
+areset
+x2_url=$(acc add "$WORK/gated.txt" --access email:a@x.io 2>/dev/null | head -1); x2_id=$(cut -d/ -f4 <<<"$x2_url"); x2_app=$(app_of "$x2_id")
+awk -F'\t' -v OFS='\t' -v id="$x2_id" '$1 == id {$5 = 1} {print}' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
+out=$(SHARE_ACCESS_DRY=1 SHARE_ACCESS_DRY_ZONES=0 CLOUDFLARE_API_TOKEN=faketoken bash "$SH" ls 2>/dev/null); rc=$?
+check "ls, expired gated row, another account's token: exit 0 and the list printed" "1" "$([[ $rc == 0 ]] && grep -c "id=$md_id " <<<"$out")"
+check "ls, expired gated row: unpublished, the app waits with no owner, no DELETE" "1" "$([[ -z $(row_of "$x2_id") && ! -e $SHARE_ROOT/pub/$x2_id && $(grep -c 'DELETE app' "$alog") == 0 ]] && grep -c "^$x2_id	$x2_app	0	" "$apending")"
+acc prune >/dev/null 2>&1
+
 echo "--- rows 12 and 12b: teardown never leaves a gated share behind ---"
 areset
 acc rm "$g_id" >/dev/null 2>&1; acc rm "$p_id" >/dev/null 2>&1; acc rm "$o6_id" >/dev/null 2>&1; acc rm "$l6_id" >/dev/null 2>&1
