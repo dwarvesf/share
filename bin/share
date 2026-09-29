@@ -1463,7 +1463,10 @@ cf_try() { # cf_try METHOD PATH [JSON]: like cf() but never dies; sets cf_body, 
   # Call it directly, never inside $( ): globals set in a command substitution are lost. The token goes through a header file, never argv.
   local out
   cf_body="" cf_code=000 cf_err=""
-  if [[ ${SHARE_ACCESS_DRY:-0} == 1 ]]; then cf_dry "$@"; return 0; fi
+  if [[ ${SHARE_ACCESS_DRY:-0} == 1 ]]; then   # the seam answers only with SHARE_TUNNEL=0; on a real install it refuses (000), never fakes a delete
+    [[ $tunnel == 0 ]] || { echo "share: SHARE_ACCESS_DRY=1 is a test seam for SHARE_TUNNEL=0 only; the Cloudflare call was refused; unset it" >&2; return 0; }
+    cf_dry "$@"; return 0
+  fi
   out="$(curl -sS --max-time 30 -w '\n%{http_code}' -X "$1" "$api$2" -H @<(printf 'Authorization: Bearer %s\n' "$api_token") \
     -H 'Content-Type: application/json' ${3:+--data "$3"} 2>/dev/null)" || return 0
   cf_code="${out##*$'\n'}"; cf_body="${out%$'\n'*}"

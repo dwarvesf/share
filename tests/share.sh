@@ -1548,6 +1548,13 @@ acc prune >/dev/null 2>&1
 check "a sweep with a working reload drops the route, then deletes the app" "1" "$([[ $(alast RELOAD) -lt $(aline 'DELETE app') && $(grep -c "^$r5_id	" "$apending") == 0 ]] && echo 1 || echo 0)"
 check "the live gated link is gone after that sweep" "404" "$(wait_code 404 "${r5_url}hello.txt")"
 
+echo "--- SHARE_ACCESS_DRY=1 with the tunnel on never fakes a Cloudflare answer ---"
+areset
+g9_url=$(acc add "$WORK/gated.txt" --access email:a@x.io 2>/dev/null | head -1); g9_id=$(cut -d/ -f4 <<<"$g9_url")
+out=$(SHARE_TUNNEL=1 SHARE_ACCESS_DRY=1 CLOUDFLARE_API_TOKEN=faketoken bash "$SH" rm "$g9_id" 2>&1 1>/dev/null); rc=$?
+check "dry seam, tunnel on: rm refuses, row and app intact, no DELETE" "1" "$([[ $rc == 1 && -n $(row_of "$g9_id") && -e $adry/$(app_of "$g9_id").json && $(grep -c 'DELETE app' "$alog") == 0 ]] && grep -c 'SHARE_ACCESS_DRY=1 is a test seam for SHARE_TUNNEL=0 only' <<<"$out")"
+acc rm "$g9_id" >/dev/null 2>&1
+
 echo "--- rows 12 and 12b: teardown never leaves a gated share behind ---"
 areset
 acc rm "$g_id" >/dev/null 2>&1; acc rm "$p_id" >/dev/null 2>&1; acc rm "$o6_id" >/dev/null 2>&1; acc rm "$l6_id" >/dev/null 2>&1
