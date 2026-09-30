@@ -1651,6 +1651,7 @@ echo "=== skill ==="
 check "skill prints a SKILL.md" "1" "$(bash "$SH" skill | grep -c '^name: share')"
 check "skill teaches --access and api-token" "2" "$(bash "$SH" skill | grep -c -- '--access email:<a>,<b>\|share api-token \[--cmd')"
 check "skill teaches --profile and share profiles" "1" "$(bash "$SH" skill | grep -c -- '--profile <name> <command>.*share profiles')"
+check "skill teaches the r2 backend" "1" "$(bash "$SH" skill | grep -c -- 'setup <hostname> --backend r2 --bucket <name>. | An R2 profile')"
 SHARE_SKILL_DIR="$WORK/skilldir" bash "$SH" skill --install >/dev/null
 check "skill --install writes SKILL.md" "share" "$(sed -n 's/^name: //p' "$WORK/skilldir/SKILL.md")"
 

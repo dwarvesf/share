@@ -146,6 +146,15 @@ if (process.argv[2] === "--dir") {
   check("r17 missing file 404", 404, r.status);
   r = await call(worker, env, `https://f.test/${ID}/noindex/`);
   check("r17 subfolder with no index 404", 404, r.status);
+  b.put(`o/${ID}.${NONCE}/My Notes/index.html`, "spaced"); b.put(`o/${ID}.${NONCE}/Ünï/README.html`, "uni");
+  r = await call(worker, env, `https://f.test/${ID}/My%20Notes/`);
+  check("r17 a folder name with a space serves its index", "200 spaced", `${r.status} ${await bodyOf(r)}`);
+  r = await call(worker, env, `https://f.test/${ID}/My%20Notes`);
+  check("r17 the same folder without slash 308", 308, r.status);
+  r = await call(worker, env, `https://f.test/${ID}/%C3%9Cn%C3%AF/`);
+  check("r17 a non-ASCII folder name serves its README", "200 uni", `${r.status} ${await bodyOf(r)}`);
+  r = await call(worker, env, `https://f.test/${ID}/%zz/`);
+  check("r17 a malformed escape in a folder path 400", 400, r.status);
   r = await call(worker, env, `https://f.test/${ID}/f.txt`, { method: "HEAD" });
   check("r17 HEAD status", 200, r.status);
   check("r17 HEAD empty body", "", await bodyOf(r));

@@ -24,7 +24,7 @@
 #   share skill [--install]   the SKILL.md that teaches an agent to use share
 #   share teardown [--yes]    delete the tunnel, DNS record, service, and stored token
 #   share setup <hostname> --backend r2 --bucket <name>   an R2 profile: a private bucket and a Worker
-#      serve links from Cloudflare, so they stay up while this machine is off
+#      serve links while this machine is off; teardown --yes --purge (admin token) deletes it all
 #
 # Docs: https://github.com/dwarvesf/share
 set -euo pipefail
@@ -2063,7 +2063,7 @@ access_open_url() { # the platform opener, backgrounded; skipped over ssh or wit
 # write pub/ or an Access app against an r2 profile.
 
 WORKER_VERSION=1            # bump on every Worker source change; deploys refuse a downgrade without --force
-WORKER_SHA=f8e97175987b     # first 12 hex of the emitted source's sha256; the suite fails when it drifts
+WORKER_SHA=76b2c8c9ab5f     # first 12 hex of the emitted source's sha256; the suite fails when it drifts
 WORKER_COMPAT_DATE=2026-09-30   # moves only with a WORKER_VERSION bump
 WORKER_RECORD_V=1           # the record schema this source understands; a newer record answers 404
 worker_meta() { printf '%s\n' "$WORKER_VERSION" "$WORKER_SHA" "$WORKER_COMPAT_DATE" "$WORKER_RECORD_V"; }   # one line, four fields, for the deploy and sweep paths
@@ -2181,18 +2181,15 @@ async function handle(request, env) {
   const rest = segs.slice(2);
   if (rest.length === 0) return new Response(null, { status: 308, headers: { Location: u.origin + "/" + id + "/" } });
   const cond = { range: request.headers, onlyIf: request.headers };
-  let rel, redir = false;
-  if (raw.endsWith("/")) {
-    rel = rest.join("/") + "index.html";
-  } else {
-    try { rel = rest.map(decodeURIComponent).join("/"); }
-    catch { return new Response(null, { status: 400 }); }
-    redir = true;
-  }
+  let dir;
+  try { dir = rest.map(decodeURIComponent).join("/"); }
+  catch { return new Response(null, { status: 400 }); }
+  const redir = !raw.endsWith("/");
+  let rel = redir ? dir : dir + "index.html";
   let obj = await env.BUCKET.get(rec.prefix + rel, cond);
-  if (obj === null && raw.endsWith("/")) {
-    obj = await env.BUCKET.get(rec.prefix + rest.join("/") + "README.html", cond);
-    if (obj !== null) rel = rest.join("/") + "README.html";
+  if (obj === null && !redir) {
+    obj = await env.BUCKET.get(rec.prefix + dir + "README.html", cond);
+    if (obj !== null) rel = dir + "README.html";
   }
   if (obj === null && redir &&
     (await env.BUCKET.head(rec.prefix + rel + "/index.html") !== null ||
@@ -2944,11 +2941,11 @@ r2_deploy() { # r2_deploy <worker> <team> <dataset> <first>: one multipart PUT; 
   worker_js "$root/worker.js"
   out="$(curl -sS --max-time 120 -w '\n%{http_code}' -X PUT "$api/accounts/$acct/workers/scripts/$worker" \
     -H @<(printf 'Authorization: Bearer %s\n' "$api_token") \
-    -F 'metadata=<-;type=application/json' -F "share.js=@$root/worker.js;type=application/javascript+module" \
+    -F 'metadata=<-;type=application/json' -F "share.js=@$root/worker.js;filename=share.js;type=application/javascript+module" \
     < <(r2_deploy_meta "$team" "$dataset" "$salt") 2>/dev/null)" || true
   rm -f "$root/worker.js"
-  cf_code="${out##*$'\n'}"
-  [[ $cf_code == 200 ]] || die "deploying Worker $worker answered HTTP $cf_code; the bucket and marker stay, rerun setup"
+  cf_code="${out##*$'\n'}"   # the part's filename is the module name Cloudflare resolves main_module against
+  [[ $cf_code == 200 ]] || die "deploying Worker $worker answered HTTP $cf_code ($(jq -r '[.errors[]?.message] | join("; ")' <<<"${out%$'\n'*}" 2>/dev/null | head -c 300)); the bucket and marker stay, rerun setup"
 }
 
 r2_no_token() { # the admin/publisher token block; callers send it to stderr
@@ -3503,6 +3500,7 @@ Publish snapshots of local files/folders, or proxy a running `localhost` server,
 | `share rm <id>` | Unpublish; for `--host` shares also deletes the CNAME and tunnel rule |
 | `share start` / `share stop` | Serving on or off |
 | `share --profile <name> <command>` | Run any command against another setup (a second account or hostname); `share profiles` lists them. No flag is the default setup |
+| `share setup <hostname> --backend r2 --bucket <name>` | An R2 profile: a Worker serves links from a private bucket, so they stay up while this machine is off, and several people publish to one hostname. Live shares, `--host`, `start`, and `stop` are refused there; `share rm <id>` unpublishes |
 
 ## Rules for agents
 
