@@ -70,23 +70,21 @@ final class MutationOutcomeTests: XCTestCase {
 
     // MARK: - verbatim detail (O1 / O3 / gate timeout)
 
+    /// The real O1 block: bin/share's access_no_token for profile dfoundation on
+    /// s.d.foundation, as `add --access` prints it to stderr before exiting 1.
     func testO1StyleStderrCarriesTheDieLineAndTheWholeBlockVerbatim() {
-        let stderr = """
-        share: Cloudflare API token not configured
-
-        Set api_token_cmd in /root/config.conf, for example:
-
-          api_token_cmd=op read op://Share/cloudflare-api-token/password
-
-        or export CLOUDFLARE_API_TOKEN in your shell profile.
-
-        Then run: share add <path>
+        let block = """
+        share: --access needs a Cloudflare API token for s.d.foundation (profile dfoundation); none is set.
+          New token (opens the prefilled form, then paste):  share --profile dfoundation api-token
+          Already have a token with Access scopes:          share --profile dfoundation api-token --cmd 'op read "op://<vault>/<item>/credential"'
+          Form link, pick the account that owns d.foundation:
+             https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=%5B%7B%22key%22%3A%22access%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22access_acct%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22read%22%7D%5D&name=share%20access%20%28dfoundation%29
         """
-        let result = CLIResult(status: 1, stdout: "", stderr: stderr, timedOut: false)
+        let result = CLIResult(status: 1, stdout: "", stderr: block + "\n", timedOut: false)
         let alert = MutationOutcome.alert(for: result, warningShareID: nil, notServingHere: false)
 
-        XCTAssertEqual(alert?.message, "share: Cloudflare API token not configured")
-        XCTAssertEqual(alert?.detail, stderr, "the guided block reaches the alert exactly as printed")
+        XCTAssertEqual(alert?.message, "share: --access needs a Cloudflare API token for s.d.foundation (profile dfoundation); none is set.")
+        XCTAssertEqual(alert?.detail, block, "the guided block reaches the alert exactly as printed, trailing newline aside")
     }
 
     func testO3StyleStderrKeepsBothLinesInDetail() {
