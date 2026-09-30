@@ -48,7 +48,7 @@ final class SetupWindowModel: ObservableObject, @unchecked Sendable {
         isRunning = true
         statusLine = "Working…"
         log = ""
-        let args = ProfileArgs.argv(profile, quickMode ? ["setup", "--quick"] : ["setup", hostname])
+        let args = ProfileArgs.setup(profile, host: hostname, quick: quickMode)
         setupLogger.log("setup start args=\(args.joined(separator: " "), privacy: .private)")
 
         let job = CLI.spawnCancellable(args) { [weak self] chunk in

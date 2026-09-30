@@ -387,7 +387,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         guard let row = sender.representedObject as? Row, row.canRefresh else { return }
         actionLogger.log("refresh profile=\(row.profile, privacy: .public) id=\(row.id, privacy: .public)")
         Task { [weak self] in
-            await self?.performMutation(ProfileArgs.argv(row.profile, ["refresh", row.id]), warningShareID: row.id, isAdd: false, profile: row.profile)
+            await self?.performMutation(ProfileArgs.refresh(row.profile, id: row.id), warningShareID: row.id, isAdd: false, profile: row.profile)
         }
     }
 
@@ -396,7 +396,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         guard confirmRemove(row) else { return }
         actionLogger.log("remove profile=\(row.profile, privacy: .public) id=\(row.id, privacy: .public)")
         Task { [weak self] in
-            await self?.performMutation(ProfileArgs.argv(row.profile, ["rm", row.id]), warningShareID: nil, isAdd: false, profile: row.profile)
+            await self?.performMutation(ProfileArgs.remove(row.profile, id: row.id), warningShareID: nil, isAdd: false, profile: row.profile)
         }
     }
 
@@ -416,7 +416,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         guard let profile = sender.representedObject as? String else { return }
         actionLogger.log("start profile=\(profile, privacy: .public)")
         Task { [weak self] in
-            await self?.performMutation(ProfileArgs.argv(profile, ["start"]), warningShareID: nil, isAdd: false, profile: profile)
+            await self?.performMutation(ProfileArgs.start(profile), warningShareID: nil, isAdd: false, profile: profile)
         }
     }
 
@@ -424,7 +424,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         guard let profile = sender.representedObject as? String else { return }
         actionLogger.log("stop profile=\(profile, privacy: .public)")
         Task { [weak self] in
-            await self?.performMutation(ProfileArgs.argv(profile, ["stop"]), warningShareID: nil, isAdd: false, profile: profile)
+            await self?.performMutation(ProfileArgs.stop(profile), warningShareID: nil, isAdd: false, profile: profile)
         }
     }
 
@@ -748,7 +748,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
             if nsAlert.runModal() == .alertSecondButtonReturn, let id = alert.removeShareID, let profile {
                 actionLogger.log("remove-from-warning profile=\(profile, privacy: .public) id=\(id, privacy: .public)")
                 Task { [weak self] in
-                    await self?.performMutation(ProfileArgs.argv(profile, ["rm", id]), warningShareID: nil, isAdd: false, profile: profile)
+                    await self?.performMutation(ProfileArgs.remove(profile, id: id), warningShareID: nil, isAdd: false, profile: profile)
                 }
             }
         }
@@ -845,7 +845,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         currentHitsKey = key
 
         actionLogger.log("hits spawn profile=\(profile, privacy: .public) id=\(rowID, privacy: .public)")
-        let job = CLI.spawnCancellable(ProfileArgs.argv(profile, ["hits", rowID])) { _ in }
+        let job = CLI.spawnCancellable(ProfileArgs.hits(profile, id: rowID)) { _ in }
         currentHitsJob = job
 
         let timeoutTask = Task {

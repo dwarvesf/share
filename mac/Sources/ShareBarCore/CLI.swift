@@ -305,6 +305,15 @@ public enum ProfileArgs {
         ["--profile", profile] + verbArgs
     }
 
+    public static func refresh(_ profile: String, id: String) -> [String] { argv(profile, ["refresh", id]) }
+    public static func remove(_ profile: String, id: String) -> [String] { argv(profile, ["rm", id]) }
+    public static func start(_ profile: String) -> [String] { argv(profile, ["start"]) }
+    public static func stop(_ profile: String) -> [String] { argv(profile, ["stop"]) }
+    public static func hits(_ profile: String, id: String) -> [String] { argv(profile, ["hits", id]) }
+    public static func setup(_ profile: String, host: String, quick: Bool) -> [String] {
+        argv(profile, quick ? ["setup", "--quick"] : ["setup", host])
+    }
+
     /// The command the menu's hint lines and failure text name: `share` for the default
     /// profile, `share --profile <name>` otherwise.
     public static func commandName(_ profile: String) -> String {
