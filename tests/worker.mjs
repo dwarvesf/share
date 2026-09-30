@@ -189,7 +189,7 @@ if (process.argv[2] === "--dir") {
   check("r18 /<id>/%zz", 400, await st(`${host}/${ID}/%zz`));
   check("r18 /<id>/%01", 400, await st(`${host}/${ID}/%01`));
   check("r18 /<ID>/f uppercase 404", 404, await st(`${host}/A1B2C3/f.txt`));
-  check("r18 /%61bc123/f 404", 404, await st(`${host}/%61bc123/f.txt`));
+  check("r18 /%61<id minus a>/f 404: the id segment is never decoded", 404, await st(`${host}/%61${ID.slice(1)}/f.txt`));
   check("r18 /<id>/50%25.v1.txt 200", 200, await st(`${host}/${ID}/50%25.v1.txt`));
   check("r18 query %2F ignored 200", 200, await st(`${host}/${ID}/f.txt?next=%2Fhome`));
   check("r18 Host f.test. 404", 404, await st(`https://f.test./${ID}/f.txt`));
