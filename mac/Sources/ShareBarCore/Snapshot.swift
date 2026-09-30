@@ -156,6 +156,20 @@ public struct ProfilesSnapshot: Decodable, Sendable, Equatable {
 }
 
 extension ProfilesSnapshot {
+    /// Folds one `profiles --json` result over the last good snapshot: a successful decode
+    /// replaces it; `.other` (incl. timeout) keeps it and marks it stale; `.cliNotFound`
+    /// and `.oldCLI` clear it because no verb would work.
+    public static func fold(_ result: CLIResult, over previous: ProfilesSnapshot?) -> (profiles: ProfilesSnapshot?, failure: Failure?) {
+        switch from(result) {
+        case .success(let value):
+            return (value, nil)
+        case .failure(.other(let line)):
+            return (previous, .other(line))
+        case .failure(let failure):
+            return (nil, failure)
+        }
+    }
+
     /// Maps one `profiles --json` `CLIResult` to a decoded `ProfilesSnapshot` or a
     /// `Failure`.
     ///

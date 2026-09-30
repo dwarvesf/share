@@ -186,16 +186,38 @@ final class MenuModelHeaderTests: XCTestCase {
         XCTAssertEqual(model.icon, .disconnected)
     }
 
+    /// Row 14c through the real fold: a good read lands, then `.oldCLI`, then
+    /// `.cliNotFound`, each folded over what the previous step left.
     func testCliNotFoundAndOldCLIClearTheSections() {
-        let profiles = makeProfiles([
-            makeEntry(name: "dfoundation", state: makeSnapshot(state: "serving", ready: true)),
-        ])
-        let missing = MenuModel(profiles: nil, failure: .cliNotFound, now: Date())
-        XCTAssertTrue(missing.sections.isEmpty)
-        XCTAssertEqual(missing.header, "share CLI not found")
+        let good = CLIResult(status: 0, stdout: """
+        {"schema":1,"profiles":[{"name":"dfoundation","state":{"schema":1,"state":"serving",
+         "ready":true,"mode":"named","host":"s.d.foundation","hosts":"","serves_here":true,
+         "service":false,"access_pending":0,"shares":[]}}]}
+        """, stderr: "", timedOut: false)
+        let oldCLI = CLIResult(status: 0, stdout: "default\tnot_setup\t-\n", stderr: "", timedOut: false)
+        let notFound = CLIResult(status: 127, stdout: "", stderr: "share: CLI not found", timedOut: false)
 
-        let old = MenuModel(profiles: nil, failure: .oldCLI, now: Date())
+        let first = ProfilesSnapshot.fold(good, over: nil)
+        XCTAssertEqual(MenuModel(profiles: first.profiles, failure: first.failure, now: Date()).sections.count, 1)
+
+        let second = ProfilesSnapshot.fold(oldCLI, over: first.profiles)
+        let old = MenuModel(profiles: second.profiles, failure: second.failure, now: Date())
         XCTAssertTrue(old.sections.isEmpty)
         XCTAssertEqual(old.header, "Update share CLI")
+
+        let third = ProfilesSnapshot.fold(notFound, over: first.profiles)
+        let missing = MenuModel(profiles: third.profiles, failure: third.failure, now: Date())
+        XCTAssertTrue(missing.sections.isEmpty)
+        XCTAssertEqual(missing.header, "share CLI not found")
+    }
+
+    func testAnOtherFailureKeepsTheLastGoodSnapshot() {
+        let previous = makeProfiles([
+            makeEntry(name: "dfoundation", state: makeSnapshot(state: "serving", ready: true)),
+        ])
+        let timedOut = CLIResult(status: 1, stdout: "", stderr: "share: timed out", timedOut: true)
+        let folded = ProfilesSnapshot.fold(timedOut, over: previous)
+        XCTAssertEqual(folded.profiles, previous)
+        XCTAssertNotNil(folded.failure)
     }
 }

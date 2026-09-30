@@ -152,24 +152,10 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Folds one `profiles --json` result into `currentProfiles`/`currentFailure`: a
-    /// successful decode replaces the snapshot; `.other` (incl. timeout) keeps the last
-    /// good one and marks it stale; `.cliNotFound`/`.oldCLI` clear the sections because
-    /// no verb would work.
+    /// Folds one `profiles --json` result into `currentProfiles`/`currentFailure`
+    /// (rules in `ProfilesSnapshot.fold`).
     private func applyResult(_ result: CLIResult) {
-        switch ProfilesSnapshot.from(result) {
-        case .success(let value):
-            currentProfiles = value
-            currentFailure = nil
-        case .failure(let failure):
-            currentFailure = failure
-            switch failure {
-            case .cliNotFound, .oldCLI:
-                currentProfiles = nil
-            case .other:
-                break
-            }
-        }
+        (currentProfiles, currentFailure) = ProfilesSnapshot.fold(result, over: currentProfiles)
     }
 
     /// Rebuilds `model` from the last read plus the current `working` flag, then
