@@ -13,12 +13,17 @@ public struct MutationAlert: Sendable, Equatable {
 
     public let kind: Kind
     public let message: String
+    /// The whole stderr verbatim (trailing newlines aside) when it holds two or more
+    /// non-empty lines: the O1 no-token block, the O3 group-not-found block, and the
+    /// gate-timeout lines reach the user exactly as the CLI printed them. Nil otherwise.
+    public let detail: String?
     /// Set only for `.privateWarning`: the share id its Remove button removes.
     public let removeShareID: String?
 
-    public init(kind: Kind, message: String, removeShareID: String? = nil) {
+    public init(kind: Kind, message: String, detail: String? = nil, removeShareID: String? = nil) {
         self.kind = kind
         self.message = message
+        self.detail = detail
         self.removeShareID = removeShareID
     }
 }
@@ -42,7 +47,11 @@ public enum MutationOutcome {
         notServingHere: Bool
     ) -> MutationAlert? {
         if result.status != 0 {
-            return MutationAlert(kind: .failure, message: result.lastErrorLine)
+            return MutationAlert(
+                kind: .failure,
+                message: dieLine(result.stderr) ?? result.lastErrorLine,
+                detail: detailText(result.stderr)
+            )
         }
         if let warningShareID, let warning = warningLine(result.stderr) {
             return MutationAlert(kind: .privateWarning, message: warning, removeShareID: warningShareID)
@@ -71,13 +80,27 @@ public enum MutationOutcome {
             .map(String.init)
             .first { $0.hasPrefix("share: WARNING") }
     }
-}
 
-/// The folder-publish confirm text (UI changes: Share File… and drop both ask this before
-/// running `add` on a directory).
-public enum FolderConfirm {
-    public static func text(name: String) -> String {
-        "Publish the folder \(name) at a public link for 30 days?"
+    /// The last stderr line starting `share: `, or nil. That is the `die` line (or the
+    /// first line of a guided block like O1), which names the failure better than a
+    /// trailing detail line.
+    private static func dieLine(_ stderr: String) -> String? {
+        stderr
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+            .last { $0.hasPrefix("share: ") }
+    }
+
+    /// The whole stderr verbatim (trailing newlines trimmed) when it holds two or more
+    /// non-empty lines; nil otherwise.
+    private static func detailText(_ stderr: String) -> String? {
+        let nonEmpty = stderr
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .count { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        guard nonEmpty >= 2 else { return nil }
+        var text = stderr
+        while text.hasSuffix("\n") { text.removeLast() }
+        return text
     }
 }
 

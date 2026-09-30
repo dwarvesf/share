@@ -31,11 +31,13 @@ func makeSnapshot(
     servesHere: Bool = true,
     service: Bool = true,
     shares: [Share] = [],
-    skipped: Int? = nil
+    skipped: Int? = nil,
+    accessPending: Int? = nil
 ) -> Snapshot {
     Snapshot(
         schema: schema, state: state, ready: ready, mode: mode, host: host, hosts: hosts,
-        servesHere: servesHere, service: service, shares: shares, skipped: skipped
+        servesHere: servesHere, service: service, shares: shares, skipped: skipped,
+        accessPending: accessPending
     )
 }
 
@@ -47,20 +49,46 @@ func makeShare(
     url: String = "https://s.han.ws/abc123/notes.txt",
     kind: String = "snapshot",
     ownHost: String? = nil,
-    expires: Int = 0
+    expires: Int = 0,
+    access: String? = nil
 ) -> Share {
-    Share(id: id, name: name, url: url, kind: kind, ownHost: ownHost, expires: expires)
+    Share(id: id, name: name, url: url, kind: kind, ownHost: ownHost, expires: expires, access: access)
 }
 
-/// Loads the hand-written `share state` fixture. TASK-005 will overwrite this file with real
-/// CLI output later; decode tests assert on its shape (one of each share category), not on
-/// hardcoded ids, so they keep passing once that happens.
+/// One profile entry: its `state`, or its `error` line (the JSON shape the CLI emits is
+/// one or the other; tests build both with `init` since the decode path is covered in
+/// SnapshotDecodeTests).
+func makeEntry(name: String, state: Snapshot? = nil, error: String? = nil) -> ProfileEntry {
+    ProfileEntry(name: name, state: state, error: error)
+}
+
+/// A `profiles --json` listing over the given entries.
+func makeProfiles(_ entries: [ProfileEntry], schema: Int = 1) -> ProfilesSnapshot {
+    ProfilesSnapshot(schema: schema, profiles: entries)
+}
+
+/// One-entry-per-name convenience wrapper.
+func makeProfiles(_ named: [(String, Snapshot)]) -> ProfilesSnapshot {
+    ProfilesSnapshot(schema: 1, profiles: named.map { ProfileEntry(name: $0.0, state: $0.1, error: nil) })
+}
+
+/// Loads the `share state` fixture.
 func loadFixtureSnapshot() throws -> Snapshot {
     guard let url = Bundle.module.url(forResource: "state", withExtension: "json") else {
         throw NSError(domain: "TestSupport", code: 1, userInfo: [NSLocalizedDescriptionKey: "fixture not found"])
     }
     let data = try Data(contentsOf: url)
     return try JSONDecoder().decode(Snapshot.self, from: data)
+}
+
+/// Loads the `share profiles --json` fixture, saved from a real run on the Mini (default
+/// `not_setup`, `dfoundation` serving a gated share).
+func loadFixtureProfiles() throws -> ProfilesSnapshot {
+    guard let url = Bundle.module.url(forResource: "profiles", withExtension: "json") else {
+        throw NSError(domain: "TestSupport", code: 1, userInfo: [NSLocalizedDescriptionKey: "fixture not found"])
+    }
+    let data = try Data(contentsOf: url)
+    return try JSONDecoder().decode(ProfilesSnapshot.self, from: data)
 }
 
 /// A plain (non-async) thread-safe string accumulator for tests that collect output streamed

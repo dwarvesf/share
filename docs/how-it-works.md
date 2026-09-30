@@ -102,8 +102,10 @@ servers on one port would split requests silently); that guard covers the defaul
 profile too. `share profiles` lists the default and every directory under
 `~/.config/share/profiles` with its state and host, read through each profile's own
 `share state`. `share teardown` on a named profile also removes its config dir when
-empty; the root with its shares stays, as for the default. Share Bar watches the
-default profile only; a monitor for a named profile watches its launchd label.
+empty; the root with its shares stays, as for the default. Share Bar reads every
+profile in one `profiles --json` call and renders a section per profile; the status
+icon shows the worst health across sections, while `not_setup` and elsewhere
+profiles stay neutral and never darken it on their own.
 Why a profile is a path prefix rather than a config key: [ADR-0005](decisions/ADR-0005-profile-is-a-path-prefix.md).
 
 ## Lifecycle of a share
@@ -188,8 +190,14 @@ if any, stays until removed in the dashboard.
 
 ## `share state`
 
-The menu bar app never reads share's files. It runs `share state`, a read-only verb
-that prints a snapshot and exits 0 in every state: not set up, stopped, or serving.
+The menu bar app never reads share's files. It runs `share profiles --json`, a read-only
+verb that prints every profile's `state` snapshot (or a per-profile error line) and exits
+0; each `state` object is the same read-only snapshot the `share state` verb prints:
+not set up, stopped, or serving. Every per-profile call the app makes carries
+`--profile <name>` before the verb, `default` included, and its children drop the
+location overrides (`SHARE_ROOT`, `SHARE_CONFIG_DIR`, `SHARE_PORT`, `SHARE_HOSTNAME`,
+`SHARE_HOSTS`, `SHARE_SERVICE_LABEL`) plus `SHARE_PROFILE`, so no verb resolves a setup
+the menu did not show.
 The app changes anything only by running share's normal verbs (`add`, `rm`, `refresh`,
 `start`, `stop`, `setup`); why that split exists: [ADR-0003](decisions/ADR-0003-menu-bar-reads-through-cli.md).
 

@@ -1,51 +1,86 @@
 import XCTest
 @testable import ShareBarCore
 
-/// Decode tests read the on-disk fixture (`Fixtures/state.json`, hand-written from the spec's
-/// JSON example) and assert on its *shape*: one snapshot share, one live share, one own-host
-/// share, one `.md` share rendered to `.html`, plus an unknown top-level field. TASK-005 will
-/// overwrite that file with real `share state` output; every assertion here still holds as
-/// long as the real output keeps at least one row of each category, so none of it hardcodes
-/// the fixture's specific ids.
+/// Decode tests read the on-disk fixtures: `Fixtures/profiles.json`, saved from a real
+/// `share profiles --json` run on the Mini (default `not_setup`, `dfoundation` serving a
+/// gated share), and `Fixtures/state.json` for the single-state decode. Assertions are on
+/// shape, not hardcoded ids.
 final class SnapshotDecodeTests: XCTestCase {
-    func testDecodesTopLevelFieldsAndIgnoresTheUnknownExtraField() throws {
-        // The fixture carries an extra top-level "cloudflared_version" field with no matching
-        // property; a successful decode here is the proof it was ignored rather than failing.
-        let snapshot = try loadFixtureSnapshot()
+    func testDecodesTheProfilesListing() throws {
+        let snapshot = try loadFixtureProfiles()
 
         XCTAssertEqual(snapshot.schema, 1)
-        XCTAssertEqual(snapshot.state, "serving")
-        XCTAssertTrue(snapshot.ready)
-        XCTAssertEqual(snapshot.mode, "named")
-        XCTAssertEqual(snapshot.host, "s.han.ws")
-        XCTAssertFalse(snapshot.hosts.isEmpty)
-        XCTAssertTrue(snapshot.servesHere)
-        XCTAssertTrue(snapshot.service)
-        XCTAssertNil(snapshot.skipped)
+        XCTAssertEqual(snapshot.profiles.map(\.name), ["default", "dfoundation"])
+        XCTAssertEqual(snapshot.profiles[0].state?.state, "not_setup")
+        XCTAssertEqual(snapshot.profiles[1].state?.state, "serving")
+        XCTAssertEqual(snapshot.profiles[1].state?.host, "s.d.foundation")
     }
 
-    func testFixtureCoversOneShareOfEachRequiredCategory() throws {
-        let snapshot = try loadFixtureSnapshot()
+    func testDecodesAccessAndAccessPending() throws {
+        let snapshot = try loadFixtureProfiles()
 
-        XCTAssertGreaterThanOrEqual(snapshot.shares.count, 3)
-        for share in snapshot.shares {
-            XCTAssertFalse(share.id.isEmpty)
-            XCTAssertFalse(share.url.isEmpty)
-        }
-
-        XCTAssertTrue(snapshot.shares.contains { $0.kind == "snapshot" }, "expected a snapshot share")
-        XCTAssertTrue(snapshot.shares.contains { $0.kind == "live" }, "expected a live share")
-        XCTAssertTrue(snapshot.shares.contains { $0.ownHost != nil }, "expected an own-host share")
-        XCTAssertTrue(
-            snapshot.shares.contains { $0.name.hasSuffix(".md") && $0.url.hasSuffix(".html") },
-            "expected a .md share rendered to .html"
+        XCTAssertEqual(snapshot.profiles[1].state?.accessPending, 0)
+        let gated = snapshot.profiles[1].state?.shares.first { $0.access != nil }
+        XCTAssertEqual(gated?.access, "group:dwarves-ops", "the fixture's gated share decodes its rule")
+        let publicShare = try JSONDecoder().decode(
+            Share.self,
+            from: Data(#"{"id":"a1","name":"n","url":"u","kind":"snapshot","own_host":null,"expires":0}"#.utf8)
         )
+        XCTAssertNil(publicShare.access, "a share with no access key decodes as public")
+    }
+
+    func testUnknownExtraFieldsAreIgnoredAtEveryLevel() throws {
+        let json = """
+        {"schema":1,"profiles":[
+          {"name":"a","extra":1,"state":{"schema":1,"state":"stopped","ready":false,
+            "mode":"named","host":null,"hosts":"","serves_here":false,"service":false,
+            "access_pending":0,"extra":2,"shares":[
+              {"id":"a1","name":"n","url":"u","kind":"snapshot","own_host":null,"expires":0,"extra":3}
+            ]}},
+          {"name":"b","error":"bad name","extra":4}
+        ],"extra":5}
+        """
+        let snapshot = try JSONDecoder().decode(ProfilesSnapshot.self, from: Data(json.utf8))
+
+        XCTAssertEqual(snapshot.profiles.count, 2)
+        XCTAssertEqual(snapshot.profiles[0].state?.shares.count, 1)
+        XCTAssertEqual(snapshot.profiles[1].error, "bad name")
+    }
+
+    func testNewerStateSchemaConfinesUpdateShareBarToItsOwnEntry() throws {
+        let json = """
+        {"schema":1,"profiles":[
+          {"name":"a","state":{"schema":2,"state":"serving","shares":[]}},
+          {"name":"b","state":{"schema":1,"state":"serving","ready":true,"mode":"named",
+            "host":"h.example.com","hosts":"h","serves_here":true,"service":false,
+            "access_pending":0,"shares":[]}}
+        ]}
+        """
+        let snapshot = try JSONDecoder().decode(ProfilesSnapshot.self, from: Data(json.utf8))
+
+        XCTAssertEqual(snapshot.profiles[0].error, "Update Share Bar")
+        XCTAssertNil(snapshot.profiles[0].state)
+        XCTAssertEqual(snapshot.profiles[1].state?.state, "serving", "the good entry is intact")
+    }
+
+    func testUnreadableStateIsConfinedToItsOwnEntry() throws {
+        let json = """
+        {"schema":1,"profiles":[
+          {"name":"a","state":{"schema":1,"state":"serving"}},
+          {"name":"b","state":{"state":"serving","shares":[]}},
+          {"name":"c","state":{"schema":1,"state":"serving","ready":true,"mode":"named",
+            "host":"h.example.com","hosts":"h","serves_here":true,"service":false,
+            "access_pending":0,"shares":[]}}
+        ]}
+        """
+        let snapshot = try JSONDecoder().decode(ProfilesSnapshot.self, from: Data(json.utf8))
+
+        XCTAssertEqual(snapshot.profiles[0].error, "state not readable", "missing shares")
+        XCTAssertEqual(snapshot.profiles[1].error, "state not readable", "missing schema")
+        XCTAssertEqual(snapshot.profiles[2].state?.state, "serving", "the good entry is intact")
     }
 
     func testDecodesANonZeroSkippedCountAlongsideOneShare() throws {
-        // The spec's "skipped" field is present only when non-zero (malformed index rows the
-        // state loop dropped); this is a minimal inline snapshot rather than the shared
-        // fixture, since that fixture always decodes with no skipped rows.
         let json = """
         {
           "schema": 1,
@@ -76,12 +111,12 @@ final class SnapshotDecodeTests: XCTestCase {
     }
 
     func testFixtureBuildsAWorkingMenuModel() throws {
-        // Not a MenuModel-rules test (see MenuModelHeaderTests / RowAndModelRulesTests for
-        // those); just confirms the decoded fixture flows end to end into a model.
-        let snapshot = try loadFixtureSnapshot()
-        let model = MenuModel(snapshot: snapshot, failure: nil, now: Date())
+        // Not a MenuModel-rules test (see MenuModelHeaderTests / SectionTests for those);
+        // just confirms the decoded fixture flows end to end into a model.
+        let snapshot = try loadFixtureProfiles()
+        let model = MenuModel(profiles: snapshot, failure: nil, now: Date())
 
-        XCTAssertEqual(model.rows.count, snapshot.shares.count)
-        XCTAssertEqual(model.more, 0)
+        XCTAssertEqual(model.sections.count, 2)
+        XCTAssertEqual(model.sections[1].rows.count, snapshot.profiles[1].state?.shares.count)
     }
 }
