@@ -2089,6 +2089,106 @@ r2_no_local() { # an r2 profile has no local server to run or manage
   [[ $backend != r2 ]] || die "an r2 profile has no local server; the links live in Cloudflare (share ls, share profiles)"
 }
 
+r2_md5() { # r2_md5 <file>: an etag-shaped lowercase hex
+  if command -v md5sum >/dev/null; then md5sum "$1" | cut -d' ' -f1; else md5 -q "$1"; fi
+}
+
+r2_url() { # r2_url <key>: sets r2_url_out; the key through urlenc, only / stays literal
+  urlenc "$1"
+  printf -v r2_url_out '%s/%s/%s' "$(cfg r2_endpoint || true)" "$(cfg bucket || true)" "$urlenc_out"
+}
+
+r2_creds() { # r2_creds: the publisher pair into r2_key_id/r2_secret; the token never reaches argv, a file, or output
+  r2_key_id="${SHARE_R2_KEY_ID:-$(cfg r2_key_id || true)}"
+  local tok="${SHARE_R2_TOKEN:-}" c
+  [[ -z $tok ]] && { c="$(cfg r2_token_cmd || true)"; [[ -n $c ]] && tok="$(eval "$c" 2>/dev/null)"; }
+  [[ -n $r2_key_id && -n $tok ]] || return 1
+  r2_secret="$(printf '%s' "$tok" | shasum -a 256 | cut -d' ' -f1)"
+}
+
+r2_call() { # r2_call METHOD KEY [ARG] [curl args...]: one S3 call on cf_try's globals; LIST takes <prefix> [continuation]; 429 and 5xx retried, Retry-After capped at 30s
+  cf_body="" cf_code=000 cf_err="" r2_etag=""
+  [[ $backend == r2 ]] || { cf_err=backend; return 1; }
+  if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then
+    if [[ $tunnel != 0 || $host_name != *.test ]]; then
+      echo "share: SHARE_R2_DRY=1 is a test seam for SHARE_TUNNEL=0 and a .test hostname only; the r2 call was refused; unset it" >&2
+      return 1
+    fi
+    r2_dry "$@"; return $?
+  fi
+  local meth=$1 key=$2 arg3=${3:-} url hdrs i ra xmeth=$1
+  r2_creds || { echo "share: no r2 publisher token for $host_name (needs r2_key_id and a token source in the profile config)" >&2; return 1; }
+  hdrs="$(mktemp "${TMPDIR:-/tmp}/share-r2h.XXXXXX")"
+  local args=()
+  case $meth in
+    LIST) urlenc "$key"; url="$(cfg r2_endpoint)/$(cfg bucket)?list-type=2&prefix=$urlenc_out&encoding-type=url&max-keys=1000"; xmeth=GET
+      [[ -n $arg3 ]] && { urlenc "$arg3"; url+="&continuation-token=$urlenc_out"; } ;;
+    *) r2_url "$key"; url=$r2_url_out; [[ -n $arg3 ]] && args+=(--upload-file "$arg3") ;;
+  esac
+  for i in 1 2 3; do
+    cf_body="$(curl -sS --max-time 60 -D "$hdrs" -w '\n%{http_code}' -X "$xmeth" "$url" \
+      --aws-sigv4 'aws:amz:auto:s3' -K <(printf 'user = "%s:%s"\n' "$r2_key_id" "$r2_secret") \
+      "${args[@]+"${args[@]}"}" "${@:4}" 2>/dev/null)" || true
+    cf_code="${cf_body##*$'\n'}"; cf_body="${cf_body%$'\n'*}"
+    [[ $cf_code == 429 || $cf_code == 5?? ]] || break
+    [[ $i -lt 3 ]] || break
+    ra="$(awk 'tolower($1)=="retry-after:"{gsub(/\r/,"",$2); print $2; exit}' "$hdrs")"
+    [[ $ra =~ ^[0-9]+$ ]] || ra=0; (( ra > 30 )) && ra=30
+    sleep "$ra"
+  done
+  r2_etag="$(sed -n 's/^[Ee][Tt][Aa][Gg]: //p' "$hdrs" | tr -d '"\r' | head -1)"
+  rm -f "$hdrs"
+  cf_err="$(sed -n 's:.*<Code>\([^<]*\)</Code>.*:\1:p' <<<"$cf_body" | head -1)"
+}
+
+r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "METHOD key" line per call; etags and conditional headers honored
+  local meth=$1 key=$2 arg3=${3:-} d="${SHARE_R2_DRY_DIR:-$root/r2-dry}" f h k rest
+  mkdir -p "$d" "$root"
+  if [[ ${SHARE_R2_DRY_PAUSE:-} == "$meth $key" ]]; then
+    local w=0
+    while [[ ! -f $d/.resume && $w -lt 600 ]]; do sleep 0.05; w=$((w + 1)); done
+  fi
+  printf '%s %s\n' "$meth" "$key" >>"$root/r2-calls.log"
+  cf_body="" cf_code=200 cf_err="" r2_etag=""
+  f="$d/$key"
+  case $meth in
+    PUT)
+      for h in "${@:4}"; do
+        case "$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')" in
+          -h) ;;
+          if-none-match:\ \*) [[ -e $f ]] && { cf_code=412 cf_err=PreconditionFailed; return 0; } ;;
+          if-match:*) [[ -e $f && $h == *"$(r2_md5 "$f")"* ]] || { cf_code=412 cf_err=PreconditionFailed; return 0; } ;;
+        esac
+      done
+      mkdir -p "${f%/*}"
+      [[ -n $arg3 && -f $arg3 ]] && cp "$arg3" "$f" || : >"$f"
+      [[ ${SHARE_R2_DRY_PUT:-} == lost ]] && { cf_code=000; return 0; }
+      r2_etag="$(r2_md5 "$f")" ;;
+    GET) [[ -e $f ]] || { cf_code=404 cf_err=NoSuchKey; return 0; }
+      cf_body="$(cat "$f")"; r2_etag="$(r2_md5 "$f")" ;;
+    HEAD) [[ -e $f ]] || { cf_code=404 cf_err=NoSuchKey; return 0; }
+      r2_etag="$(r2_md5 "$f")" ;;
+    DELETE) [[ ${SHARE_R2_DRY_DELETE:-} == lost ]] && { cf_code=000; return 0; }
+      rm -f "$f"; cf_code=204 ;;
+    LIST)
+      [[ ${SHARE_R2_DRY_LIST:-} == 500 ]] && { cf_code=500 cf_err=InternalError; return 0; }
+      local all="" count=0 last=""
+      while IFS= read -r k; do
+        [[ $k == "$key"* ]] && [[ -z $arg3 || $k > $arg3 ]] && all+="$k"$'\n'
+      done < <(cd "$d" && find . -type f ! -name '.resume' ! -name 'r2-calls.log' | sed 's|^\./||' | LC_ALL=C sort)
+      cf_body='<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>dry</Name><Prefix>'"$key"'</Prefix><MaxKeys>1000</MaxKeys><EncodingType>url</EncodingType>'
+      while IFS= read -r k; do
+        [[ -n $k ]] || continue
+        if [[ $count -ge 1000 ]]; then cf_body+='<IsTruncated>true</IsTruncated><NextContinuationToken>'"$last"'</NextContinuationToken>'; break; fi
+        urlenc "$k"; cf_body+='<Contents><Key>'"$urlenc_out"'</Key><ETag>"'"$(r2_md5 "$d/$k")"'"</ETag><Size>'"$(wc -c <"$d/$k" | tr -d ' ')"'</Size></Contents>'
+        last="$k"; count=$((count + 1))
+      done <<<"$all"
+      [[ $count -lt 1000 ]] && cf_body+='<IsTruncated>false</IsTruncated>'
+      cf_body+="<KeyCount>$count</KeyCount></ListBucketResult>" ;;
+    *) cf_code=400 cf_err=NotImplemented ;;
+  esac
+}
+
 cmd_setup_r2() { # cmd_setup_r2 <force> <bucket> <tname> <login> <service> <quick>: every refusal before the first write
   local force=$1 bucket=$2 tname=$3 login=$4 service=$5 quick=$6
   local rusage="usage: share setup <hostname> --backend r2 --bucket <name> [--force]"
@@ -2385,6 +2485,7 @@ case "${1:-status}" in
   rm) cmd_rm "$(id_of "${2:-}")" ;;
   hits) cmd_hits "$(id_of "${2:-}")" ;;
   prune) cmd_prune ;;
+  r2-call) shift; rc=0; r2_call "$@" || rc=$?; printf 'code=%s etag=%s\n' "$cf_code" "$r2_etag"; [[ -n $cf_body ]] && printf '%s\n' "$cf_body"; exit "$rc" ;;
   start) cmd_start ;;
   stop) cmd_stop ;;
   status) cmd_status ;;

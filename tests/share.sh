@@ -1736,6 +1736,110 @@ else
   echo "  SKIP  origin/main not fetched; byte-identity row skipped"
 fi
 
+echo "=== r2 backend: dry seam and r2_call ==="
+DRYD="$WORK/r2-dry-bucket"; mkdir -p "$DRYD"
+r2d() { # r2d <verb...>: the r2 profile with the dry bucket seam
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND \
+    HOME="$R2H" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$DRYD" bash "$SH" --profile r2x "$@"
+}
+printf 'backend=r2\nhostname=r2x.example.test\nzone=example.test\nbucket=ok-bucket\nport=r2\nr2_endpoint=https://acct.example.r2.cloudflarestorage.com\nr2_key_id=keyid42\n' >"$r2conf"
+rlog="$R2H/share/profiles/r2x/r2-calls.log"
+out=$(r2d r2-call PUT m/a1b2c3 "$WORK/wt/one.md" 2>&1); rc=$?
+check "dry PUT 200" "0" "$rc"
+check "dry PUT code" "code=200" "$(head -1 <<<"$out" | cut -d' ' -f1)"
+check "dry object written" "1" "$([[ -f $DRYD/m/a1b2c3 ]] && echo 1 || echo 0)"
+check "dry etag is md5 hex" "1" "$([[ $out =~ etag=[0-9a-f]{32} ]] && echo 1 || echo 0)"
+check "dry log has the call" "1" "$(grep -c '^PUT m/a1b2c3$' "$rlog")"
+out=$(r2d r2-call GET m/a1b2c3 2>&1); rc=$?
+check "dry GET 200" "0" "$rc"
+check "dry GET body" "single" "$(sed -n 2p <<<"$out")"
+out=$(r2d r2-call GET m/missing 2>&1); rc=$?
+check "dry GET missing 404" "code=404" "$(head -1 <<<"$out" | cut -d' ' -f1)"
+out=$(r2d r2-call PUT m/a1b2c3 "$WORK/wt/one.md" -H 'If-None-Match: *' 2>&1); rc=$?
+check "dry PUT if-none-match 412" "code=412" "$(head -1 <<<"$out" | cut -d' ' -f1)"
+check "if-none-match did not write" "1" "$(cmp -s "$DRYD/m/a1b2c3" "$WORK/wt/one.md" && echo 1 || echo 0)"
+etag=$(r2d r2-call HEAD m/a1b2c3 | sed 's/.*etag=\([0-9a-f]*\).*/\1/')
+out=$(r2d r2-call PUT m/a1b2c3 "$WORK/wt/one.md" -H "If-Match: \"$etag\"" 2>&1); rc=$?
+check "dry PUT if-match right etag 200" "code=200" "$(head -1 <<<"$out" | cut -d' ' -f1)"
+out=$(r2d r2-call PUT m/a1b2c3 "$WORK/wt/one.md" -H 'If-Match: "0000"' 2>&1); rc=$?
+check "dry PUT if-match wrong etag 412" "code=412" "$(head -1 <<<"$out" | cut -d' ' -f1)"
+printf 'x\n' >"$WORK/weird.txt"
+out=$(r2d r2-call PUT 'o/a1b2c3.12345678/a b%q?.txt' "$WORK/weird.txt" 2>&1); rc=$?
+check "dry weird-key PUT" "0" "$rc"
+out=$(r2d r2-call GET 'o/a1b2c3.12345678/a b%q?.txt' 2>&1); rc=$?
+check "dry weird-key GET body" "x" "$(sed -n 2p <<<"$out")"
+out=$(r2d r2-call LIST 'o/a1b2c3.' 2>&1); rc=$?
+check "dry LIST 200" "code=200" "$(head -1 <<<"$out" | cut -d' ' -f1)"
+check "dry LIST encoded key" "1" "$(grep -c 'a%20b%25q%3F.txt' <<<"$out")"
+out=$(SHARE_R2_DRY_LIST=500 r2d r2-call LIST 'o/' 2>&1); rc=$?
+check "dry LIST=500 knob" "code=500" "$(head -1 <<<"$out" | cut -d' ' -f1)"
+out=$(SHARE_R2_DRY_PUT=lost r2d r2-call PUT m/lost99 "$WORK/wt/one.md" 2>&1); rc=$?
+check "dry PUT lost answers 000" "code=000" "$(head -1 <<<"$out" | cut -d' ' -f1)"
+check "dry PUT lost still commits" "1" "$([[ -f $DRYD/m/lost99 ]] && echo 1 || echo 0)"
+out=$(SHARE_R2_DRY_DELETE=lost r2d r2-call DELETE m/a1b2c3 2>&1); rc=$?
+check "dry DELETE lost answers 000" "code=000" "$(head -1 <<<"$out" | cut -d' ' -f1)"
+check "dry DELETE lost keeps the object" "1" "$([[ -f $DRYD/m/a1b2c3 ]] && echo 1 || echo 0)"
+out=$(r2d r2-call DELETE m/a1b2c3 2>&1); rc=$?
+check "dry DELETE 204" "code=204" "$(head -1 <<<"$out" | cut -d' ' -f1)"
+check "dry object gone" "0" "$([[ -f $DRYD/m/a1b2c3 ]] && echo 1 || echo 0)"
+SHARE_R2_DRY_PAUSE="PUT m/paused" r2d r2-call PUT m/paused "$WORK/wt/one.md" >/dev/null 2>&1 &
+ppid=$!
+sleep 0.3
+check "dry PAUSE knob holds the call" "0" "$([[ -f $DRYD/m/paused ]] && echo 1 || echo 0)"
+sleep 0.6; : >"$DRYD/.resume"; wait "$ppid"
+check "dry PAUSE resumes on the file" "1" "$([[ -f $DRYD/m/paused ]] && echo 1 || echo 0)"
+rm -f "$DRYD/.resume"
+out=$(env -u SHARE_R2_DRY -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND \
+    HOME="$R2H" SHARE_TUNNEL=0 SHARE_R2_DRY_DIR="$DRYD" bash "$SH" --profile r2x r2-call GET m/x 2>&1); rc=$?
+check "no dry seam means the live path" "1" "$rc"
+check "live path names the missing token" "1" "$(grep -c 'no r2 publisher token' <<<"$out")"
+out=$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND \
+    HOME="$R2H" SHARE_TUNNEL=1 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$DRYD" bash "$SH" --profile r2x r2-call GET m/x 2>&1); rc=$?
+check "dry seam refuses with the tunnel on" "1" "$rc"
+check "the refusal names the seam" "1" "$(grep -c 'SHARE_R2_DRY=1 is a test seam' <<<"$out")"
+out=$(r2d r2-call FROBNICATE m/x 2>&1); rc=$?
+check "unknown dry method 400" "code=400" "$(head -1 <<<"$out" | cut -d' ' -f1)"
+mkdir -p "$R2H/.config/share/profiles/tun"
+printf 'hostname=tun.example.test\nport=8788\n' >"$R2H/.config/share/profiles/tun/config"
+out=$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND \
+    HOME="$R2H" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$DRYD" bash "$SH" --profile tun r2-call GET m/x 2>&1); rc=$?
+check "r2-call refuses on a non-r2 profile" "1" "$rc"
+
+echo "=== r2 backend: live transport, retries, secrets ==="
+shimd="$WORK/shim"; mkdir -p "$shimd"
+cat >"$shimd/curl" <<'SHIM'
+#!/bin/bash
+{ for a in "$@"; do printf '%s\n' "$a"; done; printf -- '---\n'; } >>"$SHIM_LOG"
+nfile="$SHIM_LOG.count"
+n=$(( $(cat "$nfile" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$nfile"
+hdrs=""; prev=""
+for a in "$@"; do [[ $prev == -D ]] && hdrs="$a"; prev="$a"; done
+[[ -n $hdrs ]] && printf 'HTTP/1.1 200 OK\r\nRetry-After: 0\r\nETag: "deadbeef01"\r\n' >"$hdrs"
+if [[ ${SHIM_ALWAYS:-0} == 1 ]]; then printf '<Error/>\n500'
+elif [[ $n -lt 3 ]]; then printf '<Error/>\n429'
+else printf 'body-ok\n200'; fi
+SHIM
+chmod +x "$shimd/curl"
+r2l() { # r2l <verb...>: the r2 profile through the curl shim, sentinel token in the environment only
+  env -u SHARE_R2_DRY -u XDG_CONFIG_HOME -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u SHARE_PROFILE -u SHARE_BACKEND \
+    HOME="$R2H" SHARE_TUNNEL=0 SHARE_R2_TOKEN='SentInelT0ken_zzz' SHIM_LOG="$WORK/shim.log" PATH="$shimd:$PATH" bash "$SH" --profile r2x "$@"
+}
+: >"$WORK/shim.log"; rm -f "$WORK/shim.log.count"
+out=$(r2l r2-call PUT m/shim01 "$WORK/wt/one.md" 2>&1); rc=$?
+check "shim: two 429s retried to a 200" "0" "$rc"
+check "shim: final code 200" "code=200" "$(head -1 <<<"$out" | cut -d' ' -f1)"
+check "shim: three calls for 429 429 200" "3" "$(grep -c '^---$' "$WORK/shim.log")"
+check "shim: the url is endpoint bucket key" "3" "$(grep -c '^https://acct.example.r2.cloudflarestorage.com/ok-bucket/m/shim01$' "$WORK/shim.log")"
+check "shim: sigv4 amz auto s3" "3" "$(grep -c '^aws:amz:auto:s3$' "$WORK/shim.log")"
+check "shim: credential config is an fd" "3" "$(grep -A1 '^-K$' "$WORK/shim.log" | grep -c 'dev/fd')"
+check "shim: sentinel never in argv" "0" "$(grep -c 'SentInelT0ken' "$WORK/shim.log")"
+check "shim: sentinel never in output" "0" "$(grep -c 'SentInelT0ken' <<<"$out")"
+check "shim: sentinel in no file under home" "0" "$(grep -rl 'SentInelT0ken' "$R2H" 2>/dev/null | wc -l | tr -d ' ')"
+: >"$WORK/shim.log"; rm -f "$WORK/shim.log.count"
+out=$(SHIM_ALWAYS=1 r2l r2-call GET m/x 2>&1); rc=$?
+check "shim: persistent 500 gives up after three" "3" "$(grep -c '^---$' "$WORK/shim.log")"
+check "shim: final code 500" "code=500" "$(head -1 <<<"$out" | cut -d' ' -f1)"
+
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then
   wout="$(node "$(dirname "$SH")/../tests/worker.mjs" 2>&1)"; wrc=$?

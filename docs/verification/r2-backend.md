@@ -29,6 +29,18 @@ Checks:  68 ok, 0 FAIL (PASS): Worker sha and version self-checks, node --check,
 Verdict: PASS
 ```
 
+The `=== r2 backend: dry seam and r2_call ===` section drives the directory
+bucket: PUT/GET/HEAD/DELETE with md5 etags, `If-None-Match` and `If-Match` 412s,
+an `a b%q?.txt` key round trip, url-encoded LIST XML, the PUT/DELETE `lost`
+knobs (commit vs no commit, both answering 000), `SHARE_R2_DRY_LIST=500`, the
+PAUSE interleaving knob, the refusal of `SHARE_R2_DRY` with the tunnel on, and
+`r2-call` refusing a non-r2 profile. The `=== live transport ===` section runs
+`r2_call` through a `curl` shim on PATH: two 429s retried to a 200 (three calls,
+Retry-After read from the `-D` header file), a persistent 500 giving up after
+three, the `endpoint/bucket/urlenc(key)` URL, `--aws-sigv4 aws:amz:auto:s3`, the
+credential config reaching curl as `/dev/fd/N`, and a sentinel token absent from
+argv, stdout, stderr, and every file under the test HOME.
+
 The new `=== r2 backend ===` sections cover row 2 (every setup argument refusal:
 missing and bad `--bucket`, `--quick`, `--no-service`, `--login`, `--tunnel-name`,
 a bogus `--backend`, `--bucket` without `--backend r2`, setup over a tunnel config,
