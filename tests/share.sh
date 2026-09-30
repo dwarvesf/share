@@ -1607,6 +1607,135 @@ check "skill teaches --profile and share profiles" "1" "$(bash "$SH" skill | gre
 SHARE_SKILL_DIR="$WORK/skilldir" bash "$SH" skill --install >/dev/null
 check "skill --install writes SKILL.md" "share" "$(sed -n 's/^name: //p' "$WORK/skilldir/SKILL.md")"
 
+echo "=== r2 backend: setup argument refusals ==="
+R2H="$WORK/r2home"; mkdir -p "$R2H"
+r2p() { # r2p <verb...>: the r2 test profile under its own HOME, no SHARE_* path or port overrides
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND \
+    HOME="$R2H" SHARE_TUNNEL=0 bash "$SH" --profile r2x "$@"
+}
+r2conf="$R2H/.config/share/profiles/r2x/config"
+out=$(r2p setup r2x.example.test --backend r2 2>&1); rc=$?
+check "r2 setup without --bucket refuses" "1" "$rc"
+check "r2 usage line printed" "1" "$(grep -c 'usage: share setup <hostname> --backend r2 --bucket <name>' <<<"$out")"
+out=$(r2p setup r2x.example.test --backend r2 --bucket Bad_Bucket 2>&1); rc=$?
+check "bad bucket name refuses" "1" "$rc"
+check "bad bucket named" "1" "$(grep -c 'bad bucket name' <<<"$out")"
+out=$(r2p setup r2x.example.test --backend r2 --bucket ok-bucket --quick 2>&1); rc=$?
+check "--backend r2 with --quick refuses" "1" "$rc"
+out=$(r2p setup r2x.example.test --backend r2 --bucket ok-bucket --no-service 2>&1); rc=$?
+check "--backend r2 with --no-service refuses" "1" "$rc"
+out=$(r2p setup r2x.example.test --backend r2 --bucket ok-bucket --login 2>&1); rc=$?
+check "--backend r2 with --login refuses" "1" "$rc"
+out=$(r2p setup r2x.example.test --backend r2 --bucket ok-bucket --tunnel-name t 2>&1); rc=$?
+check "--backend r2 with --tunnel-name refuses" "1" "$rc"
+out=$(r2p setup r2x.example.test --backend bogus --bucket ok-bucket 2>&1); rc=$?
+check "--backend bogus refuses" "1" "$rc"
+check "bogus backend named" "1" "$(grep -c -- "--backend must be" <<<"$out")"
+out=$(r2p setup r2x.example.test --bucket ok-bucket 2>&1); rc=$?
+check "--bucket without --backend r2 refuses" "1" "$rc"
+mkdir -p "${r2conf%/*}"
+printf 'hostname=r2x.example.test\ntunnel_id=abc123\nport=8787\n' >"$r2conf"
+out=$(r2p setup r2x.example.test --backend r2 --bucket ok-bucket 2>&1); rc=$?
+check "r2 setup over a tunnel config refuses" "1" "$rc"
+check "the refusal names teardown" "1" "$(grep -c 'teardown' <<<"$out")"
+check "tunnel config untouched by the refusal" "1" "$(grep -c 'tunnel_id=abc123' "$r2conf")"
+rm -f "$r2conf"
+out=$(r2p setup r2x.example.test --backend r2 --bucket ok-bucket 2>&1); rc=$?
+check "valid r2 args still exit 1 (stub)" "1" "$rc"
+check "the stub names the r2 backend" "1" "$(grep -c 'r2 backend: setup is not implemented yet' <<<"$out")"
+check "no config written" "0" "$([[ -f $r2conf ]] && echo 1 || echo 0)"
+printf 'backend=r2\nhostname=r2x.example.test\nzone=example.test\nbucket=ok-bucket\nport=r2\n' >"$r2conf"
+for verb in start stop serve; do
+  out=$(r2p "$verb" 2>&1); rc=$?
+  check "r2 profile: $verb refuses" "1" "$rc"
+  check "$verb names no local server" "1" "$(grep -c 'no local server' <<<"$out")"
+done
+out=$(r2p service install 2>&1); rc=$?
+check "r2 profile: service install refuses" "1" "$rc"
+check "install names no local server" "1" "$(grep -c 'no local server' <<<"$out")"
+out=$(r2p teardown --yes 2>&1); rc=$?
+check "r2 profile: teardown refuses" "1" "$rc"
+check "teardown names r2" "1" "$(grep -c 'r2 teardown is not implemented yet' <<<"$out")"
+out=$(r2p add 9999 2>&1); rc=$?
+check "r2 profile: live add refuses" "1" "$rc"
+check "live add names local" "1" "$(grep -c 'live shares stay local' <<<"$out")"
+out=$(r2p add "$WORK/wt/one.md" --host hh.example.test 2>&1); rc=$?
+check "r2 profile: --host add refuses" "1" "$rc"
+check "--host add names the tunnel" "1" "$(grep -c 'needs a named tunnel' <<<"$out")"
+out=$(r2p add "$WORK/wt/one.md" 2>&1); rc=$?
+check "r2 profile: file add still a stub" "1" "$rc"
+check "add stub names r2" "1" "$(grep -c 'r2 backend: add is not implemented yet' <<<"$out")"
+out=$(r2p setup other.example.test 2>&1); rc=$?
+check "tunnel setup on an r2 profile refuses" "1" "$rc"
+check "names the r2 backend" "1" "$(grep -c 'set up with the r2 backend' <<<"$out")"
+out=$(r2p setup --quick 2>&1); rc=$?
+check "quick setup on an r2 profile refuses" "1" "$rc"
+rm -f "$r2conf"
+
+echo "=== r2 backend: an older share refuses an r2 profile (compat) ==="
+main_bin="$WORK/share-main"
+if git -C "$(dirname "$SH")/.." show origin/main:bin/share >"$main_bin" 2>/dev/null; then
+  R22="$WORK/r22home"; mkdir -p "$R22/.config/share/profiles/r2x"
+  printf 'backend=r2\nhostname=r2x.example.test\nzone=example.test\nbucket=ok-bucket\nport=r2\n' >"$R22/.config/share/profiles/r2x/config"
+  r22() { # r22 <verb...>: origin/main's share against the r2 profile
+    env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND \
+      HOME="$R22" SHARE_TUNNEL=0 bash "$main_bin" --profile r2x "$@"
+  }
+  for verb in "add" "ls" "gated" "setup"; do
+    case $verb in
+      add) out=$(r22 add "$WORK/wt/one.md" 2>&1); rc=$? ;;
+      ls) out=$(r22 ls 2>&1); rc=$? ;;
+      gated) out=$(r22 add --access email:a@x.io "$WORK/wt/one.md" 2>&1); rc=$? ;;
+      setup) out=$(r22 setup 2>&1); rc=$? ;;
+    esac
+    check "old share dies at load: $verb" "1" "$rc"
+    check "the port sentinel is named: $verb" "1" "$(grep -c "port 'r2' is not a number" <<<"$out")"
+  done
+  check "nothing under the r2 profile's root" "0" "$([[ -d $R22/share/profiles/r2x ]] && echo 1 || echo 0)"
+else
+  [[ ${CI:-} == true ]] && check "origin/main fetched for the compat row" "yes" "missing"
+  echo "  SKIP  origin/main not fetched; compat rows skipped"
+fi
+
+echo "=== r2 backend: byte identity of existing installs (compat) ==="
+if [[ -s $main_bin ]]; then
+  CHOME="$WORK/compat-home"
+  compat_run() { # compat_run <bin> <tag>: one install's whole verb set under one HOME, artifacts into $WORK/compat-<tag>
+    local bin=$1 out="$WORK/compat-$2"
+    rm -rf "$CHOME" "$out" 2>/dev/null; mkdir -p "$CHOME" "$out"
+    local envs=(
+      -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_PROFILE -u SHARE_BACKEND -u XDG_CONFIG_HOME
+      "HOME=$CHOME" SHARE_TUNNEL=1 SHARE_LIVE_CHECK=0 SHARE_CLIPBOARD=0
+      "SHARE_TEST_PORT_BASE=$base" SHARE_FAKE_QUICK_URL=compat-q "SHARE_SERVICE_LABEL=share-selftest-$$" "SHARE_HOSTS=${h%%.*}"
+      "PATH=$QPATH"
+    )
+    env "${envs[@]}" bash "$bin" setup --quick --no-service >"$out/setup.out" 2>"$out/setup.err"
+    env "${envs[@]}" SHARE_TEST_IDS=c0a011 bash "$bin" add --ttl never "$WORK/wt/one.md" >"$out/add-file.out" 2>"$out/add-file.err"
+    env "${envs[@]}" SHARE_TEST_IDS=c0a012 bash "$bin" add --ttl never "$src" >"$out/add-dir.out" 2>"$out/add-dir.err"
+    env "${envs[@]}" SHARE_TEST_IDS=c0a013 bash "$bin" add --ttl never "$FIX_PORT" >"$out/add-live.out" 2>"$out/add-live.err"
+    env "${envs[@]}" SHARE_TEST_IDS=c0a014 SHARE_HOST_DRY=1 bash "$bin" add "$WORK/wt/one.md" --host hh.example.test >"$out/add-host.out" 2>"$out/add-host.err"
+    env "${envs[@]}" bash "$bin" ls >"$out/ls.out" 2>"$out/ls.err"
+    env "${envs[@]}" bash "$bin" state >"$out/state.out" 2>"$out/state.err"
+    env "${envs[@]}" bash "$bin" service install >"$out/svc.out" 2>"$out/svc.err"
+    env "${envs[@]}" bash "$bin" stop >/dev/null 2>&1
+    for f in .config/share/config share/index.tsv share/Caddyfile share/host-calls.log share/quick.url; do
+      [[ -f $CHOME/$f ]] && cp "$CHOME/$f" "$out/${f##*/}"
+    done
+    find "$CHOME/Library" "$CHOME/.config/systemd" -name '*.plist' -o -name 'foundation.d.share*' 2>/dev/null | while IFS= read -r p; do cp "$p" "$out/"; done
+    # the binary's own path is the one legitimate difference between the two installs;
+    # the realpath goes first: /private/var/... contains /var/... as a suffix
+    for b in "$(realpath "$bin")" "$bin"; do
+      find "$out" -type f -exec sed -i.bak "s|$b|SHAREBIN|g" {} + 2>/dev/null
+    done
+    find "$out" -name '*.bak' -delete 2>/dev/null; true
+  }
+  compat_run "$main_bin" main
+  compat_run "$SH" new
+  check "row 1: every artifact byte-identical" "" "$(diff -r "$WORK/compat-main" "$WORK/compat-new" 2>&1)"
+else
+  echo "  SKIP  origin/main not fetched; byte-identity row skipped"
+fi
+
 echo "=== stop ==="
 bash "$SH" stop >/dev/null
 check "stop takes links down" 000 "$(code "$md_url")"
