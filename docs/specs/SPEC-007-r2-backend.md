@@ -374,6 +374,12 @@ Then by hand: `tests/e2e-r2.sh` with the inputs above; its log goes to `docs/ver
 - DEC-003: the Worker source is embedded in `bin/share`, versioned by `WORKER_VERSION` plus `WORKER_SHA`; no `wrangler.toml`.
 - DEC-004: expiry is enforced per request by the Worker and cleaned up by any publisher's `ls` or `prune`; no Worker cron, because Access apps need a token the Worker must not hold.
 - DEC-005: `teardown` on r2 is local by default; destroying the team's backend needs `--purge` and the admin token.
+- DEC-006 (operator, 2026-09-30): the Dwarves r2 profile uses a new hostname `f.d.foundation`; `s.d.foundation` stays the tunnel profile on the Mini and keeps its links.
+- DEC-007 (operator): one bucket-scoped publisher token per teammate, with an expiry, created through the same prefilled-link onboarding as `share api-token`; a token that can list buckets beyond the share bucket is refused as a publisher token.
+- DEC-008 (operator): gated publishing needs account-wide Access: Apps and Policies Edit, so only named people hold that scope; ungated publishing needs the bucket token only.
+- DEC-009 (operator): the build adds the `share-*` Worker to the Dwarves Cloudflare inventory (the owner repo's topology doc), so an estate sweep never deletes it as unknown.
+- DEC-010 (operator): `share` warns when the deployed Worker's `WORKER_VERSION` is older than its own; the admin reruns setup to upgrade it.
+- DEC-011 (operator): same-origin scripting between shares on one host is accepted for v1, because only named teammates can publish; per-share subdomains are the upgrade path if an untrusted publisher is ever added.
 - Round 1 (seven fresh-context reviewers, 2026-09-30). Round 2 supersedes its first two rows where they differ:
 
 | Change | Why |
