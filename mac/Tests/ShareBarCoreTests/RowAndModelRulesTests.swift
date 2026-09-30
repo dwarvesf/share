@@ -166,6 +166,32 @@ final class RowAndModelRulesTests: XCTestCase {
         XCTAssertTrue(model.sections[1].showStop)
     }
 
+    func testAnR2ProfileOffersNeitherStartNorStop() throws {
+        // the shape `share state` prints on an r2 profile: serving, never serves_here
+        let json = """
+        {"schema":1,"profiles":[
+          {"name":"f","state":{"schema":1,"state":"serving","ready":true,"mode":"named",
+            "host":"f.example.test","hosts":"","serves_here":false,"service":false,
+            "access_pending":0,"backend":"r2","shares":[
+              {"id":"abc123","name":"n","url":"https://f.example.test/abc123/n","kind":"snapshot",
+               "own_host":null,"expires":0,"access":"email:a@x.io"}]}},
+          {"name":"t","state":{"schema":1,"state":"serving","ready":true,"mode":"named",
+            "host":"t.example.test","hosts":"h","serves_here":true,"service":false,
+            "access_pending":0,"shares":[]}}
+        ]}
+        """
+        let profiles = try JSONDecoder().decode(ProfilesSnapshot.self, from: Data(json.utf8))
+        XCTAssertEqual(profiles.profiles[0].state?.backend, "r2")
+        XCTAssertNil(profiles.profiles[1].state?.backend, "a tunnel state has no backend key")
+
+        let model = MenuModel(profiles: profiles, failure: nil, now: Date())
+        XCTAssertEqual(model.sections[0].health, .ok)
+        XCTAssertEqual(model.sections[0].rows.first?.access, "email:a@x.io")
+        XCTAssertFalse(model.sections[0].showStart)
+        XCTAssertFalse(model.sections[0].showStop, "the CLI refuses stop on an r2 profile")
+        XCTAssertTrue(model.sections[1].showStop, "a serving tunnel profile still offers Stop")
+    }
+
     func testShowSetUpFollowsTheNotServingRuleExceptForErrorSections() {
         let profiles = makeProfiles([
             makeEntry(name: "a", state: makeSnapshot(state: "stopped", servesHere: true)),

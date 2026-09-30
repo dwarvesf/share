@@ -2239,6 +2239,15 @@ out=$(r2a profiles 2>&1)
 check "row 14: profiles lists the r2 profile" "1" "$(grep -c $'^r2x\tserving\tr2x.example.test$' <<<"$out")"
 check "row 14: profiles lists the tunnel profile beside it" "1" "$(grep -c $'^tunx\tstopped\ttunx.example.test$' <<<"$out")"
 check "row 14: profiles reads no m/ for the r2 profile" "0 1" "$(grep -c '^LIST m/' "$rlog" || true) $(grep -c '^HEALTHZ$' "$rlog")"
+forge 130004 0 "access=00000000-0000-4000-8000-000000000a0a access_rule=email:a@x.io" "$aud64"
+out=$(r2a profiles --json 2>/dev/null); rc=$?
+check "profiles --json exits 0 beside a tunnel profile" "0" "$rc"
+check "profiles --json: the r2 entry's backend, host, state, and gated share" "r2 r2x.example.test serving false email:a@x.io" \
+  "$(jq -r '.profiles[] | select(.name == "r2x") | .state | "\(.backend) \(.host) \(.state) \(.serves_here) \([.shares[] | select(.id == "130004") | .access][0])"' <<<"$out")"
+check "profiles --json: the r2 entry lists every row" "130001 130002 130003 130004" "$(jq -r '.profiles[] | select(.name == "r2x") | [.state.shares[].id] | sort | join(" ")' <<<"$out")"
+check "profiles --json: the r2 entry equals its own state" "true" "$(jq --argjson own "$(r2a state 2>/dev/null)" '.profiles[] | select(.name == "r2x") | .state == $own' <<<"$out")"
+check "profiles --json: the tunnel entry has no backend key" "false" "$(jq '.profiles[] | select(.name == "tunx") | .state | has("backend")' <<<"$out")"
+rm -f "$DRYA/m/130004"
 mv -f "$R2H/.config/share/profiles/tunx/config" "$WORK/tunx.config"
 
 echo "=== r2 backend: admin setup (rows 3, 4, 20) ==="
