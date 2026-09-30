@@ -1888,6 +1888,9 @@ check "shim: sentinel in no file under home" "0" "$(grep -rl 'SentInelT0ken' "$R
 out=$(SHIM_ALWAYS=1 r2l r2-call GET m/x 2>&1); rc=$?
 check "shim: persistent 500 gives up after three" "3" "$(grep -c '^---$' "$WORK/shim.log")"
 check "shim: final code 500" "code=500" "$(head -1 <<<"$out" | cut -d' ' -f1)"
+: >"$WORK/shim.log"; rm -f "$WORK/shim.log.count"
+SHARE_STATE_BRIEF=1 r2l state >/dev/null 2>&1
+check "shim: the healthz probe resolves over DoH first (a new name's NXDOMAIN may sit in the local cache)" "2" "$(awk '/^---$/ {exit} {print}' "$WORK/shim.log" | grep -c -e '^--doh-url$' -e '/healthz$')"
 
 echo "=== r2 backend: put_tree, list, delete_prefix (row 26) ==="
 rm -rf "$DRYD"; mkdir -p "$DRYD"   # the r2_call section above leaves objects behind

@@ -2897,7 +2897,9 @@ r2_healthz() { # r2_healthz [secs]: hz_code (200 only for a "200 ok" body), hz_p
   fi
   local h b
   h="$(mktemp "${TMPDIR:-/tmp}/share-hz.XXXXXX")"
-  b="$(curl -sS --max-time "${1:-5}" -D "$h" "https://$host_name/healthz" 2>/dev/null)" || true
+  # DNS over HTTPS first, as live_check does: a new name's NXDOMAIN from before its record existed sits in the local cache
+  b="$(curl -sS --max-time "${1:-5}" --doh-url https://1.1.1.1/dns-query -D "$h" "https://$host_name/healthz" 2>/dev/null)" ||
+    b="$(curl -sS --max-time "${1:-5}" -D "$h" "https://$host_name/healthz" 2>/dev/null)" || true
   hz_code="$(awk 'NR == 1 {print $2}' "$h")"; hz_code="${hz_code:-000}"
   [[ $hz_code != 200 || $b == ok ]] || hz_code=000
   hz_pair="$(awk 'tolower($1) == "x-share-worker:" {sub(/\r$/, ""); print $2 " " $3; exit}' "$h")"
