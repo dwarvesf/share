@@ -23,11 +23,11 @@ Covers, in the new `profiles --json` blocks: exit 0 and parseable output, `schem
 ```
 Command: swift test --package-path mac
 Exit:    0
-Checks:  146 tests, 0 failures
+Checks:  152 tests, 0 failures
 Verdict: PASS
 ```
 
-Covers the matrix rows assigned to `swift test`: `ProfilesSnapshot` decode (fixture, unknown fields, newer entry schema -> `Update Share Bar`, unreadable state confined to its entry), `from(_:)` result mapping (missing CLI, TSV -> `.oldCLI`, brace-check, stderr rules), the `profiles --json` argv, coalescing plus the `fresh` no-join-then-rerun rule, `verbForLog`, the child environment strip with PATH/LANG/SHARE_CLIPBOARD rules, `Health` table precedence (`notSetUp` before `elsewhere`, neutral vs attention), worst-health icon, every header rule including `Working...` variants and the stale-snapshot case, section actions (`showStart`/`showStop`/`showSetUp`, per-profile command names, `access_pending`), row caps (25 / 10 each), the (profile, id) composite key, gated-row text and marker semantics, `AccessRule`/`PublishChoice`/`PublishForm` (eligibility, remembered profile and rule, login surviving a switch, quick-mode disable, button titles, add argv, relative-path refusal), `MutationOutcome` verbatim `detail`, `PublishMessage` batch/folder/file text, and `MutationQueue` JobToken (`cancel(job:)` reaching only its own job, stale token a no-op).
+Covers the matrix rows assigned to `swift test`: `ProfilesSnapshot` decode (fixture, unknown fields, newer entry schema -> `Update Share Bar`, unreadable state confined to its entry), `from(_:)` result mapping (missing CLI, TSV -> `.oldCLI`, brace-check, stderr rules), the `profiles --json` argv, coalescing plus the `fresh` no-join-then-rerun rule, `verbForLog`, the child environment strip with PATH/LANG/SHARE_CLIPBOARD rules, `Health` table precedence (`notSetUp` before `elsewhere`, neutral vs attention), worst-health icon, every header rule including `Working...` variants and the stale-snapshot case, section actions (`showStart`/`showStop`/`showSetUp`, per-profile command names, `access_pending`), row caps (25 / 10 each), the (profile, id) composite key, gated-row text and marker semantics, `AccessRule`/`PublishChoice`/`PublishForm` (eligibility, remembered profile and rule, login surviving a switch, quick-mode disable, button titles, add argv, relative-path refusal), `MutationOutcome` verbatim `detail`, `PublishMessage` batch/folder/file text, `MutationQueue` JobToken (`cancel(job:)` reaching only its own job, stale token a no-op), the refresh fold (row 14c: a good read, then `.oldCLI`, then `.cliNotFound`, through `ProfilesSnapshot.fold`, the same call the controller makes), a top-level `schema: 2` rendering like `.oldCLI`, `RefreshGate` (a `fresh` request during a poll runs when the poll ends), `--profile <name>` on every per-action argv, and row 19 against the real O1 block from `bin/share`'s `access_no_token`. Row 8 (the `Health` table) is one of these unit rows.
 
 ## Green run 3: app build + lint
 
@@ -36,6 +36,16 @@ Command: swift build --package-path mac
 Exit:    0 (Build complete)
 Command: shellcheck bin/share install.sh tests/share.sh tests/e2e.sh demo/render.sh mac/*.sh
 Exit:    0
+Verdict: PASS
+```
+
+## Green run 4: release build
+
+```
+Command: swift build -c release --package-path mac
+Exit:    0 (Build complete, 25.75s)
+Command: mac/build.sh 0.0.0-uat   (universal arm64 + x86_64, ad-hoc signed, no notarization)
+Exit:    0, bundle mac/build/Share Bar.app, copied to mac/build/ShareBar-uat.app for UAT
 Verdict: PASS
 ```
 
@@ -65,7 +75,18 @@ Result:  GREEN, 146 tests, 0 failures
 Verdict: PASS (mutate -> RED -> restore)
 ```
 
-## Not proven
+## Pending Han's UAT
 
-- UAT on a real login session (SPEC-006 rows 8 and 25): real menu rendering, a real drop and dialog, an Access-group add on the Mini's `dfoundation` profile, the stale-snapshot icon. These are the operator's manual checks; everything the spec assigns to `swift test` or `tests/share.sh` is green above.
+Everything the spec assigns to `swift test` or `tests/share.sh` is green above. These rows are manual and not yet run:
+
+| Row | What it checks |
+|---|---|
+| 21 | two sections, slashed icon, `Start Sharing` in `b` starts `b` only |
+| 22 | a drop into `b` lands in `b`, link on the pasteboard, the next dialog preselects `b` |
+| 22b | a failed second `add` stops the batch with `Not published: <third>` |
+| 23 | quick profile disables login; `Publish` stays disabled until the rule is well formed and enables as it is typed |
+| 24 | Remove and hits on a `b` row act on `b` only |
+| 25 | the Mini UAT script (TASK-009) |
+
+The UAT build is `mac/build/ShareBar-uat.app` (ad-hoc signed). It shares the installed app's bundle id, so quit the running Share Bar before opening it.
 - Two suite flakes seen on this loaded machine (load avg ~222) and passed on the clean run above: `500-row index answers under 3s` (a documented load-sensitive check, the pre-change binary also exceeded the bound) and `row 6: pub/<id> absent while a PROBE fail was logged` (a watcher-poll race in the Access gate tests, untouched by this change).
