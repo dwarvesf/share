@@ -2,9 +2,9 @@
 
 ## [v0.7.1] - 2026-09-30
 
-### Documentation
+### Features
 
-- spec for Share Bar across profiles with login-gated adds (#40)
+- Share Bar shows every profile, with login-gated adds (#40); the merge kept its spec-only title, so the release computed a patch bump
 
 ## [v0.7.0] - 2026-09-29
 
