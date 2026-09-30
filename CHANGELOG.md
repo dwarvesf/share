@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.7.1] - 2026-09-30
+
+### Documentation
+
+- spec for Share Bar across profiles with login-gated adds (#40)
+
 ## [v0.7.0] - 2026-09-29
 
 ### Features
@@ -16,6 +22,7 @@
 
 ### Documentation
 
+- changelog for v0.7.0
 - retro for the Share Bar cycle (#32)
 
 ### Tests
