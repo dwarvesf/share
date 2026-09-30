@@ -2992,7 +2992,8 @@ r2_no_token() { # the admin/publisher token block; callers send it to stderr
 share: setup --backend r2 reads its token from CLOUDFLARE_API_TOKEN only; none is set.
   Admin (creates the bucket, deploys the Worker, once per hostname): an account API token with
      Workers Scripts: Edit and Workers R2 Storage: Edit (account), Zone: Read and DNS: Read (zone),
-     Access: Organizations Read (optional, for gated links)
+     Access: Organizations Read (optional, for gated links),
+     Access: Apps and Policies Edit (teardown --purge needs it to remove the Access apps of gated shares)
   Publisher (joins a hostname an admin set up): Workers R2 Storage Bucket Item Write on bucket $1 only, and Zone: Read
   Then: CLOUDFLARE_API_TOKEN=<token> $me setup $host_name --backend r2 --bucket $1
 EOF

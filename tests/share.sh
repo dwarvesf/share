@@ -2586,6 +2586,7 @@ s_fresh
 out=$(S_TOKEN="" r2s 2>&1); rc=$?
 check "no token: exit 1" "1" "$rc"
 check "no token: the block names the admin scopes" "1" "$(grep -c 'Workers Scripts: Edit' <<<"$out")"
+check "no token: the block names the Access scope teardown --purge needs" "1" "$(grep -c 'Access: Apps and Policies Edit (teardown --purge needs it' <<<"$out")"
 check "no token: the block names the publisher form" "1" "$(grep -c 'Bucket Item Write on bucket ok-bucket' <<<"$out")"
 check "no token: no call logged" "0" "$(wc -l <"$slog" | tr -d ' ')"
 
