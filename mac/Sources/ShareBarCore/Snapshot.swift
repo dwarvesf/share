@@ -42,9 +42,12 @@ public struct Snapshot: Decodable, Sendable, Equatable {
     public let skipped: Int?
     /// Access apps waiting for deletion (`access_pending`); nil on a CLI that predates it.
     public let accessPending: Int?
+    /// `"r2"` on a profile that serves from R2 through a Worker (nothing runs on this Mac,
+    /// so start and stop do not apply); nil on a tunnel profile or an older CLI.
+    public let backend: String?
 
     enum CodingKeys: String, CodingKey {
-        case schema, state, ready, mode, host, hosts, service, shares, skipped
+        case schema, state, ready, mode, host, hosts, service, shares, skipped, backend
         case servesHere = "serves_here"
         case accessPending = "access_pending"
     }
@@ -60,7 +63,8 @@ public struct Snapshot: Decodable, Sendable, Equatable {
         service: Bool,
         shares: [Share],
         skipped: Int?,
-        accessPending: Int? = nil
+        accessPending: Int? = nil,
+        backend: String? = nil
     ) {
         self.schema = schema
         self.state = state
@@ -73,6 +77,7 @@ public struct Snapshot: Decodable, Sendable, Equatable {
         self.shares = shares
         self.skipped = skipped
         self.accessPending = accessPending
+        self.backend = backend
     }
 }
 

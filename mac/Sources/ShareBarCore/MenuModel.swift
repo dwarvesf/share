@@ -152,8 +152,10 @@ public struct Section: Sendable, Equatable {
             let allRows = (entry.state?.shares ?? []).map { Row(share: $0, profile: entry.name, now: now) }
             rows = Array(allRows.prefix(rowCap))
             more = max(0, allRows.count - rowCap)
-            showStart = entry.state?.state != "serving" && entry.state?.servesHere == true
-            showStop = entry.state?.state == "serving"
+            // An r2 profile serves from Cloudflare; the CLI refuses start and stop there.
+            let runsHere = entry.state?.backend != "r2"
+            showStart = runsHere && entry.state?.state != "serving" && entry.state?.servesHere == true
+            showStop = runsHere && entry.state?.state == "serving"
             showSetUp = entry.state?.state != "serving"
         }
     }

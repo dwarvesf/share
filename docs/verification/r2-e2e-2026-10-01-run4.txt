@@ -1,0 +1,40 @@
+# tests/e2e-r2.sh live run, Dwarves Cloudflare account (zone d.foundation)
+# Tree: f0f1d78 (committed), run 2026-09-30T17:20:36Z on the Mac Mini
+# Command: SHARE_BIN=<worktree>/bin/share SHARE_E2E_R2_HOST=share-e2e-96c405.d.foundation SHARE_E2E_R2_BUCKET=share-e2e-96c405 SHARE_E2E_ACCESS_RULE=group:dwarves-ops tests/e2e-r2.sh
+# Tokens: CLOUDFLARE_API_TOKEN = op://Toolkit/cf-api-token/credential (admin), SHARE_E2E_R2_TOKEN_ADMIN = op://Toolkit/cf-tokens-admin/credential
+#   (User API Tokens Edit only; mints the two bucket-scoped publisher tokens and revokes them), both read through 1Password Connect, never printed.
+
+--- outside check: before ---
+buckets: 15 total, 0 named share-e2e*; sha of the other names: 79a3fcf51452
+workers: 44 total, 0 named share-share-e2e*
+worker custom domains for share-e2e-96c405.d.foundation: 0
+access apps: 5 total, 0 named share * share-e2e* *
+dns records named share-e2e-96c405.d.foundation: 0
+user tokens named share-e2e*: 0
+
+=== before: nothing named for this run exists ===
+  ok    no bucket share-e2e-96c405
+  ok    no Worker share-share-e2e-96c405-d-foundation
+  ok    no DNS record for share-e2e-96c405.d.foundation
+=== L1 admin setup ===
+  | deploying as admin
+  | worker:     share-share-e2e-96c405-d-foundation 1 126c4029e8fe deployed
+  | ready:      https://share-e2e-96c405.d.foundation/ serves from bucket share-e2e-96c405. Next: share add <file|dir>
+  ok    setup exits 0
+  FAIL  /healthz answers 200 ok: expected '200 ok', got '500 ok'
+  ok    /healthz carries this CLI's pair
+  ok    workers.dev and previews off
+  ok    the workers.dev URL does not answer 200
+  ok    the bucket has no r2.dev URL
+  ok    config: backend r2, port sentinel
+L1 failed: stopping here; the EXIT trap removes what setup created
+
+# exit 1
+--- outside check: after (EXIT trap done) ---
+buckets: 15 total, 0 named share-e2e*; sha of the other names: 79a3fcf51452
+workers: 44 total, 0 named share-share-e2e*
+worker custom domains for share-e2e-96c405.d.foundation: 0
+access apps: 5 total, 0 named share * share-e2e* *
+dns records named share-e2e-96c405.d.foundation: 0
+user tokens named share-e2e*: 0
+worker 404 , bucket 404
