@@ -55,6 +55,7 @@ cfg() { [[ -f $config ]] && awk -v k="$1" 'index($0, k "=") == 1 {print substr($
 root="${SHARE_ROOT:-$HOME/share${profile:+/profiles/$profile}}"
 pub="$root/pub"            # served tree; nothing else is reachable from the tunnel
 index="$root/index.tsv"    # id, name, source, added date, expiry epoch (0 = never)
+r2own="$root/r2-own"       # r2: <id>\t<prefix>\t<source> for shares this install added; refresh trusts only this file
 pidfile="$root/serve.pid"
 pending="$root/access-pending"   # every Access app not, or no longer, backed by a finished row: id, app or -:<nonce>, owner pid, owner start, created
 host_name="${SHARE_HOSTNAME:-$(cfg hostname || true)}"
@@ -81,7 +82,7 @@ running() { # the pid must still be a share serve: an unclean exit leaves the fi
 rows() { # the only index reader: a forged row (bad id, main or malformed host=, a bad access= or access_rule=) never reaches a path, Caddyfile, or Cloudflare call
   [[ -f $index ]] || return 0
   # no {n} intervals: mawk lacks them; the host regex is setup's hostname check; the rule grammar is access_parse's
-  awk -F'\t' -v main="$host_name" '
+  awk -F'\t' -v main="$host_name" -v be="$backend" '
     function hostname(h) { return h ~ /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z][a-z]+$/ }
     function uuid(u) { return length(u) == 36 && u !~ /[^0-9a-f-]/ && substr(u, 9, 1) == "-" && substr(u, 14, 1) == "-" && substr(u, 19, 1) == "-" && substr(u, 24, 1) == "-" && gsub(/-/, "-", u) == 4 }
     function rule(r,   k, v, m, e, j, at) {
@@ -101,6 +102,7 @@ rows() { # the only index reader: a forged row (bad id, main or malformed host=,
     }
     (NF == 5 || NF == 6) && length($1) == 6 && $1 !~ /[^0-9a-f]/ {
       n = split($6, a, " "); app = 0; rl = 0
+      hp = (be != "r2"); hb = (be != "r2")   # r2 rows must carry a sound prefix= and by=
       for (i = 1; i <= n; i++) {
         if (substr(a[i], 1, 5) == "host=") {
           h = substr(a[i], 6)
@@ -108,8 +110,19 @@ rows() { # the only index reader: a forged row (bad id, main or malformed host=,
         }
         if (substr(a[i], 1, 7) == "access=") { if (!uuid(substr(a[i], 8))) next; app = 1 }
         if (substr(a[i], 1, 12) == "access_rule=") { if (!rule(substr(a[i], 13))) next; rl = 1 }
+        if (substr(a[i], 1, 7) == "prefix=") {
+          p = substr(a[i], 8)
+          if (!(length(p) == 18 && substr(p, 1, 2) == "o/" && substr(p, 3, 6) == $1 &&
+                substr(p, 9, 1) == "." && substr(p, 18, 1) == "/" && substr(p, 10, 8) ~ /^[0-9a-f]+$/)) next
+          hp = 1
+        }
+        if (substr(a[i], 1, 3) == "by=") {
+          b = substr(a[i], 4)
+          if (b == "" || b ~ /[^a-z0-9.-]/) next
+          hb = 1
+        }
       }
-      if (app != rl) next   # a gated row carries both, or it is a hand edit
+      if (app != rl || !hp || !hb) next   # a gated row carries both, or it is a hand edit; an r2 row needs its prefix and host
       print
     }' "$index"
 }
@@ -138,6 +151,19 @@ rand_id() { # loops past a collision with an existing row or an orphaned pub/<id
       [[ $SHARE_TEST_IDS == "$id" ]] && SHARE_TEST_IDS="" || SHARE_TEST_IDS="${SHARE_TEST_IDS#* }"
     else
       id="$(rand_id_raw)"
+    fi
+    if [[ $backend == r2 ]]; then   # a live GET and a prefix scan; anything but 200/404 or empty fails closed
+      r2_call GET "m/$id" || die "the r2 record check needs a publisher token (see above)"
+      case $cf_code in
+        200) continue ;;
+        404) ;;
+        *) die "the r2 record check for $id failed (HTTP $cf_code); no id was picked" ;;
+      esac
+      r2_call LIST "o/$id."
+      [[ $cf_code == 200 ]] || die "the r2 prefix check for $id failed (HTTP $cf_code); no id was picked"
+      [[ $cf_body == *"<Key>"* ]] && continue   # leftover objects under this id: never hand it out
+      ! grep -q "^$id"$'\t' "$pending" 2>/dev/null && { echo "$id"; return; }
+      continue
     fi
     # an id named in access-pending has an Access app waiting: a new share must never land behind it
     [[ -z "$(row "$id")" && ! -e $pub/$id ]] && ! grep -q "^$id"$'\t' "$pending" 2>/dev/null && { echo "$id"; return; }
@@ -195,6 +221,7 @@ release_locks() { # the EXIT trap: every held lock, a stage still outside pub, a
   stage_out=""
   if [[ -n $held_fqdn ]]; then f="$held_fqdn"; held_fqdn=""; host_rm "$f" || true; fi
   if [[ -n $held_access_id ]]; then echo "share: nothing was published; the Access app of $held_access_id waits in access-pending, the next $me add --access or $me prune with a token removes it" >&2; held_access_id=""; fi
+  [[ -n ${r2_snap_file:-} ]] && rm -f "$r2_snap_file"
   return 0
 }
 
@@ -521,12 +548,15 @@ cmd_add() {
 cmd_ls() {
   access_pending_note
   [[ -s $index ]] || { echo "no shares"; return 0; }
-  local id name src date exp opts size until gone
+  local id name src date exp opts size until gone by
   while IFS=$'\t' read -r id name src date exp opts; do
     until="never"; [[ ${exp:-0} -gt 0 ]] && until="$(day_of "$exp")"
     share_url "$id" "$name" "$opts"
     echo "$share_url_out"
-    if has_opt live "$opts"; then
+    if [[ $backend == r2 ]]; then
+      by="$(opt_val by "$opts" || true)"
+      echo "    id=$id  added=$date  expires=$until$(access_col "$opts")  by=${by:-?}  from=$src"
+    elif has_opt live "$opts"; then
       echo "    id=$id  live -> $src  added=$date  expires=$until$(access_col "$opts")"
     else
       size="$(du -sh "$pub/$id" 2>/dev/null | cut -f1 | tr -d ' ')"
@@ -597,6 +627,10 @@ cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so ex
 }
 
 cmd_prune() { # cmd_prune [quiet|listing]: unpublish every share past its expiry; sweep waiting Access apps when a token resolves
+  if [[ $backend == r2 ]]; then   # snapshot first so ls reads the bucket; expiry and the r2 sweep land with r2 rm
+    r2_snapshot
+    return 0
+  fi
   # quiet (serve, status): no token from any source, so neither touches Access; an expired gated share defers its
   # app. listing (ls): only an exported CLOUDFLARE_API_TOKEN, never api_token_cmd or the Keychain, so a listing
   # never runs `op read`. bare (the prune verb): the full resolver, soft on a failing api_token_cmd. A token for another
@@ -1855,6 +1889,7 @@ access_pending_note() { # ls and status: apps waiting for a token, and lines no 
   return 0
 }
 access_ls_check() { # with an exported CLOUDFLARE_API_TOKEN only (never op read or a prompt from a listing): a gated row whose app is gone is PUBLIC
+  [[ $backend == r2 ]] && return 0   # on r2 a missing app leaves the link closed: the Worker checks the JWT itself
   local pairs id app
   api_token_resolve env
   [[ -n $api_token && -n $host_name ]] || return 0
@@ -2179,6 +2214,99 @@ r2_delete_prefix() { # r2_delete_prefix <prefix>: every key under it deleted; a 
   [[ $fails == 0 ]] || return 1
   r2_list "$prefix"
   [[ -z $r2_list_out ]]
+}
+
+r2_record_row() { # r2_record_row <m/ key> <json>: the index.tsv row for a sound record, nothing for a forged or newer one
+  local id=${1#m/}
+  jq -r --arg id "$id" '
+    def clean: type == "string" and (explode | all(. >= 32 and . != 127));   # a control byte in a field drops the record
+    select(.v == 1
+      and .id == $id
+      and (.name | clean) and (.src | clean) and (.opts | clean)
+      and (.added | clean)
+      and (.expires | type == "number" and . >= 0 and . < 1e11)   # epoch seconds; 1e300 would break bash arithmetic
+      and (.opts | test("(^| )(prefix|by)=") | not)   # the row gains its own prefix= and by=; a record never supplies them
+      and (.prefix | type == "string" and test("^o/" + $id + "\\.[0-9a-f]{8}/$"))
+      and (.by | type == "string" and test("^[a-z0-9.-]+$"))
+      and ((.aud // "") | test("^[0-9a-f]{64}$|^$")))
+    | [.id, .name, .src, .added, (.expires | floor | tostring),
+       (if .opts == "" then "" else .opts + " " end) + "prefix=" + .prefix + " by=" + .by]
+    | @tsv' <<<"$2" 2>/dev/null || true   # a corrupt or forged record is dropped, never fatal
+}
+
+r2_fetch_records() { # r2_fetch_records <snap>: parallel-GET every key in r2_list_out, each answer appended to $1 through r2_record_row; a non-200/404 dies
+  local snap=$1 wd i=0 k f key code
+  wd="$(mktemp -d "${TMPDIR:-/tmp}/share-r2get.XXXXXX")"
+  : >"$wd/transfers"; : >"$wd/map"
+  while IFS= read -r k; do
+    [[ $k == m/* ]] || continue
+    i=$((i + 1))
+    r2_url "$k"
+    printf 'url = "%s"\noutput = "%s"\n' "$r2_url_out" "$wd/$i" >>"$wd/transfers"
+    printf '%s\t%s\n' "$wd/$i" "$k" >>"$wd/map"
+  done <<<"$r2_list_out"
+  [[ $i -gt 0 ]] || { rm -rf "$wd"; return 0; }
+  r2_creds || { rm -rf "$wd"; return 1; }
+  curl -sS --parallel --parallel-max 8 --max-time 60 -w '%{http_code} %{filename_effective}\n' \
+    -K "$wd/transfers" -K <(printf 'user = "%s:%s"\n' "$r2_key_id" "$r2_secret") \
+    --aws-sigv4 'aws:amz:auto:s3' >"$wd/codes" 2>/dev/null || true
+  # walk the map, not curl's output: a key curl printed no line for counts as failed, never as absent
+  while IFS=$'\t' read -r f key; do
+    code="$(awk -v f="$f" 'substr($0, index($0, " ") + 1) == f {print $1; exit}' "$wd/codes")"
+    if [[ $code != 200 && $code != 404 ]]; then   # a failed or missing transfer is retried alone through r2_call
+      r2_call GET "$key"
+      code=$cf_code
+      [[ $code == 200 ]] && printf '%s' "$cf_body" >"$f"
+    fi
+    case $code in
+      200) r2_record_row "$key" "$(cat "$f")" >>"$snap" ;;
+      404) ;;
+      *) rm -rf "$wd"; die "r2 snapshot: GET $key answered HTTP $code" ;;
+    esac
+  done <"$wd/map"
+  rm -rf "$wd"
+}
+
+r2_snapshot() { # r2_snapshot: every m/ record into a mktemp file that $index then names, so rows() stays the only reader
+  local snap k
+  mkdir -p "$root"
+  snap="$(mktemp "$root/.r2-index.XXXXXX")"
+  r2_snap_file="$snap"; trap release_locks EXIT
+  r2_list "m/"
+  if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then
+    while IFS= read -r k; do
+      [[ $k == m/* ]] || continue
+      r2_call GET "$k"
+      case $cf_code in
+        200) r2_record_row "$k" "$cf_body" >>"$snap" ;;
+        404) ;;
+        *) die "r2 snapshot: GET $k answered HTTP $cf_code" ;;
+      esac
+    done <<<"$r2_list_out"
+  else
+    r2_fetch_records "$snap" || die "r2 snapshot: a record fetch failed; nothing was listed"
+  fi
+  index="$snap"
+}
+
+r2_own_get() { # r2_own_get <id>: the "<id>\t<prefix>\t<source>" line for one of this install's own adds
+  # no {n} intervals: mawk lacks them
+  [[ -f $r2own ]] && awk -F'\t' -v id="$1" 'NF == 3 && $1 == id && substr($2, 3, 6) == id && $2 ~ /^o\/[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]\.[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]\/$/' "$r2own"
+}
+
+r2_own_put() { # r2_own_put <id> <prefix> <src>: remember the share this install added, replacing any older line
+  mkdir -p "$root"
+  local tmp
+  tmp="$(mktemp "$root/.r2own.XXXXXX")"
+  { [[ -f $r2own ]] && awk -F'\t' -v id="$1" '$1 != id' "$r2own"; printf '%s\t%s\t%s\n' "$1" "$2" "$3"; } >"$tmp"
+  mv -f "$tmp" "$r2own"
+}
+
+r2_own_drop() { # r2_own_drop <id>: forget the line, missing counts as dropped
+  [[ -f $r2own ]] || return 0
+  local tmp
+  tmp="$(mktemp "$root/.r2own.XXXXXX")"
+  awk -F'\t' -v id="$1" '$1 != id' "$r2own" >"$tmp" && mv -f "$tmp" "$r2own"
 }
 
 r2_creds() { # r2_creds: the publisher pair into r2_key_id/r2_secret; the token never reaches argv, a file, or output
@@ -2585,6 +2713,7 @@ case "${1:-status}" in
   r2-delete-prefix) shift; r2_delete_prefix "$@" ;;
   r2-rows) r2_snapshot; printf 'index=%s\n' "$index"; rows ;;
   r2-id) rand_id ;;
+  r2-own) case ${2:-} in get|put|drop) f="r2_own_$2"; shift 2; "$f" "$@" ;; *) exit 1 ;; esac ;;
   worker-src) worker_js /dev/stdout ;;
   start) cmd_start ;;
   stop) cmd_stop ;;

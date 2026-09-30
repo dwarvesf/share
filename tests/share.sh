@@ -1870,6 +1870,54 @@ check "delete_prefix: no key under either nonce remains" "" "$out"
 out=$(SHARE_R2_DRY_LIST=500 r2d r2-delete-prefix 'o/c1c2c3.' 2>&1); rc=$?
 check "delete_prefix dies on a bad list page" "1" "$rc"
 
+echo "=== r2 backend: snapshot, rows, rand_id (rows 25e, 27) ==="
+mkdir -p "$DRYD/m"
+printf '%s\n' '{"v":1,"id":"abc001","name":"report.html","src":"/tmp/report.html","added":"2026-09-30","expires":0,"opts":"noindex","prefix":"o/abc001.deadbeef/","by":"mini"}' >"$DRYD/m/abc001"
+printf '%s\n' '{"v":1,"id":"zzz999","name":"x.txt","src":"/x","added":"2026-09-30","expires":0,"opts":"","prefix":"o/def002.deadbeef/","by":"mini"}' >"$DRYD/m/def002"   # id differs from its key
+printf '%s\n' '{"v":1,"id":"def003","name":"x.txt","src":"/x","added":"2026-09-30","expires":0,"opts":"","prefix":"o/def003.deadbeef/","by":"mini"}' | jq -c '.name += "\u0001"' >"$DRYD/m/def003"   # a control character in name
+printf '%s\n' '{"v":1,"id":"def004","name":"x.txt","src":"/x","added":"2026-09-30","expires":0,"opts":"","prefix":"o/def004.99/","by":"mini"}' >"$DRYD/m/def004"   # a bad prefix
+printf '%s\n' '{"v":2,"id":"def005","name":"x.txt","src":"/x","added":"2026-09-30","expires":0,"opts":"","prefix":"o/def005.deadbeef/","by":"mini"}' >"$DRYD/m/def005"   # a newer record version
+printf 'not json at all\n' >"$DRYD/m/def006"
+printf '%s\n' '{"v":1,"id":"def007","name":"x.txt","src":"/x","added":"2026-09-30","expires":1e300,"opts":"","prefix":"o/def007.deadbeef/","by":"mini"}' >"$DRYD/m/def007"   # expires past epoch range
+printf '%s\n' '{"v":1,"id":"def008","name":"x.txt","src":"/x","added":"2026-09-30","expires":0,"opts":"prefix=o/def008.00000000/","prefix":"o/def008.deadbeef/","by":"mini"}' >"$DRYD/m/def008"   # opts forge a prefix
+out=$(r2d r2-rows 2>&1); rc=$?
+check "r2-rows exits 0" "0" "$rc"
+snap_path="$(sed -n 's/^index=//p' <<<"$out" | head -1)"
+check "index names the snapshot file" "1" "$(grep -c 'share/profiles/r2x/.r2-index\.' <<<"$snap_path")"
+snap_rows="$(grep -v '^index=' <<<"$out")"
+check "rows() yields only the good record" "abc001" "$(cut -f1 <<<"$snap_rows")"
+check "the row carries prefix and by" "1" "$(grep -c 'prefix=o/abc001.deadbeef/ by=mini' <<<"$snap_rows")"
+check "the row keeps its opts" "1" "$(grep -c 'noindex prefix=' <<<"$snap_rows")"
+out=$(r2d ls 2>&1)
+check "ls shows the snapshot row with by=" "1" "$(grep -c 'by=mini' <<<"$out")"
+check "ls prints the link" "1" "$(grep -c 'https://r2x.example.test/abc001/' <<<"$out")"
+out=$(SHARE_TEST_IDS="abc001 eee001" r2d r2-id 2>&1)
+check "rand_id skips an id with a record" "eee001" "$out"
+mkdir -p "$DRYD/o/f1f2f3.00000001"; printf 'x\n' >"$DRYD/o/f1f2f3.00000001/leftover.txt"
+out=$(SHARE_TEST_IDS="f1f2f3 eee002" r2d r2-id 2>&1)
+check "rand_id skips an id with leftover objects" "eee002" "$out"
+: >"$rlog"
+out=$(SHARE_R2_DRY_LIST=500 r2d ls 2>&1); rc=$?
+check "LIST 500: ls exits 1" "1" "$rc"
+out=$(SHARE_R2_DRY_LIST=500 r2d r2-id 2>&1); rc=$?
+check "LIST 500: rand_id dies, no id picked" "1" "$rc"
+out=$(SHARE_R2_DRY_LIST=500 r2d add "$WORK/wt/one.md" 2>&1); rc=$?
+check "LIST 500: add exits 1" "1" "$rc"
+check "LIST 500: no object write was attempted" "0" "$(grep -c '^PUT ' "$rlog" || true)"
+
+echo "=== r2 backend: r2-own ==="
+r2d r2-own put abc001 'o/abc001.deadbeef/' '/tmp/report.html'
+r2d r2-own put abc002 'o/abc002.00000001/' '/tmp/two'
+r2d r2-own put abc001 'o/abc001.cafebabe/' '/tmp/report.html'
+out=$(r2d r2-own get abc001)
+check "r2-own: a refresh replaces the line" "abc001	o/abc001.cafebabe/	/tmp/report.html" "$out"
+check "r2-own: one line per id" "2" "$(wc -l <"$R2H/share/profiles/r2x/r2-own" | tr -d ' ')"
+r2d r2-own put abc003 'o/abc009.00000001/' '/tmp/three'
+check "r2-own: a prefix naming another id is not returned" "" "$(r2d r2-own get abc003 || true)"
+r2d r2-own drop abc001
+check "r2-own: drop forgets the id" "" "$(r2d r2-own get abc001 || true)"
+check "r2-own: drop keeps the others" "1" "$(r2d r2-own get abc002 | grep -c '/tmp/two')"
+
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then
   wout="$(node "$(dirname "$SH")/../tests/worker.mjs" 2>&1)"; wrc=$?

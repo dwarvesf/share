@@ -116,3 +116,17 @@ R2 pricing page confirms the free tier (10 GB-month, 1 M Class A, 10 M Class B o
 ## Spike cleanup
 
 All spike objects deleted (see below): buckets `share-spike-gy4op3` and `share-spike2-gy4op3`, Worker `share-spike-gy4op3`, its five custom domains (`share-spike{,2,3,4,5}-gy4op3.d.foundation`), Access app `0354f535-cdcf-461a-9ec8-20b88d90f044`, service token `7fa29d65-d0c1-4465-8911-b531a0ad877a`, user tokens `share-spike-gy4op3-pub` and `share-spike-e-t{1,2,3,4}`. Verified: `GET` on each object answers 404/empty afterwards; no `share-spike*` DNS record or Access app name remains.
+
+## Build deltas
+
+Deviations from the spec, per task. A task with none is not listed.
+
+### TASK-6 (snapshot, rand_id, r2-own)
+
+- The live record fetch walks its own key map and looks each answer up by `%{filename_effective}`, not `%{url}`. A key curl printed no line for is retried alone through `r2_call`, so a curl that dies early fails the snapshot instead of listing fewer shares. `filename_effective` prints per transfer under `--parallel` on curl 8.7.1, failed transfers included.
+- The dry seam fetches records one `r2_call GET` at a time; the parallel path runs only live.
+- `r2_record_row` also drops a record whose `expires` is outside `0 <= expires < 1e11` (a forged `1e300` would break bash arithmetic in `ls`), whose `added` holds a control byte, or whose `opts` already carry `prefix=` or `by=` (the row appends its own).
+- `r2_own_get` also requires the stored prefix to name the same id.
+- `rand_id` on r2 skips an id whose `o/<id>.` listing holds any key (round-3 warning), besides the `GET m/<id>` check.
+- Row 25e's `add` half passes on the not-yet-built `add` refusal; TASK-9 makes it a real check.
+- Test hooks `r2-rows`, `r2-id`, `r2-own get|put|drop` sit beside the TASK-5 hooks in the dispatcher.
