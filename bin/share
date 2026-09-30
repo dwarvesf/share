@@ -2063,8 +2063,8 @@ access_open_url() { # the platform opener, backgrounded; skipped over ssh or wit
 # port=r2 sentinel: an older share dies on that port at load, so it can never
 # write pub/ or an Access app against an r2 profile.
 
-WORKER_VERSION=1            # bump on every Worker source change; deploys refuse a downgrade without --force
-WORKER_SHA=262c3c27cc27     # first 12 hex of the emitted source's sha256; the suite fails when it drifts
+WORKER_VERSION=2            # bump on every Worker source change; deploys refuse a downgrade without --force
+WORKER_SHA=62ee27f73013     # first 12 hex of the emitted source's sha256; the suite fails when it drifts
 WORKER_COMPAT_DATE=2026-09-30   # moves only with a WORKER_VERSION bump
 WORKER_RECORD_V=1           # the record schema this source understands; a newer record answers 404
 worker_meta() { printf '%s\n' "$WORKER_VERSION" "$WORKER_SHA" "$WORKER_COMPAT_DATE" "$WORKER_RECORD_V"; }   # one line, four fields, for the deploy and sweep paths
@@ -2127,6 +2127,7 @@ async function gatedOk(request, env, rec) {
   const auds = Array.isArray(body.aud) ? body.aud : [body.aud];
   if (!auds.includes(rec.aud)) return false;
   if (typeof body.exp !== "number" || body.exp * 1000 <= Date.now()) return false;
+  if (body.nbf !== undefined && (typeof body.nbf !== "number" || body.nbf * 1000 > Date.now())) return false;
   const jwk = (await certs(env, head.kid)).find((k) => k.kid === head.kid && k.kty === "RSA");
   if (!jwk) return false;
   const key = await crypto.subtle.importKey("jwk",

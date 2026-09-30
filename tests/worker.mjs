@@ -262,6 +262,9 @@ const gated = async (worker, env, headers = {}, path = `/${ID}/f.txt`) =>
   check("r28 wrong iss", 404, await gated(worker, env, await good({ iss: "https://evil.cloudflareaccess.com" })));
   check("r28 valid", 200, await gated(worker, env, await good()));
   check("r28 valid array aud", 200, await gated(worker, env, await good({ aud: ["x".repeat(64), AUD] })));
+  check("r28 nbf in the future", 404, await gated(worker, env, await good({ nbf: Math.floor(Date.now() / 1000) + 300 })));
+  check("r28 nbf not a number", 404, await gated(worker, env, await good({ nbf: "0" })));
+  check("r28 nbf in the past", 200, await gated(worker, env, await good({ nbf: Math.floor(Date.now() / 1000) - 5 })));
   check("r28 normalized backtrack path, no header", 404, await gated(worker, env, {}, `/x/..\\${ID}/f.txt`));
   check("r28 malformed token", 404, await gated(worker, env, { "cf-access-jwt-assertion": "not-a-jwt" }));
   const none = await signJwt(pair.privateKey, { alg: "none" }, jwtFor(AUD));
