@@ -90,3 +90,7 @@ Everything the spec assigns to `swift test` or `tests/share.sh` is green above. 
 
 The UAT build is `mac/build/ShareBar-uat.app` (ad-hoc signed). It shares the installed app's bundle id, so quit the running Share Bar before opening it.
 - Two suite flakes seen on this loaded machine (load avg ~222) and passed on the clean run above: `500-row index answers under 3s` (a documented load-sensitive check, the pre-change binary also exceeded the bound) and `row 6: pub/<id> absent while a PROBE fail was logged` (a watcher-poll race in the Access gate tests, untouched by this change).
+
+## Rollback
+
+Revert the branch commits (`git revert` each, newest first). The CLI change is additive: `profiles --json` is a new flag, so an older app keeps working against the new CLI. The app side rolls back by reinstalling the previous Share Bar release from the cask.
