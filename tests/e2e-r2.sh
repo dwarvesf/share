@@ -136,12 +136,13 @@ check "config: backend r2, port sentinel" "r2 r2" "$(awk -F= '$1 == "backend" {b
 [[ $fails == 0 ]] || { echo "L1 failed: stopping here; the EXIT trap removes what setup created"; exit 1; }
 
 echo "=== L2 rerun setup (no redeploy) ==="
-before="$(api "/accounts/$acct/workers/scripts" | jq -r --arg w "$worker" '.result[] | select(.id == $w) | .modified_on')"
+deployed() { api "/accounts/$acct/workers/scripts" | jq -r --arg w "$worker" '.result[] | select(.id == $w) | "\(.deployment_id) \(.etag)"'; }   # modified_on moves with the subdomain POST every setup makes
+before="$(deployed)"
 out="$(admin_as "$A" setup "$host" --backend r2 --bucket "$bucket" 2>&1)"; rc=$?
 indent <<<"$out"
 check "rerun exits 0" 0 "$rc"
 check "rerun says already deployed" 1 "$(grep -c 'already deployed' <<<"$out")"
-check "script modified_on unchanged" "$before" "$(api "/accounts/$acct/workers/scripts" | jq -r --arg w "$worker" '.result[] | select(.id == $w) | .modified_on')"
+check "no script PUT: deployment id and etag unchanged" "$before" "$(deployed)"
 
 echo "=== publisher tokens ==="
 if [[ -n $minter ]]; then
@@ -197,7 +198,7 @@ echo "keep me" >"$WORK/keep.txt"
 link="$(as_a add "$WORK/doc" 2>"$WORK/add.err" | head -1)"; indent <"$WORK/add.err"
 id="$(cut -d/ -f4 <<<"$link")"
 check "link shape" "https://$host/$id/doc/" "$link"
-check "link answers 200" 200 "$(code "$link")"
+check "link answers 200 with no Content-Range" "200 0" "$(code "$link") $(fetch -D - -o /dev/null "$link" | grep -ci '^content-range:')"
 check "content is the snapshot" "e2e r2 doc" "$(fetch "$link")"
 check "dotfile not served" 404 "$(code "${link}.env")"
 check "a subfolder with no index is 404" 404 "$(code "${link}sub/")"
@@ -205,6 +206,7 @@ check "a file in the subfolder answers" inner "$(fetch "${link}sub/x.txt")"
 check "a subfolder named with a space serves its index" spaced "$(fetch "${link}My%20Notes/")"
 hdrs="$(fetch -D - -o /dev/null "$link")"
 check "no-store header" 1 "$(grep -ci '^cache-control: no-store' <<<"$hdrs")"
+check "a Range request answers 206 with Content-Range" "206 bytes 0-3/11" "$(fetch -r 0-3 -D - -o /dev/null "$link" | awk 'NR == 1 {c = $2} tolower($1) == "content-range:" {sub(/\r$/, ""); r = $2 " " $3} END {print c " " r}')"
 check "noindex header" 1 "$(grep -ci '^x-robots-tag: noindex, nofollow' <<<"$hdrs")"
 check "/<id> redirects 308 to /<id>/" "308 https://$host/$id/" "$(fetch -o /dev/null -w '%{http_code} %{redirect_url}' "https://$host/$id")"
 keep="$(as_a add "$WORK/keep.txt" 2>/dev/null | head -1)"

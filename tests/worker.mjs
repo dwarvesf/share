@@ -64,7 +64,7 @@ class Bucket {
       const a = +m[1], b = m[2] ? +m[2] + 1 : e.bytes.length;
       bytes = e.bytes.slice(a, Math.min(b, e.bytes.length));
       range = { offset: a, length: bytes.length };
-    }
+    } else if (rangeHdr) range = { offset: 0, length: bytes.length };   // as live R2: any range option yields a range, Range header or not
     const body = new Blob([bytes]).stream();
     return {
       key, size: e.bytes.length, etag: e.etag, httpMetadata: e.meta, range,
@@ -161,6 +161,9 @@ if (process.argv[2] === "--dir") {
   r = await call(worker, env, `https://f.test/${ID}/f.txt`, { headers: { range: "bytes=0-3" } });
   check("r17 Range 206", 206, r.status);
   check("r17 Range body", "0123", await bodyOf(r));
+  check("r17 Range Content-Range", "bytes 0-3/10", r.headers.get("content-range"));
+  r = await call(worker, env, `https://f.test/${ID}/f.txt`);
+  check("r17 a plain GET is 200, not 206", "200 null", `${r.status} ${r.headers.get("content-range")}`);
   r = await call(worker, env, `https://f.test/healthz`);
   check("r17 /healthz 200", 200, r.status);
   check("r17 /healthz body", "ok", await bodyOf(r));
