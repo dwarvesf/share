@@ -66,3 +66,33 @@ Verdict: RED. Without the backend load the r2 refusal never runs; the config's
 Row 22 is itself a shipped negative control: `origin/main` cannot read
 `backend=r2` and every verb dies on the sentinel before it can write a pub/ tree
 or an Access app against an r2 profile.
+
+## Batch 2: snapshot, ids, r2-own, admin setup (dry)
+
+```
+Command: SHARE_TEST_PORT_BASE=38787 bash tests/share.sh
+Exit:    0
+Checks:  782 ok, 0 FAIL (PASS), at a720574
+Verdict: PASS
+```
+
+```
+Command: node tests/worker.mjs
+Exit:    0
+Checks:  65 ok, 0 FAIL (PASS)
+Verdict: PASS
+```
+
+`shellcheck bin/share tests/share.sh` and `/bin/bash -n bin/share` are clean on the same tree.
+
+`=== r2 backend: snapshot, rows, rand_id ===` covers rows 25e and 27: forged records (id differs from key, control byte, bad prefix, `v:2`, not JSON, `expires` 1e300, a `prefix=` inside opts) never reach `rows()`; `$index` names the snapshot file; `ls` prints the row with `by=`; `rand_id` skips an id with a record and an id with leftover `o/<id>.` objects; a LIST 500 makes `ls`, `rand_id`, and `add` exit 1 with no object write. `=== r2-own ===` covers replace, drop, and a prefix naming another id.
+
+`=== r2 backend: admin setup ===` covers rows 3, 4, and 20 on the dry account: the no-token block; the admin log order from the settings read through `HEALTHZ`; config keys and no tunnel keys or service file; bindings (HOST, VERSION, SHA, TEAM, dataset, SALT with no stored value); the workers.dev read-back; a rerun with no script, domain, bucket, or marker write; a changed deployed SHA redeployed once; a failed organizations read keeping TEAM; TEAM drift redeployed; a newer deployed version refused, then downgraded with `--force`; eight refusals (foreign objects, foreign marker, r2.dev on, bucket custom domain, DNS record, another Worker's domain with `--force`, foreign script bindings, a 500 on the domains read) each with no write logged, the bucket unchanged, and no config; the subdomain read-back dying before the domain PUT; a healthz timeout writing no config.
+
+No call reached the real Cloudflare account in this batch.
+
+## Rollback
+
+Code: revert the batch commits on `docs/r2-backend-spec`; no tunnel profile reads any r2 key (row 1 stays green).
+
+Live state: [UNAVAILABLE: this batch created nothing on Cloudflare; every setup run hit the dry seam]. Once an admin runs setup live, `share --profile <p> teardown --yes --purge` (TASK-13) removes the marker, custom domain, Worker, and empty bucket; until TASK-13 lands, the by-name cleanup is the one in `tests/e2e-r2.sh`'s EXIT trap (TASK-14).
