@@ -1722,13 +1722,15 @@ check "quick setup on an r2 profile refuses" "1" "$rc"
 rm -f "$r2conf"
 
 echo "=== r2 backend: an older share refuses an r2 profile (compat) ==="
-main_bin="$WORK/share-main"
-if git -C "$(dirname "$SH")/.." show origin/main:bin/share >"$main_bin" 2>/dev/null; then
+# v0.7.1 is the last release without the r2 backend; origin/main learned r2 once it merged
+main_bin="$WORK/share-main" old_bin="$WORK/share-v0.7.1"
+git -C "$(dirname "$SH")/.." show origin/main:bin/share >"$main_bin" 2>/dev/null || : >"$main_bin"
+if git -C "$(dirname "$SH")/.." show v0.7.1:bin/share >"$old_bin" 2>/dev/null; then
   R22="$WORK/r22home"; mkdir -p "$R22/.config/share/profiles/r2x"
   printf 'backend=r2\nhostname=r2x.example.test\nzone=example.test\nbucket=ok-bucket\nport=r2\n' >"$R22/.config/share/profiles/r2x/config"
-  r22() { # r22 <verb...>: origin/main's share against the r2 profile
+  r22() { # r22 <verb...>: v0.7.1's share against the r2 profile
     env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND \
-      HOME="$R22" SHARE_TUNNEL=0 bash "$main_bin" --profile r2x "$@"
+      HOME="$R22" SHARE_TUNNEL=0 bash "$old_bin" --profile r2x "$@"
   }
   for verb in "add" "ls" "gated" "setup"; do
     case $verb in
@@ -1742,8 +1744,8 @@ if git -C "$(dirname "$SH")/.." show origin/main:bin/share >"$main_bin" 2>/dev/n
   done
   check "nothing under the r2 profile's root" "0" "$([[ -d $R22/share/profiles/r2x ]] && echo 1 || echo 0)"
 else
-  [[ ${CI:-} == true ]] && check "origin/main fetched for the compat row" "yes" "missing"
-  echo "  SKIP  origin/main not fetched; compat rows skipped"
+  [[ ${CI:-} == true ]] && check "tag v0.7.1 fetched for the compat row" "yes" "missing"
+  echo "  SKIP  tag v0.7.1 not fetched; compat rows skipped"
 fi
 
 echo "=== r2 backend: byte identity of existing installs (compat) ==="
@@ -2550,7 +2552,7 @@ SHARE_ACCESS_DRY_APPS=deny rpurge "--purge with a gated record and no Apps Edit 
 : >"$rlog"
 out=$(tsec r2g teardown --yes --purge 2>&1); rc=$?
 check "row 15: purge exits 0" "0" "$rc"
-check "row 15: purge: every record and object is gone" "0" "$(cd "$DRYA" && find m o -type f 2>/dev/null | grep -c . || true)"
+check "row 15: purge: every record and object is gone" "0" "$(cd "$DRYA" && { find m o -type f 2>/dev/null | grep -c . || true; })"
 check "row 15: purge: the gated share goes first" "1" "$([[ $(aline '^DELETE m/ab1502$') -lt $(aline '^DELETE m/ab1501$') ]] && echo 1 || echo 0)"
 check "row 15: purge: the gated share's app and the parked app are deleted" "1 1" "$(grep -c '^DELETE app 00000000-0000-4000-8000-000000ab1502$' "$rlog") $(grep -c '^DELETE app 00000000-0000-4000-8000-000000ab1509$' "$rlog")"
 check "row 15: purge: DELETE share.json < domain DELETE < script DELETE < bucket DELETE" "1" \
