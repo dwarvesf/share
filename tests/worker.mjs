@@ -269,6 +269,10 @@ const gated = async (worker, env, headers = {}, path = `/${ID}/f.txt`) =>
   const hs = await signJwt(pair.privateKey, { alg: "HS256" }, jwtFor(AUD));
   check("r28 alg HS256", 404, await gated(worker, env, { "cf-access-jwt-assertion": hs }));
   check("r28 empty aud", 404, await gated(worker, env, await good({ aud: "" })));
+  // a record gated by opts alone, no aud: a valid JWT still gets 404 (fail closed), never the bytes
+  const w5 = await loadWorker(), e5 = envOf(new Bucket());
+  e5.BUCKET.put("m/" + ID, JSON.stringify(rec({ opts: `access=00000000-0000-4000-8000-00000000a1b2` }))); e5.BUCKET.put(`o/${ID}.${NONCE}/f.txt`, "s");
+  check("r28 access= in opts with no aud, valid JWT", 404, await gated(w5, e5, await good()));
   // TEAM empty
   const w2 = await loadWorker(), e2 = envOf(new Bucket(), { TEAM: "" });
   e2.BUCKET.put("m/" + ID, JSON.stringify(rec({ aud: AUD }))); e2.BUCKET.put(`o/${ID}.${NONCE}/f.txt`, "s");
