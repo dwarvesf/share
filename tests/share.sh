@@ -1736,6 +1736,16 @@ else
   echo "  SKIP  origin/main not fetched; byte-identity row skipped"
 fi
 
+echo "=== worker (tests/worker.mjs) ==="
+if command -v node >/dev/null; then
+  wout="$(node "$(dirname "$SH")/../tests/worker.mjs" 2>&1)"; wrc=$?
+  echo "$wout"
+  check "worker.mjs exits 0" "0" "$wrc"
+else
+  if [[ ${CI:-} == true ]]; then check "node installed for worker.mjs" "yes" "missing"
+  else echo "  SKIP  no node on PATH; worker.mjs skipped"; fi
+fi
+
 echo "=== stop ==="
 bash "$SH" stop >/dev/null
 check "stop takes links down" 000 "$(code "$md_url")"

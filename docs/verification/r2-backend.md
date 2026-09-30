@@ -18,6 +18,17 @@ Verdict: PASS
 
 `shellcheck bin/share tests/share.sh` and `/bin/bash -n` on both are clean on the same tree.
 
+```
+Command: node tests/worker.mjs
+Exit:    0
+Checks:  68 ok, 0 FAIL (PASS): Worker sha and version self-checks, node --check,
+         serving shapes (index, README fallback, 308s, HEAD, Range), path and
+         record and Host refusals, hit points, and the gated-record JWT matrix
+         (valid, array aud, no header, unknown key, wrong aud or iss, expired,
+         alg none or HS256, malformed, TEAM empty, certs down, bad record aud)
+Verdict: PASS
+```
+
 The new `=== r2 backend ===` sections cover row 2 (every setup argument refusal:
 missing and bad `--bucket`, `--quick`, `--no-service`, `--login`, `--tunnel-name`,
 a bogus `--backend`, `--bucket` without `--backend r2`, setup over a tunnel config,

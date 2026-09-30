@@ -1917,6 +1917,174 @@ access_open_url() { # the platform opener, backgrounded; skipped over ssh or wit
 # port=r2 sentinel: an older share dies on that port at load, so it can never
 # write pub/ or an Access app against an r2 profile.
 
+WORKER_VERSION=1            # bump on every Worker source change; deploys refuse a downgrade without --force
+WORKER_SHA=f8e97175987b     # first 12 hex of the emitted source's sha256; the suite fails when it drifts
+WORKER_COMPAT_DATE=2026-09-30   # moves only with a WORKER_VERSION bump
+WORKER_RECORD_V=1           # the record schema this source understands; a newer record answers 404
+worker_meta() { printf '%s\n' "$WORKER_VERSION" "$WORKER_SHA" "$WORKER_COMPAT_DATE" "$WORKER_RECORD_V"; }   # one line, four fields, for the deploy and sweep paths
+
+worker_js() { # worker_js <path>: the Worker source to $1; never a heredoc inside $( ) (macOS /bin/bash 3.2)
+  cat >"$1" <<'SHARE_WORKER_JS'
+// share Worker: serves R2-backed snapshots on one hostname, a gated record only
+// inside a valid Cloudflare Access session for that record's app.
+const RECV = 1;
+const TYPES = {
+  html: "text/html", css: "text/css", js: "text/javascript", mjs: "text/javascript",
+  json: "application/json", txt: "text/plain", md: "text/markdown", csv: "text/csv",
+  xml: "application/xml", svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg",
+  jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", ico: "image/x-icon",
+  pdf: "application/pdf", mp4: "video/mp4", webm: "video/webm", mp3: "audio/mpeg",
+  wav: "audio/wav", woff: "font/woff", woff2: "font/woff2", zip: "application/zip",
+  wasm: "application/wasm",
+};
+
+let jwks = { ts: 0, keys: null };   // isolate-global cert cache, one hour
+let jwksFetch = 0;                  // a refetch at most once a minute, failures never cached
+
+const b64u = (s) => {
+  s = s.replace(/-/g, "+").replace(/_/g, "/");
+  while (s.length % 4) s += "=";
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+};
+const b64json = (s) => JSON.parse(new TextDecoder().decode(b64u(s)));
+
+async function certs(env, kid) {
+  const now = Date.now();
+  const want = !jwks.keys || now - jwks.ts > 3600e3 || !jwks.keys.some((k) => k.kid === kid);
+  if (want && now - jwksFetch >= 60e3) {
+    jwksFetch = now;
+    try {
+      const r = await fetch("https://" + env.TEAM + "/cdn-cgi/access/certs");
+      if (r.ok) {
+        const j = await r.json();
+        if (Array.isArray(j.keys) && j.keys.length) jwks = { ts: now, keys: j.keys };
+      }
+    } catch { /* a failed fetch is never cached */ }
+  }
+  return jwks.keys || [];
+}
+
+async function gatedOk(request, env, rec) {
+  if (!env.TEAM) return false;
+  if (typeof rec.aud !== "string" || !/^[0-9a-f]{64}$/.test(rec.aud)) return false;
+  const jwt = request.headers.get("cf-access-jwt-assertion");
+  if (!jwt) return false;
+  const p = jwt.split(".");
+  if (p.length !== 3) return false;
+  const head = b64json(p[0]);
+  if (head.alg !== "RS256" || typeof head.kid !== "string" || !head.kid) return false;
+  const body = b64json(p[1]);
+  if (body.iss !== "https://" + env.TEAM) return false;
+  const auds = Array.isArray(body.aud) ? body.aud : [body.aud];
+  if (!auds.includes(rec.aud)) return false;
+  if (typeof body.exp !== "number" || body.exp * 1000 <= Date.now()) return false;
+  const jwk = (await certs(env, head.kid)).find((k) => k.kid === head.kid && k.kty === "RSA");
+  if (!jwk) return false;
+  const key = await crypto.subtle.importKey("jwk",
+    { kty: "RSA", n: jwk.n, e: jwk.e, ext: jwk.ext },
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
+  return crypto.subtle.verify({ name: "RSASSA-PKCS1-v1_5" }, key, b64u(p[2]),
+    new TextEncoder().encode(p[0] + "." + p[1]));
+}
+
+const isGated = (rec) =>
+  (typeof rec.aud === "string" && rec.aud !== "") ||
+  (typeof rec.opts === "string" && rec.opts.split(/\s+/).some((o) => o.startsWith("access=")));
+
+const hex = async (s) => {
+  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)));
+  return [...d].map((b) => b.toString(16).padStart(2, "0")).join("");
+};
+
+async function handle(request, env) {
+  const u = new URL(request.url);
+  if (u.hostname !== env.HOST) return new Response(null, { status: 404 });
+  if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405 });
+  const raw = request.url.slice(request.url.indexOf(u.hostname) + u.hostname.length).replace(/^:\d+/, "").split(/[?#]/)[0] || "/";
+  if (/%2f|%5c|%2e|%0[0-9a-f]|%1[0-9a-f]/i.test(raw) || raw.includes("//")) {
+    return new Response(null, { status: 400 });
+  }
+  if (raw === "/healthz") {
+    return new Response("ok", {
+      status: 200,
+      headers: {
+        "X-Share-Worker": (env.VERSION || "") + " " + (env.SHA || ""),
+        "X-Share-Gate": env.TEAM ? "1" : "0",
+      },
+    });
+  }
+  const segs = u.pathname.split("/");
+  const id = segs[1];
+  if (!/^[0-9a-f]{6}$/.test(id)) return new Response(null, { status: 404 });
+  const mo = await env.BUCKET.get("m/" + id);
+  if (mo === null) return new Response(null, { status: 404 });
+  let rec;
+  try { rec = await mo.json(); } catch { return new Response(null, { status: 404 }); }
+  if (!rec || rec.v > RECV || rec.id !== id || typeof rec.prefix !== "string" ||
+    !new RegExp("^o/" + id + "\\.[0-9a-f]{8}/$").test(rec.prefix) ||
+    (rec.expires > 0 && Date.now() / 1000 > rec.expires)) {
+    return new Response(null, { status: 404 });
+  }
+  if (isGated(rec)) {
+    let ok = false;
+    try { ok = await gatedOk(request, env, rec); } catch { ok = false; }
+    if (!ok) return new Response(null, { status: 404 });
+  }
+  const rest = segs.slice(2);
+  if (rest.length === 0) return new Response(null, { status: 308, headers: { Location: u.origin + "/" + id + "/" } });
+  const cond = { range: request.headers, onlyIf: request.headers };
+  let rel, redir = false;
+  if (raw.endsWith("/")) {
+    rel = rest.join("/") + "index.html";
+  } else {
+    try { rel = rest.map(decodeURIComponent).join("/"); }
+    catch { return new Response(null, { status: 400 }); }
+    redir = true;
+  }
+  let obj = await env.BUCKET.get(rec.prefix + rel, cond);
+  if (obj === null && raw.endsWith("/")) {
+    obj = await env.BUCKET.get(rec.prefix + rest.join("/") + "README.html", cond);
+    if (obj !== null) rel = rest.join("/") + "README.html";
+  }
+  if (obj === null && redir &&
+    (await env.BUCKET.head(rec.prefix + rel + "/index.html") !== null ||
+      await env.BUCKET.head(rec.prefix + rel + "/README.html") !== null)) {
+    return new Response(null, { status: 308, headers: { Location: u.origin + u.pathname + "/" + u.search } });
+  }
+  if (obj === null) return new Response(null, { status: 404 });
+  if (obj.body === null) return new Response(null, { status: 412 });
+  const h = new Headers();
+  if (obj.writeHttpMetadata) obj.writeHttpMetadata(h);
+  const ext = rel.split(".").pop().toLowerCase();
+  h.set("Content-Type", TYPES[ext] || "application/octet-stream");
+  return new Response(request.method === "HEAD" ? null : obj.body,
+    { status: obj.range ? 206 : 200, headers: h });
+}
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    const id = (url.pathname.split("/")[1] || "");
+    let resp;
+    try { resp = await handle(request, env); }
+    catch { resp = new Response(null, { status: 404 }); }
+    resp.headers.set("Cache-Control", "no-store");
+    resp.headers.set("X-Robots-Tag", "noindex, nofollow");
+    if (resp.status < 400 && url.pathname !== "/healthz" &&
+      env.HITS && env.SALT && /^[0-9a-f]{6}$/.test(id)) {
+      const pseudo = (await hex(env.SALT + (request.headers.get("cf-connecting-ip") || ""))).slice(0, 16);
+      ctx.waitUntil(Promise.resolve(env.HITS.writeDataPoint({ indexes: [id], blobs: [id, pseudo] })).catch(() => {}));
+    }
+    return resp;
+  },
+};
+SHARE_WORKER_JS
+}
+
+
 r2_no_local() { # an r2 profile has no local server to run or manage
   [[ $backend != r2 ]] || die "an r2 profile has no local server; the links live in Cloudflare (share ls, share profiles)"
 }
