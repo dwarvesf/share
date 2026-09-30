@@ -117,7 +117,7 @@ public enum CLI {
     public static func spawnCancellable(_ args: [String], onOutput: @escaping (String) -> Void) -> CLIJob {
         guard let url = locateForRun() else {
             logger.error(
-                "share CLI not found; verb=\(args.first ?? "", privacy: .public) args=\(args.joined(separator: " "), privacy: .private)"
+                "share CLI not found; verb=\(verbForLog(args), privacy: .public) args=\(args.joined(separator: " "), privacy: .private)"
             )
             onOutput("share: CLI not found")
             return CLIJob.failed(CLIResult(status: 127, stdout: "", stderr: "share: CLI not found", timedOut: false))
