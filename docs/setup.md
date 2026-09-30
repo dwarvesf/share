@@ -248,7 +248,7 @@ Every publisher gets their own token, scoped to the share bucket, with an expiry
    op read "op://<vault>/<item>/credential" | share --profile df api-token          # or store it once, from stdin
    ```
 
-   `share --profile df api-token` with no argument in a terminal also works: paste the token at the hidden prompt. It still prints and opens the prefilled form, but that form carries the Access scopes of section 4e (it is named `share access (<profile>)`), not the bucket permission. Create the bucket token as in step 1, and use the form only when this teammate also needs Access scopes.
+   `share --profile df api-token` with no argument in a terminal also works: it prints and opens a prefilled user-token form named `share publisher (<profile>)`, with Zone: Read and the profile's account, then reads the token at a hidden prompt. A Cloudflare template link cannot preset a bucket-scoped permission, so in the form add Workers R2 Storage Bucket Item Write with the share bucket as its only resource, and set an expiry. A teammate who also needs Access scopes adds them in the same form (section 4e lists them).
 
    Before storing, share refuses two kinds of token and stores nothing:
 

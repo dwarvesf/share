@@ -2471,6 +2471,33 @@ check "api-token: the check names the publisher token" "1" "$(grep -c 'a publish
 out=$(CLOUDFLARE_API_TOKEN=admintoken R2SEC_LOG="$WORK/r2sec.log" PATH="$WORK/r2sec:$PATH" SHARE_ACCESS_DRY=1 r2a api-token --check 2>&1); rc=$?
 check "api-token --check refuses an admin token too" "1 1" "$rc $(grep -c 'it is an admin token' <<<"$out")"
 
+echo "=== r2 backend: api-token with no argument opens the publisher token form ==="
+if command -v expect >/dev/null; then
+  cat >"$WORK/tty-r2.exp" <<'EXP'
+set timeout 20
+log_user 1
+spawn bash [lindex $argv 0] --profile r2x api-token
+expect {
+  "Paste the new token (input hidden): " { send "pubtoken\r" }
+  timeout { puts "NO-PROMPT"; exit 2 }
+}
+expect eof
+EXP
+  : >"$WORK/r2sec.log"
+  out=$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND \
+    HOME="$R2H" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$DRYA" SHARE_R2_DRY_ROLE=deny SHARE_ACCESS_DRY=1 SSH_CONNECTION="1.2.3.4 1 5.6.7.8 22" \
+    R2SEC_LOG="$WORK/r2sec.log" PATH="$WORK/r2sec:$PATH" expect -f "$WORK/tty-r2.exp" "$SH" 2>&1 | tr -d '\r')
+  p_url=$(grep -o 'https://dash.cloudflare.com/[^ ]*' <<<"$out" | head -1)
+  check "r2 api-token: the link is the user-token form, not the Access one" "1 0" "$(grep -c '^https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=' <<<"$p_url") $(sed '/Paste the new token/q' <<<"$out" | grep -c 'share%20access')"
+  check "r2 api-token: the keys decode to Zone Read" '[{"key":"zone","type":"read"}]' "$(urldec "$(sed -n 's/.*permissionGroupKeys=\([^&]*\).*/\1/p' <<<"$p_url")" | jq -c .)"
+  check "r2 api-token: the account is the profile's, zones all" "acct all" "$(sed -n 's/.*&accountId=\([^&]*\)&zoneId=\([^&]*\)&.*/\1 \2/p' <<<"$p_url")"
+  check "r2 api-token: the name is 'share publisher (r2x)'" "share publisher (r2x)" "$(urldec "$(sed -n 's/.*&name=\([^&]*\).*/\1/p' <<<"$p_url")")"
+  check "r2 api-token: the prompt names the bucket permission to add" "1" "$(grep -c 'add Workers R2 Storage Bucket Item Write with the resource bucket ok-bucket only' <<<"$out")"
+  check "r2 api-token: the pasted token passed the publisher check and was stored" "1 1" "$(grep -c '^add-generic-password$' "$WORK/r2sec.log") $(grep -c 'a publisher token for bucket ok-bucket' <<<"$out")"
+else
+  echo "  skip  expect not installed (the pseudo-terminal paste is covered on macOS)"
+fi
+
 echo "=== r2 backend: teardown, local and --purge (rows 15, 29) ==="
 command cp "$r2conf" "$WORK/r2x.config.keep"
 rm -rf "$DRYA"; mkdir -p "$DRYA/.cf"; rm -f "$r2root/r2-own"

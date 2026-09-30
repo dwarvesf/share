@@ -1543,6 +1543,14 @@ access_token_url() { # the account-token template URL (Cloudflare docs, "API tok
     '%5B%7B%22key%22%3A%22access%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22access_acct%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22read%22%7D%5D' \
     "${profile:-default}"
 }
+r2_publisher_token_url() { # the user-token template URL (Cloudflare docs, "API token template URLs"): Zone Read, this account, the name
+  # share derives the S3 key from /user/tokens/verify, so the form is a user token's; no documented template key presets a bucket-scoped permission
+  local ep a
+  ep="$(cfg r2_endpoint || true)"; a="${ep#https://}"; a="${a%%.*}"
+  [[ -n $ep && $a =~ ^[A-Za-z0-9-]+$ ]] || a='%2A'
+  printf 'https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%s&accountId=%s&zoneId=all&name=share%%20publisher%%20%%28%s%%29' \
+    '%5B%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22read%22%7D%5D' "$a" "${profile:-default}"
+}
 access_no_token() { # the guided block when no token source resolves; callers send it to stderr
   local z; z="$(cfg zone || true)"; z="${z:-${host_name#*.}}"
   cat <<EOF
@@ -1997,9 +2005,14 @@ cmd_api_token() { # cmd_api_token [--cmd '<command>' | --check]: store a token c
       mv -f "$config.tmp" "$config"
       echo "token:      api_token_cmd stored in $config (no secret written)" ;;
     "")
-      url="$(access_token_url)"
+      if [[ $backend == r2 ]]; then url="$(r2_publisher_token_url)"; else url="$(access_token_url)"; fi
       if [[ -t 0 ]]; then
-        echo "Create the token in the Cloudflare dashboard: the form is prefilled, pick the account that owns $host_name, click Create."
+        if [[ $backend == r2 ]]; then
+          echo "Create the publisher token in the Cloudflare dashboard: the form is prefilled with Zone: Read and the name;"
+          echo "  add Workers R2 Storage Bucket Item Write with the resource bucket $(cfg bucket || true) only (a link cannot preset a bucket), set an expiry, click Create."
+        else
+          echo "Create the token in the Cloudflare dashboard: the form is prefilled, pick the account that owns $host_name, click Create."
+        fi
         echo "  $url"
         access_open_url "$url"
         read -rs -p "Paste the new token (input hidden): " tok; echo
