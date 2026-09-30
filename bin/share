@@ -2095,14 +2095,104 @@ r2_md5() { # r2_md5 <file>: an etag-shaped lowercase hex
 
 r2_url() { # r2_url <key>: sets r2_url_out; the key through urlenc, only / stays literal
   urlenc "$1"
-  printf -v r2_url_out '%s/%s/%s' "$(cfg r2_endpoint || true)" "$(cfg bucket || true)" "$urlenc_out"
+  printf -v r2_url_out '%s/%s/%s' "${r2_endpoint:-$(cfg r2_endpoint || true)}" "${r2_bucket:-$(cfg bucket || true)}" "$urlenc_out"
+}
+
+urldec() { # urldec <str>: sets urldec_out; %XX back to bytes, a malformed tail stays literal
+  local LC_ALL=C s="$1" out="" c i n
+  n=${#s}
+  for ((i = 0; i < n; i++)); do
+    c="${s:i:1}"
+    if [[ $c == % && $((i + 2)) -lt $n && ${s:i+1:2} =~ ^[0-9A-Fa-f][0-9A-Fa-f]$ ]]; then
+      printf -v c '%b' "\\x${s:i+1:2}"   # one raw byte; UTF-8 sequences arrive as consecutive %XX
+      i=$((i + 2))
+    fi
+    out+="$c"
+  done
+  urldec_out="$out"
+}
+
+r2_list() { # r2_list <prefix>: every key under it into r2_list_out (decoded, newline-joined); dies on a bad page, never an empty list on error
+  local prefix=$1 tok="" k
+  r2_list_out=""
+  while :; do
+    r2_call LIST "$prefix" ${tok:+"$tok"}
+    [[ $cf_code == 200 ]] || die "r2 list of '$prefix' failed (HTTP $cf_code${cf_err:+, $cf_err})"
+    while IFS= read -r k; do
+      [[ -n $k ]] || continue
+      urldec "$k"; r2_list_out+="$urldec_out"$'\n'
+    done < <(grep -o '<Key>[^<]*</Key>' <<<"$cf_body" | sed 's/<Key>\(.*\)<\/Key>/\1/')
+    tok="$(grep -o '<NextContinuationToken>[^<]*' <<<"$cf_body" | sed 's/.*>//' || true)"   # pipefail: an absent token must not kill the run
+    [[ $cf_body == *'<IsTruncated>true</IsTruncated>'* && -n $tok ]] || break
+  done
+}
+
+r2_put_tree() { # r2_put_tree <dir> <prefix>: every file under dir to prefix<relpath>; parallel up to 8 live; a failed transfer is retried alone through r2_call
+  local dir=$1 prefix=$2 f rel files=()
+  while IFS= read -r f; do files+=("$f"); done < <(cd "$dir" && find . -type f | LC_ALL=C sort)
+  if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then
+    for f in ${files[@]+"${files[@]}"}; do
+      rel="${f#./}"
+      r2_call PUT "$prefix$rel" "$dir/$rel"
+      [[ $cf_code == 2?? ]] || { r2_call PUT "$prefix$rel" "$dir/$rel"; [[ $cf_code == 2?? ]]; } || return 1
+    done
+    return 0
+  fi
+  [[ ${#files[@]} -gt 0 ]] || return 0
+  local wd kf mapf out code url retries
+  wd="$(mktemp -d "${TMPDIR:-/tmp}/share-r2put.XXXXXX")"
+  kf="$wd/transfers"; mapf="$wd/map"; : >"$kf"; : >"$mapf"
+  r2_creds || { rm -rf "$wd"; return 1; }
+  for f in "${files[@]}"; do
+    rel="${f#./}"
+    r2_url "$prefix$rel"
+    printf 'url = "%s"\nupload-file = "%s"\noutput = "/dev/null"\n' "$r2_url_out" "$dir/$rel" >>"$kf"
+    printf '%s\t%s\n' "$r2_url_out" "$dir/$rel" >>"$mapf"
+  done
+  out="$(curl -sS --parallel --parallel-max 8 --max-time 300 -w '%{http_code} %{url_effective}\n' \
+    -K "$kf" -K <(printf 'user = "%s:%s"\n' "$r2_key_id" "$r2_secret") \
+    --aws-sigv4 'aws:amz:auto:s3' 2>/dev/null)" || true
+  retries=""
+  while IFS=' ' read -r code url; do
+    [[ -n $code && $code != 2?? ]] || continue
+    f="$(awk -F'\t' -v u="$url" '$1 == u {print $2; exit}' "$mapf")"
+    [[ -n $f ]] || { rm -rf "$wd"; echo "share: a failed r2 transfer did not map back to a file ($url)" >&2; return 1; }
+    retries+="$f"$'\n'
+  done <<<"$out"
+  while IFS= read -r f; do
+    [[ -n $f ]] || continue
+    rel="${f#"$dir"/}"
+    r2_call PUT "$prefix$rel" "$f"
+    [[ $cf_code == 2?? ]] || { rm -rf "$wd"; return 1; }
+  done <<<"$retries"
+  rm -rf "$wd"
+}
+
+r2_delete_prefix() { # r2_delete_prefix <prefix>: every key under it deleted; a surviving key fails the call
+  local prefix=$1 k fails=0
+  r2_list "$prefix"
+  while IFS= read -r k; do
+    [[ -n $k ]] || continue
+    r2_call DELETE "$k"
+    [[ $cf_code == 204 || $cf_code == 200 || $cf_code == 404 ]] || fails=1
+  done <<<"$r2_list_out"
+  [[ $fails == 0 ]] || return 1
+  r2_list "$prefix"
+  [[ -z $r2_list_out ]]
 }
 
 r2_creds() { # r2_creds: the publisher pair into r2_key_id/r2_secret; the token never reaches argv, a file, or output
+  [[ -n ${r2_key_id:-} && -n ${r2_secret:-} ]] && return 0   # setup presets them; one resolve per process
   r2_key_id="${SHARE_R2_KEY_ID:-$(cfg r2_key_id || true)}"
-  local tok="${SHARE_R2_TOKEN:-}" c
+  local tok="${SHARE_R2_TOKEN:-}" c out
   [[ -z $tok ]] && { c="$(cfg r2_token_cmd || true)"; [[ -n $c ]] && tok="$(eval "$c" 2>/dev/null)"; }
-  [[ -n $r2_key_id && -n $tok ]] || return 1
+  if [[ -z $tok ]]; then api_token_resolve; tok="$api_token"; fi
+  [[ -n $tok ]] || return 1
+  if [[ -z $r2_key_id ]]; then   # the S3 access key is the token's own id
+    out="$(curl -sS --max-time 30 "$api/user/tokens/verify" -H @<(printf 'Authorization: Bearer %s\n' "$tok") 2>/dev/null || true)"
+    r2_key_id="$(jq -r '.result.id // empty' <<<"$out" 2>/dev/null)"
+    [[ -n $r2_key_id ]] || return 1
+  fi
   r2_secret="$(printf '%s' "$tok" | shasum -a 256 | cut -d' ' -f1)"
 }
 
@@ -2121,7 +2211,7 @@ r2_call() { # r2_call METHOD KEY [ARG] [curl args...]: one S3 call on cf_try's g
   hdrs="$(mktemp "${TMPDIR:-/tmp}/share-r2h.XXXXXX")"
   local args=()
   case $meth in
-    LIST) urlenc "$key"; url="$(cfg r2_endpoint)/$(cfg bucket)?list-type=2&prefix=$urlenc_out&encoding-type=url&max-keys=1000"; xmeth=GET
+    LIST) urlenc "$key"; url="${r2_endpoint:-$(cfg r2_endpoint)}/${r2_bucket:-$(cfg bucket)}?list-type=2&prefix=$urlenc_out&encoding-type=url&max-keys=1000"; xmeth=GET
       [[ -n $arg3 ]] && { urlenc "$arg3"; url+="&continuation-token=$urlenc_out"; } ;;
     *) r2_url "$key"; url=$r2_url_out; [[ -n $arg3 ]] && args+=(--upload-file "$arg3") ;;
   esac
@@ -2160,6 +2250,9 @@ r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "
           if-match:*) [[ -e $f && $h == *"$(r2_md5 "$f")"* ]] || { cf_code=412 cf_err=PreconditionFailed; return 0; } ;;
         esac
       done
+      if [[ ${SHARE_R2_DRY_PUT:-} == 500-once && ! -f $d/.fx/p500.done ]]; then
+        mkdir -p "$d/.fx"; : >"$d/.fx/p500.done"; cf_code=500 cf_err=InternalError; return 0
+      fi
       mkdir -p "${f%/*}"
       [[ -n $arg3 && -f $arg3 ]] && cp "$arg3" "$f" || : >"$f"
       [[ ${SHARE_R2_DRY_PUT:-} == lost ]] && { cf_code=000; return 0; }
@@ -2172,14 +2265,15 @@ r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "
       rm -f "$f"; cf_code=204 ;;
     LIST)
       [[ ${SHARE_R2_DRY_LIST:-} == 500 ]] && { cf_code=500 cf_err=InternalError; return 0; }
-      local all="" count=0 last=""
+      local all="" count=0 last="" want=""
+      [[ -n $arg3 ]] && { urldec "$arg3"; want="$urldec_out"; }   # the continuation token arrives url-encoded, as S3 serves it
       while IFS= read -r k; do
-        [[ $k == "$key"* ]] && [[ -z $arg3 || $k > $arg3 ]] && all+="$k"$'\n'
-      done < <(cd "$d" && find . -type f ! -name '.resume' ! -name 'r2-calls.log' | sed 's|^\./||' | LC_ALL=C sort)
+        [[ $k == "$key"* ]] && [[ -z $want || $k > $want ]] && all+="$k"$'\n'
+      done < <(cd "$d" && find . -type f ! -name '.*' ! -path './.fx/*' ! -name 'r2-calls.log' | sed 's|^\./||' | LC_ALL=C sort)
       cf_body='<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>dry</Name><Prefix>'"$key"'</Prefix><MaxKeys>1000</MaxKeys><EncodingType>url</EncodingType>'
       while IFS= read -r k; do
         [[ -n $k ]] || continue
-        if [[ $count -ge 1000 ]]; then cf_body+='<IsTruncated>true</IsTruncated><NextContinuationToken>'"$last"'</NextContinuationToken>'; break; fi
+        if [[ $count -ge 1000 ]]; then urlenc "$last"; cf_body+='<IsTruncated>true</IsTruncated><NextContinuationToken>'"$urlenc_out"'</NextContinuationToken>'; break; fi
         urlenc "$k"; cf_body+='<Contents><Key>'"$urlenc_out"'</Key><ETag>"'"$(r2_md5 "$d/$k")"'"</ETag><Size>'"$(wc -c <"$d/$k" | tr -d ' ')"'</Size></Contents>'
         last="$k"; count=$((count + 1))
       done <<<"$all"
@@ -2486,6 +2580,12 @@ case "${1:-status}" in
   hits) cmd_hits "$(id_of "${2:-}")" ;;
   prune) cmd_prune ;;
   r2-call) shift; rc=0; r2_call "$@" || rc=$?; printf 'code=%s etag=%s\n' "$cf_code" "$r2_etag"; [[ -n $cf_body ]] && printf '%s\n' "$cf_body"; exit "$rc" ;;
+  r2-list) r2_list "${2:-}"; printf '%s' "$r2_list_out" ;;
+  r2-put-tree) shift; r2_put_tree "$@" ;;
+  r2-delete-prefix) shift; r2_delete_prefix "$@" ;;
+  r2-rows) r2_snapshot; printf 'index=%s\n' "$index"; rows ;;
+  r2-id) rand_id ;;
+  worker-src) worker_js /dev/stdout ;;
   start) cmd_start ;;
   stop) cmd_stop ;;
   status) cmd_status ;;

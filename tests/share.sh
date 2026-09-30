@@ -1840,6 +1840,36 @@ out=$(SHIM_ALWAYS=1 r2l r2-call GET m/x 2>&1); rc=$?
 check "shim: persistent 500 gives up after three" "3" "$(grep -c '^---$' "$WORK/shim.log")"
 check "shim: final code 500" "code=500" "$(head -1 <<<"$out" | cut -d' ' -f1)"
 
+echo "=== r2 backend: put_tree, list, delete_prefix (row 26) ==="
+rm -rf "$DRYD"; mkdir -p "$DRYD"   # the r2_call section above leaves objects behind
+STG="$WORK/r2stage"; mkdir -p "$STG/sub"
+printf 'a\n' >"$STG/a%b.txt"; printf 'q\n' >"$STG/q?.txt"; printf 'h\n' >"$STG/h#.txt"
+printf 's\n' >"$STG/sp ace.txt"; printf 'd\n' >"$STG/sub/deep.txt"
+: >"$rlog"
+out=$(r2d r2-put-tree "$STG" 'o/a1b2c3.deadbeef/' 2>&1); rc=$?
+check "put_tree exits 0" "0" "$rc"
+out=$(r2d r2-list 'o/a1b2c3.' 2>&1)
+check "put_tree: the prefix listing equals the stage tree" "o/a1b2c3.deadbeef/a%b.txt
+o/a1b2c3.deadbeef/h#.txt
+o/a1b2c3.deadbeef/q?.txt
+o/a1b2c3.deadbeef/sp ace.txt
+o/a1b2c3.deadbeef/sub/deep.txt" "$out"
+check "put_tree: bytes round-trip" "q" "$(cat "$DRYD/o/a1b2c3.deadbeef/q?.txt")"
+rm -rf "$DRYD/.fx"; : >"$rlog"
+out=$(SHARE_R2_DRY_PUT=500-once r2d r2-put-tree "$STG" 'o/b1b2c3.deadbeef/' 2>&1); rc=$?
+check "put_tree with one 500 transfer still exits 0" "0" "$rc"
+check "put_tree: the failed transfer was retried alone" "2" "$(awk '$1=="PUT" && $2=="o/b1b2c3.deadbeef/a%b.txt"' "$rlog" | grep -c .)"
+out=$(r2d r2-list 'o/b1b2c3.' 2>&1)
+check "put_tree: the 500 retried file landed" "1" "$(grep -c 'a%b.txt' <<<"$out")"
+mkdir -p "$DRYD/o/c1c2c3.aaaabbbb" "$DRYD/o/c1c2c3.ccccdddd"
+printf 'x\n' >"$DRYD/o/c1c2c3.aaaabbbb/f.txt"; printf 'y\n' >"$DRYD/o/c1c2c3.ccccdddd/g.txt"
+out=$(r2d r2-delete-prefix 'o/c1c2c3.' 2>&1); rc=$?
+check "delete_prefix exits 0" "0" "$rc"
+out=$(r2d r2-list 'o/c1c2c3.' 2>&1)
+check "delete_prefix: no key under either nonce remains" "" "$out"
+out=$(SHARE_R2_DRY_LIST=500 r2d r2-delete-prefix 'o/c1c2c3.' 2>&1); rc=$?
+check "delete_prefix dies on a bad list page" "1" "$rc"
+
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then
   wout="$(node "$(dirname "$SH")/../tests/worker.mjs" 2>&1)"; wrc=$?
