@@ -3,6 +3,7 @@
 Generated: 2026-09-30
 Status: DRAFT
 Lane: full (a new CLI JSON contract the app depends on; an authz choice made in the UI)
+Depth: research (repo: how the app refreshes, adds, and reports failures today in mac/Sources, and what cmd_profiles and cmd_state print on the Mini)
 References: `docs/specs/SPEC-003-menu-bar.md` (the app, `share state`, header and row rules); `docs/specs/SPEC-005-profiles.md` (`--profile`, `share profiles`, the overrides `profiles` unsets); `docs/specs/SPEC-004-access.md` (`--access` grammar, the O1/O3 guided messages, the gate wait); `docs/decisions/ADR-0003-menu-bar-reads-through-cli.md`.
 Supersedes: SPEC-005 `## Failure modes` row "a named profile's outage: none from Share Bar (it watches the default only)" and SPEC-005 `## Out of scope` item "Share Bar reading a named profile". After this spec ships, Share Bar watches every profile.
 
@@ -26,8 +27,8 @@ B. The CLI stays the only code that knows what a profile is (ADR-0003). The app 
 
 ### Extensibility & boundaries
 
-- Growth dimension: profiles. Each costs one `state` child inside `profiles --json` and one menu section.
-- Units: `cmd_profiles --json` (bash); `ProfilesSnapshot` decode, `Health`, sectioned `MenuModel`, `AccessRule`, `PublishChoice`, the verbatim failure detail (all `ShareBarCore`, unit-tested); the publish dialog, sections, and per-profile actions (`ShareBar`, checked by hand).
+- Growth dimension: profiles. Each costs one serial `state` child inside `profiles --json` (local checks plus a 1s `curl` ready probe) and one menu section of up to about 14 lines. Sized for fewer than 5 profiles. Past that, the upgrade is a per-child timeout in `profiles --json` and collapsing each section into a submenu.
+- Units: `cmd_profiles --json` (bash); `ProfilesSnapshot` decode, `Health`, sectioned `MenuModel`, `AccessRule`, `PublishForm`, `PublishChoice`, the verbatim failure detail (all `ShareBarCore`, unit-tested); the publish dialog, sections, and per-profile actions (`ShareBar`, checked by hand).
 - Out of bounds: creating a new named profile, token handling, changing the rule of a live share.
 
 ## Picture
@@ -36,11 +37,11 @@ B. The CLI stays the only code that knows what a profile is (ADR-0003). The app 
  poll 60s / wake / menu open
         |
         v
- CLI.profiles()  (coalesced, 20s timeout)
+ CLI.profiles()  (coalesced, 20s timeout; after a mutation: a fresh run)
         |
         v
- share profiles --json ---- for each profile: env -u SHARE_ROOT ... SHARE_PROFILE=<p> bash share state
-        |
+ share profiles --json ---- for each profile, serially:
+        |                    env -u SHARE_ROOT ... SHARE_PROFILE=<p> bash share state
         v
  {"schema":1,"profiles":[{"name":"default","state":{...}}, {"name":"dfoundation","state":{...}}]}
         |
@@ -50,10 +51,10 @@ B. The CLI stays the only code that knows what a profile is (ADR-0003). The app 
         +-- row actions ----------> share --profile <p> rm|refresh|hits <id>
         +-- Start / Stop ---------> share --profile <p> start|stop
         +-- Set Up... (not set up) -> share --profile <p> setup <host>|--quick   (existing window)
-        +-- drop / Share File... -> publish dialog (profile, who can open)
+        +-- drop / Share File... -> publish dialog (PublishForm: profile, audience, rule)
                                        |
-                                       v
-                          share --profile <p> add [--access <rule>] <path>
+                                       v   one path at a time; stop at the first failure
+                          share --profile <p> add [--access <rule>] </absolute/path>
                                        |
                           exit 1 + stderr (O1, O3, gate timeout) -> alert shows stderr verbatim
 ```
@@ -68,9 +69,9 @@ B. The CLI stays the only code that knows what a profile is (ADR-0003). The app 
 {
   "schema": 1,
   "profiles": [
-    {"name": "default", "state": {"schema": 1, "state": "not_setup", "ready": false, "mode": "named", "host": null, "hosts": "", "serves_here": true, "service": false, "access_pending": 0, "shares": []}},
+    {"name": "default", "state": {"schema": 1, "state": "not_setup", "ready": false, "mode": "named", "host": null, "hosts": "", "serves_here": false, "service": false, "access_pending": 0, "shares": []}},
     {"name": "dfoundation", "state": {"schema": 1, "state": "serving", "ready": true, "mode": "named", "host": "s.d.foundation", "...": "..."}},
-    {"name": "Bad", "error": "state exited 1"}
+    {"name": "Bad", "error": "share: bad profile name 'Bad' (a-z, 0-9, -; 32 chars max)"}
   ]
 }
 ```
@@ -81,9 +82,15 @@ B. The CLI stays the only code that knows what a profile is (ADR-0003). The app 
 | `profiles[]` | same order and same members as the text `share profiles`: `default` first, then every directory under `<config base>/share/profiles` in glob order |
 | `profiles[].name` | the directory name, or `default` |
 | `profiles[].state` | exactly the stdout of that profile's `share state` (SPEC-003, plus SPEC-004's `access` and `access_pending`), present when that child exited 0 and printed valid JSON |
-| `profiles[].error` | `state exited <n>` (or `state printed invalid JSON`), present instead of `state` otherwise |
+| `profiles[].error` | present instead of `state` otherwise: the child's last non-empty stderr line, else `state exited <n>`, else `state printed invalid JSON` |
 
-Rules: each child runs as the text form runs it today (`SHARE_ROOT`, `SHARE_CONFIG_DIR`, `SHARE_PORT`, `SHARE_HOSTNAME`, `SHARE_HOSTS`, `SHARE_SERVICE_LABEL` unset; `SHARE_PROFILE=<name>`). The verb inherits `state`'s invariants: it never prunes, writes, creates a file, needs a TTY, or touches the clipboard. The text form without `--json` is unchanged. Any other argument dies with `usage: share profiles [--json]`.
+Rules:
+
+- Each child runs as the text form runs it today: `SHARE_ROOT`, `SHARE_CONFIG_DIR`, `SHARE_PORT`, `SHARE_HOSTNAME`, `SHARE_HOSTS`, `SHARE_SERVICE_LABEL` unset, `SHARE_PROFILE=<name>`.
+- Every entry is built with `jq --arg name ... --argjson state ...` (or `--arg error`), never by string concatenation, so a directory name with `"`, `\`, or a newline cannot break or forge an entry.
+- The error line is captured without a temp file (for example, rerun only the failed child with stdout discarded).
+- The verb keeps `state`'s invariants: it never prunes, writes, creates a file, needs a TTY, or touches the clipboard.
+- The dispatcher forwards arguments (`profiles) shift; cmd_profiles "$@" ;;`). The text form without `--json` is byte-identical to today. Any other argument dies with `usage: share profiles [--json]`.
 
 **CLI verbs the app runs.** Every call is `share --profile <name> <verb> ...`, `default` included:
 
@@ -94,10 +101,12 @@ Rules: each child runs as the text form runs it today (`SHARE_ROOT`, `SHARE_CONF
 | Copy Link, Open | none (the row's `url`) |
 | Refresh, Remove | `--profile <p> refresh <id>`, `--profile <p> rm <id>` |
 | Start, Stop | `--profile <p> start`, `--profile <p> stop` |
-| publish | `--profile <p> add <path>`, or `--profile <p> add --access <rule> <path>` |
+| publish | `--profile <p> add <path>`, or `--profile <p> add --access <rule> <path>`; `<path>` is always absolute |
 | Set Up... | `--profile <p> setup <host>` or `--profile <p> setup --quick` |
 
-**Child environment.** SPEC-003's rules, plus: the app removes `SHARE_PROFILE`, `SHARE_ROOT`, `SHARE_CONFIG_DIR`, `SHARE_PORT`, `SHARE_HOSTNAME`, `SHARE_HOSTS`, and `SHARE_SERVICE_LABEL` from every child's environment. `profiles --json` ignores those overrides, so a write that honored them would land in a root the menu never shows. Manual checks isolate the app with a throwaway `HOME` instead of `SHARE_ROOT`.
+**Child environment.** SPEC-003's rules, plus: the app removes `SHARE_PROFILE` and the six location overrides above from every child's environment. `profiles --json` ignores those overrides, so a write that honored them would land in a root the menu never shows. A `tests/share.sh` check greps the `env -u` list in `cmd_profiles` and the Swift strip list and fails when they name different variables. Manual checks isolate the app with a throwaway `HOME` instead of `SHARE_ROOT`.
+
+**Logging.** The existing `os_log` rules hold: argv (which can now carry `--access email:...`) is logged `privacy: .private`; stderr and `MutationAlert.detail` are never logged `.public`.
 
 **`ShareBarCore` Swift API** (additions; existing types keep their fields):
 
@@ -108,25 +117,33 @@ struct ProfileEntry: Decodable { name: String; state: Snapshot?; error: String? 
 struct ProfilesSnapshot: Decodable { schema: Int; profiles: [ProfileEntry] }
 extension ProfilesSnapshot { static func from(_ r: CLIResult) -> Result<ProfilesSnapshot, Failure> }
 enum Health { case ok, tunnelDown, stopped, error, elsewhere, notSetUp }   // isAttention, isNeutral
+enum Working { case plain, gatedAdd }      // the app sets it from the argv it enqueues (gatedAdd: an add carrying --access)
 struct Section { profile; host; status; health; rows: [Row]; more; showStart; showStop; showSetUp; accessPending }
 struct MenuModel { init(profiles: ProfilesSnapshot?, failure: Failure?, now: Date, working: Working?) ;
                    header; sections: [Section]; icon; canPublish: Bool; showCopyInstallCommand; showCopyUpgradeCommand; isLoading }
 enum AccessRule { static func isWellFormed(_ s: String) -> Bool }
+enum Audience { case anyone, login }
+struct PublishForm {                                           // the dialog's state, no AppKit
+  init(profiles: ProfilesSnapshot, lastProfile: String?, lastRules: [String: String])
+  mutating func select(profile: String); mutating func choose(_ a: Audience); var rule: String
+  var profile: String?; var audience: Audience; var loginAvailable: Bool; var canPublish: Bool; var buttonTitle: String
+}
 enum PublishChoice { static func eligible(_ p: ProfilesSnapshot) -> [String];
-                     static func initialProfile(last: String?, eligible: [String]) -> String?;
-                     static func args(profile: String, rule: String?, path: String) -> [String] }
+                     static func args(profile: String, rule: String?, path: String) -> [String]? }   // nil unless path starts with "/"
 struct MutationAlert { ...; detail: String? }                  // the full stderr, shown verbatim
-extension CLI { static func profiles(timeout: TimeInterval? = 20) async -> CLIResult }   // coalesced, replaces state()
+extension CLI { static func profiles(fresh: Bool = false, timeout: TimeInterval? = 20) async -> CLIResult }
 ```
 
-**Decode and failure.** `ProfilesSnapshot.from` keeps SPEC-003's order: the not-found sentinel, then exit 1 with the help banner (`.oldCLI`), then a clean decode on exit 0, else `.other(lastErrorLine)`. One rule is new: exit 0 with stdout that does not start with `{` is `.oldCLI` too, because a CLI from before this spec prints the TSV listing and ignores `--json`. A per-profile `state` with `schema` > 1 marks that profile `error` with the status `Update Share Bar`; a top-level `schema` > 1 is the global `Update Share Bar` header.
+`CLI.profiles` replaces `CLI.state` and its `StateCoalescer`, which are deleted. Their one other caller, `SetupWindowModel.probeCurrentHost`, takes the host from the section instead. A plain call joins a run in flight. A `fresh` call never joins a run that started before it: it waits for that run to end, then starts a new one, which later callers may join.
+
+**Decode and failure.** `ProfilesSnapshot.from` keeps SPEC-003's order: the not-found sentinel, then exit 1 with the help banner (`.oldCLI`), then a clean decode on exit 0, else `.other(lastErrorLine)`. One rule is new: exit 0 with stdout that does not start with `{` is `.oldCLI` too, because a CLI from before this spec prints the TSV listing and ignores `--json` (Grounding G1). A per-profile `state` with `schema` > 1 marks that profile `error` with the status `Update Share Bar`; a top-level `schema` > 1 is the global `Update Share Bar` header. A failed or timed-out refresh keeps the previous `ProfilesSnapshot` on screen and puts the failure in the header; only a successful decode replaces it. (Today the app clears the snapshot on any failure; that changes.)
 
 **Health per profile**, first match wins:
 
 | Health | When | Status text | Counts for the icon |
 |---|---|---|---|
 | `error` | the entry has `error`, or its `state.schema` > 1 | `Error: <error>` or `Update Share Bar` | attention |
-| `notSetUp` | `state` is `not_setup` | `Not set up` | neutral |
+| `notSetUp` | `state` is `not_setup` (checked before `elsewhere`: the Mini's unset default reports `serves_here` false, Grounding G2) | `Not set up` | neutral |
 | `elsewhere` | not `serving` and `serves_here` false | `Not serving on this Mac (hosts=<hosts>)` | neutral |
 | `stopped` | `stopped` | `Stopped` | attention |
 | `tunnelDown` | `serving`, `ready` false | `Tunnel not connected` | attention |
@@ -134,9 +151,9 @@ extension CLI { static func profiles(timeout: TimeInterval? = 20) async -> CLIRe
 
 **Icon** (supersedes SPEC-003's rule): `connected` when at least one profile is `ok` and none needs attention; `disconnected` otherwise, which covers no set-up profile at all (the old "Not set up" icon). Neutral profiles never slash the icon, so the Mini's unset default does not hide a healthy `dfoundation`.
 
-**Menu header** (the first line, and the status item's accessibility label), first match wins: `Working…` rules below; then SPEC-003's `Loading…`, `share CLI not found`, `Update share CLI`, `Update Share Bar`, and the failure line for the `profiles --json` call itself; then `Needs attention: <name> (<status>)` for one attention profile or `Needs attention: <name>, <name>` for several; `Serving at <host>[, <host>...]` over the `ok` profiles; `Not serving on this Mac` when every set-up profile is `elsewhere`; else `Not set up`.
+**Menu header** (the first line, and the status item's accessibility label), first match wins: the `Working…` rules below; then SPEC-003's `Loading…`, `share CLI not found`, `Update share CLI`, `Update Share Bar`, and the failure line for the `profiles --json` call itself; then `Needs attention: <name> (<status>)` for one attention profile or `Needs attention: <name>, <name>` for several; `Serving at <host>[, <host>...]` over the `ok` profiles; `Not serving on this Mac` when every set-up profile is `elsewhere`; else `Not set up`.
 
-**Working header.** While a mutating verb runs: `Working…`. While the running verb is a gated add: `Working… (a login gate can take minutes)`, because SPEC-004's gate waits up to 15 minutes before it publishes.
+**Working header.** `Working.plain`: `Working…`. `Working.gatedAdd`: `Working… (a login gate can take minutes)`, because SPEC-004's gate waits up to 15 minutes before it publishes.
 
 **Sections.** One per `profiles[]` entry, in order. A section starts with a disabled title line `<name> · <host or -> · <status text>`. Under it:
 
@@ -145,23 +162,28 @@ extension CLI { static func profiles(timeout: TimeInterval? = 20) async -> CLIRe
 - `Start Sharing` or `Stop Sharing` per SPEC-003's `showStart`/`showStop`, applied to that profile;
 - `Set Up…` when the profile is `notSetUp`: the existing setup window, its argv prefixed with `--profile <p>` and its hostname field prefilled from the section's host;
 - a disabled line `<n> Access app(s) await deletion (<cmd> prune)` when `access_pending` > 0;
-- an `error` section shows its title line only.
+- an `error` section shows its title line only and offers no action, so the app never runs `--profile <bad name>`.
 
 Rows and hits are keyed by (profile, id), because two profiles can mint the same 6-hex id.
 
 **Global items**, below the sections: `Stop Waiting…` (SPEC-003 rules, one mutation queue for all profiles), `Share File…` ⌘N (disabled when `canPublish` is false), `Copy Install Command` / `Copy Upgrade Command` (as today), `Open at Login`, `About Share Bar`, `Quit Share Bar`.
 
-**Publish dialog.** Every drop and every Share File… selection opens one `NSAlert` with an accessory view, one dialog per batch:
+**Publish dialog.** Every drop and every Share File… selection opens one `NSAlert` with an accessory view, one dialog per batch. `PublishForm` holds all its state and rules:
 
-- message: `Publish <name>?` for one file; `Publish the folder <name> for 30 days?` when the batch holds a folder (this replaces the separate folder confirm); `Publish <n> items?` for several files;
-- `Profile` popup: the eligible profiles, each as `<name> · <host>`. Eligible: `stopped` or `serving` with no `error` (`add` auto-starts a stopped profile; an `elsewhere` profile keeps SPEC-003's post-add notice). Preselected: the last profile published to, else the first eligible one;
-- `Who can open` popup: `Anyone with the link` or `Only people who log in`. Choosing the second enables a `Rule` text field with the placeholder `group:<name>, email:a@x.io,b@y.io, or domain:<domain>`. For a quick-mode profile the second choice is disabled and a note reads `Login needs a named setup, not quick mode`;
-- the popup and rule start at the last choice for the selected profile; switching profiles reloads that profile's last choice;
-- `Publish` is disabled while the rule is not well formed (`AccessRule.isWellFormed`: after trimming, `group:`, `email:`, or `domain:` followed by at least one character, and no whitespace). The CLI owns the full grammar; its refusal reaches the user verbatim;
-- `Publish` stores the profile and, per profile, the rule (empty for anyone) in `UserDefaults` (`publish.lastProfile`, `publish.rule.<profile>`), then runs one `add` per path through the mutation queue, in order;
-- when `canPublish` is false (no eligible profile), a drop shows `No share profile is ready. Set one up first.` and publishes nothing.
+- message: `Publish <name>?` for one file; `Publish the folder <name> for 30 days?` when the batch holds a folder (this replaces the separate folder confirm); `Publish <n> items?` for several;
+- `Profile` popup: the eligible profiles, each as `<name> · <host>`. Eligible: `stopped` or `serving` with no `error` (`add` auto-starts a stopped profile; an `elsewhere` profile keeps SPEC-003's post-add notice). Preselected: `publish.lastProfile` when eligible, else the first eligible one;
+- `Who can open` popup: `Anyone with the link` or `Only people who log in`. `login` enables a `Rule` field with the placeholder `group:<name>, email:a@x.io,b@y.io, or domain:<domain>`. For a quick-mode profile `loginAvailable` is false and a note reads `Login needs a named setup, not quick mode`;
+- the audience and rule start from `publish.rule.<profile>` (empty means `anyone`);
+- **the form never moves the audience from `login` to `anyone` on its own.** Selecting another profile keeps `login` and the typed rule when the current audience is `login`, even when the new profile's stored choice is `anyone`. When `login` is current or stored but the profile is quick mode, `canPublish` is false until the user picks `Anyone with the link` by hand;
+- `canPublish` is also false while the audience is `login` and the rule is not well formed (`AccessRule.isWellFormed`: after trimming, `group:`, `email:`, or `domain:` followed by at least one character, and no whitespace). The CLI owns the full grammar; its refusal reaches the user verbatim;
+- the default button names what will happen: `Publish publicly on <host>` or `Publish behind login on <host>`, with the profile name in place of `<host>` when the host is unknown. Return presses it;
+- on Publish the app stores `publish.lastProfile` and `publish.rule.<profile>` (the rule, or empty for `anyone`) in `UserDefaults`, then runs one `add` per path through the mutation queue, in order;
+- **the batch stops** at the first `add` that exits non-zero or is stopped with Stop Waiting. The alert for that failure adds a line `Not published: <names>` for the paths that never ran;
+- when `canPublish` is false for every profile (none eligible), a drop shows `No share profile is ready. Set one up first.` and publishes nothing.
 
-**Failure alerts** (amends SPEC-003's rule for mutating verbs). The alert title stays `lastErrorLine`, now the last stderr line that starts with `share: ` (the die line; the O1 block's first line), falling back to today's rule. When stderr holds two or more non-empty lines, `MutationAlert.detail` carries the whole stderr, verbatim and untrimmed except for trailing newlines, shown as selectable monospaced text in the alert. This carries the O1 no-token block (with its `share --profile <p> api-token` commands and form URL), the O3 group-not-found block, and the gate-timeout line exactly as the CLI printed them. The app adds no wording of its own to a CLI failure.
+**After each add.** The app runs `CLI.profiles(fresh: true)`, so the read starts after the add exits. The new share is the first id in the target profile's `shares` that was not there before the add; `serves_here` for the notice is the target profile's. When that read fails, the share may be live but its link is unknown: the alert says `Published to <p>, but the menu could not refresh; see <cmd> ls`.
+
+**Failure alerts** (amends SPEC-003's rule for mutating verbs). The alert title is the last stderr line that starts with `share: ` (the die line; the O1 block's first line), falling back to today's `lastErrorLine`. When stderr holds two or more non-empty lines, `MutationAlert.detail` carries the whole stderr, verbatim except for trailing newlines, shown as selectable monospaced text in the alert. This carries the O1 no-token block (with its `share --profile <p> api-token` commands and form URL), the O3 group-not-found block, and the gate-timeout lines exactly as the CLI printed them. The app adds no wording of its own inside a CLI failure.
 
 ### Data model changes
 
@@ -196,13 +218,13 @@ None on disk. The app gains two `UserDefaults` keys (`publish.lastProfile`, `pub
  Quit Share Bar                       ⌘Q
 
  Publish dialog:
- ┌──────────────────────────────────────────────────────┐
- │ Publish ops-report.pdf?                              │
- │ Profile:        [ dfoundation · s.d.foundation  v ]  │
- │ Who can open:   [ Only people who log in        v ]  │
- │ Rule:           [ group:dwarves-ops               ]  │
- │                                  [Cancel] [Publish]  │
- └──────────────────────────────────────────────────────┘
+ ┌──────────────────────────────────────────────────────────────┐
+ │ Publish ops-report.pdf?                                      │
+ │ Profile:        [ dfoundation · s.d.foundation          v ]  │
+ │ Who can open:   [ Only people who log in                v ]  │
+ │ Rule:           [ group:dwarves-ops                       ]  │
+ │                  [Cancel] [Publish behind login on s.d.foundation] │
+ └──────────────────────────────────────────────────────────────┘
 ```
 
 ### Infrastructure changes
@@ -215,47 +237,75 @@ Out of scope. The app sets up only a profile that already exists and is `not_set
 
 ## Token handling
 
-The app never handles the Cloudflare API token. It never reads `api_token_cmd`, never touches the `share-api` Keychain item, and never sets `CLOUDFLARE_API_TOKEN`. When `add --access`, or `rm` of a gated share, finds no token, the CLI exits 1 with the O1 block (SPEC-004 `### Guided messages`); the failure alert shows it verbatim, and the user runs the named `share --profile <p> api-token` command in a terminal. `api_token_cmd` may prompt (for example a 1Password unlock); that prompt belongs to the command, and the app waits for it like any mutating verb.
+The app never handles the Cloudflare API token. It never reads `api_token_cmd`, never touches the `share-api` Keychain item, and never sets `CLOUDFLARE_API_TOKEN`. The 60s poll never resolves a token either: `share state` does not call the resolver. When `add --access`, or `rm` of a gated share, finds no token, the CLI exits 1 with the O1 block (SPEC-004 `### Guided messages`); the failure alert shows it verbatim, and the user runs the named `share --profile <p> api-token` command in a terminal. `api_token_cmd` may prompt (for example a 1Password unlock); that prompt belongs to the command, and the app waits for it like any mutating verb.
+
+## Grounding
+
+Read-only samples, taken on the Mini (`Mac-mini`) on 2026-09-30 with the installed CLI (`/opt/homebrew/bin/share`, v0.7.0):
+
+- G1, today's `profiles` ignores `--json`: `share profiles --json` printed the TSV `default	not_setup	-` / `dfoundation	serving	s.d.foundation`, exit 0. The `.oldCLI` rule for "exit 0, stdout not starting with `{`" rests on this.
+- G2, the default's state: `share state | jq -c '{state,serves_here,access_pending}'` gave `{"state":"not_setup","serves_here":false,"access_pending":0}`. An unset default reports `serves_here` false, so `notSetUp` must be checked before `elsewhere`.
+- G3, a gated share already exists: `share --profile dfoundation state` gave `state: serving, ready: true, host: s.d.foundation, hosts: Mac-mini, access_pending: 0`, one share with keys `access, expires, id, kind, name, own_host, url`, and a non-null `access`. The Swift `Share.access` field decodes an existing key.
+- G4, the token is present: `share --profile dfoundation api-token --check` exited 0, so UAT step U2 skips its no-token branch on the Mini today; test row 19 covers the O1 text.
+- Not sampled: `profiles --json` output (it does not exist yet); its shape is pinned by rows 1 and 2.
+
+Negative controls, traced dry:
+
+| Mutation | Code path | Test that goes red |
+|---|---|---|
+| `Health` classifies `notSetUp` as attention | `MenuModel` icon rule over the G2-shaped default | row 9: icon `disconnected` instead of `connected` |
+| `PublishChoice.args` drops `--profile` | argv builder | rows 7 and 18 |
+| no `MutationAlert.detail` | failure alert over the O1 stderr fixture | row 19 |
+| `childEnvironment` keeps `SHARE_ROOT` | env builder; the cross-language grep | rows 20 and 3b |
+| `cmd_profiles --json` passes `SHARE_ROOT` to children | the child env in bash | row 1: the exported root leaks into an entry |
+| `PublishForm.select` loads the stored `anyone` | profile switch while `login` | row 17 |
+| `addPaths` continues after a failure | the batch loop | row 22b |
 
 ## Task Breakdown
 
-- [ ] TASK-001: `share profiles --json` in `bin/share` plus the usage line; a `tests/share.sh` section. Accept: test rows 1 to 3.
-- [ ] TASK-002: `ShareBarCore` decode: `Share.access`, `Snapshot.accessPending`, `ProfileEntry`, `ProfilesSnapshot.from`, `CLI.profiles()` coalesced, the child-environment strip. Accept: rows 4 to 7, 20.
-- [ ] TASK-003: `ShareBarCore` model: `Health`, sections, header, icon, caps, gated-row text, `Working…` variants. Accept: rows 8 to 14.
-- [ ] TASK-004: `ShareBarCore` publish and failure: `AccessRule`, `PublishChoice`, `MutationAlert.detail`. Accept: rows 15 to 19.
-- [ ] TASK-005: `ShareBar` app: sections, per-profile actions with `--profile`, the publish dialog (drop and Share File…), the lock marker, the verbatim alert, Set Up… with the profile prefix. Accept: rows 21 to 24 run by hand against a throwaway `HOME` with two quick profiles, recorded in `docs/verification/menu-bar-profiles.md`.
-- [ ] TASK-006: docs. README "Menu bar app" (profiles, the publish dialog, `share profiles --json`); `docs/how-it-works.md` (the `profiles --json` contract); SPEC-005's superseded Failure-modes row and Out-of-scope item point here; the verification record. Accept: a `tests/share.sh` grep finds each `profiles --json` field name in `docs/how-it-works.md`.
-- [ ] TASK-007: UAT on the Mini (row 25). Accept: every step passes and is recorded in the verification record.
+- [ ] TASK-001: `share profiles --json` in `bin/share` (the flag, the `jq`-built entries, the error line, the dispatcher forwarding args, the usage line) plus a `tests/share.sh` section. Accept: rows 1, 2, 3, 3b.
+- [ ] TASK-002: `ShareBarCore` decode and runner: `Share.access`, `Snapshot.accessPending`, `ProfileEntry`, `ProfilesSnapshot.from`, `CLI.profiles(fresh:)` (deleting `CLI.state` and `StateCoalescer`), the child-environment strip. Depends on TASK-001's fixture. Accept: rows 4 to 7, 6b, 20.
+- [ ] TASK-003: `ShareBarCore` health: `Health`, header, icon, `Working`, keep-last-snapshot on failure. Depends on TASK-002. Accept: rows 8 to 11, 14, 14b.
+- [ ] TASK-004: `ShareBarCore` sections: per-section caps and `more` lines, gated-row text, (profile, id) keys, `access_pending` line. Depends on TASK-002. Accept: rows 12, 13.
+- [ ] TASK-005: `ShareBarCore` publish and failure: `AccessRule`, `PublishForm`, `PublishChoice`, `MutationAlert.detail` and its title rule. Accept: rows 15 to 19.
+- [ ] TASK-006: `ShareBar` menu: sections, per-profile row actions and Start/Stop with `--profile`, the lock marker, Set Up… with the profile prefix. Depends on TASK-003 and TASK-004. Accept: rows 21 and 24 by hand.
+- [ ] TASK-007: `ShareBar` publish: the dialog over `PublishForm` for drop and Share File…, the batch stop, the fresh post-add read, the verbatim alert. Depends on TASK-005 and TASK-006. Accept: rows 22, 22b, 23 by hand.
+- [ ] TASK-008: docs. README "Menu bar app" (profiles, the publish dialog); `docs/how-it-works.md` (the `profiles --json` contract); SPEC-005's superseded Failure-modes row and Out-of-scope item point here; `docs/verification/menu-bar-profiles.md` with rows 21 to 24. Accept: a `tests/share.sh` grep finds each `profiles --json` field name in `docs/how-it-works.md`.
+- [ ] TASK-009: UAT on the Mini (row 25). Accept: every step passes and is recorded in the verification record.
 
 ## Test plan
 
-Coverage matrix. Unit rows run in `bash tests/share.sh` or `swift test --package-path mac` (new files under `mac/Tests/ShareBarCoreTests/`, fixture `Fixtures/profiles.json` built from a real `profiles --json` run). Manual rows run the built app against a throwaway `HOME`.
+Coverage matrix. Unit rows run in `bash tests/share.sh` or `swift test --package-path mac` (new files under `mac/Tests/ShareBarCoreTests/`, fixture `Fixtures/profiles.json` saved from a real `profiles --json` run in TASK-001). Manual rows run the built app against a throwaway `HOME`.
 
 | Row | Level | Scenario | Assert |
 |---|---|---|---|
-| 1 | bash | `profiles --json` under a fresh `HOME`: default unset, profiles `a` and `b` set up `--quick --no-service`, `b` serving | `jq -e` passes; names are `default`, `a`, `b` in order; each `state` equals that profile's own `share --profile <p> state` output; `SHARE_ROOT` exported by the test does not leak into any entry |
-| 2 | bash | a directory `profiles/Bad` (fails the slug) | its entry is `{"name":"Bad","error":"state exited 1"}`; the others still carry `state`; exit 0 |
-| 3 | bash | `profiles --json` writes nothing; `profiles --bogus` | `find $HOME -newer <marker>` is empty; `--bogus` exits 1 with `usage: share profiles [--json]`; plain `profiles` output is byte-identical to before |
-| 4 | swift | decode the fixture, plus an unknown extra field at each level | two sections' worth of `ProfileEntry`; `access` and `accessPending` decoded; the extra fields ignored |
+| 1 | bash | `profiles --json` under a fresh `HOME`: default unset, profiles `a` and `b` set up `--quick --no-service`, `b` serving; `SHARE_ROOT` exported by the test | `jq -e` passes; names are `default`, `a`, `b` in order; each `state` equals that profile's own `share --profile <p> state` run under the same `env -u` set; the exported `SHARE_ROOT` changes no entry |
+| 2 | bash | directories `profiles/Bad` and `profiles/a"b` (both fail the slug) | each entry is `{"name":...,"error":"share: bad profile name ..."}` with the name JSON-escaped; the other entries still carry `state`; exit 0; the whole output parses |
+| 3 | bash | `profiles --json` writes nothing; `profiles --bogus`; plain `profiles` | `find $HOME -newer <marker>` is empty; `--bogus` exits 1 with `usage: share profiles [--json]`; plain output byte-identical to before |
+| 3b | bash | the `env -u` list in `cmd_profiles` against the Swift strip list in `CLI.swift` | both name the same six location variables |
+| 4 | swift | decode the fixture, plus an unknown extra field at each level | `ProfileEntry` per profile; `access` and `accessPending` decoded; extra fields ignored |
 | 5 | swift | exit 0 with TSV stdout; exit 1 with the help banner; the not-found sentinel; exit 2 with a stderr line | `.oldCLI`, `.oldCLI`, `.cliNotFound`, `.other("share: ...")` |
 | 6 | swift | two concurrent `CLI.profiles()` calls against a stub that logs each spawn | one spawn |
+| 6b | swift | a `fresh` call made while a slow stub run is in flight | two spawns; the second starts after the first ends; the fresh caller gets the second result |
 | 7 | swift | a stub CLI that echoes its argv, driven by each action's argv builder | every per-profile argv starts `--profile <p>`, `default` included; `profiles --json` has no `--profile` |
 | 8 | swift | health table: one fixture per row of `Health` | the status text and attention/neutral class match the table |
-| 9 | swift | Mini fixture: default `not_setup`, `dfoundation` serving and ready | icon `connected`; header `Serving at s.d.foundation`; the default section has `showSetUp` |
-| 10 | swift | `dfoundation` stopped; then serving with `ready` false; then an `error` entry | icon `disconnected`; header `Needs attention: dfoundation (Stopped)`, then `(Tunnel not connected)`, then `(Error: state exited 1)` |
-| 11 | swift | two attention profiles; all set-up profiles `elsewhere`; no profile set up | `Needs attention: a, b`; `Not serving on this Mac` with icon `disconnected`; `Not set up` with icon `disconnected` |
-| 12 | swift | one set-up profile with 30 rows; two set-up profiles with 30 rows each | 25 rows and `5 more (share ls)`; 10 rows each and `20 more (share --profile <p> ls)` |
-| 13 | swift | a gated row and a public row | gated: `access` set, accessibility title ends `, login required`, submenu first line `Login required: group:ops`, Remove text names the login gate; public: none of these |
-| 14 | swift | `working` = a plain verb; a gated add; also a top-level `schema: 2` | `Working…`; `Working… (a login gate can take minutes)`; `Update Share Bar` when idle |
+| 9 | swift | Mini fixture: default `not_setup` with `serves_here` false, `dfoundation` serving and ready | icon `connected`; header `Serving at s.d.foundation`; the default section has `showSetUp`; its health is `notSetUp`, not `elsewhere` |
+| 10 | swift | `dfoundation` stopped; then serving with `ready` false; then an `error` entry | icon `disconnected`; header `Needs attention: dfoundation (Stopped)`, then `(Tunnel not connected)`, then `(Error: <error>)` |
+| 11 | swift | two attention profiles; all set-up profiles `elsewhere`; no profile set up | `Needs attention: a, b`; `Not serving on this Mac`, icon `disconnected`; `Not set up`, icon `disconnected` |
+| 12 | swift | one set-up profile with 30 rows; two set-up profiles with 30 rows each; two profiles holding the same id | 25 rows and `5 more (share ls)`; 10 rows each and `20 more (share --profile <p> ls)`; the duplicate ids get distinct keys |
+| 13 | swift | a gated row and a public row; `access_pending` 1 | gated: accessibility title ends `, login required`, submenu first line `Login required: group:ops`, Remove text names the login gate; public: none of these; the pending line names `share --profile <p> prune` |
+| 14 | swift | `working` `.plain`; `.gatedAdd`; idle with a top-level `schema: 2` | `Working…`; `Working… (a login gate can take minutes)`; `Update Share Bar` |
+| 14b | swift | a good snapshot, then a timed-out refresh | the sections still render the good snapshot; the header shows the failure line |
 | 15 | swift | `AccessRule.isWellFormed` over `group:ops`, `email:a@x.io,b@y.io`, `domain:d.foundation`, ` group:ops ` (trimmed), `group:`, `group: ops`, `ops`, `url:x`, empty | true, true, true, true, false, false, false, false, false |
-| 16 | swift | `PublishChoice.eligible` over serving, stopped, `elsewhere` stopped, `not_setup`, `error` | the first three only, in `profiles[]` order |
-| 17 | swift | `initialProfile` with the last profile eligible, torn down, and nil | the last; the first eligible; the first eligible; nil when none is eligible |
-| 18 | swift | `PublishChoice.args` with and without a rule | `["--profile","p","add","/x"]`; `["--profile","p","add","--access","group:ops","/x"]` |
-| 19 | swift | failure alerts: the O1 block verbatim from SPEC-004 as stderr, exit 1; a one-line die; the gate timeout after two waiting lines | O1: title is its first line, `detail` equals the stderr byte for byte (trailing newline aside); one-line: `detail` nil; timeout: title is the die line, `detail` holds all three lines |
-| 20 | swift | `childEnvironment` with every stripped `SHARE_*` variable set, plus `SHARE_BIN` and `HOME` | the seven are gone; `SHARE_BIN`, `HOME`, and SPEC-003's `PATH`, `LANG`, `SHARE_CLIPBOARD` rules hold |
+| 16 | swift | `PublishChoice.eligible` over serving, stopped, `elsewhere` stopped, `not_setup`, `error`; `PublishForm` initial profile with the stored profile eligible, torn down, and unset | the first three only, in order; the stored one; the first eligible; the first eligible |
+| 17 | swift | `PublishForm`: `login` with rule `group:ops` on `a`, then select `b` whose stored choice is empty; then select quick profile `q`; also a fresh form on `q` with `login` stored | after `b`: still `login`, rule `group:ops`; on `q`: `canPublish` false until `choose(.anyone)`; the fresh `q` form: `canPublish` false until `choose(.anyone)`; `buttonTitle` reads `Publish behind login on <host>` or `Publish publicly on <host>` to match |
+| 18 | swift | `PublishChoice.args` with and without a rule; a relative path `8080` | `["--profile","p","add","/x"]`; `["--profile","p","add","--access","group:ops","/x"]`; nil |
+| 19 | swift | failure alerts: SPEC-004's O1 block verbatim as stderr, exit 1; a one-line die; the gate timeout after two waiting lines | O1: the title is its first line, `detail` equals the stderr byte for byte (trailing newline aside); one-line: `detail` nil; timeout: the title is the die line, `detail` holds all three lines |
+| 20 | swift | `childEnvironment` with `SHARE_PROFILE`, the six overrides, `SHARE_BIN`, and `HOME` set | the seven are gone; `SHARE_BIN`, `HOME`, and SPEC-003's `PATH`, `LANG`, `SHARE_CLIPBOARD` rules hold |
 | 21 | manual | throwaway `HOME`, quick profiles `a` (serving) and `b` (stopped) | two sections; icon slashed; header names `b`; `Start Sharing` in `b` starts `b` only (`share --profile a state` unchanged) |
-| 22 | manual | drop a file; pick `b`; then drop again | the share lands in `b` (`share --profile b ls`); the link is on the pasteboard; the second dialog preselects `b` |
-| 23 | manual | quick profile chosen in the dialog; a malformed rule | `Only people who log in` disabled with its note; for a named profile, `Publish` stays disabled until the rule is well formed |
+| 22 | manual | drop a file, pick `b`; then drop again while a 60s poll is due | the share lands in `b` (`share --profile b ls`); its link is on the pasteboard; the second dialog preselects `b` |
+| 22b | manual | drop three files with `SHARE_BIN` pointing at a wrapper that fails the second `add` | the first is published, the alert shows the second's error and `Not published: <third>`; no third `add` in `log stream` |
+| 23 | manual | quick profile in the dialog; a malformed rule on a named profile | `Only people who log in` disabled with its note; `Publish` disabled until the rule is well formed |
 | 24 | manual | Remove and hits on a row in `b` while `a` has a row with the same name | each acts on `b` only; hits shows `b`'s count |
 | 25 | UAT | Han, on the Mini (see below) | every step passes |
 
@@ -265,12 +315,12 @@ Precondition: the default profile is not set up; `dfoundation` serves `s.d.found
 
 | Step | Action | Expect |
 |---|---|---|
-| U1 | open the menu | two sections: `default · - · Not set up` with `Set Up…`, and `dfoundation · s.d.foundation · Serving` with its shares; icon is the plain antenna |
-| U2 | run `share --profile dfoundation api-token --check` in a terminal | if it fails: drop a file, pick `Only people who log in`, rule `email:<your address>`; the alert shows the O1 block verbatim and nothing is published; then run the `share --profile dfoundation api-token ...` command it names; if it passes, skip to U3 |
-| U3 | drop a small file; profile `dfoundation`; `Only people who log in`; rule `group:dwarves-ops` (or `email:<your address>` if that group does not exist yet) | header shows `Working… (a login gate can take minutes)`; afterwards the link is on the pasteboard; the row has the lock and `Login required: <rule>`; the link in a private window redirects to `dwarves.cloudflareaccess.com` |
-| U4 | drop another file | the dialog preselects `dfoundation` and the same rule; choose `Anyone with the link`; the row has no lock and the link opens without login |
+| U1 | open the menu | two sections: `default · - · Not set up` with `Set Up…`, and `dfoundation · s.d.foundation · Serving` with its shares (the existing gated one shows the lock); icon is the plain antenna |
+| U2 | run `share --profile dfoundation api-token --check` in a terminal | exit 0: skip to U3. Otherwise drop a file, pick `Only people who log in`, rule `email:<your address>`: the alert shows the O1 block verbatim and nothing is published; run the `api-token` command it names, then continue |
+| U3 | drop a small file; profile `dfoundation`; `Only people who log in`; rule `group:dwarves-ops` (or `email:<your address>` if that group does not exist yet) | the button reads `Publish behind login on s.d.foundation`; the header shows `Working… (a login gate can take minutes)`; afterwards the link is on the pasteboard; the row has the lock and `Login required: <rule>`; the link in a private window redirects to `dwarves.cloudflareaccess.com` |
+| U4 | drop another file | the dialog preselects `dfoundation` and the same rule; choose `Anyone with the link`; the button reads `Publish publicly on s.d.foundation`; the row has no lock and the link opens without login |
 | U5 | `share --profile dfoundation stop` in a terminal, wait up to 60s | icon slashes; header `Needs attention: dfoundation (Stopped)`; `Start Sharing` under `dfoundation` brings it back and the icon clears |
-| U6 | Remove the gated row | the confirm names the login gate; the row disappears; `share --profile dfoundation ls` no longer lists it |
+| U6 | Remove the two rows added in U3 and U4 | the gated confirm names the login gate; both rows disappear; `share --profile dfoundation ls` no longer lists them |
 
 ## Verification
 
@@ -281,7 +331,7 @@ swift test --package-path mac
 bash mac/build.sh 0.0.0
 ```
 
-Negative controls: (1) classify `notSetUp` as attention: row 9 fails (the Mini icon slashes). (2) drop `--profile` from the add argv: rows 7 and 18 fail. (3) show `lastErrorLine` only, no `detail`: row 19 fails. (4) keep `SHARE_ROOT` in the child environment: row 20 fails. (5) let `profiles --json` pass `SHARE_ROOT` to its children: row 1 fails.
+Negative controls: the table in `## Grounding`; each mutation must turn its named row red.
 
 ## After state
 
@@ -293,30 +343,37 @@ Negative controls: (1) classify `notSetUp` as attention: row 9 fails (the Mini i
 ## Edge Cases
 
 1. The default is unset and a named profile serves (the Mini): neutral default, `connected` icon.
-2. One profile's `state` fails: its section shows `Error: ...`; the other sections render and act.
-3. A hand-made profile directory with a bad name: an `error` entry; the app offers it no action, so it never runs `--profile <bad>`.
-4. Only quick-mode profiles: the login choice is disabled; public publishing works.
+2. One profile's `state` fails: its section shows `Error: <the CLI's line>`; the other sections render and act.
+3. A hand-made profile directory with a bad name: an `error` entry, JSON-escaped; the app offers it no action.
+4. Only quick-mode profiles: `login` is unavailable; public publishing works.
 5. No eligible profile: `Share File…` is disabled and a drop explains why.
-6. The remembered profile was torn down: the dialog falls back to the first eligible one.
-7. Two profiles hold the same share id: rows and hits are keyed by (profile, id).
-8. No token for a gated add or a gated Remove: the O1 block, verbatim; nothing changes.
-9. A rule group that does not exist: the O3 block, verbatim; nothing is published.
-10. A gated add waits minutes: the `Working…` variant; Stop Waiting TERMs the group; SPEC-004 publishes only after the gate, so nothing is served, and the next `add` or `prune` removes the waiting app.
-11. A CLI from before this spec: `profiles --json` prints TSV; header `Update share CLI` with the upgrade command.
-12. A folder in a batch: the dialog's message names it; one confirmation covers the batch.
-13. `SHARE_ROOT` or `SHARE_PROFILE` in the app's environment: stripped; the menu and the writes agree.
-14. `access_pending` > 0: the section names the count and the prune command.
-15. A gated snapshot Refresh: allowed; the app keeps its gate (SPEC-004 `refresh`).
+6. The stored profile was torn down: the dialog falls back to the first eligible one.
+7. The profile is torn down between the dialog and the add: the CLI's refusal, verbatim; the batch stops.
+8. Two profiles hold the same share id: rows and hits are keyed by (profile, id).
+9. No token for a gated add or a gated Remove: the O1 block, verbatim; nothing changes.
+10. A rule group that does not exist: the O3 block, verbatim; nothing is published.
+11. A gated add waits minutes: `Working… (a login gate ...)`; Stop Waiting TERMs the group and ends the batch; SPEC-004 publishes only after the gate, so nothing is served, and the next `add` or `prune` removes the waiting app.
+12. A CLI from before this spec: `profiles --json` prints TSV; header `Update share CLI` with the upgrade command.
+13. A folder in a batch: the dialog's message names it; one confirmation covers the batch.
+14. `SHARE_ROOT` or `SHARE_PROFILE` in the app's environment: stripped; the menu and the writes agree.
+15. `access_pending` > 0: the section names the count and the prune command.
+16. A gated snapshot Refresh: allowed; the gate stays (SPEC-004 `refresh`).
+17. A relative path reaches the argv builder (it should not, since panels and drops give absolute URLs): `args` returns nil and nothing runs, so `8080` never becomes a live port share.
 
 ## Failure modes
 
 | Failure class | Detection signal | Mitigation / recovery |
 |---|---|---|
-| one profile's `state` fails or hangs past curl's 1s ready probe | `error` entry; the 20s `profiles` timeout | that section shows the error; the icon slashes; the rest render; a timeout keeps the last snapshot, as SPEC-003 |
+| one profile's `state` fails | an `error` entry | that section shows the CLI's line; the icon slashes; the rest render |
+| one profile's `state` hangs | the 20s `profiles` timeout (the children run serially with no per-child timeout, so one hang stalls the whole refresh) | the header shows the failure; every section keeps its last snapshot; per-child timeout is the upgrade path (Extensibility) |
 | a named profile goes down | health `stopped` or `tunnelDown` | icon slashes within 60s; the header names the profile; Start in its section |
 | no token for `--access` | CLI exit 1 with O1 | verbatim alert; the user runs the named `api-token` command |
-| a long gate wait blocks the one mutation queue | `Working… (a login gate ...)` | Stop Waiting after 60s; nothing is published on stop |
-| menu and writes point at different roots | stripped child environment | rows 1 and 20 |
+| `api_token_cmd` waits on a prompt nobody answers | the add runs past 60s | Stop Waiting; the batch ends |
+| a long gate wait holds the one mutation queue | `Working… (a login gate ...)` | Stop Waiting after 60s; nothing is published on stop |
+| a batch add fails midway | non-zero exit or Stop Waiting | the batch stops; the alert names the unpublished paths |
+| the read after a successful add fails | the fresh `profiles` call fails | alert `Published to <p>, but the menu could not refresh; see <cmd> ls` |
+| a poll in flight when an add ends | the post-add read is `fresh` | it never reuses a pre-add result, so the link and the checkmark come from the new read |
+| the menu and the writes point at different roots | stripped child environment; rows 3b and 20 | cannot happen while both lists match |
 | old CLI | TSV on exit 0, or help on exit 1 | `Update share CLI` |
 
 ## Out of Scope
@@ -324,7 +381,7 @@ Negative controls: (1) classify `notSetUp` as attention: row 9 fails (the Mini i
 - Creating a new named profile from the app (see `## Setup of a new profile`).
 - Any token entry, storage, or check in the app (see `## Token handling`).
 - Changing the rule of a live share, `--host`, `--ttl`, or live (port) shares from the app.
-- Per-profile mutation queues.
+- Per-profile mutation queues; a per-child timeout in `profiles --json`.
 - Linux.
 
 ## Touches
@@ -338,10 +395,26 @@ Negative controls: (1) classify `notSetUp` as attention: row 9 fails (the Mini i
 ## Decision Log
 
 - DEC-001: One new read, `share profiles --json`, over N `state` calls or the app listing profile directories: one spawn, one timeout, and the CLI keeps the layout (ADR-0003).
-- DEC-002: Every app call passes `--profile <name>`, `default` included, and the child environment drops the seven `SHARE_*` overrides, so the read and every write resolve the same profile and root.
+- DEC-002: Every app call passes `--profile <name>`, `default` included, and the child environment drops `SHARE_PROFILE` and the six location overrides, so the read and every write resolve the same profile and root. A suite grep keeps the bash and Swift lists equal.
 - DEC-003: `notSetUp` and `elsewhere` are neutral for the icon; `stopped`, `tunnelDown`, and `error` need attention. A deliberately stopped profile still slashes the icon, as the single-profile app always did.
-- DEC-004: One publish dialog for every add, because the login choice is per add. Return accepts the remembered choice, so a repeat drop costs one keystroke.
-- DEC-005: The dialog remembers the last rule per profile, not a global "public" default. A mistaken carry-over then gates a file (visible at once, fixed by Remove and a new add) rather than exposing one.
+- DEC-004: One publish dialog for every add, because the login choice is per add. Return accepts the remembered choice, and the button names the audience and host, so a repeat drop costs one keystroke without hiding where the file goes.
+- DEC-005: The dialog remembers the last rule per profile, and it never loosens `login` to `anyone` on its own (not on a profile switch, not for a quick profile). A mistaken carry-over then gates a file, which the user sees at once, rather than exposing one.
 - DEC-006: The app checks only the rule's shape; the CLI owns the grammar, and its refusal is shown verbatim, so the two can never disagree.
-- DEC-007: One mutation queue for all profiles. A gated add can hold it for minutes; Stop Waiting is the escape. Per-profile queues wait for a real complaint.
+- DEC-007: One mutation queue for all profiles. A gated add can hold it for minutes; Stop Waiting is the escape, and it also ends the batch. Per-profile queues wait for a real complaint.
 - DEC-008: Setting up an existing unset profile reuses the setup window with one argv prefix; creating a new profile stays a CLI command.
+
+### Validation round 1 (2026-09-30), changes made
+
+| Change | Why |
+|---|---|
+| `Depth:` header line | required for new specs (Scope) |
+| TASK-005 split into menu (TASK-006) and publish (TASK-007); the model task split into health (TASK-003) and sections (TASK-004) | each task was over the atomicity budget (Scope) |
+| `PublishForm` never moves `login` to `anyone` on its own; row 17 | a profile switch could silently publish a file publicly (Security, critical) |
+| the batch stops at the first failure or Stop Waiting; row 22b | a stopped gated add let the next file start its own 15-minute wait, and O1 repeated per file (Failure modes, critical) |
+| `CLI.profiles(fresh:)` after a mutation; the new-share diff and `serves_here` read the target profile only; row 6b | a post-add read could join a pre-add poll and miss the new link (Failure modes, critical) |
+| entries built with `jq --arg`; the error carries the child's stderr line; row 2 names | a quote in a directory name could break every section; `state exited 1` hid the cause (Security, Failure modes, Design) |
+| absolute-path rule in `args`; row 18 | a bare `8080` path would publish a local port (Security) |
+| the button names audience and host; logging privacy stated | a blind Return could publish to the wrong audience or domain; argv now carries addresses (Security) |
+| a failed or timed-out refresh keeps the last snapshot; the hang row reworded; row 14b | today's code clears the snapshot on any failure; the hang claim was false for serial children (Failure modes, Design) |
+| the strip-list grep (row 3b); `Working` defined; `CLI.state` and `StateCoalescer` deleted; dispatcher forwarding named; growth ceiling stated; `## Grounding` added | drift between two lists, an undefined type, a dead API, a hidden dispatcher edit, a thin scale claim, unsampled shapes (Design, Assumptions, Scope) |
+| Sustainability: not long-lived | an in-repo app change covered by the repo's own tests; no new daemon, store, vendor, credential, or paid call |
