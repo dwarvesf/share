@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "profiles": [
+    {
+      "name": "default",
+      "state": {
+        "schema": 1,
+        "state": "not_setup",
+        "ready": false,
+        "mode": "named",
+        "host": null,
+        "hosts": "",
+        "serves_here": false,
+        "service": false,
+        "access_pending": 0,
+        "shares": []
+      }
+    },
+    {
+      "name": "dfoundation",
+      "state": {
+        "schema": 1,
+        "state": "serving",
+        "ready": true,
+        "mode": "named",
+        "host": "s.d.foundation",
+        "hosts": "Mac-mini",
+        "serves_here": true,
+        "service": true,
+        "access_pending": 0,
+        "shares": [
+          {
+            "id": "a68960",
+            "name": "support-ticket-guide",
+            "url": "https://s.d.foundation/a68960/support-ticket-guide/",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 0,
+            "access": "group:dwarves-ops"
+          }
+        ]
+      }
+    }
+  ]
+}

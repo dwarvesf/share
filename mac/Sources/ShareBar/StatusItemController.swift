@@ -12,14 +12,16 @@ private struct UncheckedBox<Value>: @unchecked Sendable {
     init(_ value: Value) { self.value = value }
 }
 
-/// A row's submenu, tagged with the share id it belongs to and holding a direct reference
-/// to its "Loading…" item, so `menuWillOpen`/hits completion can address it without a
-/// lookup table keyed by menu identity.
+/// A row's submenu, tagged with the (profile, share id) pair it belongs to and holding a
+/// direct reference to its "Loading…" item, so `menuWillOpen`/hits completion can address
+/// it without a lookup table keyed by menu identity.
 private final class RowMenu: NSMenu {
+    let profile: String
     let rowID: String
     let hitsItem: NSMenuItem
 
-    init(rowID: String, hitsItem: NSMenuItem) {
+    init(profile: String, rowID: String, hitsItem: NSMenuItem) {
+        self.profile = profile
         self.rowID = rowID
         self.hitsItem = hitsItem
         super.init(title: "")
@@ -33,11 +35,10 @@ private final class RowMenu: NSMenu {
 /// Owns the status item and its menu: builds a plain `NSMenu` from the latest `MenuModel`,
 /// keeps it current on a 60s timer, on wake, and on every open, and applies the icon.
 ///
-/// Rendering (TASK-008) plus the read and app actions (TASK-009): Copy Link, Open in
-/// Browser, lazy per-row hit counts, Set Up…, Copy Install/Upgrade Command, Open at Login,
-/// and Quit. The mutating actions (TASK-017): Refresh, Remove… (confirm), Start/Stop
-/// Sharing, Share File…, the "Working…"/Stop Waiting header state, and the private-repo and
-/// not-serving-here alerts. The drop target (TASK-010) reuses the same add path.
+/// Every verb the app runs is `--profile <name> <verb>`, `default` included, so the menu
+/// and the writes resolve the same profile and root. A failed or timed-out refresh keeps
+/// the last good snapshot on screen (stale: slashed icon, failure header); only
+/// `.cliNotFound` and `.oldCLI` clear the sections, because no verb would work.
 // @unchecked Sendable: every mutable property is only ever touched on the main thread (init,
 // or a block scheduled through `RunLoop.main.perform(inModes:)`); this just tells the
 // compiler what's already true so the refresh closure doesn't need a warning suppressed
@@ -46,19 +47,22 @@ final class StatusItemController: NSObject, @unchecked Sendable {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
     private let mutationQueue = MutationQueue()
+    private let defaults: UserDefaults = .standard
 
-    private var model = MenuModel(snapshot: nil, failure: nil, now: Date())
+    private var model = MenuModel(profiles: nil, failure: nil, now: Date())
     private var isRefreshing = false
     private var pollTimer: Timer?
     private var wakeObserver: NSObjectProtocol?
 
-    // MARK: - Mutating-verb state (TASK-017)
+    // MARK: - Mutating-verb state
 
-    /// The last `state` read, kept alongside `model` so a mutation's start/end can rebuild
-    /// `MenuModel` with a new `isMutating` flag without re-reading `state`.
-    private var currentSnapshot: Snapshot?
+    /// The last `profiles --json` read, kept alongside `model` so a mutation's start/end
+    /// can rebuild `MenuModel` with a new `working` flag without re-reading.
+    private var currentProfiles: ProfilesSnapshot?
+    /// Non-nil while the latest refresh failed; beside a kept `currentProfiles` it marks
+    /// the snapshot stale (slashed icon, publish button names the profile).
     private var currentFailure: Failure?
-    private var isMutating = false
+    private var working: Working?
     private var showStopWaitingItem = false
     private var stopWaitingTimer: Timer?
     private var checkmarkRevertTimer: Timer?
@@ -68,12 +72,12 @@ final class StatusItemController: NSObject, @unchecked Sendable {
 
     /// One call in flight at a time; a new submenu opening cancels whatever was running.
     private var currentHitsJob: CLIJob?
-    private var currentHitsRowID: String?
+    private var currentHitsKey: String?
     /// Bumped on every `requestHits` call; a completion whose generation no longer matches
     /// belonged to a cancelled or superseded call and is discarded rather than applied or
     /// cached (it may carry killed-process garbage, not a real hits line).
     private var hitsGeneration = 0
-    /// Cleared when the top-level menu closes, per the spec ("cached until the menu closes").
+    /// Keyed by (profile, id); cleared when the top-level menu closes.
     private var hitsCache: [String: String] = [:]
 
     override init() {
@@ -84,7 +88,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         installDropView()
 
         // Renders the "Loading…" placeholder instantly so the item never opens empty; the
-        // first real `state` call (kicked off below) replaces it in place when it returns.
+        // first real `profiles` call (kicked off below) replaces it in place when it returns.
         applyModel()
         startPolling()
         observeWake()
@@ -124,41 +128,51 @@ final class StatusItemController: NSObject, @unchecked Sendable {
 
     // MARK: - Refresh
 
-    /// Runs `share state`, then applies the result on the main run loop in common modes, so
-    /// an already-open menu still updates in place. Concurrent triggers collapse to the
-    /// `state` call already in flight (`CLI.state()` coalesces); this guard just skips
-    /// spawning a second `MenuModel` rebuild on top of one already pending.
-    private func triggerRefresh() {
+    /// Runs `share profiles --json`, then applies the result on the main run loop in
+    /// common modes, so an already-open menu still updates in place. Concurrent triggers
+    /// collapse to the call already in flight (`CLI.profiles` coalesces); this guard just
+    /// skips spawning a second `MenuModel` rebuild on top of one already pending. `fresh`
+    /// callers (setup completion) get a run that started after their verb exited.
+    private func triggerRefresh(fresh: Bool = false) {
         guard !isRefreshing else { return }
         isRefreshing = true
         Task { [weak self] in
-            let result = await CLI.state()
+            let result = await CLI.profiles(fresh: fresh)
             guard let self else { return }
-            let snapshot: Snapshot?
-            let failure: Failure?
-            switch Snapshot.from(result) {
-            case .success(let value):
-                snapshot = value
-                failure = nil
-            case .failure(let value):
-                snapshot = nil
-                failure = value
-            }
             RunLoop.main.perform(inModes: [.common]) {
-                self.currentSnapshot = snapshot
-                self.currentFailure = failure
+                self.applyResult(result)
                 self.isRefreshing = false
                 self.rebuildModel()
             }
         }
     }
 
-    /// Rebuilds `model` from the last `state` read plus the current mutating-verb flag,
-    /// then re-renders. The one place both inputs to `MenuModel` come together, so a
-    /// mutation's start/end can flip the header to/from "Working…" without a fresh `state`
-    /// call, and a fresh `state` result can land without losing that flag.
+    /// Folds one `profiles --json` result into `currentProfiles`/`currentFailure`: a
+    /// successful decode replaces the snapshot; `.other` (incl. timeout) keeps the last
+    /// good one and marks it stale; `.cliNotFound`/`.oldCLI` clear the sections because
+    /// no verb would work.
+    private func applyResult(_ result: CLIResult) {
+        switch ProfilesSnapshot.from(result) {
+        case .success(let value):
+            currentProfiles = value
+            currentFailure = nil
+        case .failure(let failure):
+            currentFailure = failure
+            switch failure {
+            case .cliNotFound, .oldCLI:
+                currentProfiles = nil
+            case .other:
+                break
+            }
+        }
+    }
+
+    /// Rebuilds `model` from the last read plus the current `working` flag, then
+    /// re-renders. The one place both inputs to `MenuModel` come together, so a
+    /// mutation's start/end can flip the header to/from the Working line without a fresh
+    /// `profiles` call, and a fresh result can land without losing that flag.
     private func rebuildModel() {
-        model = MenuModel(snapshot: currentSnapshot, failure: currentFailure, now: Date(), isMutating: isMutating)
+        model = MenuModel(profiles: currentProfiles, failure: currentFailure, now: Date(), working: working)
         applyModel()
     }
 
@@ -175,52 +189,32 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         let headerItem = NSMenuItem(title: model.header, action: nil, keyEquivalent: "")
         headerItem.isEnabled = false
         menu.addItem(headerItem)
-        if showStopWaitingItem {
-            menu.addItem(actionItem("Stop Waiting…", action: #selector(stopWaiting)))
-        }
         menu.addItem(.separator())
 
         // The trailing column (`2d left`, `live`, `never`, `expired`) right-aligns at a tab
         // stop past the widest row title in this render, so it reads as one column instead
         // of drifting per row.
         let font = NSFont.menuFont(ofSize: 0)
-        let tabLocation = rowTitleTabLocation(for: model.rows, font: font)
+        let widestRowTitle = model.sections
+            .flatMap(\.rows)
+            .reduce(into: CGFloat(0)) { widest, row in
+                widest = max(widest, (row.title as NSString).size(withAttributes: [.font: font]).width)
+            }
+        let tabLocation = widestRowTitle + 24
 
-        for row in model.rows {
-            let item = NSMenuItem(title: row.title, action: nil, keyEquivalent: "")
-            item.attributedTitle = rowAttributedTitle(row, tabLocation: tabLocation, font: font)
-            // AppKit's default accessibility title for a menu item mirrors the rendered
-            // `attributedTitle.string` verbatim, tab character included, so VoiceOver would
-            // read "theme-check.md\t2d left" with the tab as a pause and no indication of
-            // what the second part means. Override it with a comma-separated phrase so
-            // VoiceOver hears both the name and its status (`2d left`, `expired`, `live`,
-            // `never`) as one sentence.
-            item.setAccessibilityTitle("\(row.title), \(row.trailing)")
-            item.submenu = submenu(for: row)
-            menu.addItem(item)
+        for section in model.sections {
+            addSection(section, tabLocation: tabLocation, font: font)
+            menu.addItem(.separator())
         }
 
-        if model.more > 0 {
-            let moreItem = NSMenuItem(title: "\(model.more) more (share ls)", action: nil, keyEquivalent: "")
-            moreItem.isEnabled = false
-            menu.addItem(moreItem)
+        if showStopWaitingItem {
+            menu.addItem(actionItem("Stop Waiting…", action: #selector(stopWaiting)))
         }
 
-        menu.addItem(.separator())
+        let shareItem = actionItem("Share File…", action: #selector(shareFile), keyEquivalent: "n")
+        shareItem.isEnabled = model.canPublish
+        menu.addItem(shareItem)
 
-        menu.addItem(actionItem("Share File…", action: #selector(shareFile), keyEquivalent: "n"))
-
-        if model.showStop {
-            menu.addItem(actionItem("Stop Sharing", action: #selector(stopSharing)))
-        } else if model.showStart {
-            menu.addItem(actionItem("Start Sharing", action: #selector(startSharing)))
-        }
-
-        menu.addItem(.separator())
-
-        if model.showSetUp {
-            menu.addItem(actionItem("Set Up…", action: #selector(setUp)))
-        }
         if model.showCopyInstallCommand {
             menu.addItem(actionItem("Copy Install Command", action: #selector(copyInstallCommand)))
         }
@@ -239,19 +233,61 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         menu.addItem(quitItem)
     }
 
-    /// Widest row title, plus fixed padding so the tab stop clears it, in points.
-    private func rowTitleTabLocation(for rows: [Row], font: NSFont) -> CGFloat {
-        let padding: CGFloat = 24
-        let widest = rows.reduce(into: CGFloat(0)) { widest, row in
-            let width = (row.title as NSString).size(withAttributes: [.font: font]).width
-            widest = max(widest, width)
+    /// One profile's block: the disabled `<name> · <host or -> · <status>` title line, its
+    /// rows, the `N more` hint, Start/Stop Sharing, Set Up…, and the access_pending note.
+    private func addSection(_ section: Section, tabLocation: CGFloat, font: NSFont) {
+        let titleItem = NSMenuItem(
+            title: "\(section.profile) · \(section.host ?? "-") · \(section.status)",
+            action: nil,
+            keyEquivalent: ""
+        )
+        titleItem.isEnabled = false
+        menu.addItem(titleItem)
+
+        for row in section.rows {
+            let item = NSMenuItem(title: row.title, action: nil, keyEquivalent: "")
+            item.attributedTitle = rowAttributedTitle(row, tabLocation: tabLocation, font: font)
+            item.setAccessibilityTitle(row.accessibilityTitle)
+            if row.access != nil, let lock = NSImage(systemSymbolName: "lock.fill", accessibilityDescription: "Login required") {
+                lock.isTemplate = true
+                item.image = lock
+            }
+            item.submenu = submenu(for: row)
+            menu.addItem(item)
         }
-        return widest + padding
+
+        if section.more > 0 {
+            let moreItem = NSMenuItem(title: "\(section.more) more (\(section.command) ls)", action: nil, keyEquivalent: "")
+            moreItem.isEnabled = false
+            menu.addItem(moreItem)
+        }
+
+        if section.showStop {
+            menu.addItem(sectionItem("Stop Sharing", action: #selector(stopSharing), profile: section.profile))
+        } else if section.showStart {
+            menu.addItem(sectionItem("Start Sharing", action: #selector(startSharing), profile: section.profile))
+        }
+
+        if section.showSetUp {
+            let item = actionItem("Set Up…", action: #selector(setUp))
+            item.representedObject = section
+            menu.addItem(item)
+        }
+
+        if section.accessPending > 0 {
+            let pendingItem = NSMenuItem(
+                title: "\(section.accessPending) Access app(s) await deletion (\(section.command) prune)",
+                action: nil,
+                keyEquivalent: ""
+            )
+            pendingItem.isEnabled = false
+            menu.addItem(pendingItem)
+        }
     }
 
     /// The name in the plain font/color, a tab, then the trailing text right-aligned at
     /// `tabLocation` in `secondaryLabelColor` (macOS's shortcut-hint grey). `item.title` is
-    /// still set to the plain name (see `applyModel`) so accessibility reads the name alone.
+    /// still set to the plain name (see `addSection`) so accessibility reads the name alone.
     private func rowAttributedTitle(_ row: Row, tabLocation: CGFloat, font: NSFont) -> NSAttributedString {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.tabStops = [NSTextTab(textAlignment: .right, location: tabLocation, options: [:])]
@@ -276,9 +312,16 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         let hitsItem = NSMenuItem(title: "Loading…", action: nil, keyEquivalent: "")
         hitsItem.isEnabled = false
 
-        let submenu = RowMenu(rowID: row.id, hitsItem: hitsItem)
+        let submenu = RowMenu(profile: row.profile, rowID: row.id, hitsItem: hitsItem)
         submenu.autoenablesItems = false
         submenu.delegate = self
+
+        if let rule = row.access {
+            let gateItem = NSMenuItem(title: "Login required: \(rule)", action: nil, keyEquivalent: "")
+            gateItem.isEnabled = false
+            submenu.addItem(gateItem)
+            submenu.addItem(.separator())
+        }
 
         let copyItem = actionItem("Copy Link", action: #selector(copyLink))
         copyItem.isEnabled = row.canCopy
@@ -324,35 +367,46 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         return item
     }
 
+    /// An action item that also carries the profile it acts on.
+    private func sectionItem(_ title: String, action: Selector, profile: String) -> NSMenuItem {
+        let item = actionItem(title, action: action)
+        item.representedObject = profile
+        return item
+    }
+
     @objc private func noOp() {}
 
     // MARK: - Row actions
 
     @objc private func copyLink(_ sender: NSMenuItem) {
         guard let row = sender.representedObject as? Row, row.canCopy else { return }
-        actionLogger.log("copy-link id=\(row.id, privacy: .public)")
+        actionLogger.log("copy-link profile=\(row.profile, privacy: .public) id=\(row.id, privacy: .public)")
         setPasteboard(row.url)
     }
 
     @objc private func openInBrowser(_ sender: NSMenuItem) {
         guard let row = sender.representedObject as? Row, row.canCopy, let url = URL(string: row.url) else { return }
-        actionLogger.log("open-in-browser id=\(row.id, privacy: .public)")
+        actionLogger.log("open-in-browser profile=\(row.profile, privacy: .public) id=\(row.id, privacy: .public)")
         NSWorkspace.shared.open(url)
     }
 
-    // MARK: - Mutating actions (TASK-017)
+    // MARK: - Mutating actions
 
     @objc private func refreshRow(_ sender: NSMenuItem) {
         guard let row = sender.representedObject as? Row, row.canRefresh else { return }
-        actionLogger.log("refresh id=\(row.id, privacy: .public)")
-        Task { [weak self] in await self?.performMutation(["refresh", row.id], warningShareID: row.id, isAdd: false) }
+        actionLogger.log("refresh profile=\(row.profile, privacy: .public) id=\(row.id, privacy: .public)")
+        Task { [weak self] in
+            await self?.performMutation(ProfileArgs.argv(row.profile, ["refresh", row.id]), warningShareID: row.id, isAdd: false, profile: row.profile)
+        }
     }
 
     @objc private func removeRow(_ sender: NSMenuItem) {
         guard let row = sender.representedObject as? Row else { return }
         guard confirmRemove(row) else { return }
-        actionLogger.log("remove id=\(row.id, privacy: .public)")
-        Task { [weak self] in await self?.performMutation(["rm", row.id], warningShareID: nil, isAdd: false) }
+        actionLogger.log("remove profile=\(row.profile, privacy: .public) id=\(row.id, privacy: .public)")
+        Task { [weak self] in
+            await self?.performMutation(ProfileArgs.argv(row.profile, ["rm", row.id]), warningShareID: nil, isAdd: false, profile: row.profile)
+        }
     }
 
     /// Cancel is the default button (added first, so it gets the Return key equivalent and
@@ -367,14 +421,20 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         return alert.runModal() == .alertSecondButtonReturn
     }
 
-    @objc private func startSharing() {
-        actionLogger.log("start")
-        Task { [weak self] in await self?.performMutation(["start"], warningShareID: nil, isAdd: false) }
+    @objc private func startSharing(_ sender: NSMenuItem) {
+        guard let profile = sender.representedObject as? String else { return }
+        actionLogger.log("start profile=\(profile, privacy: .public)")
+        Task { [weak self] in
+            await self?.performMutation(ProfileArgs.argv(profile, ["start"]), warningShareID: nil, isAdd: false, profile: profile)
+        }
     }
 
-    @objc private func stopSharing() {
-        actionLogger.log("stop")
-        Task { [weak self] in await self?.performMutation(["stop"], warningShareID: nil, isAdd: false) }
+    @objc private func stopSharing(_ sender: NSMenuItem) {
+        guard let profile = sender.representedObject as? String else { return }
+        actionLogger.log("stop profile=\(profile, privacy: .public)")
+        Task { [weak self] in
+            await self?.performMutation(ProfileArgs.argv(profile, ["stop"]), warningShareID: nil, isAdd: false, profile: profile)
+        }
     }
 
     @objc private func shareFile() {
@@ -385,50 +445,168 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         panel.prompt = "Share"
         guard panel.runModal() == .OK else { return }
         let paths = panel.urls.map(\.path)
-        Task { [weak self] in await self?.addPaths(paths) }
+        presentPublishDialog(paths: paths)
     }
 
     @objc private func stopWaiting() {
-        let alert = NSAlert()
-        alert.messageText = StopWaiting.confirmText
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Continue Waiting")
-        let stopButton = alert.addButton(withTitle: "Stop Waiting")
-        stopButton.hasDestructiveAction = true
-        guard alert.runModal() == .alertSecondButtonReturn else { return }
-        actionLogger.log("stop-waiting confirmed")
-        Task { [weak self] in await self?.mutationQueue.cancelCurrent() }
+        Task { [weak self] in
+            // Read the running job's token BEFORE the confirm opens: a confirm answered
+            // after that job ended cancels nothing (never the next job).
+            guard let token = await self?.mutationQueue.currentJob() else { return }
+            RunLoop.main.perform(inModes: [.common]) {
+                guard let self else { return }
+                let alert = NSAlert()
+                alert.messageText = StopWaiting.confirmText
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "Continue Waiting")
+                let stopButton = alert.addButton(withTitle: "Stop Waiting")
+                stopButton.hasDestructiveAction = true
+                guard alert.runModal() == .alertSecondButtonReturn else { return }
+                actionLogger.log("stop-waiting confirmed")
+                Task { [weak self] in await self?.mutationQueue.cancel(job: token) }
+            }
+        }
     }
 
-    /// Runs one `add` per path, in order, through the mutation queue: a directory confirms
-    /// first (Share File… and a drop both go through this). Awaiting each `performMutation`
-    /// in turn (not firing them all at once) matters for the id diff: the next add's
-    /// "ids before" must be read after the previous add's `state` re-read has landed, not
-    /// from a snapshot captured before the whole batch started (edge case 24). `@MainActor`
-    /// for the same reason as `performMutation`: it calls `confirmFolder` (`NSAlert`)
-    /// directly, before any `await`, so the whole function must already be main-thread
-    /// isolated, not just the parts after a suspension point.
-    @MainActor
-    private func addPaths(_ paths: [String]) async {
-        for path in paths {
-            if isDirectory(path) {
-                let name = (path as NSString).lastPathComponent
-                guard confirmFolder(name: name) else { continue }
+    // MARK: - Publish dialog
+
+    /// Every drop and every Share File… selection opens one `NSAlert` with an accessory
+    /// view, one dialog per batch. `PublishForm` holds all its state and rules; the
+    /// dialog only renders it and writes back the mutations (`select`, `choose`).
+    private func presentPublishDialog(paths: [String]) {
+        guard let profiles = currentProfiles, !PublishChoice.eligible(profiles).isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "No share profile is ready. Set one up first."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        var form = PublishForm(
+            profiles: profiles,
+            lastProfile: defaults.string(forKey: "publish.lastProfile"),
+            lastRules: storedRules(profiles: profiles),
+            staleHosts: currentFailure != nil
+        )
+
+        let alert = NSAlert()
+        alert.messageText = PublishMessage.text(paths: paths, isDirectory: isDirectory)
+        alert.addButton(withTitle: form.buttonTitle)
+        alert.addButton(withTitle: "Cancel")
+
+        let profilePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        for name in PublishChoice.eligible(profiles) {
+            let host = profiles.profiles.first { $0.name == name }?.state?.host
+            profilePopup.addItem(withTitle: host.map { "\(name) · \($0)" } ?? name)
+            profilePopup.lastItem?.representedObject = name
+        }
+        if let selected = form.profile,
+           let index = profilePopup.itemArray.firstIndex(where: { $0.representedObject as? String == selected }) {
+            profilePopup.selectItem(at: index)
+        }
+
+        let audiencePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        audiencePopup.addItems(withTitles: ["Anyone with the link", "Only people who log in"])
+        audiencePopup.selectItem(at: form.audience == .login ? 1 : 0)
+
+        let ruleField = NSTextField(frame: .zero)
+        ruleField.placeholderString = "group:<name>, email:a@x.io,b@y.io, or domain:<domain>"
+        ruleField.stringValue = form.rule
+        ruleField.translatesAutoresizingMaskIntoConstraints = false
+
+        let loginNote = NSTextField(labelWithString: "Login needs a named setup, not quick mode")
+        loginNote.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        loginNote.textColor = .secondaryLabelColor
+
+        let accessory = NSStackView(views: [
+            labeledRow("Profile:", profilePopup),
+            labeledRow("Who can open:", audiencePopup),
+            labeledRow("Rule:", ruleField),
+            loginNote,
+        ])
+        accessory.orientation = .vertical
+        accessory.alignment = .leading
+        accessory.spacing = 8
+        accessory.edgeInsets = NSEdgeInsets(top: 12, left: 0, bottom: 0, right: 0)
+        accessory.translatesAutoresizingMaskIntoConstraints = false
+        accessory.widthAnchor.constraint(equalToConstant: 380).isActive = true
+        ruleField.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+        alert.accessoryView = accessory
+
+        let sync: (PublishForm) -> Void = { [ruleField, loginNote, alert] form in
+            ruleField.stringValue = form.rule
+            ruleField.isEnabled = form.audience == .login
+            loginNote.isHidden = !(form.audience == .login && !form.loginAvailable)
+            alert.buttons[0].title = form.buttonTitle
+            alert.buttons[0].isEnabled = form.canPublish
+        }
+        sync(form)
+
+        let alertForm = AlertForm(form: form, sync: sync, ruleField: ruleField)
+        profilePopup.target = alertForm
+        profilePopup.action = #selector(AlertForm.profileChanged(_:))
+        audiencePopup.target = alertForm
+        audiencePopup.action = #selector(AlertForm.audienceChanged(_:))
+        ruleField.target = alertForm
+        ruleField.action = #selector(AlertForm.ruleEdited(_:))
+
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        form = alertForm.form
+        guard let profile = form.profile, form.canPublish else { return }
+        let rule = form.audience == .login ? form.rule.trimmingCharacters(in: .whitespacesAndNewlines) : nil
+        defaults.set(profile, forKey: "publish.lastProfile")
+        defaults.set(rule ?? "", forKey: PublishForm.ruleKey(for: profile))
+        Task { [weak self] in
+            await self?.publishBatch(paths: paths, profile: profile, rule: rule)
+        }
+    }
+
+    /// The `publish.rule.<profile>` values for every eligible profile, as `PublishForm`
+    /// expects them: the stored rule, or absent for `anyone`.
+    private func storedRules(profiles: ProfilesSnapshot) -> [String: String] {
+        var rules: [String: String] = [:]
+        for name in PublishChoice.eligible(profiles) {
+            if let stored = defaults.string(forKey: PublishForm.ruleKey(for: name)), !stored.isEmpty {
+                rules[name] = stored
             }
-            actionLogger.log("add path=\(path, privacy: .private)")
-            await performMutation(["add", path], warningShareID: nil, isAdd: true)
+        }
+        return rules
+    }
+
+    /// One `add` per path, in order, through the mutation queue. The batch stops at the
+    /// first `add` that exits non-zero, is stopped with Stop Waiting, or is followed by a
+    /// failed re-read; the alert for that event adds `Not published: <names>` for the
+    /// paths that never ran.
+    @MainActor
+    private func publishBatch(paths: [String], profile: String, rule: String?) async {
+        for (index, path) in paths.enumerated() {
+            guard let argv = PublishChoice.args(profile: profile, rule: rule, path: path) else { continue }
+            actionLogger.log("add profile=\(profile, privacy: .public) path=\(path, privacy: .private)")
+            let unpublished = Array(paths.dropFirst(index + 1))
+            let ok = await performMutation(
+                argv,
+                warningShareID: nil,
+                isAdd: true,
+                profile: profile,
+                notPublished: unpublished.isEmpty ? nil : unpublished.map { ($0 as NSString).lastPathComponent }
+            )
+            if !ok { return }
         }
     }
 
     /// Manual-verification-only entry point (`SHAREBAR_DEBUG_ADD_PATHS`, wired in
-    /// `AppDelegate`): runs the exact same `addPaths` a real Share File… selection or a
+    /// `AppDelegate`): runs the exact same publish path a real Share File… selection or a
     /// real drop would, so a check can exercise the add/warning/id-diff/checkmark path
     /// deterministically without driving `NSOpenPanel` or a real drag.
     // #if DEBUG: must not exist in a release binary, or the env var alone would let any
     // process trigger an unattended `add` with no user action.
     #if DEBUG
     func debugAddPaths(_ paths: [String]) {
-        Task { [weak self] in await self?.addPaths(paths) }
+        guard let profiles = currentProfiles, let profile = PublishChoice.eligible(profiles).first else { return }
+        Task { [weak self] in await self?.publishBatch(paths: paths, profile: profile, rule: nil) }
     }
     #endif
 
@@ -437,39 +615,53 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
     }
 
-    private func confirmFolder(name: String) -> Bool {
-        let alert = NSAlert()
-        alert.messageText = FolderConfirm.text(name: name)
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Publish")
-        return alert.runModal() == .alertSecondButtonReturn
-    }
-
-    /// Runs one mutating verb through the shared queue: shows "Working…" and (after 60s)
-    /// offers Stop Waiting while it runs, re-reads `state` when it finishes, and presents
-    /// whatever alert the combined result calls for. `@MainActor` because every await here
-    /// must resume back on the main thread (it drives `NSAlert`, `NSOpenPanel`, and the
-    /// menu itself) and every caller is already on the main thread when it calls in.
+    /// Runs one mutating verb through the shared queue: shows the Working header and
+    /// (after 60s) offers Stop Waiting while it runs, re-reads `profiles` when it
+    /// finishes, and presents whatever alert the combined result calls for. Returns true
+    /// only when the verb exited 0 AND the follow-up read succeeded; a batch stops on
+    /// false. `@MainActor` because every await here must resume back on the main thread
+    /// (it drives `NSAlert` and the menu itself) and every caller is already main-thread.
     @MainActor
-    private func performMutation(_ args: [String], warningShareID: String?, isAdd: Bool) async {
-        let idsBefore: Set<String> = isAdd ? Set((currentSnapshot?.shares ?? []).map(\.id)) : []
-        beginMutating()
+    @discardableResult
+    private func performMutation(
+        _ args: [String],
+        warningShareID: String?,
+        isAdd: Bool,
+        profile: String?,
+        notPublished: [String]? = nil
+    ) async -> Bool {
+        let idsBefore: Set<String> = isAdd ? Set(shares(of: profile).map(\.id)) : []
+        beginMutating(gated: args.contains("--access"))
         let result = await mutationQueue.run(args)
-        let stateResult = await CLI.state()
-        switch Snapshot.from(stateResult) {
-        case .success(let snapshot):
-            currentSnapshot = snapshot
-            currentFailure = nil
-        case .failure(let failure):
-            currentSnapshot = nil
-            currentFailure = failure
-        }
+        let stateResult = await CLI.profiles(fresh: true)
+        var readFailed = false
+        if case .failure = ProfilesSnapshot.from(stateResult) { readFailed = true }
+        applyResult(stateResult)
         endMutating()
-        handleOutcome(result: result, idsBefore: idsBefore, warningShareID: warningShareID, isAdd: isAdd)
+        handleOutcome(
+            result: result,
+            idsBefore: idsBefore,
+            warningShareID: warningShareID,
+            isAdd: isAdd,
+            profile: profile,
+            readFailed: readFailed,
+            notPublished: notPublished
+        )
+        return result.status == 0 && !readFailed
     }
 
-    private func beginMutating() {
-        isMutating = true
+    private func shares(of profile: String?) -> [Share] {
+        guard let profile else { return [] }
+        return currentProfiles?.profiles.first { $0.name == profile }?.state?.shares ?? []
+    }
+
+    private func entry(of profile: String?) -> ProfileEntry? {
+        guard let profile else { return nil }
+        return currentProfiles?.profiles.first { $0.name == profile }
+    }
+
+    private func beginMutating(gated: Bool) {
+        working = gated ? .gatedAdd : .plain
         showStopWaitingItem = false
         rebuildModel()
         stopWaitingTimer?.invalidate()
@@ -482,7 +674,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
     }
 
     private func endMutating() {
-        isMutating = false
+        working = nil
         showStopWaitingItem = false
         stopWaitingTimer?.invalidate()
         stopWaitingTimer = nil
@@ -490,26 +682,64 @@ final class StatusItemController: NSObject, @unchecked Sendable {
     }
 
     /// Decides (via `MutationOutcome`, in `ShareBarCore`) what alert this result calls for,
-    /// finds an add's new share id by diffing against `idsBefore`, and, on a successful add,
-    /// copies its url and flashes the checkmark icon (shared with the drop target).
-    private func handleOutcome(result: CLIResult, idsBefore: Set<String>, warningShareID: String?, isAdd: Bool) {
+    /// finds an add's new share id by diffing against `idsBefore` in the target profile,
+    /// and, on a successful add, copies its url and flashes the checkmark icon (shared
+    /// with the drop target). When `notPublished` is set (a batch stopped midway) the
+    /// alert adds the `Not published:` line for the paths that never ran.
+    private func handleOutcome(
+        result: CLIResult,
+        idsBefore: Set<String>,
+        warningShareID: String?,
+        isAdd: Bool,
+        profile: String?,
+        readFailed: Bool,
+        notPublished: [String]?
+    ) {
         var effectiveWarningID = warningShareID
-        if isAdd, result.status == 0, let snapshot = currentSnapshot,
-           let newShare = MutationOutcome.newShare(before: idsBefore, after: snapshot.shares) {
-            effectiveWarningID = newShare.id
-            setPasteboard(newShare.url)
-            flashCheckmark()
+        if isAdd, result.status == 0 {
+            if readFailed {
+                // The add exited 0 but the fresh re-read failed: the share may be live,
+                // its link unknown; the alert names the profile and the `ls` command.
+                var alert = MutationAlert(
+                    kind: .failure,
+                    message: "Published to \(profile ?? ""), but the menu could not refresh; see \(ProfileArgs.commandName(profile ?? "default")) ls"
+                )
+                alert = appendingNotPublished(notPublished, to: alert)
+                present(alert, profile: profile)
+                return
+            }
+            if let state = entry(of: profile)?.state,
+               let newShare = MutationOutcome.newShare(before: idsBefore, after: state.shares) {
+                effectiveWarningID = newShare.id
+                setPasteboard(newShare.url)
+                flashCheckmark()
+            }
         }
-        let notServingHere = isAdd && result.status == 0 && currentSnapshot?.servesHere == false
-        if let alert = MutationOutcome.alert(for: result, warningShareID: effectiveWarningID, notServingHere: notServingHere) {
-            present(alert)
+        let notServingHere = isAdd && result.status == 0 && entry(of: profile)?.state?.servesHere == false
+        if var alert = MutationOutcome.alert(for: result, warningShareID: effectiveWarningID, notServingHere: notServingHere) {
+            alert = appendingNotPublished(notPublished, to: alert)
+            present(alert, profile: profile)
         }
     }
 
-    private func present(_ alert: MutationAlert) {
+    /// Appends `Not published: <names>` to the alert's detail (its own line when there is
+    /// no stderr detail to append to).
+    private func appendingNotPublished(_ names: [String]?, to alert: MutationAlert) -> MutationAlert {
+        guard let names, !names.isEmpty else { return alert }
+        let line = "Not published: \(names.joined(separator: ", "))"
+        let detail = alert.detail.map { "\($0)\n\(line)" } ?? line
+        return MutationAlert(kind: alert.kind, message: alert.message, detail: detail, removeShareID: alert.removeShareID)
+    }
+
+    private func present(_ alert: MutationAlert, profile: String?) {
         let nsAlert = NSAlert()
         nsAlert.messageText = alert.message
         nsAlert.alertStyle = alert.kind == .failure ? .warning : .informational
+        if let detail = alert.detail {
+            // The CLI's guided blocks (O1/O3, the gate timeout) are shown verbatim, as
+            // selectable monospaced text inside the alert.
+            nsAlert.accessoryView = detailView(detail)
+        }
         switch alert.kind {
         case .failure, .notServingHere:
             nsAlert.addButton(withTitle: "OK")
@@ -518,16 +748,34 @@ final class StatusItemController: NSObject, @unchecked Sendable {
             nsAlert.addButton(withTitle: "OK")
             let removeButton = nsAlert.addButton(withTitle: "Remove")
             removeButton.hasDestructiveAction = true
-            if nsAlert.runModal() == .alertSecondButtonReturn, let id = alert.removeShareID {
-                actionLogger.log("remove-from-warning id=\(id, privacy: .public)")
-                Task { [weak self] in await self?.performMutation(["rm", id], warningShareID: nil, isAdd: false) }
+            // The remove runs on the profile the verb ran on: share ids repeat across
+            // profiles, so a bare id is not enough.
+            if nsAlert.runModal() == .alertSecondButtonReturn, let id = alert.removeShareID, let profile {
+                actionLogger.log("remove-from-warning profile=\(profile, privacy: .public) id=\(id, privacy: .public)")
+                Task { [weak self] in
+                    await self?.performMutation(ProfileArgs.argv(profile, ["rm", id]), warningShareID: nil, isAdd: false, profile: profile)
+                }
             }
         }
     }
 
+    /// A scrollable read-only monospaced view for an alert's stderr detail.
+    private func detailView(_ text: String) -> NSView {
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 480, height: 120))
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 480, height: 120))
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.font = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        textView.string = text
+        textView.autoresizingMask = [.width]
+        scroll.documentView = textView
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .lineBorder
+        return scroll
+    }
+
     /// Swaps in a plain `checkmark` SF Symbol for 1.5s, then restores whatever icon the
-    /// current model calls for. Shared by every successful add (TASK-017's Share File… and
-    /// TASK-010's drop).
+    /// current model calls for. Shared by every successful add.
     private func flashCheckmark() {
         guard let button = statusItem.button else { return }
         if let image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Shared") {
@@ -544,7 +792,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         checkmarkRevertTimer = timer
     }
 
-    // MARK: - Drop target (TASK-010)
+    // MARK: - Drop target
 
     /// See `DropView`'s own doc comment for the hitTest/drag spike finding this shape rests
     /// on. Sized and pinned to the button so a drop anywhere on the icon is caught.
@@ -561,7 +809,9 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         ])
         view.onFiles = { [weak self] urls in
             actionLogger.log("drop paths=\(urls.count, privacy: .public)")
-            Task { [weak self] in await self?.addPaths(urls.map(\.path)) }
+            RunLoop.main.perform(inModes: [.common]) {
+                self?.presentPublishDialog(paths: urls.map(\.path))
+            }
         }
         view.onFilePromise = { [weak self] in
             self?.presentFilePromiseRefused()
@@ -584,9 +834,12 @@ final class StatusItemController: NSObject, @unchecked Sendable {
 
     /// Called once when a row's submenu is about to display. Serves a cached line
     /// instantly; otherwise cancels whatever hits call was in flight and starts a new one,
-    /// with a 15s timeout enforced on top of `spawnCancellable`'s own cancel path.
-    private func requestHits(rowID: String, hitsItem: NSMenuItem) {
-        if let cached = hitsCache[rowID] {
+    /// with a 15s timeout enforced on top of `spawnCancellable`'s own cancel path. Rows
+    /// are keyed by (profile, id), so the same 6-hex id under two profiles gets two hits
+    /// calls with two different argv.
+    private func requestHits(profile: String, rowID: String, hitsItem: NSMenuItem) {
+        let key = "\(profile)|\(rowID)"
+        if let cached = hitsCache[key] {
             hitsItem.title = cached
             return
         }
@@ -594,10 +847,10 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         cancelHits()
         hitsGeneration += 1
         let generation = hitsGeneration
-        currentHitsRowID = rowID
+        currentHitsKey = key
 
-        actionLogger.log("hits spawn id=\(rowID, privacy: .public)")
-        let job = CLI.spawnCancellable(["hits", rowID]) { _ in }
+        actionLogger.log("hits spawn profile=\(profile, privacy: .public) id=\(rowID, privacy: .public)")
+        let job = CLI.spawnCancellable(ProfileArgs.argv(profile, ["hits", rowID])) { _ in }
         currentHitsJob = job
 
         let timeoutTask = Task {
@@ -622,9 +875,9 @@ final class StatusItemController: NSObject, @unchecked Sendable {
                 // mid-flight, so its output is not a real hits line and must not be cached
                 // or shown.
                 guard self.hitsGeneration == generation else { return }
-                self.hitsCache[rowID] = line
+                self.hitsCache[key] = line
                 self.currentHitsJob = nil
-                self.currentHitsRowID = nil
+                self.currentHitsKey = nil
                 boxedHitsItem.value.title = line
             }
         }
@@ -632,20 +885,24 @@ final class StatusItemController: NSObject, @unchecked Sendable {
 
     private func cancelHits() {
         guard let job = currentHitsJob else { return }
-        if let rowID = currentHitsRowID {
-            actionLogger.log("hits cancelled id=\(rowID, privacy: .public)")
+        if let key = currentHitsKey {
+            actionLogger.log("hits cancelled key=\(key, privacy: .public)")
         }
         job.cancel()
         currentHitsJob = nil
-        currentHitsRowID = nil
+        currentHitsKey = nil
     }
 
     // MARK: - Other actions
 
-    @objc private func setUp() {
-        actionLogger.log("set-up requested")
-        SetupWindowController.show { [weak self] in
-            self?.triggerRefresh()
+    /// Set Up… for one existing profile: the setup window runs `--profile <p> setup` and
+    /// its hostname field is prefilled from the section (empty when `not_setup`), because
+    /// rerunning setup is the recovery for a half-finished one.
+    @objc private func setUp(_ sender: NSMenuItem) {
+        guard let section = sender.representedObject as? Section else { return }
+        actionLogger.log("set-up requested profile=\(section.profile, privacy: .public)")
+        SetupWindowController.show(profile: section.profile, host: section.host) { [weak self] in
+            self?.triggerRefresh(fresh: true)
         }
     }
 
@@ -696,13 +953,25 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         pasteboard.clearContents()
         pasteboard.setString(string, forType: .string)
     }
+
+    /// A label plus control in one horizontal row of the dialog accessory view.
+    private func labeledRow(_ label: String, _ control: NSView) -> NSStackView {
+        let labelField = NSTextField(labelWithString: label)
+        labelField.alignment = .right
+        labelField.translatesAutoresizingMaskIntoConstraints = false
+        labelField.widthAnchor.constraint(equalToConstant: 90).isActive = true
+        let row = NSStackView(views: [labelField, control])
+        row.orientation = .horizontal
+        row.spacing = 8
+        return row
+    }
 }
 
 extension StatusItemController: NSMenuDelegate {
     /// Called right before the menu displays (every open); the menu already shows the
-    /// cached snapshot instantly, this just kicks a fresh `state` call whose result replaces
-    /// the items in place if it lands while the menu is still open. Row submenus get their
-    /// own delegate callback (`menuWillOpen`, below), not this one.
+    /// cached snapshot instantly, this just kicks a fresh `profiles` call whose result
+    /// replaces the items in place if it lands while the menu is still open. Row submenus
+    /// get their own delegate callback (`menuWillOpen`, below), not this one.
     func menuNeedsUpdate(_ menu: NSMenu) {
         guard menu === self.menu else { return }
         // Cleared on open as well because menuDidClose is not guaranteed to fire for every close path.
@@ -714,7 +983,7 @@ extension StatusItemController: NSMenuDelegate {
     /// Fires once per row submenu open; kicks the lazy `hits` call for that row.
     func menuWillOpen(_ menu: NSMenu) {
         guard let rowMenu = menu as? RowMenu else { return }
-        requestHits(rowID: rowMenu.rowID, hitsItem: rowMenu.hitsItem)
+        requestHits(profile: rowMenu.profile, rowID: rowMenu.rowID, hitsItem: rowMenu.hitsItem)
     }
 
     /// The top-level menu closing is the cache boundary the spec names ("cached until the
@@ -724,5 +993,45 @@ extension StatusItemController: NSMenuDelegate {
         guard menu === self.menu else { return }
         cancelHits()
         hitsCache.removeAll()
+    }
+}
+
+/// Holds the publish dialog's `PublishForm` while it is open: the popup and field targets
+/// mutate it and re-sync the accessory view after every change. ObjC targets need a
+/// class, hence this little box rather than the value-type form itself.
+private final class AlertForm: NSObject, @unchecked Sendable {
+    var form: PublishForm
+    private let sync: (PublishForm) -> Void
+    private weak var ruleField: NSTextField?
+
+    init(form: PublishForm, sync: @escaping (PublishForm) -> Void, ruleField: NSTextField) {
+        self.form = form
+        self.sync = sync
+        self.ruleField = ruleField
+    }
+
+    @objc func profileChanged(_ sender: NSPopUpButton) {
+        guard let name = sender.selectedItem?.representedObject as? String else { return }
+        form.select(profile: name)
+        resync()
+    }
+
+    @objc func audienceChanged(_ sender: NSPopUpButton) {
+        form.choose(sender.indexOfSelectedItem == 1 ? .login : .anyone)
+        resync()
+    }
+
+    @objc func ruleEdited(_ sender: NSTextField) {
+        form.rule = sender.stringValue
+        resync()
+    }
+
+    /// Called on every control change so the final field text (edited but never
+    /// action-fired) is in the form.
+    private func resync() {
+        if let field = ruleField {
+            form.rule = field.stringValue
+        }
+        sync(form)
     }
 }

@@ -27,9 +27,9 @@ public struct CLIResult: Sendable {
 
     /// `lastNonEmptyStderrLine`, kept as-is if it already starts with `share: `, prefixed
     /// with `share: ` otherwise, or `share exited <status>` when there is none. Shared by
-    /// `Snapshot.from` (the header line for a failed `state` call) and `MutationOutcome.alert`
+    /// `ProfilesSnapshot.from` (the header line for a failed `profiles` call) and `MutationOutcome.alert`
     /// (a mutating verb's failure alert), since both failure messages follow the same rule
-    /// (TASK-017).
+    ///.
     public var lastErrorLine: String {
         guard let line = lastNonEmptyStderrLine else { return "share exited \(status)" }
         return line.hasPrefix("share: ") ? line : "share: \(line)"

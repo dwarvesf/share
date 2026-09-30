@@ -16,7 +16,6 @@ struct SetupView: View {
             TextField("Hostname, for example s.example.com", text: $model.hostname)
                 .textFieldStyle(.roundedBorder)
                 .disabled(model.quickMode || model.isRunning)
-                .onChange(of: model.hostname) { _ in model.hostnameEdited() }
 
             Toggle("Quick link, no domain needed", isOn: $model.quickMode)
                 .disabled(model.isRunning)

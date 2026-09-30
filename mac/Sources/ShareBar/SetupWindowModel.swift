@@ -13,21 +13,25 @@ private let setupLogger = Logger(subsystem: ShareBarIdentity.bundleID, category:
 // a SwiftUI button action, or a block scheduled through `DispatchQueue.main.async`), same
 // convention and reasoning as `StatusItemController`'s own `@unchecked Sendable`.
 final class SetupWindowModel: ObservableObject, @unchecked Sendable {
-    @Published var hostname: String = ""
+    /// The profile this setup runs against; its argv is always `--profile <name> setup`,
+    /// `default` included.
+    let profile: String
+    @Published var hostname: String
     @Published var quickMode: Bool = false
     @Published var openAtLogin: Bool = true
     @Published var log: String = ""
     @Published var isRunning: Bool = false
     @Published var statusLine: String = ""
 
-    /// Set once the user has typed anything, so the async best-effort host probe below
-    /// never clobbers text they already started entering.
-    private var userEditedHostname = false
     private var job: CLIJob?
     var onFinished: ((Bool) -> Void)?
 
-    init() {
-        probeCurrentHost()
+    /// `host` prefills the hostname field: rerunning `share setup <host>` is the recovery
+    /// for a setup cancelled or failed halfway, and the section passes in the host it
+    /// already knows (empty when the profile is `not_setup`).
+    init(profile: String, host: String?) {
+        self.profile = profile
+        hostname = host ?? ""
     }
 
     /// Set Up is enabled once a hostname the CLI would accept is typed, or immediately in
@@ -37,37 +41,15 @@ final class SetupWindowModel: ObservableObject, @unchecked Sendable {
         return quickMode || HostnameValidation.isValid(hostname)
     }
 
-    func hostnameEdited() {
-        userEditedHostname = true
-    }
-
-    /// Best-effort prefill from a fresh `state` read: rerunning `share setup <host>` is the
-    /// recovery for a setup that was cancelled or failed halfway, so seeding the field with
-    /// the host already on file saves retyping it. Never overwrites text the user already
-    /// started, and silently does nothing if `state` fails or names no host (quick mode,
-    /// never set up).
-    private func probeCurrentHost() {
-        Task { [weak self] in
-            let result = await CLI.state()
-            guard let self else { return }
-            DispatchQueue.main.async {
-                guard !self.userEditedHostname, self.hostname.isEmpty else { return }
-                if case .success(let snapshot) = Snapshot.from(result), let host = snapshot.host {
-                    self.hostname = host
-                }
-            }
-        }
-    }
-
-    /// Runs `share setup <host>` or `share setup --quick` through `spawnCancellable`,
-    /// streaming its output into `log` as it arrives.
+    /// Runs `share --profile <p> setup <host>` or `share --profile <p> setup --quick`
+    /// through `spawnCancellable`, streaming its output into `log` as it arrives.
     func setUp() {
         guard canSetUp else { return }
         isRunning = true
         statusLine = "Working…"
         log = ""
-        let args = quickMode ? ["setup", "--quick"] : ["setup", hostname]
-        setupLogger.log("setup start args=\(args.joined(separator: " "), privacy: .public)")
+        let args = ProfileArgs.argv(profile, quickMode ? ["setup", "--quick"] : ["setup", hostname])
+        setupLogger.log("setup start args=\(args.joined(separator: " "), privacy: .private)")
 
         let job = CLI.spawnCancellable(args) { [weak self] chunk in
             DispatchQueue.main.async {

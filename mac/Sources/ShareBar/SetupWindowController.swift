@@ -19,17 +19,18 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
     /// holding or forwarding a reference itself.
     private static var active: SetupWindowController?
 
-    private let model = SetupWindowModel()
+    private let model: SetupWindowModel
     private let onSuccess: () -> Void
 
-    /// Shows the setup window, or brings the existing one forward if one is already open.
-    static func show(onSuccess: @escaping () -> Void) {
+    /// Shows the setup window for one existing profile (its hostname field prefilled from
+    /// the section's host), or brings the existing one forward if one is already open.
+    static func show(profile: String, host: String?, onSuccess: @escaping () -> Void) {
         if let active {
             active.window?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let controller = SetupWindowController(onSuccess: onSuccess)
+        let controller = SetupWindowController(profile: profile, host: host, onSuccess: onSuccess)
         active = controller
         controller.showWindow(nil)
     }
@@ -41,7 +42,8 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
         active?.model.terminateRunningJob()
     }
 
-    private init(onSuccess: @escaping () -> Void) {
+    private init(profile: String, host: String?, onSuccess: @escaping () -> Void) {
+        model = SetupWindowModel(profile: profile, host: host)
         self.onSuccess = onSuccess
 
         let window = NSWindow(

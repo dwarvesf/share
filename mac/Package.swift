@@ -10,7 +10,7 @@ let package = Package(
         .testTarget(
             name: "ShareBarCoreTests",
             dependencies: ["ShareBarCore"],
-            resources: [.copy("Fixtures/state.json")]
+            resources: [.copy("Fixtures/state.json"), .copy("Fixtures/profiles.json")]
         ),
     ]
 )

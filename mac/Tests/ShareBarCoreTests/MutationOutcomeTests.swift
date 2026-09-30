@@ -68,6 +68,47 @@ final class MutationOutcomeTests: XCTestCase {
         XCTAssertNil(MutationOutcome.alert(for: result, warningShareID: "abc123", notServingHere: false))
     }
 
+    // MARK: - verbatim detail (O1 / O3 / gate timeout)
+
+    func testO1StyleStderrCarriesTheDieLineAndTheWholeBlockVerbatim() {
+        let stderr = """
+        share: Cloudflare API token not configured
+
+        Set api_token_cmd in /root/config.conf, for example:
+
+          api_token_cmd=op read op://Share/cloudflare-api-token/password
+
+        or export CLOUDFLARE_API_TOKEN in your shell profile.
+
+        Then run: share add <path>
+        """
+        let result = CLIResult(status: 1, stdout: "", stderr: stderr, timedOut: false)
+        let alert = MutationOutcome.alert(for: result, warningShareID: nil, notServingHere: false)
+
+        XCTAssertEqual(alert?.message, "share: Cloudflare API token not configured")
+        XCTAssertEqual(alert?.detail, stderr, "the guided block reaches the alert exactly as printed")
+    }
+
+    func testO3StyleStderrKeepsBothLinesInDetail() {
+        let stderr = """
+        share: no members in group 'ops'; check the name in your IdP
+        list them with: share access-groups
+        """
+        let result = CLIResult(status: 1, stdout: "", stderr: stderr, timedOut: false)
+        let alert = MutationOutcome.alert(for: result, warningShareID: nil, notServingHere: false)
+
+        XCTAssertEqual(alert?.message, "share: no members in group 'ops'; check the name in your IdP")
+        XCTAssertEqual(alert?.detail, "share: no members in group 'ops'; check the name in your IdP\nlist them with: share access-groups")
+    }
+
+    func testASingleLineFailureCarriesNoDetail() {
+        let result = CLIResult(status: 1, stdout: "", stderr: "share: --access expects group:<name>, email:<a@b[,...]>, or domain:<domain>\n", timedOut: false)
+        let alert = MutationOutcome.alert(for: result, warningShareID: nil, notServingHere: false)
+
+        XCTAssertEqual(alert?.message, "share: --access expects group:<name>, email:<a@b[,...]>, or domain:<domain>")
+        XCTAssertNil(alert?.detail)
+    }
+
     // MARK: - newShare(before:after:)
 
     func testNewShareFindsTheOneIDNotInTheBeforeSet() {
@@ -95,12 +136,21 @@ final class MutationOutcomeTests: XCTestCase {
         XCTAssertEqual(MutationOutcome.newShare(before: [], after: after)?.id, "only")
     }
 
-    // MARK: - FolderConfirm
+    // MARK: - PublishMessage
 
-    func testFolderConfirmTextNamesTheFolderAndThePeriod() {
+    func testPublishMessageCoversTheBatchTheFolderAndTheFile() {
+        let isDir: (String) -> Bool = { $0.hasSuffix(".dir") }
         XCTAssertEqual(
-            FolderConfirm.text(name: "team-guide"),
-            "Publish the folder team-guide at a public link for 30 days?"
+            PublishMessage.text(paths: ["/tmp/a.txt", "/tmp/b.txt"], isDirectory: isDir),
+            "Publish 2 items?"
+        )
+        XCTAssertEqual(
+            PublishMessage.text(paths: ["/tmp/team.dir"], isDirectory: isDir),
+            "Publish the folder team.dir for 30 days?"
+        )
+        XCTAssertEqual(
+            PublishMessage.text(paths: ["/tmp/notes.txt"], isDirectory: isDir),
+            "Publish notes.txt?"
         )
     }
 
@@ -118,7 +168,7 @@ final class MutationOutcomeTests: XCTestCase {
     // MARK: - CLIResult.lastErrorLine
 
     func testLastErrorLineIsSharedByStateFailureMapping() {
-        // Exercises the extracted helper directly (Snapshot.from's own test already covers
+        // Exercises the extracted helper directly (ProfilesSnapshot.from's own test already covers
         // it end to end via StateMappingTests); this guards the extraction didn't change
         // the rule the mutation alerts rely on.
         let result = CLIResult(status: 1, stdout: "", stderr: "line one\n\nline three\n", timedOut: false)
