@@ -2252,11 +2252,13 @@ EOF
   exit 1
 }
 
-r2_stage_check() { # r2_stage_check <stage>: the file cap, the per-file size cap, and no control byte in a name, before the first PUT
+r2_stage_check() { # r2_stage_check <stage>: the file cap, the per-file size cap, and no control byte, backslash, or double quote in a name, before the first PUT
   local LC_ALL=C f n=0 big max_files="${SHARE_R2_MAX_FILES:-500}" max_bytes="${SHARE_R2_MAX_BYTES:-314572800}"
   while IFS= read -r -d '' f; do
     n=$((n + 1))
     case $f in *[[:cntrl:]]*) die "a file name holds a control character ($(printf '%q' "${f#./}")); rename it; nothing was uploaded" ;; esac
+    # curl unescapes -K config values, so a\.\./ could name a file outside the stage; the Worker refuses %5C anyway
+    case $f in *[\\\"]*) die "a file name holds a backslash or a double quote (${f#./}); rename it; nothing was uploaded" ;; esac
   done < <(cd "$1" && find . -type f -print0)
   [[ $n -le $max_files ]] || die "$n files is over the r2 cap of $max_files per add (SHARE_R2_MAX_FILES); nothing was uploaded"
   big="$(cd "$1" && find . -type f -size +"${max_bytes}"c | head -1)"
@@ -2415,7 +2417,8 @@ r2_put_tree() { # r2_put_tree <dir> <prefix>: every file under dir to prefix<rel
   for f in "${files[@]}"; do
     rel="${f#./}"
     r2_url "$prefix$rel"
-    printf 'url = "%s"\nupload-file = "%s"\noutput = "/dev/null"\n' "$r2_url_out" "$dir/$rel" >>"$kf"
+    f="$dir/$rel"; f="${f//\\/\\\\}"; f="${f//\"/\\\"}"   # curl unescapes quoted config values; the url is already %-encoded
+    printf 'url = "%s"\nupload-file = "%s"\noutput = "/dev/null"\n' "$r2_url_out" "$f" >>"$kf"
     printf '%s\t%s\n' "$r2_url_out" "$dir/$rel" >>"$mapf"
   done
   out="$(curl -sS --parallel --parallel-max 8 --max-time 300 -w '%{http_code} %{url_effective}\n' \

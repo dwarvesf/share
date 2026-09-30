@@ -2034,7 +2034,47 @@ SHARE_R2_MAX_BYTES=1024 r6 "a file over SHARE_R2_MAX_BYTES" "over the r2 cap of 
 SHARE_R2_MAX_FILES=2 r6 "three files over SHARE_R2_MAX_FILES=2" "over the r2 cap of 2 per add" r2a add "$WORK/three"
 r6 "a control character in a name" "holds a control character" r2a add "$WORK/ctl"
 R2_TOK="" CLOUDFLARE_API_TOKEN="" r6 "no token source" "needs a publisher token" r2a add "$WORK/wt/one.md"
+# curl unescapes a -K config value, so a backslash or a double quote in a staged name could name a file outside the stage
+mkdir -p "$WORK/bs1/a/"'\.\./\.\.'; printf 'in\n' >"$WORK/bs1/a/"'\.\./\.\./outside.txt'
+mkdir -p "$WORK/bs2"; printf 'x\n' >"$WORK/bs2/"'x\y'
+mkdir -p "$WORK/bs3"; printf 'q\n' >"$WORK/bs3/"'q"t.txt'
+r6 "a backslash path that walks out of the stage" 'holds a backslash or a double quote (bs1/a/.*outside.txt)' r2a add "$WORK/bs1"
+r6 "a backslash in a name" 'holds a backslash or a double quote (bs2/x.y)' r2a add "$WORK/bs2"
+r6 "a double quote in a name" 'holds a backslash or a double quote (bs3/q"t.txt)' r2a add "$WORK/bs3"
 check "row 6: no stage left after the refusals" "0" "$(find "$r2root" -maxdepth 1 -name '.stage.*' | grep -c . || true)"
+
+echo "=== r2 backend: the real curl -K upload path, byte for byte ==="
+# r2_put_tree outside the dry seam, against a local S3 stand-in: every uploaded object must equal its staged file
+RC="$WORK/r2curl"; RCS="$RC/stage"; RCR="$RC/recv"; mkdir -p "$RCS/a/"'\.\./\.\.' "$RCS/sub" "$RCR" "$RC/home/.config/share/profiles/r2c"
+printf 'in\n' >"$RCS/a/"'\.\./\.\./outside.txt'; printf 'LEAKED\n' >"$RC/outside.txt"   # an unescaped path reads the parent's file
+printf 'bs\n' >"$RCS/"'x\y'; printf 'plain\n' >"$RCS/xy"; printf 'q\n' >"$RCS/"'q"t.txt'
+printf 'pct\n' >"$RCS/a%b.txt"; printf 'sp\n' >"$RCS/sp ace.txt"; printf 'd\n' >"$RCS/sub/deep.txt"
+node -e '
+const http = require("http"), fs = require("fs"), path = require("path");
+const [root, portFile] = process.argv.slice(1);
+http.createServer((q, r) => {
+  const b = []; q.on("data", (c) => b.push(c));
+  q.on("end", () => {
+    const key = decodeURIComponent(new URL(q.url, "http://x").pathname).slice(1);   // <bucket>/<key>
+    const f = path.join(root, key);
+    if (q.method !== "PUT" || !f.startsWith(root + "/")) { r.writeHead(400); return r.end(); }
+    fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, Buffer.concat(b));
+    r.writeHead(200); r.end();
+  });
+}).listen(0, "127.0.0.1", function () { fs.writeFileSync(portFile, String(this.address().port)); });
+' "$RCR" "$RC/port" & rc_srv=$!
+for _ in $(seq 1 100); do [[ -s $RC/port ]] && break; sleep 0.05; done
+printf 'backend=r2\nhostname=r2c.example.test\nzone=example.test\nbucket=ok-bucket\nport=r2\nr2_endpoint=http://127.0.0.1:%s\nr2_key_id=keyid42\n' "$(cat "$RC/port")" \
+  >"$RC/home/.config/share/profiles/r2c/config"
+out=$(env -u SHARE_R2_DRY -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND \
+  HOME="$RC/home" SHARE_TUNNEL=0 SHARE_R2_TOKEN=curltoken bash "$SH" --profile r2c r2-put-tree "$RCS" 'o/c0c0c0.deadbeef/' 2>&1); rc=$?
+kill "$rc_srv" 2>/dev/null; wait "$rc_srv" 2>/dev/null
+check "real curl: put_tree exits 0" "0" "$rc"
+rc_got="$(cd "$RCR/ok-bucket/o/c0c0c0.deadbeef" 2>/dev/null && find . -type f | LC_ALL=C sort | tr '\n' '|')"
+check "real curl: one object per staged file" "$(cd "$RCS" && find . -type f | LC_ALL=C sort | tr '\n' '|')" "$rc_got"
+rc_bad=0
+while IFS= read -r -d '' f; do cmp -s "$RCS/$f" "$RCR/ok-bucket/o/c0c0c0.deadbeef/$f" || { rc_bad=$((rc_bad + 1)); echo "    differs: $f"; }; done < <(cd "$RCS" && find . -type f -print0)
+check "real curl: every object's bytes equal its staged file" "0" "$rc_bad"
 
 echo "=== r2 backend: two publishers, ls, refresh, rm (rows 7, 8, 9, 25a) ==="
 R2B="$WORK/r2b"; mkdir -p "$R2B/.config/share/profiles/r2x"; cp "$r2conf" "$R2B/.config/share/profiles/r2x/config"

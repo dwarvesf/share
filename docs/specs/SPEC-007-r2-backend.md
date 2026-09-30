@@ -429,3 +429,8 @@ Then by hand: `tests/e2e-r2.sh` with the inputs above; its log goes to `docs/ver
 | The `origin/main` comparisons in rows 1 and 20 need a fetched remote (3, 5) | `SKIP` locally without it, fail under `CI=true`; a ref-free `VERSION SHA` ledger in `bin/share` is the alternative if two branches collide on one version |
 | Expired gated shares waiting for a token holder have no count outside prune (7) | `status` prints the count |
 | TASK-7 is large (11 setup steps) and only one negative control has a written dry trace (4) | accepted: each step is one table row with its own row 3 or 4 assert; the other traces follow the same line-order pattern |
+- Build review (PR #41, 2026-10-01): deviations from the design above, each with its test.
+
+| Change | Why |
+|---|---|
+| `add` refuses a staged name holding a backslash or a double quote, naming the file, before any upload; the Design's `r2_put_tree` line said such names are escaped. The config line still escapes both, as a second layer | curl unescapes a quoted `-K` value, so `a/\.\./\.\./x` uploaded a file outside the stage (a reviewer sent `~/.ssh` keys to the bucket with system curl); the Worker 400s any `%5C` path, so such a name could never be served. A real-curl test compares every uploaded object with its staged bytes |
