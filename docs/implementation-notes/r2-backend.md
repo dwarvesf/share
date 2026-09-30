@@ -130,3 +130,18 @@ Deviations from the spec, per task. A task with none is not listed.
 - `rand_id` on r2 skips an id whose `o/<id>.` listing holds any key (round-3 warning), besides the `GET m/<id>` check.
 - Row 25e's `add` half passes on the not-yet-built `add` refusal; TASK-9 makes it a real check.
 - Test hooks `r2-rows`, `r2-id`, `r2-own get|put|drop` sit beside the TASK-5 hooks in the dispatcher.
+
+### TASK-7 (admin setup, dry only)
+
+- No live Cloudflare call was made; rows 3, 4, and 20 run against the dry seam. The live leg stays TASK-14.
+- Dry account API: `r2_api` wraps `cf_try` and, under `SHARE_R2_DRY`, answers from state files in `$SHARE_R2_DRY_DIR/.cf/` (`bucket`, `r2dev`, `bucket-domain`, `dns`, `domain.json`, `script.json`, `subdomain.json`, `team`). Knobs: `SHARE_R2_DRY_ROLE=deny`, `SHARE_R2_DRY_BUCKETDOM=deny`, `SHARE_R2_DRY_DOMAINS=500`, `SHARE_R2_DRY_SUBDOMAIN=stuck`, `SHARE_R2_DRY_HEALTHZ=down`. Log lines read `API <METHOD> <path>` and `HEALTHZ`. The dry LIST now skips every dot path, so `.cf` is never an object.
+- Step 5's listing and the marker read and write go through S3 (`r2_call`), with the admin token's own S3 pair (key id from `GET /user/tokens/verify`). The REST object path is out per TASK-1(a), so the admin token needs Workers R2 Storage: Edit on the account.
+- The zone lookup walks the hostname's labels through `r2_api`, as `cf_zone` does.
+- Step 9 also redeploys when the deployed `VERSION` differs from the CLI's. Without it, a `--force` downgrade with an equal `SHA` skipped the deploy and then timed out at step 12.
+- Round-3 warnings built in: `TEAM` must match `^[a-z0-9-]+\.cloudflareaccess\.com$`; a failed organizations read keeps the deployed `TEAM`; a `TEAM` change redeploys and prints the change; the metadata part goes through `-F metadata=<-` from a `printf` process substitution, so `SALT` never reaches an argv or a file.
+- `--force` over a foreign DNS record adds `override_existing_dns_record: true` to the domain PUT.
+- Step 10 runs on every setup, reruns included; it is idempotent.
+- Step 12 counts a round only when the pair equals the CLI's; a stale edge answer resets the streak.
+- The config gains `r2_endpoint=`, which `r2_url` reads. It never stores `r2_key_id`: the admin token's id must not become a publisher's key. `api_token_cmd` and `r2_token_cmd` lines are kept.
+- Row 3's log order is asserted over two runs: a fresh bucket (404, so no domain or marker reads) and a rerun on the existing bucket (its reads precede the DNS read).
+- A 401 or 403 on the script settings dies until TASK-8 lands join mode.

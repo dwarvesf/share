@@ -1640,9 +1640,9 @@ check "r2 setup over a tunnel config refuses" "1" "$rc"
 check "the refusal names teardown" "1" "$(grep -c 'teardown' <<<"$out")"
 check "tunnel config untouched by the refusal" "1" "$(grep -c 'tunnel_id=abc123' "$r2conf")"
 rm -f "$r2conf"
-out=$(r2p setup r2x.example.test --backend r2 --bucket ok-bucket 2>&1); rc=$?
-check "valid r2 args still exit 1 (stub)" "1" "$rc"
-check "the stub names the r2 backend" "1" "$(grep -c 'r2 backend: setup is not implemented yet' <<<"$out")"
+out=$(CLOUDFLARE_API_TOKEN="" r2p setup r2x.example.test --backend r2 --bucket ok-bucket 2>&1); rc=$?
+check "valid r2 args with no token exit 1" "1" "$rc"
+check "the refusal names CLOUDFLARE_API_TOKEN" "1" "$(grep -c 'reads its token from CLOUDFLARE_API_TOKEN only' <<<"$out")"
 check "no config written" "0" "$([[ -f $r2conf ]] && echo 1 || echo 0)"
 printf 'backend=r2\nhostname=r2x.example.test\nzone=example.test\nbucket=ok-bucket\nport=r2\n' >"$r2conf"
 for verb in start stop serve; do
@@ -1917,6 +1917,127 @@ check "r2-own: a prefix naming another id is not returned" "" "$(r2d r2-own get 
 r2d r2-own drop abc001
 check "r2-own: drop forgets the id" "" "$(r2d r2-own get abc001 || true)"
 check "r2-own: drop keeps the others" "1" "$(r2d r2-own get abc002 | grep -c '/tmp/two')"
+
+echo "=== r2 backend: admin setup (rows 3, 4, 20) ==="
+wv="$(sed -n 's/^WORKER_VERSION=\([0-9]*\).*/\1/p' "$SH")"; wsha="$(sed -n 's/^WORKER_SHA=\([0-9a-f]*\).*/\1/p' "$SH")"
+DRYS="$WORK/r2-setup-bucket"
+s2conf="$R2H/.config/share/profiles/r2s/config"; slog="$R2H/share/profiles/r2s/r2-calls.log"
+r2s() { # r2s <setup args...>: dry admin setup of profile r2s against $DRYS
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND \
+    HOME="$R2H" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$DRYS" CLOUDFLARE_API_TOKEN="${S_TOKEN-faketoken}" SHARE_R2_WAIT="${SHARE_R2_WAIT:-2}" \
+    bash "$SH" --profile r2s setup r2s.example.test --backend r2 --bucket ok-bucket "$@"
+}
+s_fresh() { rm -rf "$DRYS" "$s2conf"; mkdir -p "$DRYS/.cf"; : >"$slog" 2>/dev/null || { mkdir -p "${slog%/*}"; : >"$slog"; }; }
+lno() { grep -n -- "$1" "$slog" | head -1 | cut -d: -f1; }   # first log line matching a pattern
+in_order() { # in_order <pattern>...: 1 when each first match sits below the previous one
+  local p prev=0 n
+  for p in "$@"; do n="$(lno "$p")"; [[ -n $n && $n -gt $prev ]] || { echo 0; return; }; prev=$n; done
+  echo 1
+}
+writes() { grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$slog" || true; }
+objs() { (cd "$DRYS" && find . -type f ! -path './.cf/*' | LC_ALL=C sort | xargs -I{} sh -c 'printf "%s " "{}"; cat "{}"'); }
+bind() { jq -r --arg n "$1" '.bindings[] | select(.name == $n) | .text' "$DRYS/.cf/script.json"; }
+
+s_fresh
+out=$(S_TOKEN="" r2s 2>&1); rc=$?
+check "no token: exit 1" "1" "$rc"
+check "no token: the block names the admin scopes" "1" "$(grep -c 'Workers Scripts: Edit' <<<"$out")"
+check "no token: the block names the publisher form" "1" "$(grep -c 'Bucket Item Write on bucket ok-bucket' <<<"$out")"
+check "no token: no call logged" "0" "$(wc -l <"$slog" | tr -d ' ')"
+
+s_fresh; echo dwarves.cloudflareaccess.com >"$DRYS/.cf/team"
+out=$(r2s 2>&1); rc=$?
+check "admin setup exits 0" "0" "$rc"
+check "admin: role printed" "1" "$(grep -c '^deploying as admin$' <<<"$out")"
+check "admin: log order, every read before the first write" "1" "$(in_order 'API GET .*/workers/scripts/share-r2s-example-test/settings' \
+  'API GET .*/r2/buckets/ok-bucket$' 'API GET /zones/zone-dry/dns_records' 'API GET .*/workers/domains?hostname=' 'API GET .*/access/organizations' \
+  'API POST .*/r2/buckets$' '^PUT share.json$' 'API PUT .*/workers/scripts/share-r2s-example-test$' 'API POST .*/subdomain$' 'API GET .*/subdomain$' \
+  'API PUT .*/workers/domains$' '^HEALTHZ$')"
+check "admin: marker names the host" '{"v":1,"host":"r2s.example.test"}' "$(cat "$DRYS/share.json")"
+check "admin: config backend" "1" "$(grep -c '^backend=r2$' "$s2conf")"
+check "admin: config bucket" "1" "$(grep -c '^bucket=ok-bucket$' "$s2conf")"
+check "admin: config port sentinel" "1" "$(grep -c '^port=r2$' "$s2conf")"
+check "admin: config endpoint" "1" "$(grep -c '^r2_endpoint=https://acct-dry.r2.cloudflarestorage.com$' "$s2conf")"
+check "admin: no tunnel keys in config" "0" "$(grep -cE '^(tunnel_id|tunnel_name|hosts|auth)=' "$s2conf" || true)"
+check "admin: no service file" "0" "$(find "$R2H/Library" "$R2H/.config/systemd" -name '*share*' 2>/dev/null | wc -l | tr -d ' ')"
+check "admin: HOST binding" "r2s.example.test" "$(bind HOST)"
+check "admin: VERSION and SHA bindings are this CLI's" "$wv $wsha" "$(bind VERSION) $(bind SHA)"
+check "admin: TEAM from the Access organization" "dwarves.cloudflareaccess.com" "$(bind TEAM)"
+check "admin: dataset derived" "share_r2s_example_test" "$(jq -r '.bindings[] | select(.name == "HITS") | .dataset' "$DRYS/.cf/script.json")"
+check "admin: SALT is a secret binding with no stored value" "1" "$(jq '[.bindings[] | select(.name == "SALT" and .type == "secret_text" and (has("text") | not))] | length' "$DRYS/.cf/script.json")"
+check "admin: workers.dev read back off" "false,false" "$(jq -r '"\(.enabled),\(.previews_enabled)"' "$DRYS/.cf/subdomain.json")"
+
+: >"$slog"
+out=$(r2s 2>&1); rc=$?
+check "rerun: exit 0" "0" "$rc"
+check "rerun: no script PUT" "0" "$(grep -c 'API PUT .*/workers/scripts/' "$slog" || true)"
+check "rerun: no domain PUT, no bucket POST, no marker PUT" "0" "$(grep -cE 'API PUT .*/workers/domains$|API POST .*/r2/buckets$|^PUT share.json$' "$slog" || true)"
+check "rerun: the existing bucket's reads come first" "1" "$(in_order 'API GET .*/r2/buckets/ok-bucket$' 'domains/managed' 'domains/custom' '^LIST $' '^GET share.json$' 'API GET /zones/zone-dry/dns_records')"
+
+jq -c '(.bindings[] | select(.name == "SHA")).text = "000000000000"' "$DRYS/.cf/script.json" >"$DRYS/.cf/s.tmp" && mv -f "$DRYS/.cf/s.tmp" "$DRYS/.cf/script.json"
+: >"$slog"
+out=$(r2s 2>&1); rc=$?
+check "new sha, same version: exit 0" "0" "$rc"
+check "new sha: one script PUT" "1" "$(grep -c 'API PUT .*/workers/scripts/share-r2s-example-test$' "$slog")"
+check "new sha: the deployed pair is this CLI's" "$wv $wsha" "$(bind VERSION) $(bind SHA)"
+
+rm -f "$DRYS/.cf/team"; : >"$slog"
+out=$(r2s 2>&1); rc=$?
+check "no Access read: exit 0" "0" "$rc"
+check "no Access read: the deployed TEAM is kept, no redeploy" "dwarves.cloudflareaccess.com 0" "$(bind TEAM) $(grep -c 'API PUT .*/workers/scripts/' "$slog" || true)"
+echo other.cloudflareaccess.com >"$DRYS/.cf/team"; : >"$slog"
+out=$(r2s 2>&1); rc=$?
+check "TEAM drift: redeployed with the new team" "other.cloudflareaccess.com 1" "$(bind TEAM) $(grep -c 'API PUT .*/workers/scripts/' "$slog")"
+check "TEAM drift: printed" "1" "$(grep -c "Access team: 'dwarves.cloudflareaccess.com' -> 'other.cloudflareaccess.com'" <<<"$out")"
+
+jq -c '(.bindings[] | select(.name == "VERSION")).text = "99"' "$DRYS/.cf/script.json" >"$DRYS/.cf/s.tmp" && mv -f "$DRYS/.cf/s.tmp" "$DRYS/.cf/script.json"
+: >"$slog"
+out=$(r2s 2>&1); rc=$?
+check "newer deployed version: refused" "1" "$rc"
+check "newer: names --force" "1" "$(grep -c 'newer than this share' <<<"$out")"
+check "newer: no write logged" "0" "$(writes)"
+: >"$slog"
+out=$(r2s --force 2>&1); rc=$?
+check "newer with --force: exit 0" "0" "$rc"
+check "newer with --force: one script PUT back to this CLI's version" "1 $wv" "$(grep -c 'API PUT .*/workers/scripts/' "$slog") $(bind VERSION)"
+
+s_refuse() { # s_refuse <label> <message> [setup args...]: after fixtures are set, setup dies naming <message>, writes nothing
+  local before; before="$(objs)"; : >"$slog"
+  out=$(r2s "${@:3}" 2>&1); rc=$?
+  check "refuse $1: exit 1" "1" "$rc"
+  check "refuse $1: named" "1" "$(grep -c -- "$2" <<<"$out")"
+  check "refuse $1: no write logged" "0" "$(writes)"
+  check "refuse $1: bucket unchanged" "$before" "$(objs)"
+  check "refuse $1: no config" "0" "$([[ -f $s2conf ]] && echo 1 || echo 0)"
+}
+s_fresh; : >"$DRYS/.cf/bucket"; echo x >"$DRYS/foreign.txt"
+s_refuse "foreign objects" "not a share bucket"
+s_fresh; : >"$DRYS/.cf/bucket"; printf '{"v":1,"host":"other.example.test"}\n' >"$DRYS/share.json"
+s_refuse "marker for another host" "names another hostname"
+s_fresh; : >"$DRYS/.cf/bucket"; : >"$DRYS/.cf/r2dev"
+s_refuse "r2.dev on" "public r2.dev URL"
+s_fresh; : >"$DRYS/.cf/bucket"; : >"$DRYS/.cf/bucket-domain"
+s_refuse "bucket custom domain" "public custom domain"
+s_fresh; echo '[{"type":"A","name":"r2s.example.test"}]' >"$DRYS/.cf/dns"
+s_refuse "a DNS record" "already has a DNS record"
+s_fresh; echo '{"hostname":"r2s.example.test","service":"df-memo"}' >"$DRYS/.cf/domain.json"
+s_refuse "another Worker's domain, even with --force" "custom domain of another Worker" --force
+s_fresh; echo '{"bindings":[{"type":"plain_text","name":"HOST","text":"other.example.test"},{"type":"r2_bucket","name":"BUCKET","bucket_name":"ok-bucket"},{"type":"plain_text","name":"VERSION","text":"1"}]}' >"$DRYS/.cf/script.json"
+s_refuse "a script bound to another host" "not share's Worker"
+s_fresh
+SHARE_R2_DRY_DOMAINS=500 s_refuse "a 500 on the domains read" "custom domains answered HTTP 500"
+s_fresh; : >"$slog"
+out=$(SHARE_R2_DRY_SUBDOMAIN=stuck r2s 2>&1); rc=$?
+check "subdomain read-back on: exit 1" "1" "$rc"
+check "subdomain read-back on: named" "1" "$(grep -c 'still reads on' <<<"$out")"
+check "subdomain read-back on: no domain PUT" "0" "$(grep -c 'API PUT .*/workers/domains' "$slog" || true)"
+check "subdomain read-back on: no config" "0" "$([[ -f $s2conf ]] && echo 1 || echo 0)"
+s_fresh
+out=$(SHARE_R2_DRY_HEALTHZ=down SHARE_R2_WAIT=1 r2s 2>&1); rc=$?
+check "healthz never up: exit 1" "1" "$rc"
+check "healthz never up: names the host" "1" "$(grep -c 'https://r2s.example.test/healthz did not answer' <<<"$out")"
+check "healthz never up: no config" "0" "$([[ -f $s2conf ]] && echo 1 || echo 0)"
+rm -f "$s2conf"
 
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then
