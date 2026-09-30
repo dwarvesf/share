@@ -9,6 +9,8 @@ set -uo pipefail
 SH="$(cd "$(dirname "$0")/.." && pwd)/bin/share"
 WORK=$(mktemp -d)
 base=${SHARE_TEST_PORT_BASE:-18787}
+# The highest port the run uses is base+10009 (the live-port share), so the base tops out at 55526.
+(( base > 55526 )) && { echo "SHARE_TEST_PORT_BASE=$base clamped to 55526 so base+10009 stays a valid port" >&2; base=55526; }
 export SHARE_ROOT="$WORK/root" SHARE_CONFIG_DIR="$WORK/config" SHARE_PORT=$base
 export SHARE_TUNNEL=0 SHARE_CLIPBOARD=0 SHARE_HOSTNAME=s.example.test
 # A label no machine has, so an installed share service is never started or stopped by the test.
