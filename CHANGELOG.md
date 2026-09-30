@@ -1,10 +1,25 @@
 # Changelog
 
-## [v0.7.1] - 2026-09-30
+## [v0.8.0] - 2026-10-01
 
 ### Features
 
-- Share Bar shows every profile, with login-gated adds (#40); the merge kept its spec-only title, so the release computed a patch bump
+- R2 storage backend for multi-publisher tenants (#43)
+
+### Fixes
+
+- main CI after the r2 merge (compat row, SC2015) (#42)
+
+### Documentation
+
+- spec for an R2 storage backend per profile (#41)
+
+## [v0.7.1] - 2026-09-30
+
+### Documentation
+
+- changelog for v0.7.1
+- spec for Share Bar across profiles with login-gated adds (#40)
 
 ## [v0.7.0] - 2026-09-29
 
