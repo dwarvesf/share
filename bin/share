@@ -2064,7 +2064,7 @@ access_open_url() { # the platform opener, backgrounded; skipped over ssh or wit
 # write pub/ or an Access app against an r2 profile.
 
 WORKER_VERSION=2            # bump on every Worker source change; deploys refuse a downgrade without --force
-WORKER_SHA=62ee27f73013     # first 12 hex of the emitted source's sha256; the suite fails when it drifts
+WORKER_SHA=fdae03ca85c7     # first 12 hex of the emitted source's sha256; the suite fails when it drifts
 WORKER_COMPAT_DATE=2026-09-30   # moves only with a WORKER_VERSION bump
 WORKER_RECORD_V=1           # the record schema this source understands; a newer record answers 404
 worker_meta() { printf '%s\n' "$WORKER_VERSION" "$WORKER_SHA" "$WORKER_COMPAT_DATE" "$WORKER_RECORD_V"; }   # one line, four fields, for the deploy and sweep paths
@@ -2183,14 +2183,22 @@ async function handle(request, env) {
   const rest = segs.slice(2);
   if (rest.length === 0) return new Response(null, { status: 308, headers: { Location: u.origin + "/" + id + "/" } });
   const cond = { range: request.headers, onlyIf: request.headers };
+  const get = async (k) => {   // R2 throws on a Range past the end; that object answers 416 with its size
+    try { return await env.BUCKET.get(k, cond); }
+    catch (e) {
+      const hd = request.headers.has("range") ? await env.BUCKET.head(k) : null;
+      if (hd === null) throw e;
+      return { unsat: hd.size };
+    }
+  };
   let dir;
   try { dir = rest.map(decodeURIComponent).join("/"); }
   catch { return new Response(null, { status: 400 }); }
   const redir = !raw.endsWith("/");
   let rel = redir ? dir : dir + "index.html";
-  let obj = await env.BUCKET.get(rec.prefix + rel, cond);
+  let obj = await get(rec.prefix + rel);
   if (obj === null && !redir) {
-    obj = await env.BUCKET.get(rec.prefix + dir + "README.html", cond);
+    obj = await get(rec.prefix + dir + "README.html");
     if (obj !== null) rel = dir + "README.html";
   }
   if (obj === null && redir &&
@@ -2199,6 +2207,7 @@ async function handle(request, env) {
     return new Response(null, { status: 308, headers: { Location: u.origin + u.pathname + "/" + u.search } });
   }
   if (obj === null) return new Response(null, { status: 404 });
+  if (obj.unsat !== undefined) return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${obj.unsat}` } });
   if (obj.body === null) return new Response(null, { status: 412 });
   const h = new Headers();
   if (obj.writeHttpMetadata) obj.writeHttpMetadata(h);
@@ -2207,7 +2216,7 @@ async function handle(request, env) {
   let status = 200;   // R2 sets obj.range whenever a range option is passed, so only a request Range makes a 206
   if (request.headers.has("range") && obj.range) {
     const r = obj.range, sfx = r.suffix !== undefined;   // live R2 carries every key, unset ones undefined
-    const start = sfx ? obj.size - r.suffix : (r.offset ?? 0), len = sfx ? r.suffix : (r.length ?? obj.size - start);
+    const start = sfx ? Math.max(0, obj.size - r.suffix) : (r.offset ?? 0), len = sfx ? obj.size - start : (r.length ?? obj.size - start);
     h.set("Content-Range", `bytes ${start}-${start + len - 1}/${obj.size}`);
     status = 206;
   }

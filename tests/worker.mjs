@@ -59,10 +59,17 @@ class Bucket {
     if (!e) return null;
     let bytes = e.bytes, range = null;
     const rh = rangeHdr && rangeHdr.get("range");
-    const m = rh && rh.match(/^bytes=(\d+)-(\d*)$/);
-    if (m) {
-      const a = +m[1], b = m[2] ? +m[2] + 1 : e.bytes.length;
-      bytes = e.bytes.slice(a, Math.min(b, e.bytes.length));
+    const m = rh && rh.match(/^bytes=(\d*)-(\d*)$/), size = e.bytes.length;
+    const unsat = () => { throw new Error("get: The requested range is not satisfiable (10039)"); };   // as live R2: a range past the end throws
+    if (m && m[1] === "" && m[2] !== "") {   // a suffix range: the last n bytes, the whole object when n exceeds it
+      const n = +m[2];
+      if (n === 0) unsat();
+      bytes = e.bytes.slice(Math.max(0, size - n));
+      range = { offset: undefined, length: undefined, suffix: n };
+    } else if (m && m[1] !== "") {
+      const a = +m[1], b = m[2] ? +m[2] + 1 : size;
+      if (a >= size) unsat();
+      bytes = e.bytes.slice(a, Math.min(b, size));
       range = { offset: a, length: bytes.length, suffix: undefined };
     } else if (rangeHdr) range = { offset: 0, length: bytes.length, suffix: undefined };   // as live R2: any range option yields a range, Range header or not
     const body = new Blob([bytes]).stream();
@@ -162,6 +169,15 @@ if (process.argv[2] === "--dir") {
   check("r17 Range 206", 206, r.status);
   check("r17 Range body", "0123", await bodyOf(r));
   check("r17 Range Content-Range", "bytes 0-3/10", r.headers.get("content-range"));
+  r = await call(worker, env, `https://f.test/${ID}/f.txt`, { headers: { range: "bytes=-4" } });
+  check("r17 suffix Range", "206 bytes 6-9/10 6789", `${r.status} ${r.headers.get("content-range")} ${await bodyOf(r)}`);
+  r = await call(worker, env, `https://f.test/${ID}/f.txt`, { headers: { range: "bytes=-50" } });
+  check("r17 a suffix longer than the object clamps to byte 0", "206 bytes 0-9/10 0123456789", `${r.status} ${r.headers.get("content-range")} ${await bodyOf(r)}`);
+  r = await call(worker, env, `https://f.test/${ID}/f.txt`, { headers: { range: "bytes=20-30" } });
+  check("r17 an unsatisfiable Range is 416 with the size", "416 bytes */10", `${r.status} ${r.headers.get("content-range")}`);
+  check("r17 no-store on a 416", "no-store", r.headers.get("cache-control"));
+  r = await call(worker, env, `https://f.test/${ID}/missing.txt`, { headers: { range: "bytes=20-30" } });
+  check("r17 a Range on a missing file is still 404", 404, r.status);
   r = await call(worker, env, `https://f.test/${ID}/f.txt`);
   check("r17 a plain GET is 200, not 206", "200 null", `${r.status} ${r.headers.get("content-range")}`);
   r = await call(worker, env, `https://f.test/healthz`);
