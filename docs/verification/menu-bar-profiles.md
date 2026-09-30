@@ -75,7 +75,11 @@ Result:  GREEN, 146 tests, 0 failures
 Verdict: PASS (mutate -> RED -> restore)
 ```
 
-## Pending Han's UAT
+## Manual rows: skipped by the operator (2026-09-30)
+
+Han skipped the GUI UAT (he was remote; the Mini's GUI was not reachable). The rows below are NOT proven. Known exposure: the rule field's live enable (row 23, commit fcbd112) is AppKit wiring with no automated test. The first real use of Share Bar with two profiles is the check; a failure there is a patch release.
+
+### Rows not run
 
 Everything the spec assigns to `swift test` or `tests/share.sh` is green above. These rows are manual and not yet run:
 
