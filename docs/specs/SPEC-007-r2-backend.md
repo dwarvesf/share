@@ -1,8 +1,8 @@
 # SPEC-007: R2 storage backend per profile
 
-Status: DRAFT
+Status: VALIDATED (three rounds; remaining warnings in the Decision Log, round 3)
 Lane: full (external provider, authz on the publish path, a new public surface, credentials for several people)
-Depth: deep. Unsampled until TASK-1: the REST object path under a bucket-scoped token, conditional writes, list pagination, custom-domain scopes, `curl --parallel` per-transfer status, the edge and Worker URL views. Every build task that consumes one of them depends on TASK-1.
+Depth: research (outside: bucket-scoped tokens on the R2 REST object path, conditional writes, list pagination, custom-domain scopes, curl parallel per-transfer status, the Access JWT at the Worker; TASK-1 samples each before the build task that consumes it) | blind-spot (failure: the edge and the Worker read one path differently and a gated share is served without its gate)
 References: `bin/share` `cmd_setup`, `cmd_add`, `stage_copy`, `stage_publish`, `rows`, `row`, `rand_id`, `cmd_rm`, `cmd_prune`, `cmd_hits`, `cmd_state`, `cmd_profiles`, `cmd_teardown`, `access_*`, `api_token_resolve`, `cf_try`, `release_locks`; SPEC-004 (Access gate), SPEC-005 (profiles), ADR-0002 (a mode is fixed at setup), ADR-0005, ADR-0006.
 
 ## Problem
@@ -124,7 +124,7 @@ The orphan sweep never trusts the filtered snapshot: it reads every key under `m
 | `add <port>`, `add --host` | refused before any write: `live shares and --host need a tunnel profile; this profile serves from R2` |
 | `ls` | rows from the snapshot, each line with `by=<host>`; prune in `listing` mode first |
 | `refresh <id>` | ids in `r2-own` only, else `<id> was added from another install; refresh it there`. Upload to a new nonce prefix, then `PUT m/<id>` with `If-Match: <etag read at start>`; a 412 or 404 aborts (a concurrent rm or refresh won) and deletes the new prefix; on success delete the old prefix |
-| `rm <id>` | a gated row first needs the SPEC-004 preflight's Apps Edit probe to pass on the resolved token, else rm dies before any change with the O1 block (a teammate without Access scopes can never strand an app); pending line for a gated row; `DELETE m/<id>` (404 counts); a fresh `GET m/<id>` must answer 404, else the line stays, the app stays, and rm dies; delete every object under `o/<id>.` (all nonces; 404 counts); then the Access app |
+| `rm <id>` | a gated row first needs the SPEC-004 preflight's Apps Edit probe to pass on the resolved token, else rm dies before any change with `access_scope_line 'Access: Apps and Policies Edit'` (the O1 block only when no token resolves at all; a teammate without Access scopes can never strand an app); pending line for a gated row; `DELETE m/<id>` (404 counts); a fresh `GET m/<id>` must answer 404, else the line stays, the app stays, and rm dies; delete every object under `o/<id>.` (all nonces; 404 counts); then the Access app |
 | `prune` | expired rows from the snapshot through `rm` in prune mode. An expired gated row is removed only by a process whose resolved token passes the Apps Edit probe; without it its record and bytes stay (the Worker already answers 404) and prune prints `expired gated share <id> waits for a publisher with the Access token`. So no install ever defers another install's app into its local `access-pending`. Bare `prune` then sweeps orphan prefixes: every `o/<id>.<nonce>/` that no record names and whose newest object is older than 24 h is deleted |
 | `hits <id>` | `POST analytics_engine/sql`: `SELECT SUM(_sample_interval) AS hits, COUNT(DISTINCT blob2) AS visitors, MAX(timestamp) AS last FROM <dataset> WHERE index1 = '<id>' FORMAT JSON`, with the id checked `^[0-9a-f]{6}$` first; output as today: `N hits, M visitors, last YYYY-MM-DD HH:MM` |
 | `status` | `r2 backend: https://<host>/`, the `/healthz` answer (`up`, or `DOWN: <code>`), the version-mismatch line when it applies, then `ls` without its prune (SPEC-004 round 8: status is a read) |
@@ -193,7 +193,7 @@ A profile without `backend=r2` runs every current code path unchanged: every r2 
 | upload fails mid-tree | a transfer's code not 2xx | die; no record, nothing served; the EXIT trap deletes the prefix; a hard kill leaves an unreferenced prefix the next `prune` deletes after 24 h |
 | record PUT lost (000) but committed | `r2_call` code | die; the EXIT trap sees the record naming the prefix and keeps it; a gated add keeps its pending line, and its sweep drops the line on a record naming the app (the finished add), never deleting the app |
 | `DELETE m/<id>` lost | the fresh `GET m/<id>` answers 200 | rm dies before touching the app; the pending line stays |
-| partial prefix delete | a later listing still shows keys | the record is already gone, so nothing is served; the next `rm` retry or the orphan sweep finishes |
+| partial prefix delete | a later listing still shows keys | the record is already gone, so nothing is served, and `rm` of that id now answers "no share"; the orphan sweep finishes after 24 h |
 | two publishers pick one id | `If-None-Match: *` answers 412 | the loser deletes its prefix (and its app) and dies with `rerun` |
 | refresh races rm or another refresh | `If-Match` answers 412 or 404 | the refresh aborts and deletes its new prefix; no record is resurrected |
 | Cloudflare API 429, 5xx, outage | `r2_call` code | three retries with `Retry-After`, then die naming the call; nothing is published half-way (the record is written last) |
@@ -201,12 +201,12 @@ A profile without `backend=r2` runs every current code path unchanged: every r2 
 | publisher token revoked mid-add | 401/403 from `r2_call` | die; the EXIT trap cannot delete the prefix (same token), so the orphan sweep of another publisher deletes it after 24 h |
 | snapshot page or record read fails | non-2xx | the verb dies; never an empty `ls` or a "free" id |
 | a forged or corrupt record | jq and `rows()` checks; the Worker's id and prefix checks | skipped by the CLI, 404 at the Worker; never a path into another share's prefix; `refresh` never reads its source path |
-| workers.dev or preview left on | setup step 8 read-back | die before the custom domain exists |
-| bucket turned public later (r2.dev or a custom domain) | a setup rerun with the admin token (step 3) | refused and named; publishers cannot see it, so Decisions for Han item 5 assigns the check |
+| workers.dev or preview left on | setup step 10 read-back | die before the custom domain exists |
+| bucket turned public later (r2.dev or a custom domain) | a setup rerun with the admin token (step 5) | refused and named; publishers cannot see it, so Decisions for Han item 5 assigns the check |
 | Worker older or newer than the CLI | `/healthz` header | a warning in `setup` and `status`; an admin deploy refuses a downgrade without `--force` |
 | an old share CLI on an r2 profile | `port=r2` fails its load-time check | it dies before any verb runs; no write |
 | an Access app on a Worker custom domain does not enforce | the SPEC-004 gate | the gate times out; the app and the prefix are deleted; nothing is published |
-| gated rm or prune by a token without Apps Edit | the preflight's Apps Edit probe | rm dies before any change with the O1 block; prune leaves the record and bytes and names the share |
+| gated rm or prune by a token without Apps Edit | the preflight's Apps Edit probe | rm dies before any change naming the missing scope; prune leaves the record and bytes and names the share |
 | a record this CLI cannot read (corrupt, or `v` above its own) | the raw `m/` read before the orphan sweep | the sweep is skipped with a warning; `ls` skips the row as today |
 | the Access JWT does not reach the Worker, or `TEAM` is empty | the gated-record check answers 404 | the gate passes but the link 404s behind the login, never public; TASK-1(l) confirms the header, and without it `--access` is refused on r2 |
 | the undocumented REST object path changes after launch | `r2_call` answers 400 or 404 on a path that worked, while `/healthz` is up | every publisher verb dies naming the call; links keep serving (the Worker reads R2 through its binding); the fix is a share release on the S3 transport |
@@ -256,7 +256,7 @@ Local rows run in `tests/share.sh` with `SHARE_R2_DRY=1`: `r2_call` reads and wr
 | 15 | teardown | plain; `--purge` without the admin fixture; `--purge` with a foreign script (bindings name another host); `--purge` with it | plain: config gone, dry bucket unchanged; refused purges: nothing logged past the reads; purge: every record and object gone, then `DELETE share.json` < domain DELETE < script DELETE < bucket DELETE, and the dataset line printed |
 | 16 | secrets | a `curl` shim first on `PATH` recording argv, a sentinel token, add, ls, rm, hits, setup | the sentinel appears in no recorded argv, no stdout or stderr, and no file under `$root`, `$config_dir`, or `$TMPDIR` |
 | 17 | Worker | `/<id>/` with index.html; with only README.html; a folder path without slash; `/<id>`; a missing file; a subfolder with no index; HEAD; `Range: bytes=0-3`; `/healthz` | 200, 200, 308, 308, 404, 404, no body, 206 with 4 bytes, `ok` plus both headers |
-| 18 | Worker | `/x/..%2F<id>/f`, `/%2f<id>/f`, `/x/..%5C<id>/f`, `/<id>/a%2Ehtml`, `//<id>/f`, `/<id>/%zz`, `/<id>/%01`, `/<ID>/f`, `/%61bc123/f`, `/<id>/50%25.v1.txt`, `/<id>/f?next=%2Fhome`, Host `f.test.` and another name, a record whose prefix names another id, a record whose `id` differs from its key, an expired record, POST. URLs enter through `new Request(url)`, as the runtime hands them over (TASK-1(h) adds any edge form it observes) | 400 x7, 404, 404, 200, 200, 404, 404, 404, 404, 405; `no-store` and `noindex` on every one |
+| 18 | Worker | `/x/..%2F<id>/f`, `/%2f<id>/f`, `/x/..%5C<id>/f`, `/<id>/a%2Ehtml`, `//<id>/f`, `/<id>/%zz`, `/<id>/%01`, `/<ID>/f`, `/%61bc123/f`, `/<id>/50%25.v1.txt`, `/<id>/f?next=%2Fhome`, Host `f.test.`, another Host name, a record whose prefix names another id, a record whose `id` differs from its key, an expired record, POST. URLs enter through `new Request(url)`, as the runtime hands them over (TASK-1(h) adds any edge form it observes) | 400 x7, 404, 404, 200, 200, 404, 404, 404, 404, 404, 405; `no-store` and `noindex` on every one |
 | 19 | Worker | a 200, a 404, `/healthz` | one data point, for the 200; its blobs hold the id and 16 hex, never the IP string |
 | 20 | version | rerun setup; bump `WORKER_VERSION` and `WORKER_SHA` with a changed source; a deployed version above the CLI's; source changed without the constants; `WORKER_SHA` updated but `WORKER_VERSION` equal to `origin/main`'s | no script PUT; one PUT with the new `VERSION` and `SHA` bindings; refused without `--force`; the sha check fails; the version check fails |
 | 21 | lint | `shellcheck` on every script; `/bin/bash -n bin/share`; `node --check` on the emitted Worker | clean |
@@ -267,7 +267,7 @@ Local rows run in `tests/share.sh` with `SHARE_R2_DRY=1`: `r2_call` reads and wr
 | 26 | primitives | `r2_put_tree` over a stage holding `a%b.txt`, `q?.txt`, `h#.txt`, `sp ace.txt`, with one transfer forced to 500 once; `r2_delete_prefix "o/<id>."` over two nonces | the listing equals the stage; the failed transfer retried alone and succeeded; no key under either nonce remains |
 | 27 | snapshot | records with a control character in `name`, an `id` differing from its key, a bad `prefix`; a good record | `rows()` yields only the good one; `$index` names the snapshot file; `rand_id` skips an id with a record |
 | 28 | Worker JWT | a gated record: no header; a JWT from an unknown key; wrong `aud`; expired; wrong `iss`; valid; `new Request("https://<host>/x/..\\<id>/f")` with no header; `TEAM` empty; the certs fetch failing. Keys are generated in the test with `crypto.subtle`, the certs URL answered by a stubbed `fetch` | 404, 404, 404, 404, 404, 200, 404, 404, 404 |
-| 29 | Access scope | a publisher token whose Apps Edit probe fails: `rm` of a gated share; `prune` of an expired gated share; `teardown --purge` with a gated record | rm: exit 1, the O1 block, no DELETE logged; prune: record and bytes kept, the waiting line printed; purge: refused before any DELETE |
+| 29 | Access scope | a publisher token whose Apps Edit probe fails: `rm` of a gated share; `prune` of an expired gated share; `teardown --purge` with a gated record | rm: exit 1, the missing scope named, no DELETE logged; prune: record and bytes kept, the waiting line printed; purge: refused before any DELETE |
 
 ### Negative controls
 
@@ -405,3 +405,21 @@ Then by hand: `tests/e2e-r2.sh` with the inputs above; its log goes to `docs/ver
 | TASK-1 gains (k) `custom_metadata` and (l) the JWT header at the Worker; the listing budget threshold is recorded with its upgrade path | the per-record fetch is the load-bearing growth dimension |
 | Rows 26 to 29 added; rows 5 and 7 moved to the tasks that can pass them; TASK-13 names TASK-7 | rows assigned to tasks that could not meet them |
 | Not taken: a Worker cron for cleanup of unused profiles (the bytes are unreachable once expired; a purge ends them) | ADR-0006 keeps tokens out of long-running processes |
+- Round 3 (four fresh-context agents covering all seven lenses, 2026-09-30): one critical, the `Depth:` line's syntax, fixed (`spec-depth.sh check` passes). Errata fixed without a design change: stale setup step numbers in the failure table, the rm refusal names the missing scope instead of the no-token O1 block, the partial-prefix-delete row, the row 18 answer count. Remaining warnings, recorded for the build (each is a TASK-3, TASK-7, or TASK-12 detail, none changes the design):
+
+| Warning (lens) | Proposed handling at build time |
+|---|---|
+| A publisher cannot see whether `TEAM` is set, so the `add --access` refusal has no read path (3, 1, 2) | `/healthz` gains `X-Share-Gate: 0` or `1`; `add --access` reads it before any write; `status` prints it |
+| A redeploy without Access Organizations Read blanks `TEAM` and silently 404s every gated link; `TEAM` drift is never redeployed (1, 2, 5) | step 7 keeps the deployed `TEAM` when the read fails; a differing `TEAM` triggers a redeploy and is printed; row 20 gains both cases |
+| JWT details: record `aud` pinned to `^[0-9a-f]{64}$`; JWT `aud` matched by exact element; a record with `access=` or `aud` counts as gated; `alg` must be `RS256` with the algorithm fixed at key import; `kid` required; one try/catch answers 404 (1) | written into `worker_js`; row 28 gains string-`aud`, empty-`aud`, `alg:none`, `alg:HS256`, and malformed-token cases |
+| The certs refetch on an unknown `kid` has no rate bound; a failed fetch must never be cached (1, 2, 3) | at most one refetch per isolate per 60 s; only a 200 with a non-empty `keys` array is cached |
+| `TEAM` comes from `auth_domain` and must match `^[a-z0-9-]+\.cloudflareaccess\.com$` before binding (1) | checked in step 7 |
+| `SALT` must not persist in a file (1) | the metadata part goes through `-F metadata=@<(...)`; row 16 scans for the salt too |
+| The snapshot's parallel fetch needs `--parallel-max 8` and per-transfer 429 retry; TASK-1(j) records whether the limit is per token or per owner (2) | as `r2_put_tree` |
+| One unreadable record blocks the orphan sweep and no verb removes it (2, 7) | the sweep warning names the key; `status` prints `orphan sweep blocked by <key>`; `teardown --purge` deletes unreadable `m/` keys from the raw listing |
+| Several publisher clocks: prune's `now` and the 24 h orphan age use the local clock (2) | take `now` from an API response's `Date` header |
+| `rand_id` should also refuse an id with leftover `o/<id>.` keys, and the r2 sweep should delete only its own nonce (2) | both, in TASK-6 and TASK-12 |
+| Role split assumes a publisher token answers 401 or 403 on a missing script's settings (3, 2) | TASK-1(a) pins it; a 404 from a publisher token would need an explicit `--join` flag |
+| The `origin/main` comparisons in rows 1 and 20 need a fetched remote (3, 5) | `SKIP` locally without it, fail under `CI=true`; a ref-free `VERSION SHA` ledger in `bin/share` is the alternative if two branches collide on one version |
+| Expired gated shares waiting for a token holder have no count outside prune (7) | `status` prints the count |
+| TASK-7 is large (11 setup steps) and only one negative control has a written dry trace (4) | accepted: each step is one table row with its own row 3 or 4 assert; the other traces follow the same line-order pattern |
