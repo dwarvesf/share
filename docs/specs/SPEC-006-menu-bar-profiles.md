@@ -1,7 +1,7 @@
 # Spec: Share Bar sees every profile and adds gated shares
 
 Generated: 2026-09-30
-Status: DRAFT
+Status: VALIDATED (3 rounds, 0 critical in round 3; round 3 warnings recorded in the Decision Log as build rules)
 Lane: full (a new CLI JSON contract the app depends on; an authz choice made in the UI)
 Depth: research (repo: how the app refreshes, adds, and reports failures today in mac/Sources, and what cmd_profiles and cmd_state print on the Mini)
 References: `docs/specs/SPEC-003-menu-bar.md` (the app, `share state`, header and row rules); `docs/specs/SPEC-005-profiles.md` (`--profile`, `share profiles`, the overrides `profiles` unsets); `docs/specs/SPEC-004-access.md` (`--access` grammar, the O1/O3 guided messages, the gate wait); `docs/decisions/ADR-0003-menu-bar-reads-through-cli.md`.
@@ -449,3 +449,18 @@ Negative controls: the table in `## Grounding`; each mutation must turn its name
 | a failed post-add re-read stops the batch; Stop Waiting cancels only its own job (row 7b); a `profiles/default` directory is an error entry | n alerts on a hung profile; a late confirm killed the next add; two sections named `default` (Failure modes) |
 | stale snapshot: the button names the profile; logging covers `ProfileEntry.error`, the stored rule, and the verb field; TASK-005 depends on TASK-002 | a stale host in the button; PII and log clarity; dependency pattern (Security, Scope) |
 | kept: new-share attribution by id diff, not by parsing `add` stdout | SPEC-003 DEC-010 (never parse verb output) and its edge case 24 accept the same-moment terminal race |
+
+### Validation round 3 (2026-09-30): APPROVED, 0 critical; warnings recorded, not revised
+
+Round 3 was the cap. Each warning below is binding on the build, in the task named.
+
+| Warning (reviewer) | Build rule | Task |
+|---|---|---|
+| `JobToken` has no shape and no way to get one (Failure modes, Assumptions, Design) | `JobToken` is a UUID minted per run; `MutationQueue.currentJob() async -> JobToken?`; `stopWaiting` reads it before `runModal` and passes it to `cancel(job:)` | TASK-005 (queue), TASK-007 (handler) |
+| `performMutation`'s re-read might copy today's clearing branch (Failure modes) | a failed `fresh` re-read keeps the last snapshot and marks it stale, exactly as a failed poll does | TASK-002 |
+| the public `verb=` log field reads `--profile` once every argv carries the prefix (Assumptions) | `CLI.swift`'s three `verbForLog` sites skip a leading `--profile <p>`; a unit test pins it | TASK-002 |
+| an `error` entry text should say what to do (Failure modes) | the reserved-name entry reads `reserved name; rename or remove <config base>/share/profiles/default` | TASK-001 |
+| `Error: Update Share Bar` reads oddly; a `state` with no `schema` is unstated (Design) | an entry whose `error` is `Update Share Bar` shows that text alone; a `state` without `schema` is `state not readable` | TASK-002, TASK-003 |
+| row 14b's `PublishForm` clause is outside TASK-003's dependencies (Scope) | that clause moves to row 17 (TASK-005); row 14b keeps the sections, header, and icon | TASK-003, TASK-005 |
+| setup completion refreshes with a plain call that can reuse a pre-setup run (Failure modes) | setup completion calls `CLI.profiles(fresh: true)` | TASK-006 |
+| TASK-002 is at the atomicity limit (Scope) | accepted: splitting it would leave a target that does not build between tasks; if it overruns, split decode (`Snapshot.swift`) from the runner and call sites (`CLI.swift` and callers) with a temporary `CLI.state` shim | TASK-002 |
