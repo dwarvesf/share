@@ -227,7 +227,7 @@ A profile without `backend=r2` runs every current code path unchanged: every r2 
 - [x] TASK-11: `hits`, `status`, `state`, `profiles`. Depends on TASK-6 and TASK-1(f). AC: rows 13, 14.
 - [x] TASK-12: gated add and rm on r2 and the r2 sweep. Depends on TASK-10 and TASK-1(c)(g)(l). AC: rows 11, 12, 25b, 25d, 29.
 - [x] TASK-13: `teardown` local and `--purge`. Depends on TASK-7 and TASK-12. AC: row 15.
-- [ ] TASK-14: `tests/e2e-r2.sh` and its run log. Depends on TASK-2 to TASK-13. AC: rows L1 to L11 and the cleanup assertions.
+- [x] TASK-14: `tests/e2e-r2.sh` and its run log. Depends on TASK-2 to TASK-13. AC: rows L1 to L11 and the cleanup assertions.
 - [ ] TASK-15: `README.md`, `docs/how-it-works.md`, `docs/setup.md`. Depends on TASK-13. AC: each doc claim matches the code line it describes.
 - [ ] TASK-16: the ADR, `docs/verification/r2-backend.md` with the negative-control runs, the skill row. Depends on TASK-14. AC: every negative control has a red and a green run.
 

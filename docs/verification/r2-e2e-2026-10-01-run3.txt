@@ -1,0 +1,181 @@
+# tests/e2e-r2.sh live run, Dwarves Cloudflare account (zone d.foundation)
+# Tree: d18dd89 (committed), run 2026-09-30T17:13:29Z on the Mac Mini
+# Command: SHARE_BIN=<worktree>/bin/share SHARE_E2E_R2_HOST=share-e2e-72b3f2.d.foundation SHARE_E2E_R2_BUCKET=share-e2e-72b3f2 SHARE_E2E_ACCESS_RULE=group:dwarves-ops tests/e2e-r2.sh
+# Tokens: CLOUDFLARE_API_TOKEN = op://Toolkit/cf-api-token/credential (admin), SHARE_E2E_R2_TOKEN_ADMIN = op://Toolkit/cf-tokens-admin/credential
+#   (User API Tokens Edit only; mints the two bucket-scoped publisher tokens and revokes them), both read through 1Password Connect, never printed.
+
+--- outside check: before ---
+buckets: 15 total, 0 named share-e2e*; sha of the other names: 79a3fcf51452
+workers: 44 total, 0 named share-share-e2e*
+worker custom domains for share-e2e-72b3f2.d.foundation: 0
+access apps: 5 total, 0 named share * share-e2e* *
+dns records named share-e2e-72b3f2.d.foundation: 0
+user tokens named share-e2e*: 0
+
+=== before: nothing named for this run exists ===
+  ok    no bucket share-e2e-72b3f2
+  ok    no Worker share-share-e2e-72b3f2-d-foundation
+  ok    no DNS record for share-e2e-72b3f2.d.foundation
+=== L1 admin setup ===
+  | deploying as admin
+  | worker:     share-share-e2e-72b3f2-d-foundation 1 76b2c8c9ab5f deployed
+  | ready:      https://share-e2e-72b3f2.d.foundation/ serves from bucket share-e2e-72b3f2. Next: share add <file|dir>
+  ok    setup exits 0
+  ok    /healthz answers 200 ok
+  ok    /healthz carries this CLI's pair
+  ok    workers.dev and previews off
+  ok    the workers.dev URL does not answer 200
+  ok    the bucket has no r2.dev URL
+  ok    config: backend r2, port sentinel
+=== L2 rerun setup (no redeploy) ===
+  | deploying as admin
+  | worker:     share-share-e2e-72b3f2-d-foundation 1 76b2c8c9ab5f already deployed
+  | ready:      https://share-e2e-72b3f2.d.foundation/ serves from bucket share-e2e-72b3f2. Next: share add <file|dir>
+  ok    rerun exits 0
+  ok    rerun says already deployed
+  FAIL  script modified_on unchanged: expected '2026-09-30T17:13:42.642815Z', got '2026-09-30T17:14:20.545032Z'
+=== publisher tokens ===
+  | minted token share-e2e-72b3f2-a (id 5990dd97..., expires 2026-09-30T19:14:30Z)
+  | minted token share-e2e-72b3f2-b (id a2fa0c37..., expires 2026-09-30T19:14:31Z)
+  ok    both publisher tokens resolved
+  | token A lists the bucket after 0s
+  | token B lists the bucket after 2s
+=== L3 publisher B joins with the bucket token ===
+  | joining as publisher
+  | public-route check skipped (publisher token)
+  | ready:      https://share-e2e-72b3f2.d.foundation/ serves from bucket share-e2e-72b3f2. Store your publisher token: share api-token; then: share add <file|dir>
+  ok    join exits 0
+  ok    join says joining as publisher
+  ok    join skips the public-route check
+  ok    GET workers/scripts/<worker>/settings with B's token is refused
+  ok    PUT workers/scripts/<worker> with B's token is refused
+  | recorded: GET workers/scripts with B's token -> 200, 0 script(s) listed
+  ok    GET r2/buckets with B's token is refused
+  ok    api-token refuses the admin token as a publisher token
+  | token:      api_token_cmd stored in <tmp>/b/.config/share/config (no secret written)
+  | share: a publisher token for bucket share-e2e-72b3f2: not an admin token, no other bucket in reach
+  | share: checking the API token for profile default (zone d.foundation)
+  |   ok       token found (api_token_cmd)
+  |   ok       Zone: Read                                                     GET /zones?name=d.foundation -> 1 zone
+  |   MISSING  Access: Organizations, Identity Providers, and Groups Read     GET /accounts/<acct>/access/organizations -> 10000
+  |   could not check  Access: Apps and Policies Edit (403/1010); rerun: share api-token --check
+  |   fix: add the missing permission to this token at https://dash.cloudflare.com/?to=/:account/api-tokens (account API tokens), then run: share api-token --check
+  | share: ungated adds work with this token; gated adds and their removal also need the Access scopes above
+  ok    api-token stores B's bucket token
+  | token:      api_token_cmd stored in <tmp>/a/.config/share/config (no secret written)
+  | share: a publisher token for bucket share-e2e-72b3f2: not an admin token, no other bucket in reach
+  | share: checking the API token for profile default (zone d.foundation)
+  |   ok       token found (api_token_cmd)
+  |   ok       Zone: Read                                                     GET /zones?name=d.foundation -> 1 zone
+  |   ok       Access: Organizations, Identity Providers, and Groups Read     GET /accounts/<acct>/access/organizations -> 200
+  |   ok       Access: Apps and Policies Edit                                 POST /accounts/<acct>/access/apps {} -> 400 (12130, nothing created)
+  ok    api-token stores A's publisher token
+  ok    no token value in either config
+  ok    B's ls is empty
+=== L4 A publishes a folder ===
+  ok    link shape
+  FAIL  link answers 200: expected '200', got '206'
+  ok    content is the snapshot
+  ok    dotfile not served
+  ok    a subfolder with no index is 404
+  ok    a file in the subfolder answers
+  ok    a subfolder named with a space serves its index
+  ok    no-store header
+  ok    noindex header
+  ok    /<id> redirects 308 to /<id>/
+  ok    a second share answers
+=== L5 encoded paths ===
+  ok    /x/..%2F805f31/doc/ answers 400
+  ok    /%2F805f31/doc/ answers 400
+  ok    /x/..%5C805f31/doc/ answers 400
+  ok    //805f31/doc/ answers 400
+  ok    /805f31/doc/%2e%2e/ answers 400
+  ok    /805f31/%zz answers 400
+  | recorded: /x/..\805f31/doc/ -> 206
+  | recorded: /x/%2e%2e/805f31/doc/ -> 400
+  | recorded: /%6105f31/doc/ -> 404
+  | recorded: /805F31/doc/ -> 404
+  ok    a POST answers 405
+=== L6 B publishes; both installs list both ===
+  ok    B's link answers
+  ok    A's ls shows B's row with by=
+  ok    B's ls shows A's two rows
+  ok    B cannot refresh A's share
+=== L7 expiry ===
+  | code=200 etag=8b04582714ae9e4c7ccdaa6d23484c4b
+  FAIL  the link still answers before the expiry: expected '200', got '206'
+  ok    the link is 404 after the expiry
+  ok    A's ls removed the record
+  ok    A's ls left no key under the prefix
+=== L9 gated link (group:dwarves-ops) ===
+  | share: checking the API token for profile default (zone d.foundation)
+  |   ok       token found (api_token_cmd)
+  |   ok       Zone: Read                                                     GET /zones?name=d.foundation -> 1 zone
+  |   ok       Access: Organizations, Identity Providers, and Groups Read     GET /accounts/<acct>/access/organizations -> 200
+  |   ok       Access: Apps and Policies Edit                                 POST /accounts/<acct>/access/apps {} -> 400 (12130, nothing created)
+  | share: waiting up to 900s for Cloudflare Access to enforce on share-e2e-72b3f2.d.foundation/5a38ce (a new app can take minutes; Ctrl-C is safe: nothing is published, the next add or prune removes the app)
+  | gated add took 40s; 14 polls during the wait
+  ok    gated add printed a link
+  ok    no 200 on the link during the wait
+  ok    one app named for the share, with an aud
+  ok    /5a38ce/ redirects to Access with kid == aud
+  ok    /5a38ce redirects to Access with kid == aud
+  ok    /5A38CE/ redirects to Access with kid == aud
+  ok    /%35a38ce/ redirects to Access with kid == aud
+  ok    /x/..\5a38ce/gated/ never answers 200 (302)
+  ok    /x/%2e%2e/5a38ce/gated/ never answers 200 (302)
+  ok    //5a38ce/gated/ never answers 200 (302)
+  ok    /x/..%2F5a38ce/gated/ never answers 200 (400)
+  | unpublished 5a38ce
+  ok    gated rm exits 0
+  ok    GET access/apps/<app> is 404
+  ok    the gated link never answers 200 after rm
+  ok    access-pending is empty
+=== L8 hits (Analytics Engine lags; polled up to 4 min from B's first fetch) ===
+  | 3 hits, 1 visitor, last 2026-10-01 00:15
+  ok    hits counts the three fetches of B's link
+  ok    an injected id is refused
+=== L10 B's local teardown ===
+  | token:   removed
+  | config:  moved to the Trash
+  | kept:    bucket share-e2e-72b3f2, the Worker, and every share on share-e2e-72b3f2.d.foundation stay for the other publishers; 'share teardown --yes --purge' with the admin token removes them
+  ok    B's teardown exits 0
+  ok    B's config is gone
+  ok    the bucket listing is unchanged
+  ok    A's link still answers
+  ok    B's link still answers
+=== L11 admin teardown --purge ===
+  | unpublished 512a06
+  | unpublished b7e6a4
+  | marker:  deleted share-e2e-72b3f2/share.json
+  | domain:  removed share-e2e-72b3f2.d.foundation
+  | worker:  deleted share-share-e2e-72b3f2-d-foundation
+  | bucket:  deleted share-e2e-72b3f2
+  | dataset: the Analytics Engine dataset share_share_e2e_72b3f2_d_foundation cannot be deleted; it ages out on its own
+  | token:   removed
+  | config:  moved to the Trash
+  ok    purge exits 0
+  ok    A's config is gone
+  ok    the links are down
+=== cleanup, asserted through the API ===
+  ok    Worker settings 404
+  ok    no custom domain for share-e2e-72b3f2.d.foundation
+  ok    no DNS record for share-e2e-72b3f2.d.foundation
+  ok    bucket 404
+  ok    no Access app named share * share-e2e-72b3f2.d.foundation *
+  ok    publisher token A revoked
+  ok    publisher token B revoked
+  | the Analytics Engine dataset share_share_e2e_72b3f2_d_foundation cannot be deleted by API; it ages out
+
+80/83 checks passed
+3 FAILED
+
+# exit 1
+--- outside check: after (EXIT trap done) ---
+buckets: 15 total, 0 named share-e2e*; sha of the other names: 79a3fcf51452
+workers: 44 total, 0 named share-share-e2e*
+worker custom domains for share-e2e-72b3f2.d.foundation: 0
+access apps: 5 total, 0 named share * share-e2e* *
+dns records named share-e2e-72b3f2.d.foundation: 0
+user tokens named share-e2e*: 0
+worker 404 , bucket 404

@@ -1,0 +1,183 @@
+# tests/e2e-r2.sh live run, Dwarves Cloudflare account (zone d.foundation)
+# Tree: 430b67f plus the uncommitted tests/e2e-r2.sh, run 2026-09-30T16:47:12Z on the Mac Mini
+# Command: SHARE_BIN=<worktree>/bin/share SHARE_E2E_R2_HOST=share-e2e-d31313.d.foundation SHARE_E2E_R2_BUCKET=share-e2e-d31313 SHARE_E2E_ACCESS_RULE=group:dwarves-ops tests/e2e-r2.sh
+# Tokens: CLOUDFLARE_API_TOKEN = op://Toolkit/cf-api-token/credential (admin), SHARE_E2E_R2_TOKEN_ADMIN = op://Toolkit/cf-tokens-admin/credential
+#   (User API Tokens Edit only; mints the two bucket-scoped publisher tokens and revokes them), both read through 1Password Connect, never printed.
+
+--- outside check: before ---
+buckets: 15 total, 0 named share-e2e*; sha of the other names: 79a3fcf51452
+workers: 44 total, 0 named share-share-e2e*
+worker custom domains for share-e2e-d31313.d.foundation: 0
+access apps: 5 total, 0 named share * share-e2e* *
+dns records named share-e2e-d31313.d.foundation: 0
+user tokens named share-e2e*: 0
+
+=== before: nothing named for this run exists ===
+  ok    no bucket share-e2e-d31313
+  ok    no Worker share-share-e2e-d31313-d-foundation
+  ok    no DNS record for share-e2e-d31313.d.foundation
+=== L1 admin setup ===
+  | deploying as admin
+  | share: deploying Worker share-share-e2e-d31313-d-foundation answered HTTP 400; the bucket and marker stay, rerun setup
+  FAIL  setup exits 0: expected '0', got '1'
+cat: <tmp>/hz: No such file or directory
+  FAIL  /healthz answers 200 ok: expected '200 ok', got '000 '
+  FAIL  /healthz carries this CLI's pair: expected '1 f8e97175987b', got ''
+  FAIL  workers.dev and previews off: expected 'false,false', got 'null,null'
+  ok    the workers.dev URL does not answer 200
+  ok    the bucket has no r2.dev URL
+awk: can't open file <tmp>/a/.config/share/config
+ source line number 1
+  FAIL  config: backend r2, port sentinel: expected 'r2 r2', got ''
+=== L2 rerun setup (no redeploy) ===
+  | deploying as admin
+  | share: deploying Worker share-share-e2e-d31313-d-foundation answered HTTP 400; the bucket and marker stay, rerun setup
+  FAIL  rerun exits 0: expected '0', got '1'
+  FAIL  rerun says already deployed: expected '1', got '0'
+  ok    script modified_on unchanged
+=== publisher tokens ===
+  | minted token share-e2e-d31313-a (id 86725b78..., expires 2026-09-30T18:47:44Z)
+  | minted token share-e2e-d31313-b (id bdbca150..., expires 2026-09-30T18:47:45Z)
+  ok    both publisher tokens resolved
+  | token A lists the bucket after 0s
+  | token B lists the bucket after 4s
+=== L3 publisher B joins with the bucket token ===
+  | joining as publisher
+  | public-route check skipped (publisher token)
+  | share: https://share-e2e-d31313.d.foundation/healthz did not answer 200 ok three times in a row within 300s (last: 000 no pair); the config was not written; rerun setup once the certificate is issued
+  FAIL  join exits 0: expected '0', got '1'
+  ok    join says joining as publisher
+  ok    join skips the public-route check
+  FAIL  GET workers/scripts with B's token is refused: expected '1', got '0 (200)'
+  ok    GET r2/buckets with B's token is refused
+  FAIL  api-token refuses the admin token as a publisher token: expected '1 1', got '1 0'
+  | share: no setup yet: run 'share setup <hostname>' or 'share setup --quick'
+  FAIL  api-token stores B's bucket token: expected '0 1', got '1 0'
+  | share: no setup yet: run 'share setup <hostname>' or 'share setup --quick'
+  FAIL  api-token stores A's publisher token: expected '0', got '1'
+cat: <tmp>/a/.config/share/config: No such file or directory
+cat: <tmp>/b/.config/share/config: No such file or directory
+  ok    no token value in either config
+  ok    B's ls is empty
+=== L4 A publishes a folder ===
+  | share: no setup yet: run 'share setup <hostname>' or 'share setup --quick'
+  FAIL  link shape: expected 'https://share-e2e-d31313.d.foundation//doc/', got ''
+curl: option : blank argument where content is expected
+curl: try 'curl --help' or 'curl --manual' for more information
+  FAIL  link answers 200: expected '200', got ''
+curl: option : blank argument where content is expected
+curl: try 'curl --help' or 'curl --manual' for more information
+  FAIL  content is the snapshot: expected 'e2e r2 doc', got ''
+  FAIL  dotfile not served: expected '404', got '000'
+  FAIL  a subfolder with no index is 404: expected '404', got '000'
+  FAIL  a file in the subfolder answers: expected 'inner', got ''
+curl: option : blank argument where content is expected
+curl: try 'curl --help' or 'curl --manual' for more information
+  FAIL  no-store header: expected '1', got '0'
+  FAIL  noindex header: expected '1', got '0'
+  FAIL  /<id> redirects 308 to /<id>/: expected '308 https://share-e2e-d31313.d.foundation//', got '000 '
+curl: option : blank argument where content is expected
+curl: try 'curl --help' or 'curl --manual' for more information
+  FAIL  a second share answers: expected 'keep me', got ''
+=== L5 encoded paths ===
+  FAIL  /x/..%2F/doc/ answers 400: expected '400', got '000'
+  FAIL  /%2F/doc/ answers 400: expected '400', got '000'
+  FAIL  /x/..%5C/doc/ answers 400: expected '400', got '000'
+  FAIL  ///doc/ answers 400: expected '400', got '000'
+  FAIL  //doc/%2e%2e/ answers 400: expected '400', got '000'
+  FAIL  //%zz answers 400: expected '400', got '000'
+  | recorded: /x/..\/doc/ -> 000
+  | recorded: /x/%2e%2e//doc/ -> 000
+  | recorded: /%61/doc/ -> 000
+  | recorded: //doc/ -> 000
+curl: option : blank argument where content is expected
+curl: try 'curl --help' or 'curl --manual' for more information
+  FAIL  a POST answers 405: expected '405', got ''
+=== L6 B publishes; both installs list both ===
+curl: option : blank argument where content is expected
+curl: try 'curl --help' or 'curl --manual' for more information
+  FAIL  B's link answers: expected 'from b', got ''
+curl: option : blank argument where content is expected
+curl: try 'curl --help' or 'curl --manual' for more information
+curl: option : blank argument where content is expected
+curl: try 'curl --help' or 'curl --manual' for more information
+  FAIL  A's ls shows B's row with by=: expected '1', got '0'
+  FAIL  B's ls shows A's two rows: expected '2', got '0'
+  FAIL  B cannot refresh A's share: expected '1 1', got '1 0'
+=== L7 expiry ===
+  | code=000 etag=
+curl: option : blank argument where content is expected
+curl: try 'curl --help' or 'curl --manual' for more information
+  FAIL  the link still answers before the expiry: expected '200', got ''
+curl: option : blank argument where content is expected
+curl: try 'curl --help' or 'curl --manual' for more information
+  FAIL  the link is 404 after the expiry: expected '404', got ''
+  ok    A's ls removed the record
+  ok    A's ls left no key under the prefix
+=== L9 gated link (group:dwarves-ops) ===
+  | share: no setup yet: run 'share setup <hostname>' or 'share setup --quick'
+/Users/tieubao/workspace/dwarvesf/share/.claude/worktrees/r2-backend-spec/tests/e2e-r2.sh: line 245: <tmp>/gate.polls: No such file or directory
+  | gated add took 1s;  polls during the wait
+  FAIL  gated add printed a link: expected '0 https://share-e2e-d31313.d.foundation//gated/', got '1 '
+  ok    no 200 on the link during the wait
+  FAIL  one app named for the share, with an aud: expected '1', got '0 (null null)'
+  FAIL  // redirects to Access with kid == aud: expected '1', got '0 (000 )'
+  FAIL  / redirects to Access with kid == aud: expected '1', got '0 (000 )'
+  FAIL  // redirects to Access with kid == aud: expected '1', got '0 (000 )'
+  FAIL  /%00/ redirects to Access with kid == aud: expected '1', got '0 (000 )'
+  ok    /x/..\/gated/ never answers 200 (000)
+  ok    /x/%2e%2e//gated/ never answers 200 (000)
+  ok    ///gated/ never answers 200 (000)
+  ok    /x/..%2F/gated/ never answers 200 (000)
+  | share: no share with id ''
+  FAIL  gated rm exits 0: expected '0', got '1'
+  ok    GET access/apps/<app> is 404
+  ok    the gated link never answers 200 after rm
+  ok    access-pending is empty
+=== L8 hits (Analytics Engine lags; polled up to 4 min from B's first fetch) ===
+  | share: no share with id ''
+  FAIL  hits counts the three fetches of B's link: expected '1', got '0 (share: no share with id '')'
+  ok    an injected id is refused
+=== L10 B's local teardown ===
+  | share: no setup yet: run 'share setup <hostname>' or 'share setup --quick'
+  FAIL  B's teardown exits 0: expected '0', got '1'
+  ok    B's config is gone
+  ok    the bucket listing is unchanged
+curl: option : blank argument where content is expected
+curl: try 'curl --help' or 'curl --manual' for more information
+  FAIL  A's link still answers: expected 'keep me', got ''
+curl: option : blank argument where content is expected
+curl: try 'curl --help' or 'curl --manual' for more information
+  FAIL  B's link still answers: expected 'from b', got ''
+=== L11 admin teardown --purge ===
+  | share: no setup yet: run 'share setup <hostname>' or 'share setup --quick'
+  FAIL  purge exits 0: expected '0', got '1'
+  ok    A's config is gone
+curl: option : blank argument where content is expected
+curl: try 'curl --help' or 'curl --manual' for more information
+curl: option : blank argument where content is expected
+curl: try 'curl --help' or 'curl --manual' for more information
+  ok    the links are down
+=== cleanup, asserted through the API ===
+  ok    Worker settings 404
+  ok    no custom domain for share-e2e-d31313.d.foundation
+  ok    no DNS record for share-e2e-d31313.d.foundation
+  FAIL  bucket 404: expected '404', got '200'
+  ok    no Access app named share * share-e2e-d31313.d.foundation *
+  ok    publisher token A revoked
+  ok    publisher token B revoked
+  | the Analytics Engine dataset share_share_e2e_d31313_d_foundation cannot be deleted by API; it ages out
+
+33/81 checks passed
+48 FAILED
+LEFTOVER: bucket share-e2e-d31313 (200)
+
+# exit 1
+--- outside check: after (EXIT trap done) ---
+buckets: 16 total, 1 named share-e2e*; sha of the other names: 79a3fcf51452
+workers: 44 total, 0 named share-share-e2e*
+worker custom domains for share-e2e-d31313.d.foundation: 0
+access apps: 5 total, 0 named share * share-e2e* *
+dns records named share-e2e-d31313.d.foundation: 0
+user tokens named share-e2e*: 0
+worker 404 , bucket PRESENT

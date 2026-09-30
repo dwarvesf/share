@@ -219,3 +219,23 @@ Deviations from the spec, per task. A task with none is not listed.
 - Dry account: `DELETE` on the domain, script, and bucket removes their state files. The domains read adds `id: "dom-dry"`. On an r2 profile, `cf_dry` lists every app the dry account holds, for the by-name pass. The tunnel listing is unchanged.
 - Negative control, red then restored: with the binding check skipped, the foreign-Worker purge exited 0 and deleted the fixture, turning 10 row 15 checks red.
 
+
+### TASK-14 (the live e2e)
+
+- Inputs beyond the spec: `SHARE_E2E_R2_TOKEN_ADMIN` (User API Tokens: Edit) mints the two publisher tokens through `POST /user/tokens`, each scoped to the run's bucket with a 2 h expiry, and revokes them on exit, as the TASK-1 spike did. A takes Bucket Item Write, Zone Read, Account Analytics Read, and the two Access scopes (a gated publisher); B takes Bucket Item Write, Zone Read, and Account Analytics Read. Without the minter, `SHARE_E2E_R2_BUCKET` plus `SHARE_E2E_R2_PUBLISHER_TOKEN` (and optionally `SHARE_E2E_R2_GATED_TOKEN`) stand in. `SHARE_E2E_ACCESS_RULE` takes any `--access` rule; the Dwarves runs use `group:dwarves-ops`.
+- Guards beyond the `share-e2e-<6 hex>` bucket rule: the hostname's first label must start with `share-e2e`, and the run refuses to start when the bucket, the Worker, or a DNS record for the hostname already exists.
+- Order: L9 runs before L8, so Analytics Engine has minutes to catch up; L8 still polls for up to 4 min. A adds a second ungated share in L4, because L7 expires the first and L10 needs a live A link.
+- L2 compares the script's `deployment_id` and `etag`: `modified_on` moves with the subdomain POST every setup makes. L3 asserts the settings read and a script PUT refused for B's token; `GET workers/scripts` with a bucket-scoped token answers 200 with 0 scripts, recorded, not refused.
+- Tokens reach share through `api-token --cmd 'printf %s "$SHARE_E2E_TOK_A"'` (the command, not the value, lands in the config) and a stub `security` first on PATH, so no test token enters the real Keychain.
+- The EXIT trap purges, then deletes by exact name: the domain for the hostname and this Worker, the script, every object (straight through S3 with the admin pair when setup died before its config), the bucket, Access apps named `share * <host> *`, DNS records for the hostname, the minted tokens. It prints each leftover.
+- Live defects the dry seam could not see, each fixed with a regression check and a rerun: the deploy's multipart part needed `filename=share.js` (Cloudflare answered 400 "No such module"); `/healthz` polled through the local resolver kept a negative-cached NXDOMAIN for the whole 300 s wait, so it now tries DNS over HTTPS first as `live_check` does; R2 sets `obj.range` whenever a range option is passed, so every plain GET answered 206 (now 206 needs a Range header and carries `Content-Range`); that range object carries every key, `suffix` included as undefined, so the first `Content-Range` read `NaN-NaN` until the check became `suffix !== undefined`. A doc review found the fourth: a folder name with a space or non-ASCII characters answered 404 because the slash branch did not decode.
+- Run 1's first trap version needed the profile config to empty the bucket, so the bucket `share-e2e-d31313` (holding only `share.json`) survived; it was deleted through S3 and the API the same hour, verified 404. The trap now empties a bucket without a config.
+- Six runs in all, logs in `docs/verification/r2-e2e-*.txt`: runs 1 to 5 each stopped on one defect above, run 6 passed 84 of 84.
+- Run 4 saw one 500 on `/healthz` right after setup's three 200s; L1 now polls for up to 30 s and records any non-200 it saw.
+
+### TASK-15 (docs)
+
+- The r2 `share api-token` with no argument still opens the Access-scope form (`access_token_url`), and the no-token and join messages point at it. No dashboard link pre-fills a bucket-scoped token, so docs/setup.md tells the admin to create the token by hand and the teammate to store it with `--cmd`, stdin, or the paste; the code messages are an open item.
+- The Worker answers 412 when a conditional GET's `If-None-Match` matches (R2 returns a body-less object); 304 is the usual answer. Left as is: every answer is `no-store`, so browsers rarely revalidate.
+- The admin no-token block does not name Access: Apps and Policies Edit, which `--purge` needs while gated shares or pending lines exist; docs/setup.md does.
+- The usage header keeps its two r2 lines; the second now names `teardown --yes --purge`.
