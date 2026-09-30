@@ -1,0 +1,118 @@
+# R2 backend: TASK-1 spike results
+
+Spike ran on throwaway objects in the Dwarves LLC account: bucket
+`share-spike-gy4op3` (plus `share-spike2-gy4op3` for the cross-bucket check),
+Worker `share-spike-gy4op3` on custom domain `share-spike-gy4op3.d.foundation`,
+an Access app, a service token, and five scoped API tokens minted through
+`POST /user/tokens` by a token-admin credential. All deleted at the end.
+
+Consequence up front: **(a) fails on the REST object path**, so per DEC-002 the
+transport is `curl --aws-sigv4 "aws:amz:auto:s3"` against
+`https://<account>.r2.cloudflarestorage.com/<bucket>/<key>`, access key = the API
+token's id, secret = `sha256(token)` computed from stdin. Every "REST" answer
+below is recorded because (c) and the rate limit also differ between the paths.
+
+## (a) Permission groups, bucket-scoped token
+
+Minted `POST /user/tokens` with
+`policies:[{effect:"allow", permission_groups:[{id:"2efd5506f9c8494dacb1fa10a3e7d5b6"}], resources:{"com.cloudflare.edge.r2.bucket.<acct>_default_<bucket>":"*"}}]`
+(`2efd5506f9c8494dacb1fa10a3e7d5b6` = "Workers R2 Storage Bucket Item Write";
+docs say Write covers read, write, and list of objects; `6a018a9f2fc74eb6b293b0c548f38b39` = Item Read).
+
+| Call | Answer |
+|---|---|
+| REST `PUT/GET/DELETE objects/<key>`, `GET objects?` | 403 on every one |
+| REST `GET r2/buckets` | 403 `code 10000 "Authentication error"` |
+| `GET workers/scripts/<w>/settings` | HTTP 403 (same for a missing script) |
+| REST `POST r2/buckets` (bucket create) | 403 |
+| S3 `PUT` `GET` `DELETE` `?list-type=2` on the spike bucket | 200/204, works |
+| S3 any op on `share-spike2-gy4op3` | 403 on every one |
+| S3 `PUT` with `If-None-Match: *` on an existing key | 412 |
+
+So: the REST object path is unusable for publishers (it needs the account-wide
+`Workers R2 Storage` scope that reaches `payout`, `invoice`, `dataroom-kyc-evidence-prod`); the S3 path is bucket-scoped correctly. `GET r2/buckets` answering 200 is also the account-wide-token detector for `share api-token` (a bucket token gets 403). Join detection holds: a publisher token gets HTTP 403, not 404, on `workers/scripts/<w>/settings` (round-3 warning settled). Token minting needs `API Tokens` edit: the Toolkit token gets 9109 on `POST /user/tokens`, `POST /accounts/<a>/tokens`, and `GET .../tokens/permission_groups`; `POST /accounts/<a>/tokens` is denied even for a token-admin credential, `POST /user/tokens` works.
+
+## (b) List pagination
+
+- REST `GET .../objects?per_page=1`: `result_info: {cursor, is_truncated, per_page}`; next page via `?per_page=N&cursor=<uri-encoded cursor>`. `result_info` was `null` only when the listing fit one page in earlier probing; with >1 page it carries the cursor.
+- S3 `?list-type=2&max-keys=N&encoding-type=url`: `<IsTruncated>` + `<NextContinuationToken>`; next page via `continuation-token=<uri-encoded token>`; `<Key>` values come url-encoded when `encoding-type=url` (`m%2Fs1`, `a%25b.txt`).
+
+## (c) Conditional writes
+
+REST PUT ignores all of `If-None-Match: *`, `If-Match: <etag>`, `x-amz-if-none-match`, `?if_none_match=*` (every probe answered 200 and overwrote; the query param became a literal key `m/t2?if_none_match=*`). **S3 honors them**: `If-None-Match: *` on an existing key -> 412, `If-Match: "<etag>"` -> 200 with the real etag and 412 with a wrong one. `--access` and `refresh` keep their atomic publish on S3.
+
+## (d) Key encoding
+
+REST: PUT `objects/<urlenc(key)>` stores the decoded key; list returns raw keys (`a%b.txt`, `q?x.txt`, `h#y.txt`, `sp ace.txt`, `ünïcode.txt`, `100%.txt`, `dir/sub/f.txt` all round-tripped; `/` literal, `%`->`%25`, `?`->`%3F`, `#`->`%23`, space->`%20`, UTF-8->`%XX` bytes). S3: keys go literally in the request path; `?list-type=2&encoding-type=url` returns them encoded. `urlenc` semantics hold on both.
+One REST bug found at cleanup: `DELETE objects/<enc>` on keys containing `?` or a query-looking string answered 200 but did not delete; S3 `DELETE` answered 204 and the object was gone. Another mark against the REST path.
+
+## (e) Minimal custom-domain scopes
+
+Minted scoped tokens and exercised `PUT /accounts/<a>/workers/domains`:
+
+| Token scopes | Result |
+|---|---|
+| Workers Scripts Write (account) + Workers Routes Write + Zone Read (zone) | 200 |
+| Workers Scripts Write (account) + Zone Read (zone) | 200 (Routes not needed) |
+| Workers Scripts Write + Routes + Zone Read, all zone-scoped | 403 (account scope on the scripts group is required) |
+| Workers Scripts Write (account) alone | 200, and it also covers `PUT workers/scripts/<w>`, `POST .../subdomain`, `GET workers/domains`, `GET workers/scripts/<w>/settings`, `GET zones?name=` |
+| that token on `GET zones/<z>/dns_records` | 403 (needs DNS: Read on the zone) |
+
+Minimal admin set: **Workers Scripts: Edit (account) + DNS: Read (zone)**. DNS: Edit and Workers Routes: Edit are not needed.
+
+## (f) Analytics Engine query
+
+`SELECT SUM(_sample_interval) AS hits, COUNT(DISTINCT blob2) AS visitors, MAX(timestamp) AS last FROM <dataset> FORMAT JSON` works as written; answer `{"hits":"1124","visitors":"2","last":"2026-09-30 09:21:35"}`. The SQL envelope is `{meta, data, rows}`, not `.result`; `MAX(timestamp)` is a `YYYY-MM-DD HH:MM:SS` string.
+
+## (g) Access app on a Worker custom domain
+
+App `self_hosted`, destinations `share-spike-gy4op3.d.foundation/ab12cd{,/*}`: an unauthenticated GET `https://<host>/ab12cd/` answered `302 https://dwarves.cloudflareaccess.com/cdn-cgi/access/login/<host>?kid=<aud>&...` with `kid` exactly the app's `aud` (`9106cc86...`). Same as the tunnel backend. One edge case found: an app whose only policy is `non_identity` (service token) answers 403, not 302, to an unauthenticated browser request, share's gated adds always carry an interactive include (email/group/domain), so the 302 gate probe holds.
+
+## (h) Edge and Worker view of odd paths
+
+Probed `https://<host><path>` with `--path-as-is`; the Worker echoes `request.url` and `new URL(request.url).pathname`:
+
+| Sent | `request.url` path | `new URL().pathname` |
+|---|---|---|
+| `/x/..%2Fabc123/f` | `/x/..%2Fabc123/f` | `/x/..%2Fabc123/f` |
+| `/%2fabc123/f` | `/%2fabc123/f` | `/%2fabc123/f` |
+| `/x/..%5Cabc123/f` | `/x/..%5Cabc123/f` | `/x/..%5Cabc123/f` |
+| `/x/%2e%2e/abc123/f` | `/x/%2e%2e/abc123/f` | `/abc123/f` |
+| `/x/..\abc123/f` | `/x/..\abc123/f` | `/abc123/f` |
+| `/./abc123/f` | `/./abc123/f` | `/abc123/f` |
+| `//abc123/f`, `/abc123//f` | unchanged | unchanged |
+| `/%61bc123/f`, `/abc123/a%2Ehtml` | unchanged | unchanged |
+| `/abc123/%01`, `/abc123/f%0a` | unchanged | unchanged |
+| `/abc123/%zz` | edge answers 400 itself, the Worker never runs | |
+| `/ABC123/f`, `?next=%2Fhome` | unchanged / query untouched | unchanged |
+
+workerd keeps `request.url` raw and `new URL()` resolves `%2e%2e`, `\`, `/./`; node 22's `new Request(u).url` resolves them at construction (tests must not assert the raw regex fires on `new Request` input for `%2e%2e`; the resolved pathname is what the record lookup sees, and the JWT check is the gated-share backstop for literal `\`).
+
+## (i) `curl --parallel` per-transfer `-w`
+
+Works on macOS system curl 8.7.1 and Ubuntu 22.04 curl 7.81.0:
+`-K` config with `output = "/dev/null"` + `url = "..."` per transfer;
+`-w '%{http_code} %{url}\n'` prints one line per completed transfer
+(order is completion order, not config order). One `-o` on the command line
+covers only the first URL, so each transfer needs its own `output=` line.
+
+## (j) Rate limits
+
+- Account API (`api.cloudflare.com`): response headers `ratelimit-policy: "rtwo_gw_apigw";q=1200;w=300` and `ratelimit: r=<remaining>` -> 1200 requests per 300 s on the R2 gateway. Per-token vs per-owner not separately measured (the second token could not read the path); moot under S3.
+- S3 endpoint (`<acct>.r2.cloudflarestorage.com`): 200 rapid GETs at 25 parallel, all 200, no rate headers, no `SlowDown`. Every object call (list, `m/` read, `o/` PUT, DELETE) runs there, so `ls` never consumes the account-API budget at any share count; the earlier N+1 concern applies only to the 1-3 account-API calls a verb still makes (Access, workers settings, one SQL call for `hits`).
+
+## (k) `custom_metadata`
+
+`x-amz-meta-<name>: <v>` on the S3 PUT populates `custom_metadata` (verified in the REST list: `{"app":"share","ver":"1"}`). The one-call-listing upgrade path exists if ever needed; the record-per-share design does not need it.
+
+## (l) `Cf-Access-Jwt-Assertion` at the Worker
+
+Service-token auth (`CF-Access-Client-Id`/`CF-Access-Client-Secret`, `non_identity` policy): the request reaches the Worker with `Cf-Access-Jwt-Assertion`; the JWT's `aud` is the app's AUD as a **string** (`9106cc86...`, the check must accept string and array), `iss` is `https://dwarves.cloudflareaccess.com`, `kid` is in the header and present at `https://<team>/cdn-cgi/access/certs` (two keys published). A wrong secret answers 302 to the login flow, never admitted. A path outside the app's destinations reaches the Worker with no JWT.
+
+## Pricing re-read (spec cost section)
+
+R2 pricing page confirms the free tier (10 GB-month, 1 M Class A, 10 M Class B ops per month) and the billed rates the spec cites (Class A $4.50/million, Class B $0.36/million, storage $0.015/GB-month). The spec's "under $1/month at 5 GB and 1k views/day" holds.
+
+## Spike cleanup
+
+All spike objects deleted (see below): buckets `share-spike-gy4op3` and `share-spike2-gy4op3`, Worker `share-spike-gy4op3`, its five custom domains (`share-spike{,2,3,4,5}-gy4op3.d.foundation`), Access app `0354f535-cdcf-461a-9ec8-20b88d90f044`, service token `7fa29d65-d0c1-4465-8911-b531a0ad877a`, user tokens `share-spike-gy4op3-pub` and `share-spike-e-t{1,2,3,4}`. Verified: `GET` on each object answers 404/empty afterwards; no `share-spike*` DNS record or Access app name remains.
