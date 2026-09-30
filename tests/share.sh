@@ -2034,6 +2034,16 @@ SHARE_R2_MAX_BYTES=1024 r6 "a file over SHARE_R2_MAX_BYTES" "over the r2 cap of 
 SHARE_R2_MAX_FILES=2 r6 "three files over SHARE_R2_MAX_FILES=2" "over the r2 cap of 2 per add" r2a add "$WORK/three"
 r6 "a control character in a name" "holds a control character" r2a add "$WORK/ctl"
 R2_TOK="" CLOUDFLARE_API_TOKEN="" r6 "no token source" "needs a publisher token" r2a add "$WORK/wt/one.md"
+# a token from CLOUDFLARE_API_TOKEN gets the same publisher check a stored one gets (DEC-007), once, before any write
+mkdir -p "$DRYA/.cf"; echo '{}' >"$DRYA/.cf/script.json"   # the admin token reads the Worker's settings
+R2_TOK="" CLOUDFLARE_API_TOKEN=admintoken r6 "an admin token in CLOUDFLARE_API_TOKEN" "it is an admin token.*from CLOUDFLARE_API_TOKEN" r2a add "$WORK/wt/one.md"
+rm -f "$DRYA/.cf/script.json"
+R2_TOK="" CLOUDFLARE_API_TOKEN=widetoken SHARE_R2_DRY_ROLE=deny SHARE_R2_DRY_BUCKETS="ok-bucket payout" \
+  r6 "an account-wide R2 token in CLOUDFLARE_API_TOKEN" "reaches other buckets (payout).*from CLOUDFLARE_API_TOKEN" r2a add "$WORK/wt/one.md"
+: >"$rlog"
+out=$(R2_TOK="" CLOUDFLARE_API_TOKEN=pubtoken SHARE_R2_DRY_ROLE=deny SHARE_TEST_IDS=e0e001 r2a add "$WORK/wt/one.md" 2>&1); rc=$?
+check "row 6: a bucket token in CLOUDFLARE_API_TOKEN publishes" "0 1" "$rc $(grep -c '^https://r2x.example.test/e0e001/one\.' <<<"$out")"
+check "row 6: its check ran once" "1 1" "$(grep -c '/workers/scripts/.*/settings$' "$rlog") $(grep -c '/r2/buckets$' "$rlog")"
 # curl unescapes a -K config value, so a backslash or a double quote in a staged name could name a file outside the stage
 mkdir -p "$WORK/bs1/a/"'\.\./\.\.'; printf 'in\n' >"$WORK/bs1/a/"'\.\./\.\./outside.txt'
 mkdir -p "$WORK/bs2"; printf 'x\n' >"$WORK/bs2/"'x\y'

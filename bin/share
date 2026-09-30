@@ -2025,24 +2025,25 @@ cmd_api_token() { # cmd_api_token [--cmd '<command>' | --check]: store a token c
   fi
   access_preflight
 }
-r2_publisher_check() { # r2_publisher_check <token>: before a publisher token is stored, refuse one that edits the Worker (admin) or lists another bucket (account-wide R2)
-  local ep a worker="share-${host_name//./-}" bucket others
+r2_publisher_check() { # r2_publisher_check <token> [env]: before a publisher token is stored or used from CLOUDFLARE_API_TOKEN, refuse one that edits the Worker (admin) or lists another bucket (account-wide R2)
+  local ep a worker="share-${host_name//./-}" bucket others tail="nothing was stored"
+  [[ ${2:-} != env ]] || tail="the token came from CLOUDFLARE_API_TOKEN; unset it or store a publisher token with $me api-token; nothing was changed"
   bucket="$(cfg bucket || true)"
   ep="$(cfg r2_endpoint || true)"; a="${ep#https://}"; a="${a%%.*}"
   [[ -n $ep && $a =~ ^[A-Za-z0-9-]+$ ]] || die "the profile config has no r2_endpoint; rerun $me setup $host_name --backend r2 --bucket $bucket"
   api_token="$1"
   r2_api GET "/accounts/$a/workers/scripts/$worker/settings"
   case $cf_code in
-    200) die "that token can edit Worker $worker: it is an admin token, which stays in CLOUDFLARE_API_TOKEN for setup only; store a token with Workers R2 Storage Bucket Item Write on bucket $bucket only; nothing was stored" ;;
+    200) die "that token can edit Worker $worker: it is an admin token, which stays in CLOUDFLARE_API_TOKEN for setup only; store a token with Workers R2 Storage Bucket Item Write on bucket $bucket only; $tail" ;;
     401|403) ;;
-    *) die "checking the token against Worker $worker answered HTTP $cf_code; nothing was stored" ;;
+    *) die "checking the token against Worker $worker answered HTTP $cf_code; $tail" ;;
   esac
   r2_api GET "/accounts/$a/r2/buckets"
   case $cf_code in
     200) others="$(jq -r --arg b "$bucket" '[(.result.buckets // [])[].name | select(. != $b)] | join(" ")' <<<"$cf_body" 2>/dev/null || echo '?')"
-      [[ -z $others ]] || die "that token reaches other buckets ($others): an account-wide R2 token; store a token with Workers R2 Storage Bucket Item Write on bucket $bucket only; nothing was stored" ;;
+      [[ -z $others ]] || die "that token reaches other buckets ($others): an account-wide R2 token; store a token with Workers R2 Storage Bucket Item Write on bucket $bucket only; $tail" ;;
     401|403) ;;
-    *) die "listing buckets with the token answered HTTP $cf_code; nothing was stored" ;;
+    *) die "listing buckets with the token answered HTTP $cf_code; $tail" ;;
   esac
   api_token=""
 }
@@ -2240,7 +2241,8 @@ r2_no_local() { # an r2 profile has no local server to run or manage
 r2_token_check() { # every r2 publisher verb, before its first call: a token source resolves; the dry seam checks the source only
   if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then
     [[ -n ${SHARE_R2_TOKEN:-} || -n "$(cfg r2_token_cmd || true)" ]] && return 0
-    api_token_resolve; [[ -n $api_token ]] && return 0
+    api_token_resolve
+    [[ -n $api_token ]] && { [[ $api_token_src != CLOUDFLARE_API_TOKEN ]] || r2_publisher_check "$api_token" env; return 0; }
   else
     r2_creds && return 0
   fi
@@ -2734,7 +2736,10 @@ r2_creds() { # r2_creds: the publisher pair into r2_key_id/r2_secret; the token 
   r2_key_id="${SHARE_R2_KEY_ID:-$(cfg r2_key_id || true)}"
   local tok="${SHARE_R2_TOKEN:-}" c out
   [[ -z $tok ]] && { c="$(cfg r2_token_cmd || true)"; [[ -n $c ]] && tok="$(eval "$c" 2>/dev/null)"; }
-  if [[ -z $tok ]]; then api_token_resolve; tok="$api_token"; fi
+  if [[ -z $tok ]]; then   # a stored token was checked when stored; one from the environment is checked here, once per process
+    api_token_resolve; tok="$api_token"
+    [[ -z $tok || $api_token_src != CLOUDFLARE_API_TOKEN ]] || r2_publisher_check "$tok" env
+  fi
   [[ -n $tok ]] || return 1
   if [[ -z $r2_key_id ]]; then   # the S3 access key is the token's own id
     out="$(curl -sS --max-time 30 "$api/user/tokens/verify" -H @<(printf 'Authorization: Bearer %s\n' "$tok") 2>/dev/null || true)"
