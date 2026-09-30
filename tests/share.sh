@@ -2030,7 +2030,6 @@ SHARE_R2_MAX_BYTES=1024 r6 "a file over SHARE_R2_MAX_BYTES" "over the r2 cap of 
 SHARE_R2_MAX_FILES=2 r6 "three files over SHARE_R2_MAX_FILES=2" "over the r2 cap of 2 per add" r2a add "$WORK/three"
 r6 "a control character in a name" "holds a control character" r2a add "$WORK/ctl"
 R2_TOK="" CLOUDFLARE_API_TOKEN="" r6 "no token source" "needs a publisher token" r2a add "$WORK/wt/one.md"
-r6 "a gated add (until the gated task)" "gated r2 adds are not built yet" r2a add --access email:a@x.io "$WORK/wt/one.md"
 check "row 6: no stage left after the refusals" "0" "$(find "$r2root" -maxdepth 1 -name '.stage.*' | grep -c . || true)"
 
 echo "=== r2 backend: two publishers, ls, refresh, rm (rows 7, 8, 9, 25a) ==="
@@ -2211,6 +2210,7 @@ check "row 14: status exits 0" "0" "$rc"
 check "row 14: status names the backend and a Worker that is up" "2" "$(grep -cE '^r2 backend: https://r2x.example.test/$|^worker: +up \(' <<<"$out")"
 check "row 14: status lists every row, the expired one included" "3" "$(grep -c '^    id=13000[123] ' <<<"$out")"
 check "row 14: status logs no DELETE and keeps the expired record" "0 1" "$(grep -c '^DELETE' "$rlog" || true) $([[ -f $DRYA/m/130003 ]] && echo 1 || echo 0)"
+check "row 14: status says gated links are off on a Worker with no TEAM" "1" "$(grep -c '^gated: *off (the Worker has no Access team' <<<"$out")"
 check "row 14: status prints no version line when the pair matches" "0" "$(grep -c 'whoever holds the admin token' <<<"$out" || true)"
 printf '{"bindings":[{"type":"plain_text","name":"VERSION","text":"%s"},{"type":"plain_text","name":"SHA","text":"000000000000"}]}\n' "$wv14" >"$DRYA/.cf/script.json"
 out=$(r2a status 2>&1)
@@ -2249,6 +2249,173 @@ check "profiles --json: the r2 entry equals its own state" "true" "$(jq --argjso
 check "profiles --json: the tunnel entry has no backend key" "false" "$(jq '.profiles[] | select(.name == "tunx") | .state | has("backend")' <<<"$out")"
 rm -f "$DRYA/m/130004"
 mv -f "$R2H/.config/share/profiles/tunx/config" "$WORK/tunx.config"
+
+echo "=== r2 backend: gated add, rm, prune, and the sweep (rows 9, 10, 11, 12, 25b, 25d, 29) ==="
+rm -rf "$DRYA"; mkdir -p "$DRYA/.cf"; rm -f "$r2root/r2-own"
+wvg="$(sed -n 's/^WORKER_VERSION=\([0-9]*\).*/\1/p' "$SH")"; wshag="$(sed -n 's/^WORKER_SHA=\([0-9a-f]*\).*/\1/p' "$SH")"
+printf '{"hostname":"r2x.example.test","service":"share-r2x-example-test"}\n' >"$DRYA/.cf/domain.json"
+gteam() { # gteam <team>: the deployed Worker's bindings, with TEAM set or empty
+  printf '{"bindings":[{"type":"plain_text","name":"VERSION","text":"%s"},{"type":"plain_text","name":"SHA","text":"%s"},{"type":"plain_text","name":"TEAM","text":"%s"}]}\n' "$wvg" "$wshag" "$1" >"$DRYA/.cf/script.json"
+}
+gteam team.cloudflareaccess.com
+r2g() { # r2g <verb...>: r2a with the Access seam and an Access-capable token in the environment
+  SHARE_ACCESS_DRY=1 SHARE_ACCESS_POLL="${SHARE_ACCESS_POLL:-0}" CLOUDFLARE_API_TOKEN="${G_TOK-faketoken}" r2a "$@"
+}
+gpend="$r2root/access-pending"; gfix="$r2root/access-probe-fixture"; gdry="$r2root/.access-dry"
+greset() { : >"$rlog"; rm -f "$gfix"; : >"$gpend"; }
+gapp() { jq -r '.opts' "$DRYA/m/$1" | tr ' ' '\n' | sed -n 's/^access=//p'; }
+gpfx() { jq -r '.prefix' "$DRYA/m/$1"; }
+printf 'gated\n' >"$WORK/g.txt"
+sh -c 'exit 0' & gdead=$!; wait "$gdead"
+
+echo "--- row 11: the record lands only after the gate is observed ---"
+greset; printf 'fail\nfail\npass\npass\npass\n' >"$gfix"
+rm -f "$WORK/g11.bad"
+( while ! grep -q '^PUT m/ab1101$' "$rlog" 2>/dev/null; do
+    if grep -q 'PROBE fail' "$rlog" 2>/dev/null && [[ -e $DRYA/m/ab1101 ]]; then echo bad >"$WORK/g11.bad"; fi
+    sleep 0.05
+  done ) & gw=$!
+out=$(SHARE_TEST_IDS=ab1101 r2g add --access email:A@x.io "$WORK/g.txt" 2>"$WORK/g11.err"); rc=$?
+kill "$gw" 2>/dev/null; wait "$gw" 2>/dev/null
+check "row 11: gated add exits 0 and prints the link" "0 https://r2x.example.test/ab1101/g.txt" "$rc $(head -1 <<<"$out")"
+check "row 11: the preflight's {} probe precedes the first object PUT" "1" "$([[ $(aline '^POST app {}') -lt $(aline '^PUT o/ab1101\.') ]] && echo 1 || echo 0)"
+check "row 11: object PUTs < POST app < every PROBE < PUT m/<id>" "1" "$([[ $(alast '^PUT o/ab1101\.') -lt $(aline '^POST app$') && $(aline '^POST app$') -lt $(aline '^PROBE') && $(alast '^PROBE') -lt $(aline '^PUT m/ab1101$') ]] && echo 1 || echo 0)"
+check "row 11: five probe rounds (2 fail, 3 pass)" "fail fail pass pass pass" "$(sed -n 's/^PROBE //p' "$rlog" | tr '\n' ' ' | sed 's/ $//')"
+check "row 11: m/<id> absent while a PROBE fail was logged" "0" "$([[ -e $WORK/g11.bad ]] && echo 1 || echo 0)"
+g11app="$(gapp ab1101)"
+check "row 11: the record names the app, the rule, and the app's aud" "1 email:a@x.io 1" \
+  "$(grep -c '^00000000-0000-4000-8000-000000ab1101$' <<<"$g11app") $(jq -r '.opts' "$DRYA/m/ab1101" | tr ' ' '\n' | sed -n 's/^access_rule=//p') $([[ $(jq -r .aud "$DRYA/m/ab1101") == "$(jq -r .aud "$gdry/$g11app.json")" ]] && jq -r .aud "$DRYA/m/ab1101" | grep -c '^[0-9a-f]\{64\}$')"
+check "row 11: the app's nonce names the upload prefix" "$(gpfx ab1101)" "o/ab1101.$(jq -r '.name | split(" ") | last' "$gdry/$g11app.json")/"
+check "row 11: access-pending empty after the publish" "0" "$(awk 'NF' "$gpend" | wc -l | tr -d ' ')"
+check "row 11: no public-link warning on a gated add" "0" "$(grep -c 'public to anyone' "$WORK/g11.err" || true)"
+check "row 11: ls shows the rule" "1" "$(r2g ls 2>/dev/null | grep -c 'id=ab1101 .*access=email:a@x.io')"
+if command -v node >/dev/null; then
+  check "row 11: the integration Worker answers 404 without an Access JWT" "404 /ab1101/g.txt" "$(wnode /ab1101/g.txt)"
+fi
+gteam ""
+r6 "a gated add on a Worker with no Access team" "has no Access team" r2g add --access email:a@x.io "$WORK/g.txt"
+check "row 11: the no-team refusal creates no app" "0" "$(grep -c '^POST app' "$rlog" || true)"
+gteam team.cloudflareaccess.com
+check "status says gated links are on once the Worker has a TEAM" "1" "$(r2a status 2>/dev/null | grep -c '^gated: *on ')"
+
+echo "--- row 12: SPEC-004 row 8 on r2: a gate that never passes publishes nothing ---"
+greset; printf 'fail\n' >"$gfix"
+out=$(SHARE_TEST_IDS=ab0801 SHARE_ACCESS_WAIT=2 SHARE_ACCESS_POLL=1 r2g add --access email:a@x.io "$WORK/g.txt" 2>&1); rc=$?
+check "row 12/8: exit 1 naming the wait" "1 1" "$rc $(grep -c 'did not enforce on r2x.example.test/ab0801 within 2s; nothing was published' <<<"$out")"
+check "row 12/8: DELETE app logged, no record PUT" "1 0" "$(grep -c '^DELETE app ' "$rlog") $(grep -c '^PUT m/' "$rlog" || true)"
+check "row 12/8: no record, no prefix, pending empty" "0 0 0" "$([[ -e $DRYA/m/ab0801 ]] && echo 1 || echo 0) $(r2a r2-list o/ab0801. | grep -c . || true) $(awk 'NF' "$gpend" | wc -l | tr -d ' ')"
+check "row 12/8: no stage left" "0" "$(find "$r2root" -maxdepth 1 -name '.stage.*' | grep -c . || true)"
+
+echo "--- row 12: SPEC-004 row 25 on r2: a live owner's line is never swept ---"
+greset; printf 'fail\nfail\npass\n' >"$gfix"
+(SHARE_TEST_IDS=ab2501 SHARE_ACCESS_POLL=1 r2g add --access email:a@x.io "$WORK/g.txt" >"$WORK/g25.out" 2>&1; echo $? >"$WORK/g25.rc") &
+gadd=$!
+for _ in $(seq 1 100); do grep -q 'PROBE fail' "$rlog" 2>/dev/null && break; sleep 0.1; done
+r2g prune >/dev/null 2>&1
+wait "$gadd"
+check "row 12/25: the prune skipped the live owner's line (no DELETE app)" "0" "$(grep -c '^DELETE app' "$rlog" || true)"
+check "row 12/25: the add then published" "0 1" "$(cat "$WORK/g25.rc") $([[ -e $DRYA/m/ab2501 ]] && echo 1 || echo 0)"
+
+echo "--- row 12: SPEC-004 row 23c on r2: a sweep that claims the line during the wait stops the publish ---"
+greset; printf 'fail\nfail\nfail\nfail\npass\n' >"$gfix"
+(SHARE_TEST_IDS=ab2301 SHARE_ACCESS_POLL=1 r2g add --access email:a@x.io "$WORK/g.txt" >"$WORK/g23.out" 2>"$WORK/g23.err"; echo $? >"$WORK/g23.rc") &
+gadd=$!
+for _ in $(seq 1 100); do grep -q 'PROBE fail' "$rlog" 2>/dev/null && break; sleep 0.1; done
+awk -F'\t' -v OFS='\t' -v d="$gdead" '{$3 = d} {print}' "$gpend" >"$WORK/gp" && mv "$WORK/gp" "$gpend"   # the owner forged dead
+SHARE_ACCESS_DRY_DELETE=lost r2g prune >/dev/null 2>&1
+wait "$gadd"
+check "row 12/23c: the sweep read m/<id> fresh (after rand_id's read), then claimed the app" "2" "$(awk '/^GET m\/ab2301$/ {n++} /^DELETE app .* \(lost\)$/ {print n + 0; exit}' "$rlog")"
+check "row 12/23c: the add finds its line gone, publishes nothing, dies" "1 1 0" "$(cat "$WORK/g23.rc") $(grep -c 'claimed by a sweep during the wait; nothing was published' "$WORK/g23.err") $(grep -c '^PUT m/ab2301' "$rlog" || true)"
+check "row 12/23c: no record, and the add's trap deleted its upload" "0 0" "$([[ -e $DRYA/m/ab2301 ]] && echo 1 || echo 0) $(r2a r2-list o/ab2301. | grep -c . || true)"
+r2g prune >/dev/null 2>&1   # the app the lost DELETE kept goes on the next sweep
+check "row 12/23c: the next sweep deletes the kept app and drops the line" "1 0" "$(grep -c '^DELETE app 00000000-0000-4000-8000-000000ab2301$' "$rlog") $(grep -c '^ab2301' "$gpend" || true)"
+
+echo "--- rows 9 and 12: gated rm: record, a 404 read, every nonce, then the app ---"
+greset
+out=$(SHARE_R2_DRY_DELETE=lost r2g rm ab2501 2>&1); rc=$?
+check "row 9: a lost record DELETE: exit 1 naming the kept app" "1 1" "$rc $(grep -c 'm/ab2501 still answers HTTP 200 after its delete (HTTP 000); its objects and its Access app were kept' <<<"$out")"
+check "row 9: lost: no DELETE app, no object DELETE, the pending line kept" "0 0 1" "$(grep -c '^DELETE app' "$rlog" || true) $(grep -c '^DELETE o/' "$rlog" || true) $(grep -c '^ab2501	' "$gpend")"
+check "row 9: lost: the record is still there" "1" "$([[ -e $DRYA/m/ab2501 ]] && echo 1 || echo 0)"
+g25app="$(gapp ab2501)"; greset
+mkdir -p "$DRYA/o/ab2501.0badf00d"; printf 'old\n' >"$DRYA/o/ab2501.0badf00d/x.txt"   # a second nonce: rm deletes every one
+out=$(r2g rm ab2501 2>&1); rc=$?
+check "row 9: gated rm exits 0" "0" "$rc"
+check "row 9: DELETE m/<id> < GET m/<id> (404) < every object DELETE < DELETE app" "DELETE m GET m DELETE o DELETE app" \
+  "$(awk -v app="$g25app" '$0 == "DELETE m/ab2501" || (seen && $0 == "GET m/ab2501") {print $1, "m"; seen = 1} /^DELETE o\/ab2501\./ {print "DELETE o"} $0 == "DELETE app " app {print "DELETE app"}' "$rlog" | uniq | tr '\n' ' ' | sed 's/ $//')"
+check "row 9: both nonces deleted (the add's and a second one), the record gone, pending empty" "0 0 0" "$(r2a r2-list o/ab2501. | grep -c . || true) $([[ -e $DRYA/m/ab2501 ]] && echo 1 || echo 0) $(awk 'NF' "$gpend" | wc -l | tr -d ' ')"
+check "row 9: the app is gone" "0" "$([[ -e $gdry/$g25app.json ]] && echo 1 || echo 0)"
+forge ab9001 0 "access=00000000-0000-4000-8000-000000ab9001 access_rule=email:a@x.io" "$aud64"
+out=$(G_TOK="" r2g rm ab9001 2>&1); rc=$?
+check "row 9: gated rm with no token: the guided block, record intact" "1 1 1" "$rc $(grep -c 'needs a Cloudflare API token' <<<"$out") $([[ -e $DRYA/m/ab9001 ]] && echo 1 || echo 0)"
+
+echo "--- row 29: a token without Access: Apps and Policies Edit never touches a gated share ---"
+greset
+out=$(SHARE_ACCESS_DRY_APPS=deny r2g rm ab9001 2>&1); rc=$?
+check "row 29: rm exits 1 naming the missing scope" "1 1" "$rc $(grep -c "the token lacks 'Access: Apps and Policies Edit'" <<<"$out")"
+check "row 29: rm logged no DELETE and wrote no pending line" "0 0" "$(grep -c '^DELETE' "$rlog" || true) $(awk 'NF' "$gpend" | wc -l | tr -d ' ')"
+forge ab2901 1000 "access=00000000-0000-4000-8000-000000ab2901 access_rule=email:a@x.io" "$aud64"
+out=$(SHARE_ACCESS_DRY_APPS=deny r2g prune 2>&1); rc=$?
+check "row 29: prune exits 0 and prints the waiting line" "0 1" "$rc $(grep -c 'expired gated share ab2901 waits for a publisher with the Access token' <<<"$out")"
+check "row 29: prune kept the record and the bytes" "1 1" "$([[ -e $DRYA/m/ab2901 ]] && echo 1 || echo 0) $(r2a r2-list o/ab2901. | grep -c .)"
+
+echo "--- row 10: ls with a publisher token keeps an expired gated share; prune with the Access token removes it ---"
+plant_g() { mkdir -p "$gdry"; jq -nc --arg id "00000000-0000-4000-8000-000000$1" --arg n "share $1 r2x.example.test 00000${1: -3}" '{id:$id, name:$n}' >"$gdry/00000000-0000-4000-8000-000000$1.json"; }
+plant_g ab2901; greset
+out=$(G_TOK="" r2g ls 2>&1); rc=$?
+check "row 10: ls with no Access token keeps the gated record and names the wait" "0 1 1" "$rc $([[ -e $DRYA/m/ab2901 ]] && echo 1 || echo 0) $(grep -c 'expired gated share ab2901 waits' <<<"$out")"
+greset
+out=$(r2g prune 2>&1); rc=$?
+check "row 10: prune with an Access-capable token exits 0" "0" "$rc"
+check "row 10: the gated record, its prefix, and its app are gone" "0 0 0" "$([[ -e $DRYA/m/ab2901 ]] && echo 1 || echo 0) $(r2a r2-list o/ab2901. | grep -c . || true) $([[ -e $gdry/00000000-0000-4000-8000-000000ab2901.json ]] && echo 1 || echo 0)"
+check "row 10: the record's 404 read precedes DELETE app" "1" "$([[ $(alast '^GET m/ab2901$') -lt $(aline '^DELETE app 00000000-0000-4000-8000-000000ab2901$') ]] && echo 1 || echo 0)"
+r2g rm ab9001 >/dev/null 2>&1
+
+echo "--- row 25b: another publisher takes the id while the add waits in its gate ---"
+greset; printf 'fail\nfail\npass\npass\npass\n' >"$gfix"
+(SHARE_TEST_IDS=ab25b1 SHARE_ACCESS_POLL=1 r2g add --access email:a@x.io "$WORK/g.txt" >"$WORK/g25b.out" 2>"$WORK/g25b.err"; echo $? >"$WORK/g25b.rc") &
+gadd=$!
+for _ in $(seq 1 100); do grep -q 'PROBE fail' "$rlog" 2>/dev/null && break; sleep 0.1; done
+mkdir -p "$DRYA/m" "$DRYA/o/ab25b1.00000000"; printf 'theirs\n' >"$DRYA/o/ab25b1.00000000/x.txt"
+printf '%s\n' '{"v":1,"id":"ab25b1","name":"x.txt","src":"/x","added":"2026-09-30","expires":0,"opts":"","prefix":"o/ab25b1.00000000/","by":"peer"}' >"$DRYA/m/ab25b1"
+wait "$gadd"
+check "row 25b: the publish answers 412 and the add exits 1 naming it" "1 1" "$(cat "$WORK/g25b.rc") $(grep -c 'another publisher took id ab25b1' "$WORK/g25b.err")"
+check "row 25b: the add deleted its app and kept no pending line" "1 0" "$(grep -c '^DELETE app 00000000-0000-4000-8000-000000ab25b1$' "$rlog") $(awk 'NF' "$gpend" | wc -l | tr -d ' ')"
+check "row 25b: the other publisher's record and prefix stay; the add's own prefix is gone" "o/ab25b1.00000000/ o/ab25b1.00000000/x.txt" "$(gpfx ab25b1) $(r2a r2-list o/ab25b1. | tr -d '\n')"
+
+echo "--- row 25d: a lost gated publish that committed; the sweep keeps the app ---"
+greset
+out=$(SHARE_TEST_IDS=ab25d1 SHARE_R2_DRY_PUT=lost-record r2g add --access email:a@x.io "$WORK/g.txt" 2>&1); rc=$?
+check "row 25d: the add dies naming the prune" "1 1" "$rc $(grep -c "answered HTTP 000; rerun the same share --profile r2x add (the next 'share --profile r2x prune' with the token settles its Access app)" <<<"$out")"
+check "row 25d: the record landed, the trap kept its prefix, the line stays" "1 1 1" "$([[ -e $DRYA/m/ab25d1 ]] && echo 1 || echo 0) $([[ -n $(r2a r2-list "$(gpfx ab25d1)") ]] && echo 1 || echo 0) $(grep -c '^ab25d1	' "$gpend")"
+: >"$rlog"
+r2g prune >/dev/null 2>&1
+check "row 25d: the sweep read the record fresh (after the snapshot's read), dropped the line, deleted no app" "2 0 0" "$(grep -c '^GET m/ab25d1$' "$rlog") $(grep -c '^ab25d1	' "$gpend" || true) $(grep -c '^DELETE app' "$rlog" || true)"
+check "row 25d: the share still lists" "1" "$(r2a ls 2>/dev/null | grep -c 'id=ab25d1 ')"
+r2g rm ab25d1 >/dev/null 2>&1; r2g rm ab1101 >/dev/null 2>&1
+
+echo "--- DEC-007: share api-token on r2 refuses an admin or account-wide token ---"
+mkdir -p "$WORK/r2sec"
+cat >"$WORK/r2sec/security" <<'EOF2'
+#!/bin/bash
+# logs each verb (the -i script's too), never a value; finds nothing
+if [[ $1 == -i ]]; then while read -r v _; do echo "$v"; done; else echo "$1"; fi >>"${R2SEC_LOG:?}"
+exit 0
+EOF2
+chmod +x "$WORK/r2sec/security"
+: >"$WORK/r2sec.log"
+gat() { R2SEC_LOG="$WORK/r2sec.log" PATH="$WORK/r2sec:$PATH" G_TOK="" r2g api-token "$@"; }
+out=$(printf 'admintoken' | gat 2>&1); rc=$?
+check "api-token: a token that reads the Worker settings is refused as admin" "1 1" "$rc $(grep -c 'it is an admin token' <<<"$out")"
+out=$(printf 'widetoken' | SHARE_R2_DRY_ROLE=deny SHARE_R2_DRY_BUCKETS="ok-bucket payout" gat 2>&1); rc=$?
+check "api-token: a token that lists another bucket is refused, naming it" "1 1" "$rc $(grep -c 'reaches other buckets (payout): an account-wide R2 token' <<<"$out")"
+check "api-token: neither refused token reached the keychain" "0" "$(grep -c . "$WORK/r2sec.log" || true)"
+out=$(SHARE_R2_DRY_ROLE=deny SHARE_R2_DRY_BUCKETS="ok-bucket payout" gat --cmd 'printf widetoken' 2>&1); rc=$?
+check "api-token --cmd: the command's token is checked before the line is stored" "1 0" "$rc $(grep -c '^api_token_cmd=' "$r2conf" || true)"
+out=$(printf 'pubtoken' | SHARE_R2_DRY_ROLE=deny gat 2>&1); rc=$?
+check "api-token: a bucket-scoped token is stored, exit 0" "0 1" "$rc $(grep -c '^add-generic-password$' "$WORK/r2sec.log")"
+check "api-token: the check names the publisher token" "1" "$(grep -c 'a publisher token for bucket ok-bucket: not an admin token, no other bucket in reach' <<<"$out")"
+out=$(CLOUDFLARE_API_TOKEN=admintoken R2SEC_LOG="$WORK/r2sec.log" PATH="$WORK/r2sec:$PATH" SHARE_ACCESS_DRY=1 r2a api-token --check 2>&1); rc=$?
+check "api-token --check refuses an admin token too" "1 1" "$rc $(grep -c 'it is an admin token' <<<"$out")"
 
 echo "=== r2 backend: admin setup (rows 3, 4, 20) ==="
 wv="$(sed -n 's/^WORKER_VERSION=\([0-9]*\).*/\1/p' "$SH")"; wsha="$(sed -n 's/^WORKER_SHA=\([0-9a-f]*\).*/\1/p' "$SH")"

@@ -470,9 +470,8 @@ cmd_add() {
   pt="$(parse_target "$target")" || die "$usage"
   if [[ $backend == r2 ]]; then   # every r2 refusal before any write
     [[ $pt == snapshot && -z $host_fqdn ]] || die "live shares and --host need a tunnel profile; this profile serves from R2"
-    [[ -z $access ]] || die "gated r2 adds are not built yet; this profile publishes ungated links only"
     need_host
-    cmd_add_r2 "$(ttl_secs "$ttl")" "$noindex" "$target"
+    cmd_add_r2 "$(ttl_secs "$ttl")" "$noindex" "$target" "$access"
     return
   fi
   if [[ $pt == snapshot ]]; then
@@ -1448,7 +1447,10 @@ access_wait="${SHARE_ACCESS_WAIT:-900}"
 access_named_only() { die "--access needs a named tunnel on a Cloudflare account with Access: '$me teardown', then '$me setup <hostname>'"; }
 api_token_file="$config_dir/api-token"
 api_token_key() { echo "share-api${profile:+.$profile}:$host_name"; }
-dry_log() { [[ ${SHARE_ACCESS_DRY:-0} == 1 ]] && echo "$*" >>"$root/access-calls.log"; return 0; }
+dry_log() { # an r2 profile logs beside its bucket calls, so one log orders PUTs, PROBEs, and app calls
+  [[ ${SHARE_ACCESS_DRY:-0} == 1 ]] || return 0
+  if [[ $backend == r2 ]]; then echo "$*" >>"$root/r2-calls.log"; else echo "$*" >>"$root/access-calls.log"; fi
+}
 hostname_ok() { [[ $1 =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z][a-z]+$ ]]; }
 
 access_parse() { # access_parse <rule>: validates and normalizes into access_rule; the include JSON waits for the account (group: is resolved by name)
@@ -1562,6 +1564,9 @@ cf_try() { # cf_try METHOD PATH [JSON]: like cf() but never dies; sets cf_body, 
     [[ $tunnel == 0 ]] || { echo "share: SHARE_ACCESS_DRY=1 is a test seam for SHARE_TUNNEL=0 only; the Cloudflare call was refused; unset it" >&2; return 0; }
     cf_dry "$@"; return 0
   fi
+  if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then   # a dry r2 run answers Access calls only through SHARE_ACCESS_DRY
+    echo "share: SHARE_R2_DRY=1 without SHARE_ACCESS_DRY=1: the Cloudflare call $1 $2 was refused" >&2; return 0
+  fi
   out="$(curl -sS --max-time 30 -w '\n%{http_code}' -X "$1" "$api$2" -H @<(printf 'Authorization: Bearer %s\n' "$api_token") \
     -H 'Content-Type: application/json' ${3:+--data "$3"} 2>/dev/null)" || return 0
   cf_code="${out##*$'\n'}"; cf_body="${out%$'\n'*}"
@@ -1604,7 +1609,7 @@ cf_dry() { # the SHARE_ACCESS_DRY answers: fixtures and knobs in, one log line p
       else
         name="$(jq -r .name <<<"$3")"; id="$(awk '{print $2}' <<<"$name")"; nonce="${name##* }"
         uuid="00000000-0000-4000-8000-000000$id"
-        jq -c --arg id "$uuid" --arg aud "aud-$nonce" '. + {id:$id, aud:$aud}' <<<"$3" >"$d/$uuid.json"
+        jq -c --arg id "$uuid" --arg aud "$(printf '%s' "$nonce" | shasum -a 256 | cut -c1-64)" '. + {id:$id, aud:$aud}' <<<"$3" >"$d/$uuid.json"   # 64 hex, as a real AUD tag
         cf_code=201 cf_body="{\"success\":true,\"result\":$(cat "$d/$uuid.json")}"
         dry_log "POST app"
       fi ;;
@@ -1644,6 +1649,10 @@ access_account() { # access_account [soft]: acct, the account of the ONE active 
     access_soft_warned=1; return 1
   fi
   acct="$(jq -r '.result[0].account.id' <<<"$cf_body")"
+}
+access_apps_edit_ok() { # the preflight's Apps Edit probe alone: the invalid body {} answers 400 (12130) only with the scope, and creates nothing
+  cf_try POST "/accounts/$acct/access/apps" '{}'
+  [[ $cf_code == 400 && $cf_err == 12130 ]]
 }
 access_read_proven=0
 access_proof() { # once per process: a token without the Access read scope answers 404 to any app id, so a 404 proves nothing until this passes
@@ -1780,7 +1789,7 @@ owner_live() { # owner_live <pid> <start>: alive, a share process, and the same 
 
 access_create() { # access_create <id> [fqdn]: the intent line, the app, its uuid into the line, then a read-back; sets access_app and access_aud
   local nonce name dests body
-  nonce="$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+  nonce="${access_nonce:-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')}"   # an r2 gated add passes its prefix nonce
   name="share $1 $host_name $nonce"   # the nonce is the last word: a lookup by name can never match an older app for the same id
   lock_take index; pending_add "$1" "-:$nonce"; lock_release index
   dests="[{\"type\":\"public\",\"uri\":\"$host_name/$1\"},{\"type\":\"public\",\"uri\":\"$host_name/$1/*\"}]"
@@ -1809,6 +1818,7 @@ access_create() { # access_create <id> [fqdn]: the intent line, the app, its uui
 }
 access_delete() { # access_delete <uuid> <share id>: only an app whose name says it is this share's; 404 is done; anything else (000 included) is not
   local name
+  access_deleted_nonce=""
   cf_try GET "/accounts/$acct/access/apps/$1"
   if [[ $cf_code == 404 ]]; then access_proof; return; fi   # done only once Access read is proven: a scope-less token 404s on every id
   [[ $cf_code == 200 ]] || return 1
@@ -1817,6 +1827,7 @@ access_delete() { # access_delete <uuid> <share id>: only an app whose name says
     echo "share: Access app $1 is not the app of share $2 (its name is '$name'); left alone" >&2
     return 1
   fi
+  access_deleted_nonce="${name##* }"   # on r2 the app's nonce is its upload's: the sweep deletes o/<id>.<nonce>/ by it
   cf_try DELETE "/accounts/$acct/access/apps/$1"
   [[ $cf_code == 2* || $cf_code == 404 ]]
 }
@@ -1886,7 +1897,7 @@ access_sweep() { # every pending line: a live owner is skipped, a finished add's
   # (orphaned bytes trashed first), then each app deleted with no lock held. A line that is not done stays claimed by
   # this process; once it exits, the next sweep sees a dead owner and retries.
   [[ -s $pending ]] || return 0
-  local id app pid st created tmp reload=0 claimed="" uuid
+  local id app pid st created tmp reload=0 claimed="" uuid mcode=""
   lock_take index
   tmp="$(mktemp "$root/.pending.XXXXXX")"
   while IFS=$'\t' read -r id app pid st created; do
@@ -1896,10 +1907,11 @@ access_sweep() { # every pending line: a live owner is skipped, a finished add's
       printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$app" "$pid" "$st" "$created" >>"$tmp"; continue
     fi
     if owner_live "$pid" "$st"; then printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$app" "$pid" "$st" "$created" >>"$tmp"; continue; fi
-    [[ "$(opt_val access "$(row "$id" | cut -f6)" || true)" == "$app" ]] && continue   # the add finished: a stale line
+    # the add finished: a stale line. On r2 a fresh GET m/<id> decides below, outside the lock
+    [[ $backend != r2 && "$(opt_val access "$(row "$id" | cut -f6)" || true)" == "$app" ]] && continue
     printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$app" "$$" "$(own_start)" "$created" >>"$tmp"
     claimed="$claimed$id $app $created"$'\n'
-    if [[ -z "$(row "$id")" ]]; then   # orphaned bytes, or a live route an rm whose reload failed left in the running Caddy
+    if [[ $backend != r2 && -z "$(row "$id")" ]]; then   # orphaned bytes, or a live route an rm whose reload failed left in the running Caddy
       [[ -e $pub/$id ]] && { to_trash "$pub/$id"; dry_log "TRASH $id"; }
       reload=1
     fi
@@ -1923,7 +1935,21 @@ access_sweep() { # every pending line: a live owner is skipped, a finished add's
         continue
       fi
     fi
-    if access_delete "$uuid" "$id"; then lock_take index; pending_drop "$id" "$app"; lock_release index; fi
+    if [[ $backend == r2 ]]; then   # never the snapshot: a record naming this app is a finished add; a 404 frees the app; anything else keeps the line
+      r2_call GET "m/$id"; mcode=$cf_code
+      if [[ $cf_code == 200 && "$(jq -r '.opts // ""' <<<"$cf_body" 2>/dev/null | tr ' ' '\n' | sed -n 's/^access=//p')" == "$uuid" ]]; then
+        lock_take index; pending_drop "$id" "$app"; lock_release index
+        continue
+      fi
+      [[ $cf_code == 200 || $cf_code == 404 ]] || continue   # a record naming another app is another publisher's share
+    fi
+    if access_delete "$uuid" "$id"; then
+      lock_take index; pending_drop "$id" "$app"; lock_release index
+      # the upload of an add that never published: its own nonce only, never another publisher's prefix
+      if [[ $backend == r2 && $mcode == 404 && $access_deleted_nonce =~ ^[0-9a-f]{8}$ ]]; then
+        (r2_delete_prefix "o/$id.$access_deleted_nonce/") >/dev/null 2>&1 || true
+      fi
+    fi
   done <<<"$claimed"
 }
 
@@ -1959,6 +1985,11 @@ cmd_api_token() { # cmd_api_token [--cmd '<command>' | --check]: store a token c
     --cmd)
       [[ $# -eq 2 && -n $2 ]] || die "$usage"
       case $2 in *$'\n'*|*$'\r'*) die "$usage" ;; esac   # a line break would inject a second config line
+      if [[ $backend == r2 ]]; then   # the command's token is checked before the command is stored
+        tok="$(eval "$2" 2>/dev/null)" || tok=""
+        [[ -n $tok ]] || die "the command printed no token; run it by hand to see why; nothing was stored"
+        r2_publisher_check "$tok"; tok=""
+      fi
       mkdir -p "$config_dir"
       { [[ -f $config ]] && { grep -v '^api_token_cmd=' "$config" || true; }; echo "api_token_cmd=$2"; } >"$config.tmp"
       mv -f "$config.tmp" "$config"
@@ -1974,12 +2005,44 @@ cmd_api_token() { # cmd_api_token [--cmd '<command>' | --check]: store a token c
         IFS= read -r tok || true
       fi
       [[ -n $tok ]] || die "no token entered; rerun: $me api-token"
+      [[ $backend != r2 ]] || r2_publisher_check "$tok"
       api_token_store "$tok"   # direct call: a bad token dies here, never reaches the preflight
       echo "token:      $api_token_store_out"
       tok="" ;;
     *) die "$usage" ;;
   esac
+  if [[ $backend == r2 ]]; then   # the bucket token is enough for ungated links; the Access scopes are reported, not required
+    if [[ ${1:-} == --check ]]; then
+      api_token_resolve
+      [[ -n $api_token ]] || die "no token for $host_name; store one: $me api-token"
+      r2_publisher_check "$api_token"
+    fi
+    echo "share: a publisher token for bucket $(cfg bucket || true): not an admin token, no other bucket in reach" >&2
+    access_preflight || echo "share: ungated adds work with this token; gated adds and their removal also need the Access scopes above" >&2
+    return 0
+  fi
   access_preflight
+}
+r2_publisher_check() { # r2_publisher_check <token>: before a publisher token is stored, refuse one that edits the Worker (admin) or lists another bucket (account-wide R2)
+  local ep a worker="share-${host_name//./-}" bucket others
+  bucket="$(cfg bucket || true)"
+  ep="$(cfg r2_endpoint || true)"; a="${ep#https://}"; a="${a%%.*}"
+  [[ -n $ep && $a =~ ^[A-Za-z0-9-]+$ ]] || die "the profile config has no r2_endpoint; rerun $me setup $host_name --backend r2 --bucket $bucket"
+  api_token="$1"
+  r2_api GET "/accounts/$a/workers/scripts/$worker/settings"
+  case $cf_code in
+    200) die "that token can edit Worker $worker: it is an admin token, which stays in CLOUDFLARE_API_TOKEN for setup only; store a token with Workers R2 Storage Bucket Item Write on bucket $bucket only; nothing was stored" ;;
+    401|403) ;;
+    *) die "checking the token against Worker $worker answered HTTP $cf_code; nothing was stored" ;;
+  esac
+  r2_api GET "/accounts/$a/r2/buckets"
+  case $cf_code in
+    200) others="$(jq -r --arg b "$bucket" '[(.result.buckets // [])[].name | select(. != $b)] | join(" ")' <<<"$cf_body" 2>/dev/null || echo '?')"
+      [[ -z $others ]] || die "that token reaches other buckets ($others): an account-wide R2 token; store a token with Workers R2 Storage Bucket Item Write on bucket $bucket only; nothing was stored" ;;
+    401|403) ;;
+    *) die "listing buckets with the token answered HTTP $cf_code; nothing was stored" ;;
+  esac
+  api_token=""
 }
 access_open_url() { # the platform opener, backgrounded; skipped over ssh or with no display, so a text browser never fights the hidden prompt
   local opener
@@ -2218,33 +2281,63 @@ r2_release_prefix() { # r2_release_prefix <id> <prefix>: the EXIT trap's r2 part
   return 0
 }
 
-cmd_add_r2() { # cmd_add_r2 <secs> <noindex> <target>: stage, upload to a fresh prefix, then PUT m/<id> with If-None-Match: * is the publish
-  local secs=$1 opts="" src name id exp=0 prefix rec url
+cmd_add_r2() { # cmd_add_r2 <secs> <noindex> <target> [rule]: stage, upload to a fresh prefix, then PUT m/<id> with If-None-Match: * is the publish
+  # gated (a rule, already parsed): the app and its gate sit between the upload and the record, and the record carries the app's aud
+  local secs=$1 opts="" src name id exp=0 prefix rec url nonce gated="${4:-}"
   src="$(realpath "$3")"; name="$(basename "$src")"
   case $src in *$'\t'*|*$'\n'*) die "paths with tabs or newlines are not supported" ;; esac
   case $name in *[{}\"\\]*) die "names with { } \" or \\ are not supported" ;; esac
   [[ -n $2 ]] && opts="noindex"
   r2_token_check
   mk_root
+  if [[ -n $gated ]]; then   # before any write: a Worker with no Access team 404s every gated link, then the Access token and scopes
+    r2_healthz
+    [[ $hz_code == 200 ]] || die "https://$host_name/healthz answered $hz_code; nothing was published"
+    [[ $hz_gate == 1 ]] || die "the Worker at $host_name has no Access team, so a gated link would never open; whoever holds the admin token reruns '$me setup $host_name --backend r2 --bucket $(cfg bucket || true)' with Access: Organizations Read; nothing was published"
+    access_prepare
+  fi
   id="$(rand_id)"
   [[ $secs -gt 0 ]] && exp=$(($(date +%s) + secs))
   stage_copy "$src" "$opts"
   r2_stage_check "$stage_out"
-  prefix="o/$id.$(r2_nonce)/"
+  nonce="$(r2_nonce)"; prefix="o/$id.$nonce/"
   r2_held_id=$id r2_held_prefix=$prefix   # from the first PUT on, the EXIT trap owns this prefix
   r2_put_tree "$stage_out" "$prefix" || die "uploading $name failed (HTTP $cf_code); nothing was published"
   r2_prefix_matches "$stage_out" "$prefix" || die "the objects under $prefix do not match the stage; nothing was published"
+  if [[ -n $gated ]]; then
+    access_nonce=$nonce access_create "$id"   # intent line, the app, its id into the line, read-back
+    if [[ ! $access_aud =~ ^[0-9a-f]{64}$ ]] || ! access_gate "$id" "$access_aud"; then
+      local left=""
+      if access_delete "$access_app" "$id"; then lock_take index; pending_drop "$id" "$access_app"; lock_release index; held_access_id=""
+      else left="; the app stays in access-pending for the next '$me prune' with the token"; fi
+      [[ $access_aud =~ ^[0-9a-f]{64}$ ]] || die "the Access app for $id has an aud the Worker cannot check ($access_aud); nothing was published$left"
+      die "Cloudflare Access did not enforce on $host_name/$id within ${access_wait}s; nothing was published$left; rerun the same $me add (Access can take several minutes on a new app)"
+    fi
+    opts="${opts:+$opts }access=$access_app access_rule=$access_rule"
+    lock_take index   # publish under the lock: a sweep that claimed this line may have deleted the app
+    pending_has "$id" "$access_app" || { lock_release index; die "the Access app of $id was claimed by a sweep during the wait; nothing was published; rerun the same $me add"; }
+  fi
   rec="$(mktemp "$root/.r2rec.XXXXXX")"
   jq -nc --arg id "$id" --arg name "$name" --arg src "$src" --arg added "$(date +%F)" --argjson exp "$exp" \
-    --arg opts "$opts" --arg prefix "$prefix" --arg by "$(r2_by)" \
-    '{v: 1, id: $id, name: $name, src: $src, added: $added, expires: $exp, opts: $opts, prefix: $prefix, by: $by}' >"$rec"
+    --arg opts "$opts" --arg prefix "$prefix" --arg by "$(r2_by)" --arg aud "${gated:+$access_aud}" \
+    '{v: 1, id: $id, name: $name, src: $src, added: $added, expires: $exp, opts: $opts, prefix: $prefix, by: $by}
+      + (if $aud == "" then {} else {aud: $aud} end)' >"$rec"
   r2_call PUT "m/$id" "$rec" -H 'If-None-Match: *'
   rm -f "$rec"
   case $cf_code in
     200) ;;
-    412) die "another publisher took id $id during the upload; nothing was published; rerun the same $me add" ;;   # the trap sees their prefix and deletes ours
-    *) die "publishing m/$id answered HTTP $cf_code${cf_err:+ ($cf_err)}; rerun the same $me add" ;;   # a lost-but-committed PUT: the trap keeps the prefix the record names
+    412) # the trap sees their prefix and deletes ours; a gated add deletes its app too
+      if [[ -n $gated ]]; then
+        lock_release index; held_access_id=""
+        if access_delete "$access_app" "$id"; then lock_take index; pending_drop "$id" "$access_app"; lock_release index; fi
+      fi
+      die "another publisher took id $id during the upload; nothing was published; rerun the same $me add" ;;
+    *) # a lost-but-committed PUT: the trap keeps the prefix the record names; a gated line stays for the sweep's fresh read
+      local tail=""
+      [[ -z $gated ]] || { held_access_id=""; tail=" (the next '$me prune' with the token settles its Access app)"; }
+      die "publishing m/$id answered HTTP $cf_code${cf_err:+ ($cf_err)}; rerun the same $me add$tail" ;;
   esac
+  if [[ -n $gated ]]; then pending_drop "$id" "$access_app"; lock_release index; held_access_id=""; fi
   r2_held_prefix="" r2_held_id=""
   r2_own_put "$id" "$prefix" "$src"
   r2_link_base="$stage_out"; share_url "$id" "$name" "$opts"; r2_link_base=""
@@ -2254,7 +2347,7 @@ cmd_add_r2() { # cmd_add_r2 <secs> <noindex> <target>: stage, upload to a fresh 
   if [[ ${SHARE_CLIPBOARD:-1} == 1 ]] && command -v pbcopy >/dev/null; then
     printf '%s' "$url" | pbcopy && echo "  (link copied)"
   fi
-  warn_private "$src" "$id"
+  [[ -n $gated ]] || warn_private "$src" "$id"   # it says "public to anyone with the link", which a gated link is not
 }
 
 r2_md5() { # r2_md5 <file>: an etag-shaped lowercase hex
@@ -2459,37 +2552,56 @@ r2_sweep_orphans() { # bare prune: every o/<id>.<nonce>/ no record names, whose 
   done
 }
 
-r2_prune() { # r2_prune [quiet|listing]: the snapshot; unless quiet, every expired ungated row through rm; a bare prune then sweeps orphan uploads
+r2_prune() { # r2_prune [quiet|listing]: the snapshot; unless quiet, every expired row through rm, a gated one only with an Access-proven token; a bare prune then sweeps orphan uploads
   r2_snapshot
   [[ ${1:-} != quiet ]] || return 0
-  local now id opts
+  local now id opts expired gate_ok=0
   now="$(date +%s)"
+  expired="$(rows | awk -F'\t' -v now="$now" '$5 > 0 && $5 < now {print $1 "\t" $6}')"
+  if [[ -s $pending || $expired == *access=* ]]; then   # listing: the environment only, never op read; bare: the full resolver, soft
+    if [[ ${1:-} == listing ]]; then api_token_resolve env; else api_token_resolve soft; fi
+    [[ -n $api_token ]] && access_account soft && access_apps_edit_ok && gate_ok=1
+    [[ $gate_ok == 0 ]] || access_sweep
+  fi
   while IFS=$'\t' read -r id opts; do
     [[ -n $id ]] || continue
-    if [[ -n "$(opt_val access "$opts" || true)" ]]; then   # the Worker already answers 404; the app needs an Access-capable token
+    if [[ $gate_ok == 0 && -n "$(opt_val access "$opts" || true)" ]]; then   # the Worker already answers 404; the app needs an Access-capable token
       echo "share: expired gated share $id waits for a publisher with the Access token" >&2
       continue
     fi
     cmd_rm "$id" prune | sed 's/$/ (expired)/' || true   # a listing never dies on one row
-  done < <(rows | awk -F'\t' -v now="$now" '$5 > 0 && $5 < now {print $1 "\t" $6}')
+  done <<<"$expired"
   [[ -n ${1:-} ]] || r2_sweep_orphans
 }
 
-cmd_rm_r2() { # cmd_rm_r2 <id> [prune]: the record, a fresh read proving it gone, then every nonce's objects; any publisher may rm any ungated share
-  local r opts tmp
+cmd_rm_r2() { # cmd_rm_r2 <id> [prune]: the record, a fresh read proving it gone, then every nonce's objects, then a gated share's app
+  # any publisher may rm any share; a gated one needs a token that passes the Apps Edit probe first (prune: r2_prune proved it)
+  local r opts tmp app
   [[ -n ${r2_snap_file:-} ]] || r2_snapshot
   r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
-  [[ -z "$(opt_val access "$opts" || true)" ]] || die "$1 is gated; removing a gated r2 share is not built yet, and its link already needs the Access login"
+  app="$(opt_val access "$opts" || true)"
+  if [[ -n $app ]]; then
+    if [[ ${2:-} != prune ]]; then   # before any change: a teammate without Access scopes never strands the app
+      api_token_resolve; [[ -n $api_token ]] || { access_no_token >&2; exit 1; }
+      access_account
+      access_apps_edit_ok || die "$(access_scope_line 'Access: Apps and Policies Edit')"
+      access_sweep
+    fi
+    lock_take index; pending_has_id "$1" || pending_add "$1" "$app" "" "$$"; lock_release index
+  fi
   local dcode
   r2_call DELETE "m/$1"; dcode=$cf_code   # any answer, 000 included: the fresh read below decides
-  r2_call GET "m/$1"   # a lost DELETE must not look done
-  [[ $cf_code == 404 ]] || die "m/$1 still answers HTTP $cf_code after its delete (HTTP $dcode); its objects were kept; rerun $me rm $1"
+  r2_call GET "m/$1"   # a lost DELETE must not look done; a gated line and its app stay
+  [[ $cf_code == 404 ]] || die "m/$1 still answers HTTP $cf_code after its delete (HTTP $dcode); its objects${app:+ and its Access app} were kept; rerun $me rm $1"
   tmp="$(mktemp "$root/.r2-index.XXXXXX")"
   awk -F'\t' -v id="$1" '$1 != id' "$index" >"$tmp" && mv -f "$tmp" "$index"   # this process's listing drops the row too
   r2_own_drop "$1"
   (r2_delete_prefix "o/$1.") || echo "share: some objects under o/$1. remain; nothing serves them, and a $me prune removes them after 24 h" >&2
   echo "unpublished $1"
+  [[ -n $app ]] || return 0
+  if access_delete "$app" "$1"; then lock_take index; pending_drop_id "$1" "$app"; lock_release index
+  else die "could not delete the Access app for $1 (HTTP $cf_code, or the app is not this share's, see above); it stays in access-pending for the next '$me prune' with the token"; fi
 }
 
 cmd_refresh_r2() { # cmd_refresh_r2 <id>: this install's own share only; a new prefix, the record swap under If-Match, then the old prefix goes
@@ -2555,6 +2667,8 @@ cmd_status_r2() { # read-only: the Worker's health and version, then the listing
   echo "r2 backend: https://$host_name/"
   r2_healthz
   if [[ $hz_code == 200 ]]; then echo "worker:     up ($hz_pair)"; else echo "worker:     DOWN: $hz_code"; fi
+  if [[ $hz_code == 200 && $hz_gate == 1 ]]; then echo "gated:      on (the Worker checks the Access login)"
+  elif [[ $hz_code == 200 ]]; then echo "gated:      off (the Worker has no Access team; add --access is refused)"; fi
   [[ $hz_code != 200 || $hz_pair == "$WORKER_VERSION $WORKER_SHA" ]] ||
     echo "the Worker at $host_name runs $hz_pair; this share ships $WORKER_VERSION $WORKER_SHA; whoever holds the admin token reruns '$me setup $host_name --backend r2 --bucket $(cfg bucket || true)'"
   cmd_prune quiet
@@ -2681,7 +2795,7 @@ r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "
       fi
       mkdir -p "${f%/*}"
       [[ -n $arg3 && -f $arg3 ]] && cp "$arg3" "$f" || : >"$f"
-      [[ ${SHARE_R2_DRY_PUT:-} == lost ]] && { cf_code=000; return 0; }
+      [[ ${SHARE_R2_DRY_PUT:-} == lost || ( ${SHARE_R2_DRY_PUT:-} == lost-record && $key == m/* ) ]] && { cf_code=000; return 0; }
       r2_etag="$(r2_md5 "$f")" ;;
     GET) [[ -e $f ]] || { cf_code=404 cf_err=NoSuchKey; return 0; }
       cf_body="$(cat "$f")"; r2_etag="$(r2_md5 "$f")" ;;
@@ -2749,6 +2863,9 @@ r2_api_dry() { # the account API under SHARE_R2_DRY: state files in $SHARE_R2_DR
       if [[ ${SHARE_R2_DRY_BUCKETDOM:-} == deny ]]; then cf_code=403 cf_body=$deny   # a bucket-scoped token reads no bucket settings
       elif [[ ! -f $d/bucket ]]; then cf_code=404 cf_body='{"success":false,"errors":[{"code":10006}]}'; fi ;;
     "POST "*/r2/buckets) : >"$d/bucket"; cf_body='{"success":true,"result":{}}' ;;
+    "GET "*/r2/buckets)   # a bucket-scoped token gets 403; SHARE_R2_DRY_BUCKETS="a b" answers as an account-wide token that lists them
+      if [[ -z ${SHARE_R2_DRY_BUCKETS:-} ]]; then cf_code=403 cf_body=$deny
+      else cf_body="$(jq -nc --arg l "$SHARE_R2_DRY_BUCKETS" '{success: true, result: {buckets: [$l | split(" ")[] | {name: .}]}}')"; fi ;;
     "GET /zones/"*/dns_records*) [[ -f $d/dns ]] && cf_body="{\"success\":true,\"result\":$(cat "$d/dns")}" ;;
     "GET "*/workers/domains*)
       if [[ ${SHARE_R2_DRY_DOMAINS:-} == 500 ]]; then cf_code=500 cf_body='{"success":false,"errors":[{"code":10013}]}'
@@ -2765,14 +2882,15 @@ r2_api_dry() { # the account API under SHARE_R2_DRY: state files in $SHARE_R2_DR
   cf_err="$(jq -r '.errors[0].code // empty' <<<"$cf_body" 2>/dev/null || true)"
 }
 
-r2_healthz() { # r2_healthz [secs]: hz_code (200 only for a "200 ok" body) and hz_pair (the X-Share-Worker header) from https://<host>/healthz
-  hz_code=000 hz_pair=""
+r2_healthz() { # r2_healthz [secs]: hz_code (200 only for a "200 ok" body), hz_pair (X-Share-Worker), hz_gate (X-Share-Gate: 1 when TEAM is set) from https://<host>/healthz
+  hz_code=000 hz_pair="" hz_gate=0
   if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then
     local d="${SHARE_R2_DRY_DIR:-$root/r2-dry}/.cf"
     printf 'HEALTHZ\n' >>"$root/r2-calls.log"
     [[ ${SHARE_R2_DRY_HEALTHZ:-} != down && -f $d/domain.json && -f $d/script.json ]] || return 0
     hz_code=200
     hz_pair="$(jq -r '[(.bindings[] | select(.name == "VERSION") | .text), (.bindings[] | select(.name == "SHA") | .text)] | join(" ")' "$d/script.json")"
+    hz_gate="$(jq -r 'if any(.bindings[]; .name == "TEAM" and (.text // "") != "") then 1 else 0 end' "$d/script.json")"
     return 0
   fi
   local h b
@@ -2781,6 +2899,7 @@ r2_healthz() { # r2_healthz [secs]: hz_code (200 only for a "200 ok" body) and h
   hz_code="$(awk 'NR == 1 {print $2}' "$h")"; hz_code="${hz_code:-000}"
   [[ $hz_code != 200 || $b == ok ]] || hz_code=000
   hz_pair="$(awk 'tolower($1) == "x-share-worker:" {sub(/\r$/, ""); print $2 " " $3; exit}' "$h")"
+  [[ "$(awk 'tolower($1) == "x-share-gate:" {sub(/\r$/, ""); print $2; exit}' "$h")" == 1 ]] && hz_gate=1
   rm -f "$h"
 }
 
