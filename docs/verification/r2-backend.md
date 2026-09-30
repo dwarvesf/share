@@ -194,3 +194,16 @@ Suites on the final tree (2c7f8e9):
 | `shellcheck bin/share install.sh tests/share.sh tests/e2e.sh tests/e2e-r2.sh demo/render.sh mac/*.sh` | clean |
 
 Nothing ran against the real Cloudflare account beyond two read-only `permission_groups` lookups, both refused (9109).
+
+### Live e2e on the final tree
+
+```
+Command: the Batch 4 command, with host share-e2e-44bcde.d.foundation and bucket share-e2e-44bcde
+Tree:    6125b97 (the PR head; bin/share as reviewed)
+Exit:    0
+Checks:  84/84 passed
+Log:     docs/verification/r2-e2e-2026-10-01-final.txt
+Verdict: PASS
+```
+
+The outside checks before and after match the earlier runs: 0 buckets named `share-e2e*`, 0 Workers named `share-share-e2e*`, 0 custom domains and 0 DNS records for the run's hostname, 0 Access apps named for it, 0 user tokens named `share-e2e*`, and the same 15 other buckets (sha `79a3fcf51452`). The Worker settings and the bucket both answer 404 after the EXIT trap.
