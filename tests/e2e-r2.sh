@@ -126,7 +126,10 @@ echo "=== L1 admin setup ==="
 admin_as "$A" setup "$host" --backend r2 --bucket "$bucket" 2>&1 | indent
 check "setup exits 0" 0 "${PIPESTATUS[0]}"
 hz="$(fetch -D - -o "$WORK/hz" "https://$host/healthz" | awk 'tolower($1) == "x-share-worker:" {sub(/\r$/, ""); print $2 " " $3}')"
-check "/healthz answers 200 ok" "200 ok" "$(code "https://$host/healthz") $(cat "$WORK/hz")"
+seen="" c=""   # run 4 saw one 500 right after setup's three 200s: the edge still warming the new deployment
+for _ in $(seq 1 15); do c="$(code "https://$host/healthz")"; [[ $c == 200 ]] && break; seen="$seen $c"; sleep 2; done
+[[ -z $seen ]] || echo "  | recorded: /healthz answered$seen before 200"
+check "/healthz answers 200 ok" "200 ok" "$c $(cat "$WORK/hz" 2>/dev/null)"
 check "/healthz carries this CLI's pair" "$pair" "$hz"
 check "workers.dev and previews off" "false,false" "$(api "/accounts/$acct/workers/scripts/$worker/subdomain" | jq -r '"\(.result.enabled),\(.result.previews_enabled)"')"
 sub="$(api "/accounts/$acct/workers/subdomain" | jq -r '.result.subdomain // empty')"
