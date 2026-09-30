@@ -222,7 +222,7 @@ A profile without `backend=r2` runs every current code path unchanged: every r2 
 - [x] TASK-6: `r2_snapshot` into `rows()`, `rand_id`, `r2-own`. Depends on TASK-5. AC: rows 25e, 27.
 - [x] TASK-7: admin setup (steps 1 to 11, deploy). Depends on TASK-1(e), TASK-3, TASK-4. AC: rows 3, 4, 20.
 - [x] TASK-8: join mode. Depends on TASK-7. AC: row 23.
-- [ ] TASK-9: `add` and the refusals. Depends on TASK-6. AC: rows 5, 6.
+- [x] TASK-9: `add` and the refusals. Depends on TASK-6. AC: rows 5, 6.
 - [ ] TASK-10: `ls`, `refresh`, `rm`, `prune` with the orphan sweep. Depends on TASK-9. AC: rows 7, 8, 9, 10, 24, 25a, 25c.
 - [ ] TASK-11: `hits`, `status`, `state`, `profiles`. Depends on TASK-6 and TASK-1(f). AC: rows 13, 14.
 - [ ] TASK-12: gated add and rm on r2 and the r2 sweep. Depends on TASK-10 and TASK-1(c)(g)(l). AC: rows 11, 12, 25b, 25d, 29.

@@ -222,6 +222,7 @@ release_locks() { # the EXIT trap: every held lock, a stage still outside pub, a
   if [[ -n $held_fqdn ]]; then f="$held_fqdn"; held_fqdn=""; host_rm "$f" || true; fi
   if [[ -n $held_access_id ]]; then echo "share: nothing was published; the Access app of $held_access_id waits in access-pending, the next $me add --access or $me prune with a token removes it" >&2; held_access_id=""; fi
   [[ -n ${r2_snap_file:-} ]] && rm -f "$r2_snap_file"
+  if [[ -n ${r2_held_prefix:-} ]]; then f="$r2_held_prefix"; r2_held_prefix=""; r2_release_prefix "$r2_held_id" "$f"; fi
   return 0
 }
 
@@ -246,8 +247,11 @@ share_url() { # share_url <id> <name> [opts]: sets share_url_out; the link depen
     printf -v share_url_out 'https://%s/%s/' "$shost" "$1"; return
   fi
   path="$2"
-  if [[ -d $pub/$1/$2 ]]; then path="$2/"
-  elif [[ $2 == *.md && -f $pub/$1/${2%.md}.html ]]; then path="${2%.md}.html"
+  local base="$pub/$1"
+  [[ $backend != r2 ]] || base="${r2_link_base:-}"   # r2: the stage during an add; a listing has none, and the Worker 308s a folder to its slash
+  if [[ -z $base ]]; then :
+  elif [[ -d $base/$2 ]]; then path="$2/"
+  elif [[ $2 == *.md && -f $base/${2%.md}.html ]]; then path="${2%.md}.html"
   fi
   urlenc "$path"
   printf -v share_url_out 'https://%s/%s/%s' "$shost" "$1" "$urlenc_out"
@@ -393,7 +397,7 @@ stage_out=""   # the stage of the share being built, outside pub; release_locks 
 stage_copy() { # stage_copy <src> [opts]: the copy into a stage, sets stage_out; regular files only, so dotfiles (.git, .env) and symlinks (to ~/.ssh) never ship
   local parent name stage skipped
   parent="$(dirname "$1")"; name="$(basename "$1")"
-  mkdir -p "$pub"
+  [[ $backend == r2 ]] || mkdir -p "$pub"   # an r2 profile never has a pub/ tree
   stage="$(mktemp -d "$root/.stage.XXXXXX")"
   stage_out="$stage"; trap release_locks EXIT
   (cd "$parent" && find "$name" -name '.*' -prune -o -type f -print | while IFS= read -r f; do
@@ -464,10 +468,12 @@ cmd_add() {
   fi
   local pt kind tport="" src name id exp=0 url opts="" secs
   pt="$(parse_target "$target")" || die "$usage"
-  if [[ $backend == r2 ]]; then   # every r2 refusal before any write; the verbs land with the publish task
-    [[ $pt == snapshot ]] || die "live shares stay local; an r2 profile publishes files and folders"
-    [[ -z $host_fqdn ]] || die "--host needs a named tunnel; an r2 profile serves one hostname"
-    die "r2 backend: add is not implemented yet"
+  if [[ $backend == r2 ]]; then   # every r2 refusal before any write
+    [[ $pt == snapshot && -z $host_fqdn ]] || die "live shares and --host need a tunnel profile; this profile serves from R2"
+    [[ -z $access ]] || die "gated r2 adds are not built yet; this profile publishes ungated links only"
+    need_host
+    cmd_add_r2 "$(ttl_secs "$ttl")" "$noindex" "$target"
+    return
   fi
   if [[ $pt == snapshot ]]; then
     kind=snapshot
@@ -2121,7 +2127,95 @@ SHARE_WORKER_JS
 
 
 r2_no_local() { # an r2 profile has no local server to run or manage
-  [[ $backend != r2 ]] || die "an r2 profile has no local server; the links live in Cloudflare (share ls, share profiles)"
+  [[ $backend != r2 ]] || die "an r2 profile serves from Cloudflare; nothing runs on this machine ('$me rm <id>' unpublishes a link)"
+}
+
+r2_token_check() { # every r2 publisher verb, before its first call: a token source resolves; the dry seam checks the source only
+  if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then
+    [[ -n ${SHARE_R2_TOKEN:-} || -n "$(cfg r2_token_cmd || true)" ]] && return 0
+    api_token_resolve; [[ -n $api_token ]] && return 0
+  else
+    r2_creds && return 0
+  fi
+  cat >&2 <<EOF
+share: this r2 profile needs a publisher token for $host_name; none resolved.
+  Store one (Workers R2 Storage Bucket Item Write on bucket $(cfg bucket || true) only):  $me api-token
+  Or point at one you have:  $me api-token --cmd 'op read "op://<vault>/<item>/credential"'
+EOF
+  exit 1
+}
+
+r2_stage_check() { # r2_stage_check <stage>: the file cap, the per-file size cap, and no control byte in a name, before the first PUT
+  local LC_ALL=C f n=0 big max_files="${SHARE_R2_MAX_FILES:-500}" max_bytes="${SHARE_R2_MAX_BYTES:-314572800}"
+  while IFS= read -r -d '' f; do
+    n=$((n + 1))
+    case $f in *[[:cntrl:]]*) die "a file name holds a control character ($(printf '%q' "${f#./}")); rename it; nothing was uploaded" ;; esac
+  done < <(cd "$1" && find . -type f -print0)
+  [[ $n -le $max_files ]] || die "$n files is over the r2 cap of $max_files per add (SHARE_R2_MAX_FILES); nothing was uploaded"
+  big="$(cd "$1" && find . -type f -size +"${max_bytes}"c | head -1)"
+  [[ -z $big ]] || die "${big#./} is over the r2 cap of $max_bytes bytes per file (SHARE_R2_MAX_BYTES); nothing was uploaded"
+}
+
+r2_prefix_matches() { # r2_prefix_matches <stage> <prefix>: the prefix listing equals the stage's file list, name for name
+  local want got="" k
+  want="$(cd "$1" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)"
+  r2_list "$2"
+  while IFS= read -r k; do [[ -n $k ]] && got+="${k#"$2"}"$'\n'; done <<<"$r2_list_out"
+  [[ "$(printf '%s' "$got" | LC_ALL=C sort)" == "$want" ]]
+}
+
+r2_by() { local b; b="$(this_host | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9.-')"; echo "${b:-unknown}"; }   # the record's by=: rows() takes a-z 0-9 . - only
+
+r2_nonce() { od -An -N4 -tx1 /dev/urandom | tr -d ' \n'; }   # 8 hex: one upload's prefix, o/<id>.<nonce>/
+
+r2_release_prefix() { # r2_release_prefix <id> <prefix>: the EXIT trap's r2 part; an upload no record names is deleted, one a record names or an unread one stays
+  r2_call GET "m/$1" || return 0
+  case $cf_code in
+    404) ;;
+    200) [[ "$(jq -r '.prefix // empty' <<<"$cf_body" 2>/dev/null || true)" != "$2" ]] || return 0 ;;
+    *) echo "share: m/$1 answered HTTP $cf_code; the upload under $2 stays until a $me prune removes it after 24 h" >&2; return 0 ;;
+  esac
+  ( r2_delete_prefix "$2" ) >/dev/null 2>&1 || echo "share: some objects under $2 remain; a $me prune removes them after 24 h" >&2
+  return 0
+}
+
+cmd_add_r2() { # cmd_add_r2 <secs> <noindex> <target>: stage, upload to a fresh prefix, then PUT m/<id> with If-None-Match: * is the publish
+  local secs=$1 opts="" src name id exp=0 prefix rec url
+  src="$(realpath "$3")"; name="$(basename "$src")"
+  case $src in *$'\t'*|*$'\n'*) die "paths with tabs or newlines are not supported" ;; esac
+  case $name in *[{}\"\\]*) die "names with { } \" or \\ are not supported" ;; esac
+  [[ -n $2 ]] && opts="noindex"
+  r2_token_check
+  mk_root
+  id="$(rand_id)"
+  [[ $secs -gt 0 ]] && exp=$(($(date +%s) + secs))
+  stage_copy "$src" "$opts"
+  r2_stage_check "$stage_out"
+  prefix="o/$id.$(r2_nonce)/"
+  r2_held_id=$id r2_held_prefix=$prefix   # from the first PUT on, the EXIT trap owns this prefix
+  r2_put_tree "$stage_out" "$prefix" || die "uploading $name failed (HTTP $cf_code); nothing was published"
+  r2_prefix_matches "$stage_out" "$prefix" || die "the objects under $prefix do not match the stage; nothing was published"
+  rec="$(mktemp "$root/.r2rec.XXXXXX")"
+  jq -nc --arg id "$id" --arg name "$name" --arg src "$src" --arg added "$(date +%F)" --argjson exp "$exp" \
+    --arg opts "$opts" --arg prefix "$prefix" --arg by "$(r2_by)" \
+    '{v: 1, id: $id, name: $name, src: $src, added: $added, expires: $exp, opts: $opts, prefix: $prefix, by: $by}' >"$rec"
+  r2_call PUT "m/$id" "$rec" -H 'If-None-Match: *'
+  rm -f "$rec"
+  case $cf_code in
+    200) ;;
+    412) die "another publisher took id $id during the upload; nothing was published; rerun the same $me add" ;;   # the trap sees their prefix and deletes ours
+    *) die "publishing m/$id answered HTTP $cf_code${cf_err:+ ($cf_err)}; rerun the same $me add" ;;   # a lost-but-committed PUT: the trap keeps the prefix the record names
+  esac
+  r2_held_prefix="" r2_held_id=""
+  r2_own_put "$id" "$prefix" "$src"
+  r2_link_base="$stage_out"; share_url "$id" "$name" "$opts"; r2_link_base=""
+  rm -rf "$stage_out"; stage_out=""
+  url="$share_url_out"
+  echo "$url"
+  if [[ ${SHARE_CLIPBOARD:-1} == 1 ]] && command -v pbcopy >/dev/null; then
+    printf '%s' "$url" | pbcopy && echo "  (link copied)"
+  fi
+  warn_private "$src" "$id"
 }
 
 r2_md5() { # r2_md5 <file>: an etag-shaped lowercase hex

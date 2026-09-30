@@ -128,7 +128,7 @@ Deviations from the spec, per task. A task with none is not listed.
 - `r2_record_row` also drops a record whose `expires` is outside `0 <= expires < 1e11` (a forged `1e300` would break bash arithmetic in `ls`), whose `added` holds a control byte, or whose `opts` already carry `prefix=` or `by=` (the row appends its own).
 - `r2_own_get` also requires the stored prefix to name the same id.
 - `rand_id` on r2 skips an id whose `o/<id>.` listing holds any key (round-3 warning), besides the `GET m/<id>` check.
-- Row 25e's `add` half passes on the not-yet-built `add` refusal; TASK-9 makes it a real check.
+- Row 25e's `add` half passed on the `add` stub; TASK-9 made it a real check (see below).
 - Test hooks `r2-rows`, `r2-id`, `r2-own get|put|drop` sit beside the TASK-5 hooks in the dispatcher.
 
 ### TASK-7 (admin setup, dry only)
@@ -153,3 +153,16 @@ Deviations from the spec, per task. A task with none is not listed.
 - Join skips steps 4 and 6 to 11 and writes nothing on Cloudflare. Step 12 accepts any Worker pair and prints the mismatch line when the pair is not the CLI's.
 - The healthz wait moved into `r2_wait_healthz admin|join`, shared by both roles.
 - `SHARE_R2_DRY_BUCKETDOM=deny` also answers 403 on the bucket settings read.
+
+### TASK-9 (add and its refusals)
+
+- `add` resolves a publisher token source before any call (`r2_token_check`); the dry seam checks only that a source exists. The no-token block names `share api-token`.
+- `add --access` on r2 is refused until TASK-12 builds the gated publish.
+- `by=` is `this_host` lowercased, with characters outside `a-z0-9.-` dropped: a Mac named `Mac-mini` failed the `rows()` check and its own records vanished from `ls`.
+- The printed link comes from the stage: a folder gets its slash, a rendered `.md` links its `.html`. `ls` has no stage, so it prints `/<id>/<name>`; the Worker 308s a folder to its slash, and a rendered `.md` lists by its source name.
+- `stage_copy` makes no `pub/` on an r2 profile.
+- The live, `--host`, `start`, `stop`, `serve`, and `service` refusals now print the spec's text.
+- A 412 on the record PUT dies; the EXIT trap then reads `m/<id>`, sees another prefix, and deletes only this add's prefix.
+- The dry log does not record headers, so row 5 proves `If-None-Match: *` by behavior: a record written while the add waits at its publish wins, and the add dies naming the taken id. Dropping the header turns five row 5 checks red.
+- Row 25e's `add` half is a real check: with a token source, the add dies in `rand_id`'s prefix check and names it.
+- The `share api-token` refusals for admin and account-wide tokens (DEC-007) stay open for TASK-12: `api-token` still runs the Access preflight on every profile, and its r2 branch lands with the gated work.

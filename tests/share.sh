@@ -1648,23 +1648,24 @@ printf 'backend=r2\nhostname=r2x.example.test\nzone=example.test\nbucket=ok-buck
 for verb in start stop serve; do
   out=$(r2p "$verb" 2>&1); rc=$?
   check "r2 profile: $verb refuses" "1" "$rc"
-  check "$verb names no local server" "1" "$(grep -c 'no local server' <<<"$out")"
+  check "$verb names no local server" "1" "$(grep -c 'nothing runs on this machine' <<<"$out")"
 done
 out=$(r2p service install 2>&1); rc=$?
 check "r2 profile: service install refuses" "1" "$rc"
-check "install names no local server" "1" "$(grep -c 'no local server' <<<"$out")"
+check "install names no local server" "1" "$(grep -c 'nothing runs on this machine' <<<"$out")"
 out=$(r2p teardown --yes 2>&1); rc=$?
 check "r2 profile: teardown refuses" "1" "$rc"
 check "teardown names r2" "1" "$(grep -c 'r2 teardown is not implemented yet' <<<"$out")"
 out=$(r2p add 9999 2>&1); rc=$?
 check "r2 profile: live add refuses" "1" "$rc"
-check "live add names local" "1" "$(grep -c 'live shares stay local' <<<"$out")"
+check "live add names the tunnel profile" "1" "$(grep -c 'live shares and --host need a tunnel profile' <<<"$out")"
 out=$(r2p add "$WORK/wt/one.md" --host hh.example.test 2>&1); rc=$?
 check "r2 profile: --host add refuses" "1" "$rc"
-check "--host add names the tunnel" "1" "$(grep -c 'needs a named tunnel' <<<"$out")"
-out=$(r2p add "$WORK/wt/one.md" 2>&1); rc=$?
-check "r2 profile: file add still a stub" "1" "$rc"
-check "add stub names r2" "1" "$(grep -c 'r2 backend: add is not implemented yet' <<<"$out")"
+check "--host add names the tunnel profile" "1" "$(grep -c 'live shares and --host need a tunnel profile' <<<"$out")"
+out=$(CLOUDFLARE_API_TOKEN="" r2p add "$WORK/wt/one.md" 2>&1); rc=$?
+check "r2 profile: add with no token source refuses" "1" "$rc"
+check "the no-token block names api-token" "1" "$(grep -c 'needs a publisher token' <<<"$out")"
+check "no root, so nothing was staged or written" "0" "$([[ -d $R2H/share/profiles/r2x ]] && echo 1 || echo 0)"
 out=$(r2p setup other.example.test 2>&1); rc=$?
 check "tunnel setup on an r2 profile refuses" "1" "$rc"
 check "names the r2 backend" "1" "$(grep -c 'set up with the r2 backend' <<<"$out")"
@@ -1901,8 +1902,9 @@ out=$(SHARE_R2_DRY_LIST=500 r2d ls 2>&1); rc=$?
 check "LIST 500: ls exits 1" "1" "$rc"
 out=$(SHARE_R2_DRY_LIST=500 r2d r2-id 2>&1); rc=$?
 check "LIST 500: rand_id dies, no id picked" "1" "$rc"
-out=$(SHARE_R2_DRY_LIST=500 r2d add "$WORK/wt/one.md" 2>&1); rc=$?
+out=$(SHARE_R2_TOKEN=drytoken SHARE_R2_DRY_LIST=500 r2d add "$WORK/wt/one.md" 2>&1); rc=$?
 check "LIST 500: add exits 1" "1" "$rc"
+check "LIST 500: add dies in the id check, no id picked" "1" "$(grep -c 'prefix check for .* failed (HTTP 500); no id was picked' <<<"$out")"
 check "LIST 500: no object write was attempted" "0" "$(grep -c '^PUT ' "$rlog" || true)"
 
 echo "=== r2 backend: r2-own ==="
@@ -1917,6 +1919,72 @@ check "r2-own: a prefix naming another id is not returned" "" "$(r2d r2-own get 
 r2d r2-own drop abc001
 check "r2-own: drop forgets the id" "" "$(r2d r2-own get abc001 || true)"
 check "r2-own: drop keeps the others" "1" "$(r2d r2-own get abc002 | grep -c '/tmp/two')"
+
+echo "=== r2 backend: add (rows 5, 6) ==="
+DRYA="$WORK/r2-add-bucket"; mkdir -p "$DRYA"
+r2a() { # r2a <verb...>: the r2x profile on its own dry bucket with a publisher token source
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND \
+    HOME="$R2H" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$DRYA" SHARE_R2_TOKEN="${R2_TOK-drytoken}" bash "$SH" --profile r2x "$@"
+}
+r2root="$R2H/share/profiles/r2x"
+aline() { grep -n -- "$1" "$rlog" | head -1 | cut -d: -f1; }
+alast() { grep -n -- "$1" "$rlog" | tail -1 | cut -d: -f1; }
+AF="$WORK/r2fold/deck"; mkdir -p "$AF/sub"
+for n in 'a%b.txt' 'q?.txt' 'h#.txt' 'sp ace.txt'; do printf '%s\n' "$n" >"$AF/$n"; done
+printf '# Deck\n' >"$AF/README.md"; printf 'SECRET=1\n' >"$AF/.env"; ln -s /etc/hosts "$AF/hosts-link"; printf 'z\n' >"$AF/sub/z.txt"
+: >"$rlog"
+out=$(SHARE_TEST_IDS=add001 r2a add "$AF" 2>/dev/null); rc=$?
+check "row 5: folder add exits 0" "0" "$rc"
+check "row 5: the link is https://<host>/<id>/<name>/" "https://r2x.example.test/add001/deck/" "$(head -1 <<<"$out")"
+anonce="$(sed -n 's/^PUT o\/add001\.\([0-9a-f]\{8\}\)\/.*/\1/p' "$rlog" | head -1)"
+check "row 5: the prefix is o/<id>.<8 hex>/" "1" "$(grep -c '^[0-9a-f]\{8\}$' <<<"$anonce")"
+alist="$(cd "$DRYA/o/add001.$anonce" 2>/dev/null && find . -type f | sed 's|^\./||' | LC_ALL=C sort | tr '\n' '|')"
+if command -v pandoc >/dev/null; then want5="README.html|README.md|a%b.txt|h#.txt|q?.txt|sp ace.txt|sub/z.txt|"
+else want5="README.md|a%b.txt|h#.txt|index.html|q?.txt|sp ace.txt|sub/z.txt|"; fi
+check "row 5: the prefix holds the stage tree (no dotfile, no symlink, the four names intact)" "$want5" "$(sed 's/deck\///g' <<<"$alist")"
+check "row 5: every object PUT precedes PUT m/<id>" "1" "$([[ -n $(aline '^PUT m/add001$') && $(alast '^PUT o/') -lt $(aline '^PUT m/add001$') ]] && echo 1 || echo 0)"
+check "row 5: the prefix listing is read back before the publish" "1" "$([[ $(alast '^LIST o/add001\.') -lt $(aline '^PUT m/add001$') ]] && echo 1 || echo 0)"
+check "row 5: the record" "1 add001 deck o/add001.$anonce/ " "$(jq -r '"\(.v) \(.id) \(.name) \(.prefix) \(.opts)"' "$DRYA/m/add001")"
+check "row 5: the record's by= passes rows()" "1" "$(jq -r '.by' "$DRYA/m/add001" | grep -c '^[a-z0-9.-]*$')"
+check "row 5: no pub/ tree" "0" "$([[ -e $r2root/pub ]] && echo 1 || echo 0)"
+check "row 5: no stage left" "0" "$(find "$r2root" -maxdepth 1 -name '.stage.*' | grep -c . || true)"
+check "row 5: r2-own names the prefix and source" "add001	o/add001.$anonce/	$(realpath "$AF")" "$(r2a r2-own get add001)"
+printf 'note\n' >"$WORK/note.txt"
+out=$(SHARE_TEST_IDS=add002 r2a add --ttl 7d "$WORK/note.txt" 2>/dev/null); rc=$?
+check "row 5: a file add links the file" "0 https://r2x.example.test/add002/note.txt" "$rc $(head -1 <<<"$out")"
+check "row 5: a file add's expiry is seven days out" "1" "$(jq --argjson now "$(date +%s)" '.expires > $now + 604000 and .expires <= $now + 604800' "$DRYA/m/add002" | grep -c true)"
+out=$(r2a ls 2>&1)
+check "row 5: ls lists both adds" "2" "$(grep -c '^https://r2x.example.test/add00[12]/' <<<"$out")"
+# If-None-Match: a record that lands while the add waits at its publish wins; the add deletes only its own prefix
+: >"$rlog"; rm -f "$DRYA/.resume"
+(SHARE_TEST_IDS=add003 SHARE_R2_DRY_PAUSE="PUT m/add003" r2a add "$WORK/wt/one.md" >"$WORK/add3.out" 2>"$WORK/add3.err"; echo $? >"$WORK/add3.rc") &
+for _ in $(seq 1 200); do grep -q '^LIST o/add003\.[0-9a-f]\{8\}/$' "$rlog" 2>/dev/null && break; sleep 0.05; done
+printf '%s\n' '{"v":1,"id":"add003","name":"x.txt","src":"/x","added":"2026-09-30","expires":0,"opts":"","prefix":"o/add003.00000000/","by":"peer"}' >"$DRYA/m/add003"
+mkdir -p "$DRYA/o/add003.00000000"; printf 'theirs\n' >"$DRYA/o/add003.00000000/x.txt"
+: >"$DRYA/.resume"; wait "$!"; rm -f "$DRYA/.resume"
+check "row 5: a taken id answers 412 and the add exits 1" "1" "$(cat "$WORK/add3.rc")"
+check "row 5: the 412 is named" "1" "$(grep -c 'another publisher took id add003' "$WORK/add3.err")"
+check "row 5: the other publisher's record and prefix stay" "o/add003.00000000/ x.txt" "$(jq -r .prefix "$DRYA/m/add003") $(ls "$DRYA/o/add003.00000000")"
+check "row 5: the loser's own prefix is deleted" "o/add003.00000000/x.txt" "$(r2a r2-list o/add003. | tr -d '\n')"
+check "row 5: the loser keeps no r2-own line" "" "$(r2a r2-own get add003 || true)"
+r6() { # r6 <label> <message> <cmd...>: exit 1, the message, no object PUT
+  : >"$rlog"
+  out=$("${@:3}" 2>&1); rc=$?
+  check "row 6: $1 exits 1" "1" "$rc"
+  check "row 6: $1 named" "1" "$(grep -c -- "$2" <<<"$out")"
+  check "row 6: $1 puts no object" "0" "$(grep -c '^PUT ' "$rlog" || true)"
+}
+printf '%2048s' x >"$WORK/two-k.bin"
+mkdir -p "$WORK/three"; for n in 1 2 3; do echo "$n" >"$WORK/three/$n.txt"; done
+mkdir -p "$WORK/ctl"; printf 'x\n' >"$WORK/ctl/bad$(printf '\001')name.txt"
+r6 "a live port" "live shares and --host need a tunnel profile" r2a add 3000
+r6 "--host" "live shares and --host need a tunnel profile" r2a add --host x.example.test "$WORK/wt/one.md"
+SHARE_R2_MAX_BYTES=1024 r6 "a file over SHARE_R2_MAX_BYTES" "over the r2 cap of 1024 bytes" r2a add "$WORK/two-k.bin"
+SHARE_R2_MAX_FILES=2 r6 "three files over SHARE_R2_MAX_FILES=2" "over the r2 cap of 2 per add" r2a add "$WORK/three"
+r6 "a control character in a name" "holds a control character" r2a add "$WORK/ctl"
+R2_TOK="" CLOUDFLARE_API_TOKEN="" r6 "no token source" "needs a publisher token" r2a add "$WORK/wt/one.md"
+r6 "a gated add (until the gated task)" "gated r2 adds are not built yet" r2a add --access email:a@x.io "$WORK/wt/one.md"
+check "row 6: no stage left after the refusals" "0" "$(find "$r2root" -maxdepth 1 -name '.stage.*' | grep -c . || true)"
 
 echo "=== r2 backend: admin setup (rows 3, 4, 20) ==="
 wv="$(sed -n 's/^WORKER_VERSION=\([0-9]*\).*/\1/p' "$SH")"; wsha="$(sed -n 's/^WORKER_SHA=\([0-9a-f]*\).*/\1/p' "$SH")"
