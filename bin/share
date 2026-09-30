@@ -2830,7 +2830,7 @@ r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "
         mkdir -p "$d/.fx"; : >"$d/.fx/p500.done"; cf_code=500 cf_err=InternalError; return 0
       fi
       mkdir -p "${f%/*}"
-      [[ -n $arg3 && -f $arg3 ]] && cp "$arg3" "$f" || : >"$f"
+      if [[ -n $arg3 && -f $arg3 ]]; then cp "$arg3" "$f"; else : >"$f"; fi
       [[ ${SHARE_R2_DRY_PUT:-} == lost || ( ${SHARE_R2_DRY_PUT:-} == lost-record && $key == m/* ) ]] && { cf_code=000; return 0; }
       r2_etag="$(r2_md5 "$f")" ;;
     GET) [[ -e $f ]] || { cf_code=404 cf_err=NoSuchKey; return 0; }
