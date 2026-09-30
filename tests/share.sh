@@ -1700,9 +1700,9 @@ done
 out=$(r2p service install 2>&1); rc=$?
 check "r2 profile: service install refuses" "1" "$rc"
 check "install names no local server" "1" "$(grep -c 'nothing runs on this machine' <<<"$out")"
-out=$(r2p teardown --yes 2>&1); rc=$?
-check "r2 profile: teardown refuses" "1" "$rc"
-check "teardown names r2" "1" "$(grep -c 'r2 teardown is not implemented yet' <<<"$out")"
+out=$(r2p teardown --purge 2>&1 </dev/null); rc=$?
+check "r2 profile: teardown without --yes refuses" "1" "$rc"
+check "the teardown refusal names --yes --purge" "1" "$(grep -c "rerun 'share --profile r2x teardown --yes --purge' to confirm" <<<"$out")"
 out=$(r2p add 9999 2>&1); rc=$?
 check "r2 profile: live add refuses" "1" "$rc"
 check "live add names the tunnel profile" "1" "$(grep -c 'live shares and --host need a tunnel profile' <<<"$out")"
@@ -2416,6 +2416,70 @@ check "api-token: a bucket-scoped token is stored, exit 0" "0 1" "$rc $(grep -c 
 check "api-token: the check names the publisher token" "1" "$(grep -c 'a publisher token for bucket ok-bucket: not an admin token, no other bucket in reach' <<<"$out")"
 out=$(CLOUDFLARE_API_TOKEN=admintoken R2SEC_LOG="$WORK/r2sec.log" PATH="$WORK/r2sec:$PATH" SHARE_ACCESS_DRY=1 r2a api-token --check 2>&1); rc=$?
 check "api-token --check refuses an admin token too" "1 1" "$rc $(grep -c 'it is an admin token' <<<"$out")"
+
+echo "=== r2 backend: teardown, local and --purge (rows 15, 29) ==="
+command cp "$r2conf" "$WORK/r2x.config.keep"
+rm -rf "$DRYA"; mkdir -p "$DRYA/.cf"; rm -f "$r2root/r2-own"
+printf '{"v":1,"host":"r2x.example.test"}\n' >"$DRYA/share.json"; : >"$DRYA/.cf/bucket"
+printf '{"hostname":"r2x.example.test","service":"share-r2x-example-test"}\n' >"$DRYA/.cf/domain.json"
+pscript() { # pscript <host>: the deployed Worker's bindings, naming <host> and bucket ok-bucket, TEAM set
+  printf '{"bindings":[{"type":"r2_bucket","name":"BUCKET","bucket_name":"ok-bucket"},{"type":"plain_text","name":"HOST","text":"%s"},{"type":"plain_text","name":"VERSION","text":"%s"},{"type":"plain_text","name":"SHA","text":"%s"},{"type":"plain_text","name":"TEAM","text":"team.cloudflareaccess.com"}]}\n' "$1" "$wvg" "$wshag" >"$DRYA/.cf/script.json"
+}
+pscript r2x.example.test
+tsec() { R2SEC_LOG="$WORK/r2sec.log" PATH="$WORK/r2sec:$PATH" "$@"; }   # api_token_forget reaches the stub, never the real keychain
+greset
+SHARE_TEST_IDS=ab1501 r2a add "$WORK/g.txt" >/dev/null 2>&1
+SHARE_TEST_IDS=ab1502 r2g add --access email:a@x.io "$WORK/g.txt" >/dev/null 2>&1
+printf 'not json\n' >"$DRYA/m/ab1503"                                                   # a record no share can read
+mkdir -p "$DRYA/o/ab1504.0000abcd"; printf 'x\n' >"$DRYA/o/ab1504.0000abcd/f.txt"         # an upload no record names
+plant_g ab1509                                                                            # an app parked in a teammate's pending file
+check "row 15: the fixture holds an ungated and a gated share" "2" "$(r2a ls 2>/dev/null | grep -c 'id=ab150[12] ')"
+bsum() { (cd "$DRYA" && find . -type f ! -path './.cf/*' -exec cksum {} + | LC_ALL=C sort | cksum); }
+
+before="$(bsum)"; : >"$rlog"
+out=$(tsec r2a teardown --yes 2>&1); rc=$?
+check "row 15: plain teardown exits 0" "0" "$rc"
+check "row 15: plain: the config and r2-own are gone" "0 0" "$([[ -e $r2conf ]] && echo 1 || echo 0) $([[ -e $r2root/r2-own ]] && echo 1 || echo 0)"
+check "row 15: plain: the bucket is unchanged and no call was logged" "$before 0" "$(bsum) $(grep -c . "$rlog" || true)"
+check "row 15: plain: the stored token went, and it says what stays" "1 1" "$(grep -c '^delete-generic-password$' "$WORK/r2sec.log") $(grep -c 'bucket ok-bucket, the Worker, and every share on r2x.example.test stay for the other publishers' <<<"$out")"
+mkdir -p "${r2conf%/*}"; command cp "$WORK/r2x.config.keep" "$r2conf"
+out=$(r2a teardown 2>&1 </dev/null); rc=$?
+check "row 15: teardown without --yes and no terminal refuses" "1 1" "$rc $(grep -c "rerun 'share --profile r2x teardown --yes' to confirm" <<<"$out")"
+out=$(r2a teardown --yes --bogus 2>&1); rc=$?
+check "row 15: an unknown teardown flag refuses" "1 1" "$rc $(grep -c 'usage: share teardown \[--yes\] \[--purge\]' <<<"$out")"
+
+rpurge() { # rpurge <label> <message> <cmd...>: exit 1, the message, no write logged, the config and bucket untouched
+  : >"$rlog"; local b; b="$(bsum)"
+  out=$("${@:3}" 2>&1); rc=$?
+  check "row 15: $1 exits 1" "1" "$rc"
+  check "row 15: $1 named" "1" "$(grep -c -- "$2" <<<"$out")"
+  check "row 15: $1 logged nothing past the reads" "0" "$(grep -cE '^(PUT|DELETE) |^API (PUT|DELETE|POST) |^POST app$|^DELETE app' "$rlog" || true)"
+  check "row 15: $1 kept the config and the bucket" "1 $b" "$([[ -e $r2conf ]] && echo 1 || echo 0) $(bsum)"
+}
+G_TOK="" rpurge "--purge with no admin token" "reads the admin token from CLOUDFLARE_API_TOKEN only" tsec r2g teardown --yes --purge
+SHARE_R2_DRY_ROLE=deny rpurge "--purge with a publisher token" "purge needs the admin token" tsec r2g teardown --yes --purge
+pscript other.example.test
+rpurge "--purge with a foreign Worker (bindings name another host)" "is not share's Worker for r2x.example.test on bucket ok-bucket" tsec r2g teardown --yes --purge
+pscript r2x.example.test
+printf '{"v":1,"host":"other.example.test"}\n' >"$DRYA/share.json"
+rpurge "--purge with a marker for another host" "share.json does not name r2x.example.test" tsec r2g teardown --yes --purge
+printf '{"v":1,"host":"r2x.example.test"}\n' >"$DRYA/share.json"
+SHARE_ACCESS_DRY_APPS=deny rpurge "--purge with a gated record and no Apps Edit (row 29)" "lacks 'Access: Apps and Policies Edit'" tsec r2g teardown --yes --purge
+
+: >"$rlog"
+out=$(tsec r2g teardown --yes --purge 2>&1); rc=$?
+check "row 15: purge exits 0" "0" "$rc"
+check "row 15: purge: every record and object is gone" "0" "$(cd "$DRYA" && find m o -type f 2>/dev/null | grep -c . || true)"
+check "row 15: purge: the gated share goes first" "1" "$([[ $(aline '^DELETE m/ab1502$') -lt $(aline '^DELETE m/ab1501$') ]] && echo 1 || echo 0)"
+check "row 15: purge: the gated share's app and the parked app are deleted" "1 1" "$(grep -c '^DELETE app 00000000-0000-4000-8000-000000ab1502$' "$rlog") $(grep -c '^DELETE app 00000000-0000-4000-8000-000000ab1509$' "$rlog")"
+check "row 15: purge: DELETE share.json < domain DELETE < script DELETE < bucket DELETE" "1" \
+  "$([[ $(alast '^DELETE o/') -lt $(aline '^DELETE share.json$') && $(aline '^DELETE share.json$') -lt $(aline '^API DELETE /accounts/.*/workers/domains/dom-dry$') &&
+      $(aline '^API DELETE /accounts/.*/workers/domains/') -lt $(aline '^API DELETE /accounts/.*/workers/scripts/share-r2x-example-test$') &&
+      $(aline '^API DELETE /accounts/.*/workers/scripts/') -lt $(aline '^API DELETE /accounts/.*/r2/buckets/ok-bucket$') ]] && echo 1 || echo 0)"
+check "row 15: purge: the marker, domain, script, and bucket are gone" "0 0 0 0" "$([[ -e $DRYA/share.json ]] && echo 1 || echo 0) $([[ -e $DRYA/.cf/domain.json ]] && echo 1 || echo 0) $([[ -e $DRYA/.cf/script.json ]] && echo 1 || echo 0) $([[ -e $DRYA/.cf/bucket ]] && echo 1 || echo 0)"
+check "row 15: purge: the dataset line" "1" "$(grep -c '^dataset: the Analytics Engine dataset share_r2x_example_test cannot be deleted; it ages out on its own$' <<<"$out")"
+check "row 15: purge: the config is gone and nothing waits in access-pending" "0 0" "$([[ -e $r2conf ]] && echo 1 || echo 0) $(awk 'NF' "$gpend" 2>/dev/null | wc -l | tr -d ' ')"
+mkdir -p "${r2conf%/*}"; command cp "$WORK/r2x.config.keep" "$r2conf"
 
 echo "=== r2 backend: admin setup (rows 3, 4, 20) ==="
 wv="$(sed -n 's/^WORKER_VERSION=\([0-9]*\).*/\1/p' "$SH")"; wsha="$(sed -n 's/^WORKER_SHA=\([0-9a-f]*\).*/\1/p' "$SH")"

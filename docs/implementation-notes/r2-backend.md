@@ -210,3 +210,12 @@ Deviations from the spec, per task. A task with none is not listed.
 - Row 12 maps SPEC-004 rows 8, 9, 23c, and 25 onto r2. Rows 10 and 11 map onto this spec's row 10: `ls` with no Access token keeps the record, and `prune` with one removes the record, prefix, and app.
 - Negative controls, red then restored: the record published before the gate turned 11 checks red across rows 11, 12, and 25b. `rm` without the Apps Edit probe turned the 2 rm checks of row 29 red.
 
+### TASK-13 (teardown, local and --purge)
+
+- The dispatch passes every argument. An unknown flag dies with `usage: share teardown [--yes] [--purge]`. The usage header is unchanged, so a tunnel install still sees only the two r2 lines.
+- Plain teardown forgets the stored API token, and trashes `r2-own` and the config. The root stays, as on a tunnel profile. A count of `access-pending` lines is printed, because those apps outlive the config.
+- `--purge` resolves the zone and the admin token's own S3 pair as setup does. Before the first delete it checks four things. The Worker settings read must answer 200 with `HOST` and `BUCKET` bindings for this profile, so a publisher token's 403 refuses. `share.json` must name this hostname. No custom domain for the hostname may name another Worker; a missing domain is allowed, as after a setup that stopped early. The Apps Edit probe must pass when any gated record or pending line exists.
+- Shares go through `cmd_rm_r2` with the prune flag, gated ones first, because the checks already ran. The sweep and the by-name app pass follow. The by-name pass needs Access read (`access_proof`) and prints a skip line without it. Then every remaining `m/` and `o/` key goes: the round-3 "unreadable `m/` keys", plus orphan uploads, so the bucket can go too. The domain is deleted by the id its read returned.
+- Dry account: `DELETE` on the domain, script, and bucket removes their state files. The domains read adds `id: "dom-dry"`. On an r2 profile, `cf_dry` lists every app the dry account holds, for the by-name pass. The tunnel listing is unchanged.
+- Negative control, red then restored: with the binding check skipped, the foreign-Worker purge exited 0 and deleted the fixture, turning 10 row 15 checks red.
+

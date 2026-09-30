@@ -1619,7 +1619,9 @@ cf_dry() { # the SHARE_ACCESS_DRY answers: fixtures and knobs in, one log line p
       else cf_code=404 cf_body='{"success":false,"errors":[{"code":12103}]}' cf_err=12103; fi ;;
     "GET "*"/access/apps?"*)
       dry_log "GET apps"
-      if [[ -f $d/lost.json ]]; then
+      if [[ $backend == r2 ]]; then
+        cf_body="$(find "$d" -name '*-*.json' -exec cat {} + 2>/dev/null | jq -sc '{success:true, result:[.[] | {id, name}], result_info:{total_pages:1}}')"
+      elif [[ -f $d/lost.json ]]; then
         jq -c '{id:"00000000-0000-4000-8000-000000001057", name:.name}' "$d/lost.json" >"$d/00000000-0000-4000-8000-000000001057.json"
         cf_body="$(jq -c '{success:true, result:[.], result_info:{total_pages:1}}' "$d/00000000-0000-4000-8000-000000001057.json")"
       fi ;;
@@ -2869,7 +2871,10 @@ r2_api_dry() { # the account API under SHARE_R2_DRY: state files in $SHARE_R2_DR
     "GET /zones/"*/dns_records*) [[ -f $d/dns ]] && cf_body="{\"success\":true,\"result\":$(cat "$d/dns")}" ;;
     "GET "*/workers/domains*)
       if [[ ${SHARE_R2_DRY_DOMAINS:-} == 500 ]]; then cf_code=500 cf_body='{"success":false,"errors":[{"code":10013}]}'
-      elif [[ -f $d/domain.json ]]; then cf_body="{\"success\":true,\"result\":[$(cat "$d/domain.json")]}"; fi ;;
+      elif [[ -f $d/domain.json ]]; then cf_body="{\"success\":true,\"result\":[$(jq -c '{id: "dom-dry"} + .' "$d/domain.json")]}"; fi ;;
+    "DELETE "*/workers/domains/*) rm -f "$d/domain.json" ;;
+    "DELETE "*/workers/scripts/*) rm -f "$d/script.json" ;;
+    "DELETE "*/r2/buckets/*) rm -f "$d/bucket" ;;
     "PUT "*/workers/domains) jq -c '{hostname, service}' <<<"$3" >"$d/domain.json"; cf_body='{"success":true,"result":{}}' ;;
     "POST "*/analytics_engine/sql)
       printf 'SQL %s\n' "$3" >>"$root/r2-calls.log"
@@ -3275,7 +3280,7 @@ cmd_setup() {
 }
 
 cmd_teardown() {
-  [[ $backend != r2 ]] || die "r2 teardown is not implemented yet"
+  [[ $backend != r2 ]] || { cmd_teardown_r2 "$@"; return; }
   if [[ $mode == quick ]]; then
     if [[ ${1:-} != --yes ]]; then
       [[ -t 0 ]] || die "rerun '$me teardown --yes' to confirm"
@@ -3358,6 +3363,111 @@ cmd_teardown() {
   [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true
 }
 
+cmd_teardown_r2() { # cmd_teardown_r2 [--yes] [--purge]: local by default; --purge also removes every share, the Worker, its domain, and the empty bucket
+  local a yes=0 purge=0 bucket n
+  for a in "$@"; do
+    case $a in --yes) yes=1 ;; --purge) purge=1 ;; *) die "usage: share teardown [--yes] [--purge]" ;; esac
+  done
+  need_host
+  bucket="$(cfg bucket || true)"
+  if [[ $yes == 0 ]]; then
+    [[ -t 0 ]] || die "rerun '$me teardown --yes$([[ $purge == 1 ]] && echo ' --purge')' to confirm"
+    if [[ $purge == 1 ]]; then read -rp "Delete every share on $host_name, its Worker, its domain, and bucket $bucket for every publisher? [y/N] " a
+    else read -rp "Remove this install's r2 setup for $host_name? The bucket and every share stay. [y/N] " a; fi
+    [[ $a == y* || $a == Y* ]] || die "aborted"
+  fi
+  [[ $purge == 0 ]] || r2_purge "$bucket"
+  api_token_forget; echo "token:   removed"
+  n="$(pending_count)"
+  [[ $n == 0 ]] || echo "access:  $n Access app(s) stay listed in $pending; a later setup of $host_name and '$me prune' with the token removes them"
+  [[ -f $r2own ]] && to_trash "$r2own"
+  to_trash "$config"; echo "config:  moved to the Trash"
+  [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true
+  [[ $purge == 1 ]] || echo "kept:    bucket $bucket, the Worker, and every share on $host_name stay for the other publishers; '$me teardown --yes --purge' with the admin token removes them"
+}
+
+r2_purge() { # r2_purge <bucket>: the admin token from the environment; every check before the first delete, then shares, apps, marker, domain, script, bucket
+  local bucket=$1 worker="share-${host_name//./-}" dataset="share_${host_name//[.-]/_}" dom_id gated
+  api_token="${CLOUDFLARE_API_TOKEN:-}"
+  [[ -n $api_token ]] || die "teardown --purge reads the admin token from CLOUDFLARE_API_TOKEN only; nothing was changed"
+  r2_setup_zone
+  r2_bucket=$bucket r2_endpoint="$(cfg r2_endpoint || true)"
+  r2_api GET /user/tokens/verify   # the admin token's own S3 pair, as setup uses it
+  r2_key_id="$(jq -r '.result.id // empty' <<<"$cf_body" 2>/dev/null || true)"
+  [[ $cf_code == 200 && -n $r2_key_id ]] || die "the token did not verify (HTTP $cf_code); nothing was changed"
+  r2_secret="$(printf '%s' "$api_token" | shasum -a 256 | cut -d' ' -f1)"
+  r2_api GET "/accounts/$acct/workers/scripts/$worker/settings"
+  [[ $cf_code == 200 ]] || die "reading Worker $worker answered HTTP $cf_code (purge needs the admin token); nothing was changed"
+  jq -e --arg h "$host_name" --arg b "$bucket" '.result.bindings as $bs
+    | ($bs | any(.name == "HOST" and .text == $h)) and ($bs | any(.name == "BUCKET" and .bucket_name == $b))' <<<"$cf_body" >/dev/null ||
+    die "Worker $worker is not share's Worker for $host_name on bucket $bucket (its bindings differ); refused, nothing was changed"
+  r2_call GET share.json
+  if [[ $cf_code != 200 ]] || ! jq -e --arg h "$host_name" '.v == 1 and .host == $h' <<<"$cf_body" >/dev/null 2>&1; then
+    die "bucket $bucket's share.json does not name $host_name (HTTP $cf_code); refused, nothing was changed"
+  fi
+  r2_api GET "/accounts/$acct/workers/domains?hostname=$host_name"
+  [[ $cf_code == 200 ]] || die "reading Worker custom domains answered HTTP $cf_code; nothing was changed"
+  [[ "$(jq --arg h "$host_name" --arg w "$worker" '[.result[] | select(.hostname == $h and .service != $w)] | length' <<<"$cf_body")" == 0 ]] ||
+    die "$host_name is the custom domain of another Worker; refused, nothing was changed"
+  dom_id="$(jq -r --arg h "$host_name" '[.result[] | select(.hostname == $h) | .id] | first // empty' <<<"$cf_body")"
+  r2_snapshot
+  gated="$(rows | awk -F'\t' '(" " $6) ~ / access=/ {print $1}')"
+  if [[ -n $gated || -s $pending ]]; then   # a gated share's app must go with it: the scope is proven before any delete
+    access_account
+    access_apps_edit_ok || die "$(access_scope_line 'Access: Apps and Policies Edit'); purge needs it for the gated shares; nothing was changed"
+  fi
+
+  local id
+  for id in $gated $(rows | awk -F'\t' '(" " $6) !~ / access=/ {print $1}'); do   # gated first; any failure dies before the Worker goes
+    cmd_rm_r2 "$id" prune
+  done
+  [[ -z $gated && ! -s $pending ]] || access_sweep
+  r2_purge_apps
+  # what no rm reached: records this share cannot read, and uploads no record names
+  r2_delete_prefix "m/" || die "some m/ keys remain in bucket $bucket; the Worker, domain, and bucket stay; rerun $me teardown --yes --purge"
+  r2_delete_prefix "o/" || die "some o/ keys remain in bucket $bucket; the Worker, domain, and bucket stay; rerun $me teardown --yes --purge"
+  r2_call DELETE share.json
+  [[ $cf_code == 204 || $cf_code == 200 || $cf_code == 404 ]] || die "deleting $bucket/share.json answered HTTP $cf_code; the Worker, domain, and bucket stay"
+  echo "marker:  deleted $bucket/share.json"
+  if [[ -n $dom_id ]]; then
+    r2_api DELETE "/accounts/$acct/workers/domains/$dom_id"
+    [[ $cf_code == 200 ]] || die "removing $host_name from $worker answered HTTP $cf_code; the Worker and bucket stay"
+    echo "domain:  removed $host_name"
+  fi
+  r2_api DELETE "/accounts/$acct/workers/scripts/$worker"
+  [[ $cf_code == 200 ]] || die "deleting Worker $worker answered HTTP $cf_code; the bucket stays"
+  echo "worker:  deleted $worker"
+  r2_list ""
+  if [[ -z $r2_list_out ]]; then
+    r2_api DELETE "/accounts/$acct/r2/buckets/$bucket"
+    [[ $cf_code == 200 ]] || die "deleting bucket $bucket answered HTTP $cf_code"
+    echo "bucket:  deleted $bucket"
+  else
+    echo "bucket:  kept $bucket: $(grep -c . <<<"$r2_list_out") key(s) remain that share did not write"
+  fi
+  echo "dataset: the Analytics Engine dataset $dataset cannot be deleted; it ages out on its own"
+}
+
+r2_purge_apps() { # every Access app named "share <6 hex> <host> <8 hex>", read and name-checked by access_delete; skipped without Access read
+  local page=1 pages ids="" id n
+  if ! { access_account soft && access_proof; }; then echo "access:  by-name pass skipped (the token cannot read Access apps)"; return 0; fi
+  while :; do
+    cf_try GET "/accounts/$acct/access/apps?page=$page&per_page=100"
+    [[ $cf_code == 200 ]] || die "listing Access apps answered HTTP $cf_code; the Worker, domain, and bucket stay"
+    ids="$ids$(jq -r --arg h "$host_name" '.result[] | (.name | split(" ")) as $w
+      | select(($w | length) == 4 and $w[0] == "share" and ($w[1] | test("^[0-9a-f]{6}$")) and $w[2] == $h and ($w[3] | test("^[0-9a-f]{8}$")))
+      | "\(.id) \($w[1])"' <<<"$cf_body")"$'\n'
+    pages="$(jq -r '.result_info.total_pages // 1' <<<"$cf_body")"
+    [[ $page -lt $pages ]] || break
+    page=$((page + 1))
+  done
+  while read -r id n; do
+    [[ -n $id ]] || continue
+    access_delete "$id" "$n" || die "could not delete Access app $id; the Worker, domain, and bucket stay"
+    echo "access:  deleted app $id (share $n)"
+  done <<<"$ids"
+}
+
 cmd_skill() { # cmd_skill [--install]: the skill file that makes share agent-native
   local out="/dev/stdout" d=""
   if [[ ${1:-} == --install ]]; then
@@ -3410,7 +3520,7 @@ EOF
 
 case "${1:-status}" in
   setup) shift; cmd_setup "$@" ;;
-  teardown) cmd_teardown "${2:-}" ;;
+  teardown) shift; cmd_teardown "$@" ;;
   service) cmd_service "${2:-}" ;;
   add) shift; cmd_add "$@" ;;
   api-token) shift; cmd_api_token "$@" ;;
