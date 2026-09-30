@@ -50,7 +50,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
     private let defaults: UserDefaults = .standard
 
     private var model = MenuModel(profiles: nil, failure: nil, now: Date())
-    private var isRefreshing = false
+    private var refreshGate = RefreshGate()
     private var pollTimer: Timer?
     private var wakeObserver: NSObjectProtocol?
 
@@ -129,20 +129,25 @@ final class StatusItemController: NSObject, @unchecked Sendable {
     // MARK: - Refresh
 
     /// Runs `share profiles --json`, then applies the result on the main run loop in
-    /// common modes, so an already-open menu still updates in place. Concurrent triggers
-    /// collapse to the call already in flight (`CLI.profiles` coalesces); this guard just
-    /// skips spawning a second `MenuModel` rebuild on top of one already pending. `fresh`
-    /// callers (setup completion) get a run that started after their verb exited.
+    /// common modes, so an already-open menu still updates in place. A plain trigger
+    /// during a run is dropped (that run answers it); a `fresh` trigger (setup
+    /// completion) during a run gets its own run once that one ends, so it always sees a
+    /// read that started after its verb exited.
     private func triggerRefresh(fresh: Bool = false) {
-        guard !isRefreshing else { return }
-        isRefreshing = true
+        guard refreshGate.request(fresh: fresh) else { return }
+        startRefresh(fresh: fresh)
+    }
+
+    private func startRefresh(fresh: Bool) {
         Task { [weak self] in
             let result = await CLI.profiles(fresh: fresh)
             guard let self else { return }
             RunLoop.main.perform(inModes: [.common]) {
                 self.applyResult(result)
-                self.isRefreshing = false
                 self.rebuildModel()
+                if self.refreshGate.finish() {
+                    self.startRefresh(fresh: true)
+                }
             }
         }
     }
