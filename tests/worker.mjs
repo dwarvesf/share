@@ -63,8 +63,8 @@ class Bucket {
     if (m) {
       const a = +m[1], b = m[2] ? +m[2] + 1 : e.bytes.length;
       bytes = e.bytes.slice(a, Math.min(b, e.bytes.length));
-      range = { offset: a, length: bytes.length };
-    } else if (rangeHdr) range = { offset: 0, length: bytes.length };   // as live R2: any range option yields a range, Range header or not
+      range = { offset: a, length: bytes.length, suffix: undefined };
+    } else if (rangeHdr) range = { offset: 0, length: bytes.length, suffix: undefined };   // as live R2: any range option yields a range, Range header or not
     const body = new Blob([bytes]).stream();
     return {
       key, size: e.bytes.length, etag: e.etag, httpMetadata: e.meta, range,

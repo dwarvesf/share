@@ -2063,7 +2063,7 @@ access_open_url() { # the platform opener, backgrounded; skipped over ssh or wit
 # write pub/ or an Access app against an r2 profile.
 
 WORKER_VERSION=1            # bump on every Worker source change; deploys refuse a downgrade without --force
-WORKER_SHA=126c4029e8fe     # first 12 hex of the emitted source's sha256; the suite fails when it drifts
+WORKER_SHA=262c3c27cc27     # first 12 hex of the emitted source's sha256; the suite fails when it drifts
 WORKER_COMPAT_DATE=2026-09-30   # moves only with a WORKER_VERSION bump
 WORKER_RECORD_V=1           # the record schema this source understands; a newer record answers 404
 worker_meta() { printf '%s\n' "$WORKER_VERSION" "$WORKER_SHA" "$WORKER_COMPAT_DATE" "$WORKER_RECORD_V"; }   # one line, four fields, for the deploy and sweep paths
@@ -2204,8 +2204,8 @@ async function handle(request, env) {
   h.set("Content-Type", TYPES[ext] || "application/octet-stream");
   let status = 200;   // R2 sets obj.range whenever a range option is passed, so only a request Range makes a 206
   if (request.headers.has("range") && obj.range) {
-    const r = obj.range, start = "suffix" in r ? obj.size - r.suffix : (r.offset || 0);
-    const len = "suffix" in r ? r.suffix : (r.length ?? obj.size - start);
+    const r = obj.range, sfx = r.suffix !== undefined;   // live R2 carries every key, unset ones undefined
+    const start = sfx ? obj.size - r.suffix : (r.offset ?? 0), len = sfx ? r.suffix : (r.length ?? obj.size - start);
     h.set("Content-Range", `bytes ${start}-${start + len - 1}/${obj.size}`);
     status = 206;
   }
