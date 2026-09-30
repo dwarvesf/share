@@ -540,7 +540,10 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         alert.accessoryView = accessory
 
         let sync: (PublishForm) -> Void = { [ruleField, loginNote, alert] form in
-            ruleField.stringValue = form.rule
+            // Only on a real change: rewriting the text mid-edit would move the caret.
+            if ruleField.stringValue != form.rule {
+                ruleField.stringValue = form.rule
+            }
             ruleField.isEnabled = form.audience == .login
             loginNote.isHidden = !(form.audience == .login && !form.loginAvailable)
             alert.buttons[0].title = form.buttonTitle
@@ -555,6 +558,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         audiencePopup.action = #selector(AlertForm.audienceChanged(_:))
         ruleField.target = alertForm
         ruleField.action = #selector(AlertForm.ruleEdited(_:))
+        ruleField.delegate = alertForm
 
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -1004,7 +1008,7 @@ extension StatusItemController: NSMenuDelegate {
 /// Holds the publish dialog's `PublishForm` while it is open: the popup and field targets
 /// mutate it and re-sync the accessory view after every change. ObjC targets need a
 /// class, hence this little box rather than the value-type form itself.
-private final class AlertForm: NSObject, @unchecked Sendable {
+private final class AlertForm: NSObject, NSTextFieldDelegate, @unchecked Sendable {
     var form: PublishForm
     private let sync: (PublishForm) -> Void
     private weak var ruleField: NSTextField?
@@ -1028,6 +1032,12 @@ private final class AlertForm: NSObject, @unchecked Sendable {
 
     @objc func ruleEdited(_ sender: NSTextField) {
         form.rule = sender.stringValue
+        resync()
+    }
+
+    /// Every keystroke in the rule field: Publish enables as soon as the rule is well
+    /// formed, without waiting for Return.
+    func controlTextDidChange(_ obj: Notification) {
         resync()
     }
 
