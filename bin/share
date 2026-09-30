@@ -659,6 +659,7 @@ cmd_prune() { # cmd_prune [quiet|listing]: unpublish every share past its expiry
 }
 
 cmd_hits() {
+  [[ $backend != r2 ]] || { cmd_hits_r2 "$@"; return; }
   local r opts fqdn="" log="$root/access.log"
   r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
@@ -1017,6 +1018,7 @@ cmd_stop() {
 }
 
 cmd_status() {
+  [[ $backend != r2 ]] || { cmd_status_r2; return; }
   cmd_prune quiet
   if running; then
     if [[ $mode == quick ]]; then
@@ -1031,6 +1033,7 @@ cmd_status() {
 }
 
 cmd_state() { # read-only JSON snapshot for the menu bar app: never prunes, writes, needs a TTY, or touches the clipboard
+  [[ $backend != r2 ]] || { cmd_state_r2; return; }
   local mode_val="named" host_val="" state_val ready_val="false" serves_val="false" service_val="false" skipped_n=0
   [[ $mode == quick ]] && mode_val="quick"
   if running; then state_val="serving"
@@ -1190,7 +1193,7 @@ cmd_profiles() { # the default, then every directory under profiles/; state and 
     d="${n%/}"; d="${d##*/}"
     # the overrides are unset for the children: an inherited SHARE_ROOT or SHARE_HOSTNAME would make every row read one setup
     line="$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_HOSTS -u SHARE_SERVICE_LABEL \
-      SHARE_PROFILE="$d" bash "$0" state 2>/dev/null | jq -r '[.state, (.host // "-")] | @tsv' 2>/dev/null)" || line=""
+      SHARE_PROFILE="$d" SHARE_STATE_BRIEF=1 bash "$0" state 2>/dev/null | jq -r '[.state, (.host // "-")] | @tsv' 2>/dev/null)" || line=""
     printf '%s\t%s\n' "$d" "${line:-error	-}"
   done
 }
@@ -2493,6 +2496,60 @@ cmd_refresh_r2() { # cmd_refresh_r2 <id>: this install's own share only; a new p
   echo "refreshed $1 from $src"
 }
 
+cmd_hits_r2() { # cmd_hits_r2 <id>: one Analytics Engine SQL call; the id is checked before it can reach the query
+  [[ ${1:-} =~ ^[0-9a-f]{6}$ ]] || die "no share with id '${1:-}'"
+  local ds="share_${host_name//[.-]/_}" ep
+  [[ $ds =~ ^[a-z0-9_]+$ ]] || die "bad hostname '$host_name' for a dataset name"
+  ep="$(cfg r2_endpoint || true)"; acct="${ep#https://}"; acct="${acct%%.*}"
+  [[ -n $ep && $acct =~ ^[A-Za-z0-9-]+$ ]] || die "the profile config has no r2_endpoint; rerun $me setup $host_name --backend r2 --bucket $(cfg bucket || true)"
+  api_token_resolve
+  [[ -n $api_token ]] || die "hits needs an API token with Account Analytics: Read (it reads every dataset on the account): $me api-token, or CLOUDFLARE_API_TOKEN"
+  r2_api POST "/accounts/$acct/analytics_engine/sql" \
+    "SELECT SUM(_sample_interval) AS hits, COUNT(DISTINCT blob2) AS visitors, MAX(timestamp) AS last FROM $ds WHERE index1 = '$1' FORMAT JSON"
+  [[ $cf_code == 200 ]] || die "the Analytics Engine query answered HTTP $cf_code (the token needs Account Analytics: Read)"
+  jq -r 'def n($k; $w): "\($k) \($w)\(if $k == 1 then "" else "s" end)";
+    (.data[0] // {}) as $r | ($r.hits // 0 | tonumber) as $h | ($r.visitors // 0 | tonumber) as $v
+    | n($h; "hit") + ", " + n($v; "visitor")
+      + (if $h > 0 and ($r.last // "") != "" then ", last " + ($r.last | strptime("%Y-%m-%d %H:%M:%S") | mktime | strflocaltime("%F %H:%M")) else "" end)' <<<"$cf_body"
+}
+
+cmd_status_r2() { # read-only: the Worker's health and version, then the listing without its prune (status never deletes)
+  local waiting
+  echo "r2 backend: https://$host_name/"
+  r2_healthz
+  if [[ $hz_code == 200 ]]; then echo "worker:     up ($hz_pair)"; else echo "worker:     DOWN: $hz_code"; fi
+  [[ $hz_code != 200 || $hz_pair == "$WORKER_VERSION $WORKER_SHA" ]] ||
+    echo "the Worker at $host_name runs $hz_pair; this share ships $WORKER_VERSION $WORKER_SHA; whoever holds the admin token reruns '$me setup $host_name --backend r2 --bucket $(cfg bucket || true)'"
+  cmd_prune quiet
+  [[ -z ${r2_sweep_block:-} ]] || echo "orphan sweep blocked by $r2_sweep_block"
+  waiting="$(rows | awk -F'\t' -v now="$(date +%s)" '$5 > 0 && $5 < now && (" " $6) ~ / access=/ {c++} END {print c + 0}')"
+  [[ $waiting == 0 ]] || echo "$waiting expired gated share(s) wait for a publisher with the Access token"
+  cmd_ls
+}
+
+cmd_state_r2() { # the Share Bar snapshot for an r2 profile: schema 1 plus "backend"; SHARE_STATE_BRIEF=1 (profiles) skips the share list and its m/ reads
+  local state_val="not_setup" ready="false" id name src date exp opts
+  if [[ -n $host_name ]]; then
+    state_val="serving"   # nothing runs here; the Worker serves while the account does
+    r2_healthz 2; [[ $hz_code == 200 ]] && ready="true"
+  fi
+  [[ -z $host_name || ${SHARE_STATE_BRIEF:-0} == 1 ]] || r2_snapshot
+  {
+    if [[ -z $host_name || ${SHARE_STATE_BRIEF:-0} == 1 ]]; then :
+    else
+      while IFS=$'\t' read -r id name src date exp opts; do
+        share_url "$id" "$name" "$opts"
+        printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$share_url_out" "${exp:-0}" "$(opt_val access_rule "$opts" || true)"
+      done < <(rows)
+    fi
+  } | jq -nR --arg state "$state_val" --argjson ready "$ready" --arg host "$host_name" --argjson access_pending "$(pending_count)" '
+    def row: split("\t") | {id: .[0], name: .[1], url: .[2], kind: "snapshot", own_host: null,
+      expires: (.[3] | tonumber), access: (if .[4] == "" then null else .[4] end)};
+    {schema: 1, state: $state, ready: $ready, mode: "named", host: (if $host == "" then null else $host end), hosts: "",
+     serves_here: false, service: false, access_pending: $access_pending, backend: "r2",
+     shares: [inputs | select(length > 0) | row]}'
+}
+
 r2_own_get() { # r2_own_get <id>: the "<id>\t<prefix>\t<source>" line for one of this install's own adds
   # no {n} intervals: mawk lacks them
   [[ -f $r2own ]] && awk -F'\t' -v id="$1" 'NF == 3 && $1 == id && substr($2, 3, 6) == id && $2 ~ /^o\/[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]\.[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]\/$/' "$r2own"
@@ -2660,6 +2717,9 @@ r2_api_dry() { # the account API under SHARE_R2_DRY: state files in $SHARE_R2_DR
       if [[ ${SHARE_R2_DRY_DOMAINS:-} == 500 ]]; then cf_code=500 cf_body='{"success":false,"errors":[{"code":10013}]}'
       elif [[ -f $d/domain.json ]]; then cf_body="{\"success\":true,\"result\":[$(cat "$d/domain.json")]}"; fi ;;
     "PUT "*/workers/domains) jq -c '{hostname, service}' <<<"$3" >"$d/domain.json"; cf_body='{"success":true,"result":{}}' ;;
+    "POST "*/analytics_engine/sql)
+      printf 'SQL %s\n' "$3" >>"$root/r2-calls.log"
+      cf_body="$(cat "$d/sql.json" 2>/dev/null || echo '{"meta":[],"data":[],"rows":0}')" ;;
     "GET "*/access/organizations)
       if [[ -f $d/team ]]; then cf_body="{\"success\":true,\"result\":{\"auth_domain\":\"$(cat "$d/team")\"}}"
       else cf_code=403 cf_body=$deny; fi ;;
@@ -2668,7 +2728,7 @@ r2_api_dry() { # the account API under SHARE_R2_DRY: state files in $SHARE_R2_DR
   cf_err="$(jq -r '.errors[0].code // empty' <<<"$cf_body" 2>/dev/null || true)"
 }
 
-r2_healthz() { # r2_healthz: hz_code (200 only for a "200 ok" body) and hz_pair (the X-Share-Worker header) from https://<host>/healthz
+r2_healthz() { # r2_healthz [secs]: hz_code (200 only for a "200 ok" body) and hz_pair (the X-Share-Worker header) from https://<host>/healthz
   hz_code=000 hz_pair=""
   if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then
     local d="${SHARE_R2_DRY_DIR:-$root/r2-dry}/.cf"
@@ -2680,7 +2740,7 @@ r2_healthz() { # r2_healthz: hz_code (200 only for a "200 ok" body) and hz_pair 
   fi
   local h b
   h="$(mktemp "${TMPDIR:-/tmp}/share-hz.XXXXXX")"
-  b="$(curl -sS --max-time 5 -D "$h" "https://$host_name/healthz" 2>/dev/null)" || true
+  b="$(curl -sS --max-time "${1:-5}" -D "$h" "https://$host_name/healthz" 2>/dev/null)" || true
   hz_code="$(awk 'NR == 1 {print $2}' "$h")"; hz_code="${hz_code:-000}"
   [[ $hz_code != 200 || $b == ok ]] || hz_code=000
   hz_pair="$(awk 'tolower($1) == "x-share-worker:" {sub(/\r$/, ""); print $2 " " $3; exit}' "$h")"

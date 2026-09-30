@@ -2134,6 +2134,66 @@ check "row 24: a broken record skips the sweep" "0 0" "$rc $(grep -c '^DELETE' "
 check "row 24: the warning names it" "1" "$(grep -c 'orphan sweep skipped: m/aaa004' <<<"$out")"
 check "row 24: every prefix is still there" "4" "$(find "$DRYA/o" -maxdepth 1 -name 'aaa00[2345].*' | grep -c .)"
 
+echo "=== r2 backend: hits, status, state, profiles (rows 13, 14) ==="
+rm -rf "$DRYA"; mkdir -p "$DRYA/.cf"
+forge 130001 0; forge 130002 0
+printf '%s\n' '{"meta":[],"data":[{"hits":"3","visitors":"2","last":"2026-09-30 09:21:35"}],"rows":1}' >"$DRYA/.cf/sql.json"
+: >"$rlog"
+out=$(CLOUDFLARE_API_TOKEN=faketoken r2a hits 130001 2>&1); rc=$?
+check "row 13: hits exits 0" "0" "$rc"
+check "row 13: the count line" "1" "$(grep -c '^3 hits, 2 visitors, last 2026-09-[0-9]* [0-9][0-9]:[0-9][0-9]$' <<<"$out")"
+check "row 13: the SQL names the dataset and the id" "1" "$(grep -c "^SQL SELECT SUM(_sample_interval) AS hits, COUNT(DISTINCT blob2) AS visitors, MAX(timestamp) AS last FROM share_r2x_example_test WHERE index1 = '130001' FORMAT JSON$" "$rlog")"
+check "row 13: one account call and no bucket read" "API POST /accounts/acct/analytics_engine/sql" "$(grep -v '^SQL ' "$rlog")"
+out=$(CLOUDFLARE_API_TOKEN=faketoken r2a hits https://r2x.example.test/130001/f.txt 2>&1)
+check "row 13: hits takes the pasted link" "1" "$(grep -c '^3 hits, 2 visitors' <<<"$out")"
+: >"$rlog"
+out=$(CLOUDFLARE_API_TOKEN=faketoken r2a hits "abc' OR '1'='1" 2>&1); rc=$?
+check "row 13: an injected id is refused before any call" "1 0" "$rc $(grep -c . "$rlog" || true)"
+printf '%s\n' '{"meta":[],"data":[{"hits":"0","visitors":"0","last":"1970-01-01 00:00:00"}],"rows":1}' >"$DRYA/.cf/sql.json"
+check "row 13: no visits" "0 hits, 0 visitors" "$(CLOUDFLARE_API_TOKEN=faketoken r2a hits 130002 2>&1)"
+out=$(CLOUDFLARE_API_TOKEN="" r2a hits 130001 2>&1); rc=$?
+check "row 13: hits with no API token exits 1 naming the scope" "1 1" "$rc $(grep -c 'Account Analytics: Read' <<<"$out")"
+
+forge 130003 1000   # expired: status must list it and delete nothing
+wv14="$(sed -n 's/^WORKER_VERSION=\([0-9]*\).*/\1/p' "$SH")"; wsha14="$(sed -n 's/^WORKER_SHA=\([0-9a-f]*\).*/\1/p' "$SH")"
+printf '{"hostname":"r2x.example.test","service":"share-r2x-example-test"}\n' >"$DRYA/.cf/domain.json"
+printf '{"bindings":[{"type":"plain_text","name":"VERSION","text":"%s"},{"type":"plain_text","name":"SHA","text":"%s"}]}\n' "$wv14" "$wsha14" >"$DRYA/.cf/script.json"
+: >"$rlog"
+out=$(r2a status 2>&1); rc=$?
+check "row 14: status exits 0" "0" "$rc"
+check "row 14: status names the backend and a Worker that is up" "2" "$(grep -cE '^r2 backend: https://r2x.example.test/$|^worker: +up \(' <<<"$out")"
+check "row 14: status lists every row, the expired one included" "3" "$(grep -c '^    id=13000[123] ' <<<"$out")"
+check "row 14: status logs no DELETE and keeps the expired record" "0 1" "$(grep -c '^DELETE' "$rlog" || true) $([[ -f $DRYA/m/130003 ]] && echo 1 || echo 0)"
+check "row 14: status prints no version line when the pair matches" "0" "$(grep -c 'whoever holds the admin token' <<<"$out" || true)"
+printf '{"bindings":[{"type":"plain_text","name":"VERSION","text":"%s"},{"type":"plain_text","name":"SHA","text":"000000000000"}]}\n' "$wv14" >"$DRYA/.cf/script.json"
+out=$(r2a status 2>&1)
+check "row 14: status names a Worker on another version" "1" "$(grep -c "runs $wv14 000000000000; this share ships $wv14 $wsha14" <<<"$out")"
+out=$(SHARE_R2_DRY_HEALTHZ=down r2a status 2>&1)
+check "row 14: status names a Worker that is down" "1" "$(grep -c '^worker: *DOWN: 000$' <<<"$out")"
+printf 'not json\n' >"$DRYA/m/130009"
+out=$(r2a status 2>&1)
+check "row 14: status names a record that blocks the orphan sweep" "1" "$(grep -c '^orphan sweep blocked by m/130009$' <<<"$out")"
+mv -f "$DRYA/m/130009" "$WORK/130009.broken"
+: >"$rlog"
+out=$(r2a state 2>/dev/null); rc=$?
+check "row 14: state exits 0" "0" "$rc"
+check "row 14: state: backend, mode, serves_here, schema, state" "r2 named false 1 serving" "$(jq -r '"\(.backend) \(.mode) \(.serves_here) \(.schema) \(.state)"' <<<"$out")"
+check "row 14: state has every field Share Bar's Snapshot decodes, typed" "true" "$(jq '(.schema | type) == "number" and (.state | type) == "string" and (.ready | type) == "boolean"
+  and (.mode | type) == "string" and (.host | type) == "string" and (.hosts | type) == "string" and (.serves_here | type) == "boolean"
+  and (.service | type) == "boolean" and (.shares | type) == "array"
+  and all(.shares[]; (.id | type) == "string" and (.name | type) == "string" and (.url | type) == "string" and .kind == "snapshot" and (.expires | type) == "number")' <<<"$out")"
+check "row 14: state lists the rows with their links" "130001 https://r2x.example.test/130001/f.txt|130002|130003|" "$(jq -r '.shares | sort_by(.id) | .[0] as $f | [$f.id + " " + $f.url] + [.[1:][] | .id] | join("|")' <<<"$out")|"
+check "row 14: state logs no DELETE" "0" "$(grep -c '^DELETE' "$rlog" || true)"
+check "row 14: a tunnel profile's state has no backend key" "false" "$(bash "$SH" state | jq 'has("backend")')"
+mkdir -p "$R2H/.config/share/profiles/tunx"
+printf 'hostname=tunx.example.test\ntunnel_id=00000000-0000-4000-8000-00000000abcd\ntunnel_name=tunx\nport=38997\n' >"$R2H/.config/share/profiles/tunx/config"
+: >"$rlog"
+out=$(r2a profiles 2>&1)
+check "row 14: profiles lists the r2 profile" "1" "$(grep -c $'^r2x\tserving\tr2x.example.test$' <<<"$out")"
+check "row 14: profiles lists the tunnel profile beside it" "1" "$(grep -c $'^tunx\tstopped\ttunx.example.test$' <<<"$out")"
+check "row 14: profiles reads no m/ for the r2 profile" "0 1" "$(grep -c '^LIST m/' "$rlog" || true) $(grep -c '^HEALTHZ$' "$rlog")"
+mv -f "$R2H/.config/share/profiles/tunx/config" "$WORK/tunx.config"
+
 echo "=== r2 backend: admin setup (rows 3, 4, 20) ==="
 wv="$(sed -n 's/^WORKER_VERSION=\([0-9]*\).*/\1/p' "$SH")"; wsha="$(sed -n 's/^WORKER_SHA=\([0-9a-f]*\).*/\1/p' "$SH")"
 DRYS="$WORK/r2-setup-bucket"
