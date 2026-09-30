@@ -166,3 +166,17 @@ Deviations from the spec, per task. A task with none is not listed.
 - The dry log does not record headers, so row 5 proves `If-None-Match: *` by behavior: a record written while the add waits at its publish wins, and the add dies naming the taken id. Dropping the header turns five row 5 checks red.
 - Row 25e's `add` half is a real check: with a token source, the add dies in `rand_id`'s prefix check and names it.
 - The `share api-token` refusals for admin and account-wide tokens (DEC-007) stay open for TASK-12: `api-token` still runs the Access preflight on every profile, and its r2 branch lands with the gated work.
+
+### TASK-10 (ls, refresh, rm, prune, orphan sweep)
+
+- Gated rows wait for TASK-12. `rm` of a gated r2 row is refused. `ls` and `prune` keep every expired gated row and print the waiting line, because no Access-capable path exists yet. Row 10's "prune with an Access-capable token" half and row 9's gated lost-DELETE case move to TASK-12.
+- `rm` ignores the DELETE answer and lets the fresh `GET m/<id>` decide. A DELETE that answered 000 but committed still completes; one that did not commit dies before any object delete.
+- The `ls` prune drops each removed row from the snapshot file, so the listing never shows a share it just removed.
+- The orphan sweep reuses the snapshot's record fetch. Each 200 body also passes a raw check (a JSON object, a string `prefix`, a numeric `v` no higher than `WORKER_RECORD_V`), independent of the filtered row. The first body that fails names its key and skips the sweep. No second `m/` read runs.
+- The orphan age compares R2's `LastModified` against the local clock minus 24 h, as ISO strings. An object without `LastModified` counts as fresh. Expiry uses the local clock too; the round-3 `Date`-header idea was not taken, since the Worker enforces expiry per request and prune only cleans up.
+- `r2_list` also returns each key's `LastModified`, and skips a decoded key that holds a control byte: a decoded newline would otherwise split into a second line naming another key.
+- The dry LIST emits `LastModified` from the file's mtime.
+- `refresh` reads the record fresh with `GET m/<id>` for its etag, never the snapshot. The new record keeps the old one's fields and swaps `prefix`, and `src` is rewritten from `r2-own`.
+- The integration Worker is a mode of `tests/worker.mjs`: `--dir <dry bucket> --host <host> <path>...` loads the dry bucket into the in-memory `BUCKET` and prints one `<code> <path>` line per path. It replaces the `node:http` server plus curl: the same Worker logic runs, with no port.
+- Row 25c: with no cross-install lock, both prunes may issue DELETEs. The suite asserts both exit 0, nothing is left, and at least one reports the removal.
+- Negative controls, red then restored: the sweep ignoring unreadable records (three row 24 checks), the refresh PUT without `If-Match` (six row 25a checks), and `rm` without the fresh GET (two row 9 checks).

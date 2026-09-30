@@ -1986,6 +1986,154 @@ R2_TOK="" CLOUDFLARE_API_TOKEN="" r6 "no token source" "needs a publisher token"
 r6 "a gated add (until the gated task)" "gated r2 adds are not built yet" r2a add --access email:a@x.io "$WORK/wt/one.md"
 check "row 6: no stage left after the refusals" "0" "$(find "$r2root" -maxdepth 1 -name '.stage.*' | grep -c . || true)"
 
+echo "=== r2 backend: two publishers, ls, refresh, rm (rows 7, 8, 9, 25a) ==="
+R2B="$WORK/r2b"; mkdir -p "$R2B/.config/share/profiles/r2x"; cp "$r2conf" "$R2B/.config/share/profiles/r2x/config"
+r2b() { # r2b <verb...>: a second install (its own HOME) publishing to the same dry bucket as r2a
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND \
+    HOME="$R2B" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$DRYA" SHARE_R2_TOKEN=drytoken bash "$SH" --profile r2x "$@"
+}
+blog="$R2B/share/profiles/r2x/r2-calls.log"
+bline() { grep -n -- "$1" "$blog" | head -1 | cut -d: -f1; }
+wnode() { # wnode <path>...: "<code> <path>" per path from the real Worker over the dry bucket (integration mode)
+  node "$(dirname "$SH")/../tests/worker.mjs" --dir "$DRYA" --host r2x.example.test "$@" 2>/dev/null | grep -E '^[0-9]{3} /'
+}
+rm -rf "$DRYA"; mkdir -p "$DRYA"; rm -f "$r2root/r2-own"
+printf 'alpha\n' >"$WORK/a7.txt"; printf 'beta\n' >"$WORK/b7.txt"
+a7=$(SHARE_TEST_IDS=a70001 r2a add "$WORK/a7.txt" 2>/dev/null | head -1)
+b7=$(SHARE_TEST_IDS=b70001 r2b add "$WORK/b7.txt" 2>/dev/null | head -1)
+check "row 7: A and B each publish" "https://r2x.example.test/a70001/a7.txt https://r2x.example.test/b70001/b7.txt" "$a7 $b7"
+out=$(r2a ls 2>&1)
+check "row 7: A's ls shows both rows with by=" "2" "$(grep -c 'id=[ab]70001 .* by=[a-z0-9.-]' <<<"$out")"
+out=$(r2b ls 2>&1)
+check "row 7: B's ls shows both rows with by=" "2" "$(grep -c 'id=[ab]70001 .* by=[a-z0-9.-]' <<<"$out")"
+out=$(r2b refresh a70001 2>&1); rc=$?
+check "row 7: B's refresh of A's share is refused" "1" "$rc"
+check "row 7: the refusal names the other install" "1" "$(grep -c 'a70001 was added from another install; refresh it there' <<<"$out")"
+if command -v node >/dev/null; then
+  check "row 5: the real Worker serves A's link from the dry bucket" "200 /a70001/a7.txt" "$(wnode /a70001/a7.txt)"
+fi
+
+aprefix="$(jq -r .prefix "$DRYA/m/a70001")"
+printf 'forged\n' >"$WORK/forged.txt"
+jq -c --arg s "$WORK/forged.txt" '.src = $s' "$DRYA/m/a70001" >"$WORK/m.tmp" && mv -f "$WORK/m.tmp" "$DRYA/m/a70001"
+printf 'alpha two\n' >"$WORK/a7.txt"
+: >"$rlog"
+out=$(r2a refresh a70001 2>&1); rc=$?
+nprefix="$(jq -r .prefix "$DRYA/m/a70001")"
+check "row 8: refresh exits 0" "0" "$rc"
+check "row 8: the record names a new prefix" "1" "$([[ $nprefix != "$aprefix" && $nprefix == o/a70001.????????/ ]] && echo 1 || echo 0)"
+check "row 8: the upload came from r2-own, not the forged src" "alpha two" "$(cat "$DRYA/${nprefix}a7.txt" 2>/dev/null)"
+check "row 8: the record's src is the r2-own path again" "$(realpath "$WORK/a7.txt")" "$(jq -r .src "$DRYA/m/a70001")"
+check "row 8: new objects < PUT m/<id> < old-prefix DELETEs" "1" "$([[ -n $(aline "^DELETE $aprefix") && $(alast "^PUT $nprefix") -lt $(aline '^PUT m/a70001$') && $(aline '^PUT m/a70001$') -lt $(aline "^DELETE $aprefix") ]] && echo 1 || echo 0)"
+check "row 8: the old prefix is gone" "" "$(r2a r2-list "$aprefix")"
+check "row 8: r2-own names the new prefix" "$nprefix" "$(r2a r2-own get a70001 | cut -f2)"
+
+mkdir -p "$DRYA/o/b70001.0000beef"; printf 'left\n' >"$DRYA/o/b70001.0000beef/old.txt"   # a second nonce under the same id
+: >"$rlog"
+out=$(r2a rm b70001 2>&1); rc=$?
+check "row 7: A's rm of B's share works" "0" "$rc"
+check "row 9: DELETE m/<id> < GET m/<id> < object DELETEs" "1" "$([[ -n $(aline '^DELETE o/b70001\.') && $(aline '^DELETE m/b70001$') -lt $(alast '^GET m/b70001$') && $(alast '^GET m/b70001$') -lt $(aline '^DELETE o/b70001\.') ]] && echo 1 || echo 0)"
+check "row 9: no record and no object under any nonce" "" "$(ls "$DRYA/m/b70001" 2>/dev/null)$(r2a r2-list o/b70001.)"
+check "row 7: B's ls no longer lists it" "0" "$(r2b ls 2>&1 | grep -c 'id=b70001' || true)"
+: >"$rlog"
+out=$(SHARE_R2_DRY_DELETE=lost r2a rm a70001 2>&1); rc=$?
+check "row 9: a lost record DELETE exits 1" "1" "$rc"
+check "row 9: named, nothing else deleted" "1 0" "$(grep -c 'still answers HTTP 200 after its delete' <<<"$out") $(grep -c '^DELETE o/' "$rlog" || true)"
+check "row 9: the record and objects stay" "1" "$([[ -f $DRYA/m/a70001 && -n $(r2a r2-list o/a70001.) ]] && echo 1 || echo 0)"
+out=$(r2a rm ffffff 2>&1); rc=$?
+check "rm of an unknown id exits 1" "1 1" "$rc $(grep -c "no share with id 'ffffff'" <<<"$out")"
+
+printf 'gamma\n' >"$WORK/g.txt"
+SHARE_TEST_IDS=a25001 r2a add "$WORK/g.txt" >/dev/null 2>&1
+g_old="$(jq -r .prefix "$DRYA/m/a25001")"
+: >"$rlog"; rm -f "$DRYA/.resume"
+(SHARE_R2_DRY_PAUSE="PUT m/a25001" r2a refresh a25001 >"$WORK/r25.out" 2>"$WORK/r25.err"; echo $? >"$WORK/r25.rc") &
+for _ in $(seq 1 200); do grep -q '^LIST o/a25001\.[0-9a-f]\{8\}/$' "$rlog" 2>/dev/null && break; sleep 0.05; done
+g_new="$(sed -n 's/^LIST \(o\/a25001\.[0-9a-f]\{8\}\/\)$/\1/p' "$rlog" | head -1)"
+out=$(r2b rm a25001 2>&1); brc=$?
+: >"$DRYA/.resume"; wait "$!"; rm -f "$DRYA/.resume"
+check "row 25a: B's rm during A's refresh exits 0" "0" "$brc"
+check "row 25a: A's refresh answers 412 and exits 1" "1" "$(cat "$WORK/r25.rc")"
+check "row 25a: named" "1" "$(grep -c 'a25001 changed during the refresh' "$WORK/r25.err")"
+check "row 25a: no record resurrected, no object left" "" "$(ls "$DRYA/m/a25001" 2>/dev/null)$(r2a r2-list o/a25001.)"
+SHARE_TEST_IDS=a25002 r2a add "$WORK/g.txt" >/dev/null 2>&1
+g_old="$(jq -r .prefix "$DRYA/m/a25002")"
+: >"$rlog"
+(SHARE_R2_DRY_PAUSE="PUT m/a25002" r2a refresh a25002 >"$WORK/r25.out" 2>"$WORK/r25.err"; echo $? >"$WORK/r25.rc") &
+for _ in $(seq 1 200); do grep -q '^LIST o/a25002\.[0-9a-f]\{8\}/$' "$rlog" 2>/dev/null && break; sleep 0.05; done
+g_new="$(sed -n 's/^LIST \(o\/a25002\.[0-9a-f]\{8\}\/\)$/\1/p' "$rlog" | head -1)"
+jq -c '.name = "renamed"' "$DRYA/m/a25002" >"$WORK/m.tmp" && mv -f "$WORK/m.tmp" "$DRYA/m/a25002"   # another refresh won: a new etag
+: >"$DRYA/.resume"; wait "$!"; rm -f "$DRYA/.resume"
+check "row 25a: a record changed mid-refresh answers 412" "1 1" "$(cat "$WORK/r25.rc") $(grep -c 'a25002 changed during the refresh' "$WORK/r25.err")"
+check "row 25a: the winner's record and prefix stay" "$g_old renamed" "$(jq -r '"\(.prefix) \(.name)"' "$DRYA/m/a25002")"
+check "row 25a: the loser deleted its own new prefix" "0 1" "$(r2a r2-list "$g_new" | grep -c . || true) $([[ -n $(r2a r2-list "$g_old") ]] && echo 1 || echo 0)"
+
+echo "=== r2 backend: expiry, concurrent prune, orphan sweep (rows 10, 24, 25c) ==="
+rm -rf "$DRYA"; mkdir -p "$DRYA"; rm -f "$r2root/r2-own" "$R2B/share/profiles/r2x/r2-own"
+forge() { # forge <id> <expires> [opts] [aud]: a record and one object, as another publisher would leave them
+  local id=$1 n; n="00000${id: -3}"
+  mkdir -p "$DRYA/m" "$DRYA/o/$id.$n"; printf 'f %s\n' "$id" >"$DRYA/o/$id.$n/f.txt"
+  jq -nc --arg id "$id" --argjson e "$2" --arg o "${3:-}" --arg a "${4:-}" --arg p "o/$id.$n/" \
+    '{v: 1, id: $id, name: "f.txt", src: "/elsewhere/f.txt", added: "2026-09-01", expires: $e, opts: $o, prefix: $p, by: "peer"} + (if $a == "" then {} else {aud: $a} end)' >"$DRYA/m/$id"
+}
+aud64="$(printf 'a%.0s' $(seq 1 64))"
+forge 100001 1000
+forge 100002 1000 "access=00000000-0000-4000-8000-000000000a0a access_rule=email:a@x.io" "$aud64"
+forge 100003 0
+if command -v node >/dev/null; then
+  check "row 10: the Worker answers 404 for both expired records before any prune, 200 for a live one" "404 /100001/f.txt|404 /100002/f.txt|200 /100003/f.txt|" \
+    "$(wnode /100001/f.txt /100002/f.txt /100003/f.txt | tr '\n' '|')"
+fi
+: >"$rlog"
+out=$(r2a ls 2>&1); rc=$?
+check "row 10: ls with a publisher token exits 0" "0" "$rc"
+check "row 10: the expired ungated record and prefix are gone" "" "$(ls "$DRYA/m/100001" 2>/dev/null)$(r2a r2-list o/100001.)"
+check "row 10: ls prints the expiry" "1" "$(grep -c '^unpublished 100001 (expired)$' <<<"$out")"
+check "row 10: the expired gated record and prefix stay" "1" "$([[ -f $DRYA/m/100002 && -n $(r2a r2-list o/100002.) ]] && echo 1 || echo 0)"
+check "row 10: the waiting line names the gated share" "1" "$(grep -c 'expired gated share 100002 waits for a publisher with the Access token' <<<"$out")"
+check "row 10: ls lists the live share, not the removed one" "1 0" "$(grep -c 'id=100003' <<<"$out") $(grep -c 'id=100001' <<<"$out")"
+check "row 10: no DELETE touched the gated share" "0" "$(grep -c '100002' <<<"$(grep '^DELETE' "$rlog")" || true)"
+
+forge 250001 1000
+(r2a prune >"$WORK/p1.out" 2>&1; echo $? >"$WORK/p1.rc") & p1=$!
+(r2b prune >"$WORK/p2.out" 2>&1; echo $? >"$WORK/p2.rc") & p2=$!
+wait "$p1" "$p2"   # never a bare wait: the suite's fixture server is a background job too
+check "row 25c: two prunes of one expired id both exit 0" "0 0" "$(cat "$WORK/p1.rc") $(cat "$WORK/p2.rc")"
+check "row 25c: the record and every object are gone" "" "$(ls "$DRYA/m/250001" 2>/dev/null)$(r2a r2-list o/250001.)"
+check "row 25c: at least one prune reported it" "1" "$([[ $(cat "$WORK/p1.out" "$WORK/p2.out" | grep -c '^unpublished 250001 (expired)$') -ge 1 ]] && echo 1 || echo 0)"
+
+rm -rf "$DRYA"; mkdir -p "$DRYA"
+aged() { # aged <seconds> <file>...: set the mtime that many seconds back (the dry LastModified)
+  local t=$(($(date +%s) - $1)) s; s="$(date -r "$t" +%Y%m%d%H%M.%S 2>/dev/null || date -d "@$t" +%Y%m%d%H%M.%S)"
+  touch -t "$s" "${@:2}"
+}
+obj() { mkdir -p "$DRYA/${1%/*}"; printf 'x\n' >"$DRYA/$1"; }
+obj o/aaa001.00000001/f.txt; aged 90000 "$DRYA/o/aaa001.00000001/f.txt"
+obj o/aaa002.00000002/f.txt; aged 3600 "$DRYA/o/aaa002.00000002/f.txt"
+forge aaa003 0; aged 90000 "$DRYA/o/aaa003.00000003/f.txt"
+: >"$rlog"
+out=$(r2a ls 2>&1)
+check "row 24: ls never sweeps" "0" "$(grep -c '^DELETE' "$rlog" || true)"
+: >"$rlog"
+out=$(r2a prune 2>&1); rc=$?
+check "row 24: bare prune exits 0" "0" "$rc"
+check "row 24: only the old unreferenced prefix is deleted" "DELETE o/aaa001.00000001/f.txt" "$(grep '^DELETE' "$rlog")"
+check "row 24: the removal is printed" "1" "$(grep -c '^removed orphan upload o/aaa001.00000001/$' <<<"$out")"
+check "row 24: the young and the referenced prefixes stay" "2" "$(find "$DRYA/o" -maxdepth 1 -name 'aaa00[23].*' | grep -c .)"
+obj o/aaa005.00000005/f.txt; aged 90000 "$DRYA/o/aaa005.00000005/f.txt"
+printf '%s\n' '{"v":2,"id":"aaa004","name":"f.txt","src":"/x","added":"2026-09-01","expires":0,"opts":"","prefix":"o/aaa004.00000004/","by":"peer"}' >"$DRYA/m/aaa004"
+obj o/aaa004.00000004/f.txt; aged 90000 "$DRYA/o/aaa004.00000004/f.txt"
+: >"$rlog"
+out=$(r2a prune 2>&1); rc=$?
+check "row 24: a v:2 record skips the sweep" "0 0" "$rc $(grep -c '^DELETE' "$rlog" || true)"
+check "row 24: the warning names the record" "1" "$(grep -c 'orphan sweep skipped: m/aaa004 is unreadable or newer' <<<"$out")"
+printf 'not json\n' >"$DRYA/m/aaa004"
+: >"$rlog"
+out=$(r2a prune 2>&1); rc=$?
+check "row 24: a broken record skips the sweep" "0 0" "$rc $(grep -c '^DELETE' "$rlog" || true)"
+check "row 24: the warning names it" "1" "$(grep -c 'orphan sweep skipped: m/aaa004' <<<"$out")"
+check "row 24: every prefix is still there" "4" "$(find "$DRYA/o" -maxdepth 1 -name 'aaa00[2345].*' | grep -c .)"
+
 echo "=== r2 backend: admin setup (rows 3, 4, 20) ==="
 wv="$(sed -n 's/^WORKER_VERSION=\([0-9]*\).*/\1/p' "$SH")"; wsha="$(sed -n 's/^WORKER_SHA=\([0-9a-f]*\).*/\1/p' "$SH")"
 DRYS="$WORK/r2-setup-bucket"

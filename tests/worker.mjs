@@ -3,11 +3,13 @@
 // Rows covered: 17 (serving shapes), 18 (path/record/Host refusals), 19 (hits),
 // 28 (the gated-record JWT check), plus the WORKER_SHA/WORKER_VERSION self-checks
 // and `node --check` on the emitted source.
+// Integration mode, `node tests/worker.mjs --dir <dry bucket> --host <host> <path>...`:
+// the same Worker over a BUCKET loaded from a SHARE_R2_DRY_DIR, one "<code> <path>" line per path.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -104,6 +106,19 @@ const loadWorker = async () => (await import("file://" + srcFile + "?m=" + ++mod
 const ID = "a1b2c3", NONCE = "f00dcafe";
 const rec = (over = {}) => ({ v: 1, id: ID, name: "f.txt", src: "/tmp/x", added: "2026-01-01", expires: 0, opts: "", prefix: `o/${ID}.${NONCE}/`, by: "mini", ...over });
 const putRec = (b, over = {}) => b.put("m/" + ID, JSON.stringify(rec(over)));
+
+if (process.argv[2] === "--dir") {
+  const dir = process.argv[3], host = process.argv[5], bucket = new Bucket();
+  const walk = (d) => readdirSync(d, { withFileTypes: true }).forEach((e) => {
+    if (e.name.startsWith(".")) return;   // the dry seam's .cf, .fx, and .resume are not objects
+    const f = join(d, e.name);
+    if (e.isDirectory()) walk(f); else bucket.put(relative(dir, f), readFileSync(f));
+  });
+  walk(dir);
+  const worker = await loadWorker(), env = envOf(bucket, { HOST: host });
+  for (const path of process.argv.slice(6)) console.log(`${(await call(worker, env, "https://" + host + path)).status} ${path}`);
+  process.exit(0);
+}
 
 // --- row 17: serving shapes ---
 {

@@ -575,6 +575,7 @@ cmd_ls() {
 access_col() { local r; r="$(opt_val access_rule "$1" || true)"; [[ -n $r ]] && printf '  access=%s' "$r"; return 0; }
 
 cmd_refresh() {
+  [[ $backend != r2 ]] || { cmd_refresh_r2 "$@"; return; }
   local r src opts
   r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
@@ -593,6 +594,7 @@ cmd_refresh() {
 }
 
 cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so expiry is never blocked (DEC-016)
+  [[ $backend != r2 ]] || { cmd_rm_r2 "$@"; return; }
   local r opts fqdn="" app="" tmp reloaded=1
   r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
@@ -633,10 +635,7 @@ cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so ex
 }
 
 cmd_prune() { # cmd_prune [quiet|listing]: unpublish every share past its expiry; sweep waiting Access apps when a token resolves
-  if [[ $backend == r2 ]]; then   # snapshot first so ls reads the bucket; expiry and the r2 sweep land with r2 rm
-    r2_snapshot
-    return 0
-  fi
+  if [[ $backend == r2 ]]; then r2_prune "${1:-}"; return 0; fi
   # quiet (serve, status): no token from any source, so neither touches Access; an expired gated share defers its
   # app. listing (ls): only an exported CLOUDFLARE_API_TOKEN, never api_token_cmd or the Keychain, so a listing
   # never runs `op read`. bare (the prune verb): the full resolver, soft on a failing api_token_cmd. A token for another
@@ -2241,16 +2240,19 @@ urldec() { # urldec <str>: sets urldec_out; %XX back to bytes, a malformed tail 
   urldec_out="$out"
 }
 
-r2_list() { # r2_list <prefix>: every key under it into r2_list_out (decoded, newline-joined); dies on a bad page, never an empty list on error
-  local prefix=$1 tok="" k
-  r2_list_out=""
+r2_list() { # r2_list <prefix>: every key under it into r2_list_out (decoded, newline-joined) and "<key>\t<LastModified>" into r2_list_mods; dies on a bad page
+  local prefix=$1 tok="" k m
+  r2_list_out="" r2_list_mods=""
   while :; do
     r2_call LIST "$prefix" ${tok:+"$tok"}
     [[ $cf_code == 200 ]] || die "r2 list of '$prefix' failed (HTTP $cf_code${cf_err:+, $cf_err})"
-    while IFS= read -r k; do
+    while IFS=$'\t' read -r k m; do   # the raw key is url-encoded, so it holds no tab
       [[ -n $k ]] || continue
-      urldec "$k"; r2_list_out+="$urldec_out"$'\n'
-    done < <(grep -o '<Key>[^<]*</Key>' <<<"$cf_body" | sed 's/<Key>\(.*\)<\/Key>/\1/')
+      urldec "$k"
+      [[ $urldec_out != *[[:cntrl:]]* ]] || continue   # share never writes such a key; a decoded newline must never become a key of its own
+      r2_list_out+="$urldec_out"$'\n'; r2_list_mods+="$urldec_out"$'\t'"$m"$'\n'
+    done < <(grep -oE '<Key>[^<]*</Key>|<LastModified>[^<]*</LastModified>' <<<"$cf_body" |
+      awk '/^<Key>/ {if (k != "") print k "\t" m; k = substr($0, 6, length($0) - 11); m = ""; next} {m = substr($0, 15, length($0) - 29)} END {if (k != "") print k "\t" m}')
     tok="$(grep -o '<NextContinuationToken>[^<]*' <<<"$cf_body" | sed 's/.*>//' || true)"   # pipefail: an absent token must not kill the run
     [[ $cf_body == *'<IsTruncated>true</IsTruncated>'* && -n $tok ]] || break
   done
@@ -2353,7 +2355,7 @@ r2_fetch_records() { # r2_fetch_records <snap>: parallel-GET every key in r2_lis
       [[ $code == 200 ]] && printf '%s' "$cf_body" >"$f"
     fi
     case $code in
-      200) r2_record_row "$key" "$(cat "$f")" >>"$snap" ;;
+      200) r2_record_row "$key" "$(cat "$f")" >>"$snap"; r2_record_raw "$key" "$(cat "$f")" ;;
       404) ;;
       *) rm -rf "$wd"; die "r2 snapshot: GET $key answered HTTP $code" ;;
     esac
@@ -2366,13 +2368,14 @@ r2_snapshot() { # r2_snapshot: every m/ record into a mktemp file that $index th
   mkdir -p "$root"
   snap="$(mktemp "$root/.r2-index.XXXXXX")"
   r2_snap_file="$snap"; trap release_locks EXIT
+  r2_refs="" r2_sweep_block=""
   r2_list "m/"
   if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then
     while IFS= read -r k; do
       [[ $k == m/* ]] || continue
       r2_call GET "$k"
       case $cf_code in
-        200) r2_record_row "$k" "$cf_body" >>"$snap" ;;
+        200) r2_record_row "$k" "$cf_body" >>"$snap"; r2_record_raw "$k" "$cf_body" ;;
         404) ;;
         *) die "r2 snapshot: GET $k answered HTTP $cf_code" ;;
       esac
@@ -2381,6 +2384,113 @@ r2_snapshot() { # r2_snapshot: every m/ record into a mktemp file that $index th
     r2_fetch_records "$snap" || die "r2 snapshot: a record fetch failed; nothing was listed"
   fi
   index="$snap"
+}
+
+r2_record_raw() { # r2_record_raw <m/ key> <json>: the orphan sweep's own view; the prefix into r2_refs, or the first key this CLI cannot read into r2_sweep_block
+  local p
+  p="$(jq -r --argjson v "$WORKER_RECORD_V" 'if type == "object" and (.prefix | type == "string") and (.v | type == "number") and .v <= $v then .prefix else error("unreadable") end' <<<"$2" 2>/dev/null)" ||
+    { r2_sweep_block="${r2_sweep_block:-$1}"; return 0; }
+  r2_refs+="$p"$'\n'
+}
+
+r2_ago() { date -u -r "$1" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%S; }   # epoch -> the ISO form S3's LastModified starts with
+
+r2_sweep_orphans() { # bare prune: every o/<id>.<nonce>/ no record names, whose newest object is over 24 h old, is deleted; one unreadable record skips it all
+  if [[ -n ${r2_sweep_block:-} ]]; then
+    echo "share: orphan sweep skipped: $r2_sweep_block is unreadable or newer than this share; no upload was deleted" >&2
+    return 0
+  fi
+  local cutoff p
+  cutoff="$(r2_ago $(($(date +%s) - 86400)))"   # the local clock; 24 h absorbs any sane skew against R2's LastModified
+  r2_list "o/"
+  # no {n} intervals: mawk lacks them. An object with no LastModified counts as fresh, so its prefix stays
+  for p in $(printf '%s' "$r2_list_mods" | R2_REFS="$r2_refs" awk -F'\t' -v cut="$cutoff" '
+    BEGIN { n = split(ENVIRON["R2_REFS"], r, "\n"); for (i = 1; i <= n; i++) if (r[i] != "") ref[r[i]] = 1 }   # -v cannot carry a newline in every awk
+    length($1) > 18 && substr($1, 1, 2) == "o/" && substr($1, 3, 6) !~ /[^0-9a-f]/ && substr($1, 9, 1) == "." &&
+      substr($1, 10, 8) !~ /[^0-9a-f]/ && substr($1, 18, 1) == "/" {
+      k = substr($1, 1, 18)
+      if (k in ref) next
+      seen[k] = 1
+      if ($2 == "" || substr($2, 1, 19) >= cut) fresh[k] = 1
+    }
+    END { for (k in seen) if (!(k in fresh)) print k }'); do
+    if (r2_delete_prefix "$p") >/dev/null 2>&1; then echo "removed orphan upload $p"
+    else echo "share: could not delete every object under $p; the next $me prune retries" >&2; fi
+  done
+}
+
+r2_prune() { # r2_prune [quiet|listing]: the snapshot; unless quiet, every expired ungated row through rm; a bare prune then sweeps orphan uploads
+  r2_snapshot
+  [[ ${1:-} != quiet ]] || return 0
+  local now id opts
+  now="$(date +%s)"
+  while IFS=$'\t' read -r id opts; do
+    [[ -n $id ]] || continue
+    if [[ -n "$(opt_val access "$opts" || true)" ]]; then   # the Worker already answers 404; the app needs an Access-capable token
+      echo "share: expired gated share $id waits for a publisher with the Access token" >&2
+      continue
+    fi
+    cmd_rm "$id" prune | sed 's/$/ (expired)/' || true   # a listing never dies on one row
+  done < <(rows | awk -F'\t' -v now="$now" '$5 > 0 && $5 < now {print $1 "\t" $6}')
+  [[ -n ${1:-} ]] || r2_sweep_orphans
+}
+
+cmd_rm_r2() { # cmd_rm_r2 <id> [prune]: the record, a fresh read proving it gone, then every nonce's objects; any publisher may rm any ungated share
+  local r opts tmp
+  [[ -n ${r2_snap_file:-} ]] || r2_snapshot
+  r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
+  opts="$(awk -F'\t' '{print $6}' <<<"$r")"
+  [[ -z "$(opt_val access "$opts" || true)" ]] || die "$1 is gated; removing a gated r2 share is not built yet, and its link already needs the Access login"
+  local dcode
+  r2_call DELETE "m/$1"; dcode=$cf_code   # any answer, 000 included: the fresh read below decides
+  r2_call GET "m/$1"   # a lost DELETE must not look done
+  [[ $cf_code == 404 ]] || die "m/$1 still answers HTTP $cf_code after its delete (HTTP $dcode); its objects were kept; rerun $me rm $1"
+  tmp="$(mktemp "$root/.r2-index.XXXXXX")"
+  awk -F'\t' -v id="$1" '$1 != id' "$index" >"$tmp" && mv -f "$tmp" "$index"   # this process's listing drops the row too
+  r2_own_drop "$1"
+  (r2_delete_prefix "o/$1.") || echo "share: some objects under o/$1. remain; nothing serves them, and a $me prune removes them after 24 h" >&2
+  echo "unpublished $1"
+}
+
+cmd_refresh_r2() { # cmd_refresh_r2 <id>: this install's own share only; a new prefix, the record swap under If-Match, then the old prefix goes
+  local body etag own oprefix src opts new rec
+  [[ ${1:-} =~ ^[0-9a-f]{6}$ ]] || die "no share with id '${1:-}'"
+  r2_token_check
+  mk_root
+  r2_call GET "m/$1"
+  case $cf_code in
+    200) ;;
+    404) die "no share with id '$1'" ;;
+    *) die "reading m/$1 answered HTTP $cf_code; nothing was changed" ;;
+  esac
+  body=$cf_body etag=$r2_etag
+  [[ -n "$(r2_record_row "m/$1" "$body")" && -n $etag ]] || die "no share with id '$1'"
+  oprefix="$(jq -r '.prefix' <<<"$body")"
+  own="$(r2_own_get "$1" || true)"
+  [[ -n $own && "$(cut -f2 <<<"$own")" == "$oprefix" ]] || die "$1 was added from another install; refresh it there"
+  src="$(cut -f3 <<<"$own")"   # never the record's src: another publisher could forge it
+  [[ -e $src ]] || die "source is gone: $src (the snapshot keeps serving; $me rm $1 to unpublish)"
+  opts="$(jq -r '.opts' <<<"$body")"
+  stage_copy "$src" "$opts"
+  r2_stage_check "$stage_out"
+  new="o/$1.$(r2_nonce)/"
+  r2_held_id=$1 r2_held_prefix=$new
+  r2_put_tree "$stage_out" "$new" || die "uploading $src failed (HTTP $cf_code); $1 still serves its old copy"
+  r2_prefix_matches "$stage_out" "$new" || die "the objects under $new do not match the stage; $1 still serves its old copy"
+  rec="$(mktemp "$root/.r2rec.XXXXXX")"
+  jq -c --arg p "$new" --arg src "$src" '.prefix = $p | .src = $src' <<<"$body" >"$rec"
+  r2_call PUT "m/$1" "$rec" -H "If-Match: \"$etag\""
+  rm -f "$rec"
+  case $cf_code in
+    200) ;;
+    412|404) die "$1 changed during the refresh (a concurrent rm or refresh won); nothing was published" ;;   # the trap deletes the new prefix no record names
+    *) die "swapping m/$1 answered HTTP $cf_code${cf_err:+ ($cf_err)}; rerun $me refresh $1" ;;
+  esac
+  r2_held_prefix="" r2_held_id=""
+  r2_own_put "$1" "$new" "$src"
+  rm -rf "$stage_out"; stage_out=""
+  (r2_delete_prefix "$oprefix") || echo "share: some objects under $oprefix remain; nothing serves them, and a $me prune removes them after 24 h" >&2
+  echo "refreshed $1 from $src"
 }
 
 r2_own_get() { # r2_own_get <id>: the "<id>\t<prefix>\t<source>" line for one of this install's own adds
@@ -2496,7 +2606,7 @@ r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "
       while IFS= read -r k; do
         [[ -n $k ]] || continue
         if [[ $count -ge 1000 ]]; then urlenc "$last"; cf_body+='<IsTruncated>true</IsTruncated><NextContinuationToken>'"$urlenc_out"'</NextContinuationToken>'; break; fi
-        urlenc "$k"; cf_body+='<Contents><Key>'"$urlenc_out"'</Key><ETag>"'"$(r2_md5 "$d/$k")"'"</ETag><Size>'"$(wc -c <"$d/$k" | tr -d ' ')"'</Size></Contents>'
+        urlenc "$k"; cf_body+='<Contents><Key>'"$urlenc_out"'</Key><LastModified>'"$(date -u -r "$d/$k" +%Y-%m-%dT%H:%M:%S.000Z)"'</LastModified><ETag>"'"$(r2_md5 "$d/$k")"'"</ETag><Size>'"$(wc -c <"$d/$k" | tr -d ' ')"'</Size></Contents>'
         last="$k"; count=$((count + 1))
       done <<<"$all"
       [[ $count -lt 1000 ]] && cf_body+='<IsTruncated>false</IsTruncated>'
