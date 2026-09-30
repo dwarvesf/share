@@ -91,6 +91,17 @@ Verdict: PASS
 
 No call reached the real Cloudflare account in this batch.
 
+## Batch 3: join mode (dry)
+
+```
+Command: SHARE_TEST_PORT_BASE=38787 bash tests/share.sh
+Exit:    0
+Checks:  800 ok, 0 FAIL (PASS)
+Verdict: PASS
+```
+
+`node tests/worker.mjs` exits 0 on the same tree. `=== r2 backend: join as publisher ===` covers row 23: a second HOME joins with the script and bucket reads answering 403; it prints `joining as publisher` and the public-route skip, reads the marker, makes no DNS, domain, or Access read, logs no write, leaves the bucket unchanged, writes the config, and prints the version-mismatch line. A missing marker, a missing bucket, and a Worker that never answers each exit 1 with no config.
+
 ## Rollback
 
 Code: revert the batch commits on `docs/r2-backend-spec`; no tunnel profile reads any r2 key (row 1 stays green).

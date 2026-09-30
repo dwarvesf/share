@@ -145,3 +145,11 @@ Deviations from the spec, per task. A task with none is not listed.
 - The config gains `r2_endpoint=`, which `r2_url` reads. It never stores `r2_key_id`: the admin token's id must not become a publisher's key. `api_token_cmd` and `r2_token_cmd` lines are kept.
 - Row 3's log order is asserted over two runs: a fresh bucket (404, so no domain or marker reads) and a rerun on the existing bucket (its reads precede the DNS read).
 - A 401 or 403 on the script settings dies until TASK-8 lands join mode.
+
+### TASK-8 (join mode)
+
+- Join takes its token from `CLOUDFLARE_API_TOKEN`, as admin does, and does not store it. The ready line names `share api-token` as the next step. The `api-token` refusals for admin and account-wide tokens are not built yet.
+- Step 5 for join: a 403 on the REST bucket read is accepted, because a bucket-scoped token gets 403 on every REST call (TASK-1(a)). The S3 listing and the `share.json` read then prove the bucket, and a missing marker dies naming the admin step. A 404 on the bucket read dies the same way.
+- Join skips steps 4 and 6 to 11 and writes nothing on Cloudflare. Step 12 accepts any Worker pair and prints the mismatch line when the pair is not the CLI's.
+- The healthz wait moved into `r2_wait_healthz admin|join`, shared by both roles.
+- `SHARE_R2_DRY_BUCKETDOM=deny` also answers 403 on the bucket settings read.

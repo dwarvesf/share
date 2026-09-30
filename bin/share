@@ -2447,7 +2447,9 @@ r2_api_dry() { # the account API under SHARE_R2_DRY: state files in $SHARE_R2_DR
       if [[ ${SHARE_R2_DRY_BUCKETDOM:-} == deny ]]; then cf_code=403 cf_body=$deny
       elif [[ -f $d/bucket-domain ]]; then cf_body='{"success":true,"result":{"domains":[{"domain":"cdn.example.test"}]}}'
       else cf_body='{"success":true,"result":{"domains":[]}}'; fi ;;
-    "GET "*/r2/buckets/*) [[ -f $d/bucket ]] || { cf_code=404 cf_body='{"success":false,"errors":[{"code":10006}]}'; } ;;
+    "GET "*/r2/buckets/*)
+      if [[ ${SHARE_R2_DRY_BUCKETDOM:-} == deny ]]; then cf_code=403 cf_body=$deny   # a bucket-scoped token reads no bucket settings
+      elif [[ ! -f $d/bucket ]]; then cf_code=404 cf_body='{"success":false,"errors":[{"code":10006}]}'; fi ;;
     "POST "*/r2/buckets) : >"$d/bucket"; cf_body='{"success":true,"result":{}}' ;;
     "GET /zones/"*/dns_records*) [[ -f $d/dns ]] && cf_body="{\"success\":true,\"result\":$(cat "$d/dns")}" ;;
     "GET "*/workers/domains*)
@@ -2479,6 +2481,22 @@ r2_healthz() { # r2_healthz: hz_code (200 only for a "200 ok" body) and hz_pair 
   [[ $hz_code != 200 || $b == ok ]] || hz_code=000
   hz_pair="$(awk 'tolower($1) == "x-share-worker:" {sub(/\r$/, ""); print $2 " " $3; exit}' "$h")"
   rm -f "$h"
+}
+
+r2_wait_healthz() { # r2_wait_healthz admin|join: three 200s in a row within SHARE_R2_WAIT; admin also needs this CLI's pair; a new name waits for its certificate
+  local wait="${SHARE_R2_WAIT:-300}" start=$SECONDS streak=0 poll=2
+  [[ ${SHARE_R2_DRY:-0} == 1 ]] && poll=0
+  while :; do
+    r2_healthz
+    if [[ $hz_code == 200 && ( $1 == join || $hz_pair == "$WORKER_VERSION $WORKER_SHA" ) ]]; then
+      streak=$((streak + 1)); [[ $streak -ge 3 ]] && return 0
+    else
+      streak=0
+    fi
+    [[ $((SECONDS - start)) -lt $wait ]] ||
+      die "https://$host_name/healthz did not answer 200 ok three times in a row within ${wait}s (last: $hz_code ${hz_pair:-no pair}); the config was not written; rerun setup once the certificate is issued"
+    sleep "$poll"
+  done
 }
 
 r2_deploy_meta() { # r2_deploy_meta <team> <dataset> [salt]: the multipart metadata; printf only, so the salt never reaches an argv
@@ -2586,9 +2604,8 @@ cmd_setup_r2() { # cmd_setup_r2 <force> <bucket> <tname> <login> <service> <quic
     401|403) role="join" ;;
     *) die "reading Worker $worker answered HTTP $cf_code; nothing was changed" ;;
   esac
-  [[ $role == admin ]] || die "joining as publisher is not implemented yet; nothing was changed"
-  echo "deploying as admin"
-  if [[ $first == 0 ]]; then
+  [[ $role == admin ]] && echo "deploying as admin" || echo "joining as publisher"
+  if [[ $role == admin && $first == 0 ]]; then
     jq -e --arg h "$host_name" --arg b "$bucket" '.result.bindings as $bs
       | ($bs | any(.name == "HOST" and .text == $h)) and ($bs | any(.name == "BUCKET" and .bucket_name == $b))
         and ($bs | any(.name == "VERSION" and (.text | test("^[0-9]+$"))))' <<<"$cf_body" >/dev/null ||
@@ -2600,17 +2617,25 @@ cmd_setup_r2() { # cmd_setup_r2 <force> <bucket> <tname> <login> <service> <quic
       die "Worker $worker runs version $dep_v, newer than this share's $WORKER_VERSION; upgrade share, or pass --force to downgrade it; nothing was changed"
   fi
 
-  local bucket_new=0 marker=""
+  local bucket_new=0 marker="" skipped=0
   r2_api GET "/accounts/$acct/r2/buckets/$bucket"
-  case $cf_code in
-    404) bucket_new=1 ;;
-    200)
+  case "$role $cf_code" in
+    "admin 404") bucket_new=1 ;;
+    "join 404") die "bucket $bucket does not exist; whoever holds the admin token runs '$me setup $host_name --backend r2 --bucket $bucket' first" ;;
+    "admin 200"|"join 200"|"join 403")   # a bucket-scoped token cannot read bucket settings; the S3 reads below prove the bucket
       r2_api GET "/accounts/$acct/r2/buckets/$bucket/domains/managed"
-      [[ $cf_code == 200 ]] || die "reading bucket $bucket's r2.dev setting answered HTTP $cf_code; nothing was changed"
-      [[ "$(jq -r '.result.enabled' <<<"$cf_body")" == false ]] || die "bucket $bucket has its public r2.dev URL on; a share bucket must be private; refused, nothing was changed"
+      if [[ $role == join && $cf_code == 403 ]]; then skipped=1
+      else
+        [[ $cf_code == 200 ]] || die "reading bucket $bucket's r2.dev setting answered HTTP $cf_code; nothing was changed"
+        [[ "$(jq -r '.result.enabled' <<<"$cf_body")" == false ]] || die "bucket $bucket has its public r2.dev URL on; a share bucket must be private; refused, nothing was changed"
+      fi
       r2_api GET "/accounts/$acct/r2/buckets/$bucket/domains/custom"
-      [[ $cf_code == 200 ]] || die "reading bucket $bucket's custom domains answered HTTP $cf_code; nothing was changed"
-      [[ "$(jq '.result.domains | length' <<<"$cf_body")" == 0 ]] || die "bucket $bucket has a public custom domain; a share bucket must be private; refused, nothing was changed"
+      if [[ $role == join && $cf_code == 403 ]]; then skipped=1
+      else
+        [[ $cf_code == 200 ]] || die "reading bucket $bucket's custom domains answered HTTP $cf_code; nothing was changed"
+        [[ "$(jq '.result.domains | length' <<<"$cf_body")" == 0 ]] || die "bucket $bucket has a public custom domain; a share bucket must be private; refused, nothing was changed"
+      fi
+      [[ $skipped == 1 ]] && echo "public-route check skipped (publisher token)"
       r2_call LIST ""
       [[ $cf_code == 200 ]] || die "listing bucket $bucket answered HTTP $cf_code; nothing was changed"
       local has_objects=0; [[ $cf_body == *"<Key>"* ]] && has_objects=1
@@ -2619,11 +2644,21 @@ cmd_setup_r2() { # cmd_setup_r2 <force> <bucket> <tname> <login> <service> <quic
         200) marker="$cf_body"
           jq -e --arg h "$host_name" '.v == 1 and .host == $h' <<<"$marker" >/dev/null 2>&1 ||
             die "bucket $bucket's share.json names another hostname; refused, nothing was changed" ;;
-        404) [[ $has_objects == 0 ]] || die "bucket $bucket holds objects and no share.json; it is not a share bucket; refused, nothing was changed" ;;
+        404) [[ $role == admin ]] || die "bucket $bucket has no share.json; whoever holds the admin token runs '$me setup $host_name --backend r2 --bucket $bucket' first"
+          [[ $has_objects == 0 ]] || die "bucket $bucket holds objects and no share.json; it is not a share bucket; refused, nothing was changed" ;;
         *) die "reading $bucket/share.json answered HTTP $cf_code; nothing was changed" ;;
       esac ;;
     *) die "reading bucket $bucket answered HTTP $cf_code (the token needs Workers R2 Storage: Edit); nothing was changed" ;;
   esac
+
+  if [[ $role == join ]]; then   # join writes nothing on Cloudflare: the live check, then the local config
+    r2_wait_healthz join
+    [[ $hz_pair == "$WORKER_VERSION $WORKER_SHA" ]] ||
+      echo "the Worker at $host_name runs $hz_pair; this share ships $WORKER_VERSION $WORKER_SHA; whoever holds the admin token reruns '$me setup $host_name --backend r2 --bucket $bucket'"
+    write_config_r2 "$bucket"
+    echo "ready:      https://$host_name/ serves from bucket $bucket. Store your publisher token: $me api-token; then: $me add <file|dir>"
+    return 0
+  fi
 
   r2_api GET "/zones/$zone_id/dns_records?name=$host_name"
   [[ $cf_code == 200 ]] || die "reading DNS for $host_name answered HTTP $cf_code (the token needs DNS: Read); nothing was changed"
@@ -2679,20 +2714,7 @@ cmd_setup_r2() { # cmd_setup_r2 <force> <bucket> <tname> <login> <service> <quic
     [[ $cf_code == 200 ]] || die "adding $host_name as $worker's custom domain answered HTTP $cf_code"
   fi
 
-  # step 12: three 200s in a row carrying this CLI's pair; a new name waits for its certificate
-  local wait="${SHARE_R2_WAIT:-300}" start=$SECONDS streak=0 poll=2
-  [[ ${SHARE_R2_DRY:-0} == 1 ]] && poll=0
-  while :; do
-    r2_healthz
-    if [[ $hz_code == 200 && $hz_pair == "$WORKER_VERSION $WORKER_SHA" ]]; then
-      streak=$((streak + 1)); [[ $streak -ge 3 ]] && break
-    else
-      streak=0
-    fi
-    [[ $((SECONDS - start)) -lt $wait ]] ||
-      die "https://$host_name/healthz did not answer 200 ok with $WORKER_VERSION $WORKER_SHA three times in a row within ${wait}s (last: $hz_code ${hz_pair:-no pair}); the config was not written; rerun setup once the certificate is issued"
-    sleep "$poll"
-  done
+  r2_wait_healthz admin
 
   write_config_r2 "$bucket"
   echo "ready:      https://$host_name/ serves from bucket $bucket. Next: $me add <file|dir>"

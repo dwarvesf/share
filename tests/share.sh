@@ -2039,6 +2039,47 @@ check "healthz never up: names the host" "1" "$(grep -c 'https://r2s.example.tes
 check "healthz never up: no config" "0" "$([[ -f $s2conf ]] && echo 1 || echo 0)"
 rm -f "$s2conf"
 
+echo "=== r2 backend: join as publisher (row 23) ==="
+R2J="$WORK/r2join"; mkdir -p "$R2J"
+jconf="$R2J/.config/share/profiles/r2s/config"; jlog="$R2J/share/profiles/r2s/r2-calls.log"
+r2j() { # r2j [env...]: a second HOME joins r2s.example.test with a publisher token (script and bucket reads answer 403)
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND \
+    HOME="$R2J" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$DRYS" CLOUDFLARE_API_TOKEN=pubtoken SHARE_R2_WAIT="${SHARE_R2_WAIT:-2}" \
+    SHARE_R2_DRY_ROLE=deny SHARE_R2_DRY_BUCKETDOM=deny "$@" bash "$SH" --profile r2s setup r2s.example.test --backend r2 --bucket ok-bucket
+}
+jwrites() { grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$jlog" || true; }
+s_fresh; echo dwarves.cloudflareaccess.com >"$DRYS/.cf/team"
+out=$(r2s 2>&1); rc=$?
+check "join fixture: admin setup exits 0" "0" "$rc"
+jq -c '(.bindings[] | select(.name == "SHA")).text = "000000000000"' "$DRYS/.cf/script.json" >"$DRYS/.cf/s.tmp" && mv -f "$DRYS/.cf/s.tmp" "$DRYS/.cf/script.json"
+before="$(objs)"
+mkdir -p "${jlog%/*}"; : >"$jlog"
+out=$(r2j 2>&1); rc=$?
+check "join: exit 0" "0" "$rc"
+check "join: role printed" "1" "$(grep -c '^joining as publisher$' <<<"$out")"
+check "join: public-route skip printed" "1" "$(grep -c '^public-route check skipped (publisher token)$' <<<"$out")"
+check "join: no write logged" "0" "$(jwrites)"
+check "join: the marker was read" "1" "$(grep -c '^GET share.json$' "$jlog")"
+check "join: no DNS, domain, or Access read" "0" "$(grep -cE 'dns_records|workers/domains|access/organizations' "$jlog" || true)"
+check "join: bucket unchanged" "$before" "$(objs)"
+check "join: config written" "1" "$(grep -c '^backend=r2$' "$jconf")"
+check "join: config bucket and sentinel" "2" "$(grep -cE '^(bucket=ok-bucket|port=r2)$' "$jconf")"
+check "join: the version mismatch line" "1" "$(grep -c "runs $wv 000000000000; this share ships $wv $wsha; whoever holds the admin token reruns" <<<"$out")"
+check "join: next step names api-token" "1" "$(grep -c 'api-token' <<<"$out")"
+rm -f "$jconf" "$DRYS/share.json"; : >"$jlog"
+out=$(r2j 2>&1); rc=$?
+check "join, no marker: exit 1" "1" "$rc"
+check "join, no marker: names the admin step" "1" "$(grep -c 'has no share.json; whoever holds the admin token' <<<"$out")"
+check "join, no marker: no write, no config" "0 0" "$(jwrites) $([[ -f $jconf ]] && echo 1 || echo 0)"
+rm -f "$DRYS/.cf/bucket"; : >"$jlog"
+out=$(r2j SHARE_R2_DRY_BUCKETDOM= 2>&1); rc=$?
+check "join, no bucket: exit 1" "1" "$rc"
+check "join, no bucket: named" "1" "$(grep -c 'bucket ok-bucket does not exist' <<<"$out")"
+s_fresh; out=$(r2s 2>&1); : >"$jlog"
+out=$(r2j SHARE_R2_DRY_HEALTHZ=down SHARE_R2_WAIT=1 2>&1); rc=$?
+check "join, Worker down: exit 1, no config" "1 0" "$rc $([[ -f $jconf ]] && echo 1 || echo 0)"
+rm -f "$s2conf"
+
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then
   wout="$(node "$(dirname "$SH")/../tests/worker.mjs" 2>&1)"; wrc=$?
