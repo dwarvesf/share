@@ -155,6 +155,116 @@ A rule group for `group:<name>`: Zero Trust > Access controls > Policies > Rule 
 | `skipping the Access check` on `ls` | the exported `CLOUDFLARE_API_TOKEN` belongs to another account or zone | unset it, or store the right token with `share api-token` |
 | `Access app for <id> is gone; the link is PUBLIC` (`ls` with `CLOUDFLARE_API_TOKEN` exported) | the app was deleted in the dashboard | `share rm <id>` |
 
+## 4f. R2 backend: admin setup
+
+An r2 profile serves snapshots from a private R2 bucket through a Worker on your hostname, so links answer while every publisher's machine is off. One person, the admin, sets up the hostname once with an account-level token. Everyone else joins with a token scoped to the bucket (section 4g).
+
+The admin token is read from `CLOUDFLARE_API_TOKEN` only, never from a stored token, and share never stores it. Create it at **My Profile → API Tokens → Create Token → Create Custom Token**:
+
+| Scope | Resource | Permission | Why |
+|---|---|---|---|
+| Account | Workers Scripts | Edit | Deploy the Worker, turn off its `workers.dev` route, attach the custom domain, read the deployed version. |
+| Account | Workers R2 Storage | Edit | Create the bucket, read its public-route settings, write `share.json`. |
+| Zone | Zone | Read | Find the zone and account that own the hostname. |
+| Zone | DNS | Read | Refuse a hostname whose DNS record is not this Worker's custom domain. |
+| Account | Access: Organizations, Identity Providers, and Groups | Read | Optional: sets the Worker's Access team. Without it at the first setup, `add --access` is refused on this profile; a later rerun without it keeps the team already deployed. `teardown --purge` also needs it for its pass over Access apps by name. |
+| Account | Access: Apps and Policies | Edit | Only for `teardown --purge` while gated shares exist. |
+
+DNS: Edit and Workers Routes: Edit are not needed: attaching a Worker custom domain creates its DNS record.
+
+```sh
+CLOUDFLARE_API_TOKEN=... share --profile df setup f.example.com --backend r2 --bucket share-f
+```
+
+```
+share --profile df setup f.example.com --backend r2 --bucket share-f
+   │
+   ├─ reads only; every refusal happens here, so a refused run creates nothing:
+   │    the zone and account that own f.example.com, and the token's own id
+   │    Worker share-f-example-com: absent or share's own -> "deploying as admin";
+   │      401 or 403 -> "joining as publisher" (section 4g)
+   │      bindings for another hostname or bucket: refused
+   │      a deployed version newer than this share: refused unless --force
+   │    bucket: public r2.dev URL on, or a custom domain: refused
+   │      objects but no share.json: refused; share.json naming another hostname: refused
+   │    DNS: a record that is not this Worker's custom domain: refused unless --force
+   │      the custom domain of another Worker: refused, even with --force
+   │    Access organization: its team domain becomes the Worker's Access team (optional)
+   ├─ create the bucket if absent; write share.json {"v":1,"host":"f.example.com"}
+   ├─ deploy the Worker when absent, or when its version, source hash, or Access team differs
+   ├─ turn off workers.dev and previews, then read it back: anything but false,false dies
+   │  before the custom domain exists, so nothing is exposed
+   ├─ attach f.example.com as the Worker's custom domain
+   ├─ wait for https://f.example.com/healthz: "200 ok" with this share's Worker version,
+   │  three times in a row, up to SHARE_R2_WAIT (300 s; a new name waits for its certificate)
+   └─ write the profile config: backend, hostname, zone, bucket, port=r2, r2_endpoint
+```
+
+| Created in Cloudflare | Name |
+|---|---|
+| R2 bucket (private: no r2.dev URL, no custom domain) | `--bucket`: 3 to 63 characters of `a-z 0-9 -`, no leading or trailing `-` |
+| Bucket marker | object `share.json`, naming the hostname |
+| Worker | `share-<hostname with dots as dashes>`, `workers.dev` and previews off |
+| Worker custom domain | `<hostname>` |
+| Analytics Engine dataset | `share_<hostname with dots and dashes as underscores>`, filled by the Worker for `share hits` |
+
+On this machine setup writes only the config. There is no tunnel, no login service, and no Keychain tunnel item. `port=r2` in the config is a sentinel: a share release older than the r2 backend dies at load on it, so it can never write to an r2 profile.
+
+`--backend r2` refuses `--quick`, `--tunnel-name`, `--login`, and `--no-service` (`usage: share setup <hostname> --backend r2 --bucket <name> [--force]`). A profile has one backend; to switch, run `share teardown` first. `--force` replaces an existing DNS record at the hostname, or downgrades a Worker that a newer share deployed.
+
+Rerun the same command after a share release that changes the Worker. Publishers see a line when the deployed Worker differs from their share, in `setup` and `status`: `the Worker at <host> runs <v> <sha>; this share ships <v> <sha>; whoever holds the admin token reruns '...'`. A rerun is safe: it redeploys only when the version, source hash, or Access team differs, and prints `already deployed` otherwise.
+
+To publish yourself, store a publisher token as a teammate does (section 4g, steps 1 and 3). `share api-token` refuses the admin token.
+
+For an external monitor (vps-mon or any uptime checker), watch `https://<hostname>/healthz`: it answers `200 ok` with an `X-Share-Worker: <version> <sha>` header while the Worker serves. `share status` prints the same probe (`worker: up (...)` or `worker: DOWN: <code>`) and `gated: on` or `gated: off`.
+
+## 4g. R2 backend: a teammate joins
+
+Every publisher gets their own token, scoped to the share bucket, with an expiry. Never hand out an account-wide R2 token: it reaches every bucket on the account. `share api-token` refuses one.
+
+1. **The admin creates the teammate's token** in the Cloudflare dashboard as a custom API token, with an expiry (TTL):
+
+   | Permission | Resource | Needed for |
+   |---|---|---|
+   | Workers R2 Storage Bucket Item Write | the share bucket only | every `add`, `ls`, `rm`, `refresh`, `prune` (read, write, list, and delete objects) |
+   | Zone: Read | the hostname's zone | joining: setup finds the account through the zone |
+   | Account Analytics: Read | the account | optional: `share hits`. It reads every Analytics Engine dataset on the account. |
+   | Access: Apps and Policies: Edit; Access: Organizations, Identity Providers, and Groups: Read | the account | only for a named gated publisher: `add --access` and removing gated shares. Apps and Policies Edit is account-wide, so give it to few people. |
+
+   One token per teammate: revoking a leaver is deleting their token, and nobody else is affected.
+
+2. **The teammate joins** with that token in the environment:
+
+   ```sh
+   CLOUDFLARE_API_TOKEN=<their token> share --profile df setup f.example.com --backend r2 --bucket share-f
+   ```
+
+   Setup prints `joining as publisher`. A publisher token cannot read the bucket's public-route settings, so it also prints `public-route check skipped (publisher token)`; the admin's setup runs that check. Join checks that the bucket holds `share.json` for this hostname (none: run the admin setup first) and waits for three `200 ok` answers from `/healthz`. It accepts any Worker version and prints the mismatch line when it differs. It writes nothing on Cloudflare and does not store the token; it writes only the local config.
+
+3. **The teammate stores the token**, once per profile:
+
+   ```sh
+   share --profile df api-token --cmd 'op read "op://<vault>/<item>/credential"'   # share runs the command on every use
+   op read "op://<vault>/<item>/credential" | share --profile df api-token          # or store it once, from stdin
+   ```
+
+   `share --profile df api-token` with no argument in a terminal also works: paste the token at the hidden prompt. It still prints and opens the prefilled form, but that form carries the Access scopes of section 4e (it is named `share access (<profile>)`), not the bucket permission. Create the bucket token as in step 1, and use the form only when this teammate also needs Access scopes.
+
+   Before storing, share refuses two kinds of token and stores nothing:
+
+   | Refusal | Cause |
+   |---|---|
+   | `that token can edit Worker share-...: it is an admin token` | the token reads the Worker's settings |
+   | `that token reaches other buckets (...): an account-wide R2 token` | the token lists a bucket besides the share bucket |
+
+   On success it prints `a publisher token for bucket <bucket>: not an admin token, no other bucket in reach`, then the Access preflight lines for information. A bucket-only token shows the Access scopes as `MISSING` and still exits 0: ungated adds work. `share --profile df api-token --check` reruns the same checks.
+
+4. **Publish**: `share --profile df add ./report.pdf`. `share --profile df ls` shows every publisher's shares, each with `by=<machine>`.
+
+The token lives where `share api-token` puts it for any profile: `api_token_cmd` in the config, else the Keychain item `share-api.<profile>:<hostname>` (Linux: `<config dir>/api-token`, mode 600), else `CLOUDFLARE_API_TOKEN`. share derives the R2 access key from it (the key id is the token's id, the secret its SHA-256) and never writes either.
+
+When a teammate leaves, delete their token in the dashboard. Their shares keep serving until they expire or someone runs `share rm <id>`; any publisher can remove any share. Only the install that added a share can `refresh` it, so a leaver's shares can be removed and added again, not refreshed.
+
 ## 5. Serve from a different machine
 
 Only machines listed in `hosts` serve. Two machines on one tunnel would split requests between two different `~/share` folders, so links would fail at random.
@@ -172,6 +282,23 @@ Teardown removes the service, stops serving, deletes the tunnel, removes the sto
 
 The DNS record depends on the path. With `CLOUDFLARE_API_TOKEN` set, teardown deletes it (only when it still points at this tunnel). The browser-login token cannot delete DNS records, so teardown tells you to remove the CNAME in the dashboard. Until you do, the hostname returns a Cloudflare error.
 
+On an r2 profile, teardown has two forms:
+
+```sh
+share --profile df teardown [--yes]                                   # this install only
+CLOUDFLARE_API_TOKEN=<admin token> share --profile df teardown --yes --purge   # everything, for everyone
+```
+
+| | `teardown` | `teardown --yes --purge` |
+|---|---|---|
+| Stored API token, `r2-own`, config | removed (config and `r2-own` to the Trash) | removed |
+| Every share on the hostname | stays for the other publishers | deleted, gated ones first with their Access apps |
+| Worker, custom domain, `share.json` | stay | deleted |
+| Bucket | stays | deleted when empty; otherwise kept, with the count of keys share did not write |
+| Analytics Engine dataset | stays | stays: it cannot be deleted and ages out |
+
+`--purge` reads the admin token from `CLOUDFLARE_API_TOKEN` only. Before the first delete it checks that the Worker's bindings name this hostname and bucket (a publisher token gets 403 there and is refused), that `share.json` names this hostname, that no other Worker holds the hostname, and, when any gated share or waiting Access app exists, that the token has Access: Apps and Policies Edit. Any failed check changes nothing. After the shares it deletes every Access app named for this hostname, which catches apps parked in teammates' local `access-pending` files (it skips that pass with a line when the token cannot read Access apps), then every leftover `m/` and `o/` key, including records no share release could read. The local form prints how many Access apps stay in this install's `access-pending`.
+
 ## 7. Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -188,3 +315,22 @@ The DNS record depends on the path. With `CLOUDFLARE_API_TOKEN` set, teardown de
 | "caddy failed to start" | Another process uses the port. | Free the port, or change `port` and rerun setup so the route follows. |
 | "127.0.0.1:<port> is already in use" | Another share profile, or another process, listens on this profile's port or metrics port. | `share profiles` to find it; change `port=` in the config it names and rerun setup so the route follows. |
 | Markdown served as raw text | pandoc is not installed. | `brew install pandoc`, then `share refresh <id>`. |
+
+R2 backend:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `setup --backend r2 reads its token from CLOUDFLARE_API_TOKEN only; none is set` | No token in the environment. | Export the admin token (4f) or the teammate's token (4g); the message lists both scope sets. |
+| `setup`: `bucket <b> has no share.json` / `does not exist; whoever holds the admin token runs ...` | A teammate joined before the admin setup ran. | The admin runs setup first. |
+| `setup`: `did not answer 200 ok three times in a row within 300s` | A new hostname waits for its certificate, or the Worker is down. | Rerun setup; raise `SHARE_R2_WAIT` for a slow certificate. The config is written only after this check. |
+| `that token can edit Worker ...: it is an admin token` | `api-token` got the admin token. | Store a bucket-scoped token (4g, step 1). |
+| `that token reaches other buckets (...): an account-wide R2 token` | The token is not limited to the share bucket. | Create a token with Workers R2 Storage Bucket Item Write on the share bucket only. |
+| `this r2 profile needs a publisher token for <host>; none resolved` | No token stored for this profile. | `share --profile <p> api-token` (4g, step 3). |
+| `live shares and --host need a tunnel profile; this profile serves from R2` | `add <port>` or `--host` on an r2 profile. | Use a tunnel profile for those; both kinds run side by side. |
+| `an r2 profile serves from Cloudflare; nothing runs on this machine` | `start`, `stop`, `serve`, or `service` on an r2 profile. | Nothing to run. `share rm <id>` unpublishes a link. |
+| `<id> was added from another install; refresh it there` | `refresh` of a teammate's share. | Refresh from that install, or `rm` and add again. |
+| `the Worker at <host> has no Access team, so a gated link would never open` | The admin token lacked Access: Organizations Read at setup (`status` shows `gated: off`). | The admin reruns setup with that scope. |
+| `the Worker at <host> runs <v> <sha>; this share ships <v> <sha>` | The Worker and your share are different releases. | The admin reruns setup with the newer share. |
+| `expired gated share <id> waits for a publisher with the Access token` | `ls` or `prune` without Access: Apps and Policies Edit. The Worker already answers 404 for it. | A gated publisher runs `share prune`. |
+| `orphan sweep skipped: m/<id> is unreadable or newer than this share` (`status`: `orphan sweep blocked by m/<id>`) | A record this share cannot read: a newer release wrote it, or it is corrupt. | Upgrade share. A corrupt record goes only through `teardown --purge` or a delete in the dashboard. |
+| `hits needs an API token with Account Analytics: Read` / `the Analytics Engine query answered HTTP 403` | The stored token lacks the optional analytics scope. | Add Account Analytics: Read to the token. |

@@ -41,8 +41,9 @@ share profiles                                                       # default a
 | **Menu bar app** | Share Bar shows what's shared and lets you drag a file onto the icon to publish it |
 | **Profiles** | `share --profile work ...` runs a second setup (another account or hostname) beside the first, on its own port and service |
 | **Private links** | `--access email:a@x,b@y`, `domain:example.com`, or `group:<rule group>` puts a Cloudflare Access login (one-time PIN) on one link; the other links stay public. See [Private links](#private-links) |
+| **Links with the machine off** | `setup <host> --backend r2 --bucket <name>`: snapshots live in a private R2 bucket, a Worker serves them, and a whole team publishes to one hostname. See [R2 backend](#r2-backend-links-that-stay-up-while-the-machine-is-off) |
 
-Links are live only while the machine is awake; visitors get Cloudflare 530 when it sleeps. `https://<hostname>/healthz` answers `ok` while share is serving; the site root 404s by design.
+On the default tunnel backend, links are live only while the machine is awake; visitors get Cloudflare 530 when it sleeps. `https://<hostname>/healthz` answers `ok` while share is serving; the site root 404s by design.
 
 ## How it works
 
@@ -89,6 +90,7 @@ share state                 # JSON snapshot for the menu bar app
 share stop | start          # take all links down / bring them back
 share teardown [--yes]      # remove tunnel, service, and config; the shares on disk stay
 share --profile <name> ...  # any command against another setup (or SHARE_PROFILE=<name>); share profiles lists them
+share setup <host> --backend r2 --bucket <name>   # serve from a private R2 bucket through a Worker (see below)
 ```
 
 A share from a private GitHub repo prints a warning; the content is public to anyone with the link.
@@ -123,6 +125,31 @@ Share a link that only named people can open (Cloudflare Access, email one-time 
 
 `share rm` of a gated link removes its Access app too (it needs the same token). A link that expires while nobody holds the token keeps its app in a waiting list; `share status` shows the count and the next `share prune` with the token clears it. Detail: [docs/how-it-works.md](docs/how-it-works.md#a-gated-share---access), scopes and troubleshooting: [docs/setup.md](docs/setup.md#4e-private-links-the-api-token-for---access).
 
+## R2 backend: links that stay up while the machine is off
+
+A profile can serve from Cloudflare instead of your machine. `share add` uploads the snapshot to a private R2 bucket, and a Worker on your hostname serves it. Links answer while the laptop sleeps, and several people publish to one hostname, each from their own machine with their own token.
+
+```sh
+CLOUDFLARE_API_TOKEN=<admin token> share --profile df setup f.example.com --backend r2 --bucket share-f   # admin, once per hostname
+share --profile df add ./report.pdf                                                                      # https://f.example.com/<id>/report.pdf
+```
+
+The admin run creates the bucket, deploys the Worker, turns its `workers.dev` route off, and attaches the hostname. A teammate runs the same `setup` line with a token scoped to that one bucket: it prints `joining as publisher` and writes nothing on Cloudflare. Then the teammate stores the token with `share --profile df api-token`. Token scopes and the step-by-step onboarding: [docs/setup.md](docs/setup.md#4f-r2-backend-admin-setup).
+
+| | tunnel profile | r2 profile |
+|---|---|---|
+| Links while the machine is off | Cloudflare 530 | served |
+| Who publishes | the one machine in `hosts` | anyone holding a publisher token for the bucket |
+| `add <file\|dir>`, `ls`, `rm`, `hits`, `prune` | yes | yes; any publisher can `rm` any share |
+| `refresh` | yes | only from the install that added the share |
+| `add --access` | yes | yes, once the admin setup read the Access team |
+| `add <port>` (live), `--host`, `setup --quick` | yes | refused: live dev servers stay on a tunnel profile |
+| `start`, `stop`, `serve`, `service` | yes | refused: nothing runs on this machine |
+
+One add holds at most 500 files (`SHARE_R2_MAX_FILES`), each at most 300 MiB. A tunnel profile and an r2 profile run side by side on one machine, so `share add 3000` keeps working on the tunnel one.
+
+`share --profile df teardown` on an r2 profile is local: it forgets this install's token and config, and the bucket, the Worker, and every share stay for the other publishers. `CLOUDFLARE_API_TOKEN=<admin token> share --profile df teardown --yes --purge` deletes every share (gated ones with their Access apps), the Worker, its domain, and the bucket once it is empty, for everyone. Detail: [docs/how-it-works.md](docs/how-it-works.md#r2-backend).
+
 ## Menu bar app
 
 ```sh
@@ -153,8 +180,8 @@ CLI call and action.
 
 ## Docs
 
-- [docs/setup.md](docs/setup.md): API token setup (no browser), moving machines, troubleshooting
-- [docs/how-it-works.md](docs/how-it-works.md): architecture, config keys, security model, testing
+- [docs/setup.md](docs/setup.md): API token setup (no browser), the R2 backend and teammate onboarding, moving machines, troubleshooting
+- [docs/how-it-works.md](docs/how-it-works.md): architecture, config keys, security model, the R2 data model and Worker, testing
 
 ## License
 

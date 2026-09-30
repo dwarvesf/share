@@ -75,6 +75,13 @@ The launchd agent's first program argument is the `share` script itself, so the 
 └── profiles/<name>/        a named profile's config dir, same files; its root is ~/share/profiles/<name>
 ```
 
+An r2 profile keeps far less. Its config holds `backend=r2`, `hostname`, `zone`, `bucket`,
+`port=r2` (a sentinel an older share dies on at load), `r2_endpoint`, and a kept
+`api_token_cmd`. Its root holds `r2-own` (`<id>`, prefix, source path for every share this
+install added; `refresh` trusts only this file), `access-pending` for its own gated adds,
+and short-lived `.r2-index.XXXXXX` snapshots. There is no `pub/`, `index.tsv`, Caddyfile, or
+tunnel token.
+
 ## Profiles
 
 `share --profile <name> <verb>` (or `SHARE_PROFILE=<name>`) runs a second, independent
@@ -188,6 +195,161 @@ if any, stays until removed in the dashboard.
 
 `share refresh <id>` runs the same copy from the recorded source path and swaps it in under the same id (a live share is a no-op). `share rm <id>` moves `pub/<id>` to the Trash (or `~/share/trash` without a `trash` command) and drops the row. An own-host share (`--host`) refuses to be removed without a Cloudflare credential (`CLOUDFLARE_API_TOKEN` or a `share setup --login` cert), so its DNS record and ingress rule are never orphaned. `prune` still removes an expired one and warns that they stay behind.
 
+## R2 backend
+
+A profile set up with `--backend r2` has no tunnel, no caddy, and no login service. Its
+snapshots live in a private R2 bucket, and a Worker on the profile's hostname serves them.
+Every publisher's CLI talks to the bucket directly.
+
+```
+ publisher A (Mini)        publisher B (laptop)                   visitor
+ share --profile df add    share --profile df add                 https://f.example.com/<id>/<name>
+        │                         │                                          │
+        │ S3 API: curl --aws-sigv4, key id = token id,                       ▼
+        │ secret = sha256(token) from stdin (never argv, never a file)   Cloudflare edge: TLS; an
+        └────────────┬────────────┘                                   Access app on /<id>, /<id>/*
+                     ▼                                                for each gated share
+ R2 bucket <bucket> (private: no r2.dev URL, no custom domain)                │
+   share.json                 marker: {"v":1,"host":"<hostname>"}             ▼
+   m/<id>                     one record per share   ◀──────────  Worker share-<host-with-dashes>
+   o/<id>.<nonce>/<path>      the snapshot bytes     ◀──────────  (custom domain only; workers.dev
+                                                                    and previews off)
+                                                                     │
+ local, per install: r2-own (own adds), access-pending               └─▶ Analytics Engine dataset
+                                                                         share_<host_with_underscores>
+```
+
+The transport is the R2 S3 API, not the account REST API: a token scoped to one bucket
+works only there, and only S3 honors conditional writes (`If-None-Match`, `If-Match`).
+Object calls never touch the account API rate limit. Each call retries 429 and 5xx up to
+three times, honoring `Retry-After` up to 30 s. An upload runs as one `curl --parallel`
+with up to 8 transfers, and a failed transfer is retried alone.
+
+### Objects and records
+
+| Key | Content | Written by |
+|---|---|---|
+| `share.json` | `{"v":1,"host":"<hostname>"}` | the admin setup |
+| `m/<id>` | the record: `v`, `id`, `name`, `src`, `added`, `expires` (epoch seconds, `0` = never), `opts` (`noindex`, `access=<app uuid>`, `access_rule=<rule>`), `prefix` (`o/<id>.<nonce>/`), `by` (the publisher's machine name, for display), and `aud` (the Access app's AUD tag) on a gated share | `add` with `If-None-Match: *`; `refresh` with `If-Match: <etag>`; deleted by `rm` and `prune` |
+| `o/<id>.<nonce>/<path>` | the stage tree byte for byte, the same one `stage_copy` builds for a tunnel share (dotfiles and symlinks excluded, `.md` rendered, a generated `index.html` for a folder without one unless `--no-index`) | `add`, `refresh` |
+
+The record is the publish. The Worker reaches bytes only through `m/<id>`, whose `prefix`
+names exactly one upload, so an upload that no record names is never served. `add`
+uploads every file to a fresh `o/<id>.<nonce>/`, checks that the prefix listing equals the
+stage file for file, then writes `m/<id>` with `If-None-Match: *`. A 412 there means
+another publisher took the id; the add dies and deletes its own upload. The EXIT trap
+deletes a held upload only after a fresh `GET m/<id>` shows no record names it, so a record
+write that committed but answered with an error keeps its bytes. `rand_id` on r2 skips an
+id that has a record or any key under `o/<id>.`.
+
+An add refuses before the first upload when the stage holds more than `SHARE_R2_MAX_FILES`
+(500) files, a file over `SHARE_R2_MAX_BYTES` (300 MiB), or a file name with a control
+character.
+
+`ls`, `prune`, `state`, and `rm` read a snapshot: the `m/` listing (every page), then every
+record in one parallel curl run. A record whose `id` differs from its key, whose `prefix` is
+not `o/<id>.` plus 8 hex plus `/`, whose `v` is newer than this share knows, or whose fields
+hold a control character is dropped, like a forged `index.tsv` row. Any listing or record
+read that fails (other than a 404) stops the verb: share never prints an empty list or
+picks an id on an error. The snapshot goes to a temporary `.r2-index.XXXXXX` under the root
+that `index` points at for the process, so `rows()` stays the only reader.
+
+### The Worker
+
+The Worker holds no API token. Its source is embedded in `bin/share`, versioned by
+`WORKER_VERSION` and `WORKER_SHA`, and deployed by the admin setup with the bindings
+`BUCKET`, `HITS`, `HOST`, `TEAM` (the Access team domain, empty without one), `VERSION`,
+`SHA`, and a `SALT` secret set at the first deploy. Every request runs these checks in
+order; the first that matches answers.
+
+| # | Request | Answer |
+|---|---|---|
+| 1 | Host is not exactly the profile's hostname (a trailing dot or another name fails) | 404 |
+| 2 | method other than GET or HEAD | 405 |
+| 3 | the raw path holds `%2F`, `%5C`, `%2E` (any case), an escape of a byte below 0x20, or `//` | 400 |
+| 4 | `/healthz` | `200 ok`, with `X-Share-Worker: <VERSION> <SHA>` and `X-Share-Gate: 1` (an Access team is set) or `0` |
+| 5 | first segment is not exactly 6 lowercase hex characters (no decoding: `/ABC123/` and `/%61bc123/` fail) | 404 |
+| 6 | no `m/<id>`; a record that is not JSON, whose `v` is newer than the Worker's, whose `id` is not the key's, or whose `prefix` is not `o/<id>.` plus 8 hex plus `/`; or `expires > 0` and past, checked on every request | 404 |
+| 7 | a gated record (an `aud`, or `access=` in `opts`) without a valid Access JWT: `Cf-Access-Jwt-Assertion`, RS256, signed by a key from `https://<TEAM>/cdn-cgi/access/certs`, `iss` `https://<TEAM>`, `aud` holding the record's `aud`, `exp` in the future. `TEAM` empty or the certs unreachable also fail | 404 |
+| 8 | `/<id>` | 308 to `/<id>/` |
+| 9 | a path ending in `/` | the decoded folder's `index.html`, then its `README.html`, else 404 (a malformed escape answers 400) |
+| 10 | any other path | the object at the decoded path (a malformed escape answers 400); missing, but `<path>/index.html` or `<path>/README.html` exists: 308 to `<path>/`; else 404 |
+| 11 | every answer, errors included | `Cache-Control: no-store`, `X-Robots-Tag: noindex, nofollow` |
+
+`Content-Type` comes from a fixed extension map, `application/octet-stream` otherwise.
+`Range` and conditional request headers pass through to R2. The certs are cached in the
+isolate for an hour and refetched at most once a minute on an unknown `kid`; a failed
+fetch is never cached. Expiry is enforced here, per request, so a link dies at its second
+whether or not anyone has pruned.
+
+The JWT check is what keeps a gated share closed whatever the edge does: a path the Access
+app did not match, a hand-deleted app, or a stale gate reaches the Worker with no valid
+token for the record's `aud`, and gets 404. Every served path starts with `/<id>/` or is
+`/<id>`, both inside the app's destinations.
+
+### Gated shares on r2
+
+`add --access` keeps the tunnel's order, with the record write as the publish:
+
+```
+share --profile df add ./report.pdf --access group:ops
+  /healthz         X-Share-Gate must be 1, else refused before any write
+  preflight        the Access scopes, the sweep, the group lookup (as on a tunnel)
+  upload           every file to o/<id>.<nonce>/, the listing checked against the stage
+  create app       intent line in access-pending, then the Access app
+                   "share <id> <host> <nonce>" (the upload's nonce); its aud must be 64 hex
+  gate             the three-round kid == aud check, capped by SHARE_ACCESS_WAIT (900 s);
+                   a timeout deletes the app, and the EXIT trap deletes the upload
+  publish          under the index lock, only while the pending line is still there:
+                   PUT m/<id> with If-None-Match: * and the app's aud; drop the line
+```
+
+No record exists during the gate wait, so the Worker answers 404 behind the login. A 412
+on the publish deletes the app and the upload. Removing a gated share needs Access: Apps
+and Policies Edit: `rm` runs the Apps Edit probe before any change, adds a pending line,
+deletes `m/<id>`, and continues only when a fresh `GET m/<id>` answers 404. Then it deletes
+every object under `o/<id>.` (every nonce) and, last, the app. The r2 sweep of
+`access-pending` decides with a fresh `GET m/<id>`, never the snapshot: a record naming the
+line's app means the add finished, and the line is dropped. A 404, or a record naming another
+app, means the app is deleted; on a 404 the upload under that app's own nonce goes after it.
+Any other answer keeps the line. `ls` does not check gated apps on r2, as it does on a
+tunnel: a deleted app leaves the link closed, because the Worker checks the JWT itself.
+
+### Several publishers
+
+| Action | Who |
+|---|---|
+| `add`, `ls`, `hits` | any publisher; `ls` shows every share with `by=<machine>` |
+| `rm` | any publisher, for any share; a gated one needs the Access scope |
+| `refresh` | only the install that added the share: its id must be in the local `r2-own` file (`<id>`, prefix, source path) with the prefix the record still names. The source path comes from `r2-own`, never from a record another publisher could forge. The upload goes to a new nonce, the record swaps with `If-Match: <etag>` (a 412 or 404 means a concurrent `rm` or `refresh` won; the new upload is deleted), then the old prefix goes |
+| expired shares, orphan uploads | any publisher's `ls` or `prune` (below) |
+
+### Expiry and cleanup
+
+The Worker already answers 404 for an expired record. The record and its bytes go at the
+next `ls` or `prune` by any publisher. An expired gated share goes only through a process
+whose token passes the Apps Edit probe (for `ls`, only an exported `CLOUDFLARE_API_TOKEN`);
+otherwise it stays whole and each run prints `expired gated share <id> waits for a publisher
+with the Access token`. `status` counts them and never deletes.
+
+A bare `prune` then sweeps orphan uploads: every `o/<id>.<nonce>/` that no record names and
+whose newest object is over 24 hours old is deleted (a crashed add, or a revoked token that
+could not clean up after itself). The sweep reads every `m/` record raw, not the filtered
+snapshot. One record that is not JSON, lacks a `prefix`, or has a `v` newer than this share
+skips the whole sweep with a warning naming its key, so no live share's bytes are deleted
+because this CLI could not read its record. `status` prints `orphan sweep blocked by <key>`.
+
+### Hits
+
+The Worker writes one Analytics Engine data point for every answer under 400 on a share
+path (not `/healthz`): index the share id, blobs the id and the first 16 hex of
+`sha256(SALT + cf-connecting-ip)`. The raw IP is never written; the salted hash
+pseudonymizes visitors, it does not anonymize them. `share hits <id>` checks the id against
+`^[0-9a-f]{6}$`, then sends one SQL query:
+`SELECT SUM(_sample_interval) AS hits, COUNT(DISTINCT blob2) AS visitors, MAX(timestamp) AS last`
+over the profile's dataset for that id. It needs a token with Account Analytics: Read,
+which reads every dataset on the account.
+
 ## `share state`
 
 The menu bar app never reads share's files. It runs `share profiles --json`, a read-only
@@ -238,6 +400,7 @@ The app changes anything only by running share's normal verbs (`add`, `rm`, `ref
 | `shares[].access` | the `--access` rule of a gated share (`group:...`, `email:...`, `domain:...`), else `null` |
 | `access_pending` | count of Access apps waiting for deletion (`access-pending` lines) |
 | `skipped` | count of malformed index rows; present only when greater than zero |
+| `backend` | `"r2"` on an r2 profile only, absent on a tunnel profile. There `state` is `serving` once set up, `ready` comes from one `/healthz` probe (2 s), `mode` is `named`, `hosts` is `""`, `serves_here` and `service` are `false`, every share is a `snapshot`, and `skipped` is never set. Share Bar shows neither Start nor Stop for it |
 
 Invariants: `state` never prunes, never writes or creates a file, never needs a TTY,
 and never touches the clipboard. Removing or renaming a field bumps `schema`; adding a
@@ -274,6 +437,10 @@ or more than 6 fields, when its id is not exactly 6 lowercase hex characters, or
 | DNS check before creating the tunnel | A taken hostname stops setup with nothing created, so a failed run leaves no orphan tunnel. |
 | API token through `-H @file`; run token stored through stdin and passed as `TUNNEL_TOKEN` | Neither token appears in a process's arguments, so `ps` output never shows one. |
 | caddy, not `python -m http.server` | caddy sets headers, disables listings, writes a JSON access log, and ships as one static binary for CI. |
+| r2: one record per share, naming its upload prefix | R2 has no rename, so a staged upload cannot move into place. The record is the only path from a link to bytes, so one conditional `PUT m/<id>` publishes, one conditional swap refreshes, and every add and rm writes its own key instead of contending on a shared index. |
+| r2: the S3 API through `curl --aws-sigv4` | Measured: a bucket-scoped token gets 403 on every REST object call, and the REST PUT ignores `If-None-Match` and `If-Match`. S3 honors both and stays outside the account API rate limit. curl's built-in flag adds no dependency. |
+| r2: expiry checked by the Worker per request | A link dies at its second. A cleanup cron in the Worker would need an Access token there; publishers' `ls` and `prune` delete the bytes instead. |
+| r2: Worker source embedded in `bin/share` | `install.sh` ships one file, and the formula stays unchanged. `WORKER_VERSION` and `WORKER_SHA` make every deploy comparable, and a deploy refuses to downgrade a newer Worker without `--force`. |
 | Bash | The tool is glue around caddy, cloudflared, and the Cloudflare API. A single binary in Go becomes the better choice if share needs Windows or a distribution without a git checkout. |
 
 ## Testing
