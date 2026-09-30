@@ -11,7 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItemController = StatusItemController()
 
         // Manual-verification-only debug entry (TASK-017/TASK-010): a colon-separated list
-        // of paths in `SHAREBAR_DEBUG_ADD_PATHS` runs through the same `addPaths` a real
+        // of paths in `SHAREBAR_DEBUG_ADD_PATHS` runs through the same publish path a real
         // Share File… selection or drop would, without driving `NSOpenPanel` or a real
         // drag. Never set by a normal launch; exists so manual checks can hit the add path
         // deterministically instead of navigating a picker via synthetic keystrokes.

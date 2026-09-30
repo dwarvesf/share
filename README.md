@@ -143,9 +143,13 @@ First run, before anything is set up:
 | Stopped | `Stopped` | Start Sharing |
 | Serving | `Serving at <host>` | the share list, Stop Sharing |
 
-The app only reads through the CLI (`share state`) and only acts through the CLI's own
-verbs; it never touches `~/share` directly. To see what the app is doing, `log stream
---predicate 'subsystem == "foundation.d.share.bar"'` shows every CLI call and action.
+The app only reads through the CLI (`share profiles --json`, one call for every profile)
+and only acts through the CLI's own verbs (`--profile <name>` before each, `default`
+included); it never touches `~/share` directly. Publishing a file or folder can target
+any stopped or serving profile, publicly or behind a login rule (`group:`, `email:`,
+`domain:` on a named setup); the app never sees a Cloudflare token. To see what the app
+is doing, `log stream --predicate 'subsystem == "foundation.d.share.bar"'` shows every
+CLI call and action.
 
 ## Docs
 

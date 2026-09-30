@@ -12,7 +12,7 @@ final class RowAndModelRulesTests: XCTestCase {
 
     func testExpiresZeroShowsNever() {
         let share = makeShare(kind: "snapshot", expires: 0)
-        XCTAssertEqual(rowFor(share, now: Date()).trailing, "never")
+        XCTAssertEqual(rowFor(share).trailing, "never")
     }
 
     func testExpiresEqualToNowShowsExpired() {
@@ -130,81 +130,140 @@ final class RowAndModelRulesTests: XCTestCase {
         XCTAssertEqual(rowFor(share).title, "notes.txt")
     }
 
-    // MARK: - showStart / showSetUp
+    // MARK: - gated rows
 
-    func testShowStartIsFalseWhenServing() {
-        let snapshot = makeSnapshot(state: "serving", servesHere: true)
-        XCTAssertFalse(MenuModel(snapshot: snapshot, failure: nil, now: Date()).showStart)
+    func testGatedRowGetsTheGateTextAndMarker() {
+        let gated = rowFor(makeShare(name: "ops-report.pdf", access: "group:dwarves-ops"))
+        XCTAssertEqual(gated.access, "group:dwarves-ops")
+        XCTAssertEqual(gated.accessibilityTitle, "ops-report.pdf, never, login required")
+        XCTAssertEqual(gated.removeText, "Remove ops-report.pdf? The copy goes to the Trash and its login gate is deleted.")
+
+        let gatedOwnHost = rowFor(makeShare(name: "docs", ownHost: "docs.example.com", access: "email:a@x.io"))
+        XCTAssertEqual(
+            gatedOwnHost.removeText,
+            "Remove docs? This also deletes the DNS record for docs.example.com and its login gate."
+        )
     }
 
-    func testShowStartIsFalseWhenNotServedHere() {
-        let snapshot = makeSnapshot(state: "stopped", servesHere: false)
-        XCTAssertFalse(MenuModel(snapshot: snapshot, failure: nil, now: Date()).showStart)
+    func testPublicRowHasNoGateText() {
+        let row = rowFor(makeShare(name: "notes.txt"))
+        XCTAssertNil(row.access)
+        XCTAssertEqual(row.accessibilityTitle, "notes.txt, never")
     }
 
-    func testShowStartIsTrueWhenStoppedAndServedHere() {
-        let snapshot = makeSnapshot(state: "stopped", servesHere: true)
-        XCTAssertTrue(MenuModel(snapshot: snapshot, failure: nil, now: Date()).showStart)
+    // MARK: - per-profile section rules
+
+    func testShowStartAndShowStopApplyPerProfile() {
+        let profiles = makeProfiles([
+            makeEntry(name: "a", state: makeSnapshot(state: "stopped", servesHere: true)),
+            makeEntry(name: "b", state: makeSnapshot(state: "serving", servesHere: true)),
+        ])
+        let model = MenuModel(profiles: profiles, failure: nil, now: Date())
+
+        XCTAssertTrue(model.sections[0].showStart)
+        XCTAssertFalse(model.sections[0].showStop)
+        XCTAssertFalse(model.sections[1].showStart)
+        XCTAssertTrue(model.sections[1].showStop)
     }
 
-    func testShowSetUpIsTrueWheneverNotServing() {
-        for state in ["stopped", "not_setup"] {
-            let snapshot = makeSnapshot(state: state)
-            XCTAssertTrue(MenuModel(snapshot: snapshot, failure: nil, now: Date()).showSetUp, "state=\(state)")
-        }
+    func testShowSetUpFollowsTheNotServingRuleExceptForErrorSections() {
+        let profiles = makeProfiles([
+            makeEntry(name: "a", state: makeSnapshot(state: "stopped", servesHere: true)),
+            makeEntry(name: "b", state: makeSnapshot(state: "serving", servesHere: true)),
+            makeEntry(name: "Bad", error: "share: bad profile name 'Bad'"),
+        ])
+        let model = MenuModel(profiles: profiles, failure: nil, now: Date())
+
+        XCTAssertTrue(model.sections[0].showSetUp, "stopped: rerunning setup is the recovery")
+        XCTAssertFalse(model.sections[1].showSetUp, "serving has nothing to set up")
+        XCTAssertFalse(model.sections[2].showSetUp, "an error section offers no action")
     }
 
-    func testShowSetUpIsFalseWhenServing() {
-        let snapshot = makeSnapshot(state: "serving")
-        XCTAssertFalse(MenuModel(snapshot: snapshot, failure: nil, now: Date()).showSetUp)
-    }
+    func testSectionTitleFieldsAndCommand() {
+        let profiles = makeProfiles([
+            makeEntry(name: "default", state: makeSnapshot(state: "not_setup", host: nil, servesHere: false)),
+            makeEntry(name: "dfoundation", state: makeSnapshot(state: "serving", ready: true, host: "s.d.foundation")),
+        ])
+        let model = MenuModel(profiles: profiles, failure: nil, now: Date())
 
-    func testShowStopIsTrueOnlyWhenServing() {
-        XCTAssertTrue(MenuModel(snapshot: makeSnapshot(state: "serving"), failure: nil, now: Date()).showStop)
-        XCTAssertFalse(MenuModel(snapshot: makeSnapshot(state: "stopped"), failure: nil, now: Date()).showStop)
-        XCTAssertFalse(MenuModel(snapshot: nil, failure: nil, now: Date()).showStop)
+        XCTAssertEqual(model.sections[0].profile, "default")
+        XCTAssertNil(model.sections[0].host)
+        XCTAssertEqual(model.sections[0].status, "Not set up")
+        XCTAssertEqual(model.sections[0].command, "share")
+        XCTAssertEqual(model.sections[1].command, "share --profile dfoundation")
     }
 
     func testShowCopyInstallCommandIsTrueOnlyWhenCLIIsNotFound() {
-        XCTAssertTrue(MenuModel(snapshot: nil, failure: .cliNotFound, now: Date()).showCopyInstallCommand)
-        XCTAssertFalse(MenuModel(snapshot: nil, failure: .oldCLI, now: Date()).showCopyInstallCommand)
-        XCTAssertFalse(MenuModel(snapshot: makeSnapshot(), failure: nil, now: Date()).showCopyInstallCommand)
+        XCTAssertTrue(MenuModel(profiles: nil, failure: .cliNotFound, now: Date()).showCopyInstallCommand)
+        XCTAssertFalse(MenuModel(profiles: nil, failure: .oldCLI, now: Date()).showCopyInstallCommand)
+        XCTAssertFalse(MenuModel(profiles: try? loadFixtureProfiles(), failure: nil, now: Date()).showCopyInstallCommand)
     }
 
     func testShowCopyUpgradeCommandIsTrueOnlyWhenCLIIsOld() {
-        XCTAssertTrue(MenuModel(snapshot: nil, failure: .oldCLI, now: Date()).showCopyUpgradeCommand)
-        XCTAssertFalse(MenuModel(snapshot: nil, failure: .cliNotFound, now: Date()).showCopyUpgradeCommand)
-        XCTAssertFalse(MenuModel(snapshot: makeSnapshot(), failure: nil, now: Date()).showCopyUpgradeCommand)
+        XCTAssertTrue(MenuModel(profiles: nil, failure: .oldCLI, now: Date()).showCopyUpgradeCommand)
+        XCTAssertFalse(MenuModel(profiles: nil, failure: .cliNotFound, now: Date()).showCopyUpgradeCommand)
+        XCTAssertFalse(MenuModel(profiles: try? loadFixtureProfiles(), failure: nil, now: Date()).showCopyUpgradeCommand)
     }
 
-    // MARK: - 25-row cap
+    // MARK: - row caps
 
-    func testRowsAreCappedAt25AndMoreHoldsTheRest() {
+    func testOneSetUpProfileCapsAt25() {
         let shares = (1...30).map { makeShare(id: "id\($0)", name: "file\($0).txt") }
-        let snapshot = makeSnapshot(shares: shares)
+        let profiles = makeProfiles([
+            makeEntry(name: "default", state: makeSnapshot(state: "not_setup", host: nil, servesHere: false)),
+            makeEntry(name: "a", state: makeSnapshot(state: "serving", shares: shares)),
+        ])
+        let model = MenuModel(profiles: profiles, failure: nil, now: Date())
 
-        let model = MenuModel(snapshot: snapshot, failure: nil, now: Date())
-
-        XCTAssertEqual(model.rows.count, 25)
-        XCTAssertEqual(model.more, 5)
-        XCTAssertEqual(model.rows.map(\.id), shares.prefix(25).map(\.id), "cap keeps the given order")
+        let section = model.sections[1]
+        XCTAssertEqual(section.rows.count, 25)
+        XCTAssertEqual(section.more, 5)
+        XCTAssertEqual(section.command, "share --profile a")
+        XCTAssertEqual(section.rows.map(\.id), shares.prefix(25).map(\.id), "cap keeps the given order")
     }
 
-    func testMoreIsZeroWhenAtOrUnderTheCap() {
-        let shares = (1...25).map { makeShare(id: "id\($0)") }
-        let snapshot = makeSnapshot(shares: shares)
+    func testTwoSetUpProfilesCapAt10Each() {
+        let shares = (1...30).map { makeShare(id: "id\($0)", name: "file\($0).txt") }
+        let profiles = makeProfiles([
+            makeEntry(name: "a", state: makeSnapshot(state: "serving", shares: shares)),
+            makeEntry(name: "b", state: makeSnapshot(state: "serving", shares: shares)),
+        ])
+        let model = MenuModel(profiles: profiles, failure: nil, now: Date())
 
-        let model = MenuModel(snapshot: snapshot, failure: nil, now: Date())
+        for section in model.sections {
+            XCTAssertEqual(section.rows.count, 10)
+            XCTAssertEqual(section.more, 20)
+        }
+    }
 
-        XCTAssertEqual(model.rows.count, 25)
-        XCTAssertEqual(model.more, 0)
+    func testTheSameIdUnderTwoProfilesKeepsDistinctKeys() {
+        let share = makeShare(id: "abc123")
+        let profiles = makeProfiles([
+            makeEntry(name: "a", state: makeSnapshot(state: "serving", shares: [share])),
+            makeEntry(name: "b", state: makeSnapshot(state: "serving", shares: [share])),
+        ])
+        let model = MenuModel(profiles: profiles, failure: nil, now: Date())
+
+        let keys = model.sections.flatMap { $0.rows.map(\.key) }
+        XCTAssertEqual(keys, ["a|abc123", "b|abc123"])
+        XCTAssertEqual(Set(keys).count, 2)
+    }
+
+    // MARK: - access_pending
+
+    func testAccessPendingCountLandsOnTheSection() {
+        let profiles = makeProfiles([
+            makeEntry(name: "a", state: makeSnapshot(state: "serving", accessPending: 2)),
+        ])
+        let model = MenuModel(profiles: profiles, failure: nil, now: Date())
+
+        XCTAssertEqual(model.sections[0].accessPending, 2)
+        XCTAssertEqual(model.sections[0].command, "share --profile a")
     }
 
     // MARK: - helpers
 
     private func rowFor(_ share: Share, now: Date = Date()) -> Row {
-        let snapshot = makeSnapshot(shares: [share])
-        let model = MenuModel(snapshot: snapshot, failure: nil, now: now)
-        return model.rows[0]
+        Row(share: share, profile: "default", now: now)
     }
 }

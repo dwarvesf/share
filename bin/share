@@ -18,7 +18,7 @@
 #   share start | stop        start or stop serving (links live while this machine is awake)
 #   share service install|uninstall|status   the login service that keeps serving
 #   share state               machine-readable JSON snapshot (for the menu bar app)
-#   share profiles            every profile with its state and host
+#   share profiles [--json]   every profile with its state and host (--json: full state objects, for the menu bar app)
 #   share [status]            server state plus the share list
 #   share serve               serve in the foreground until Ctrl-C
 #   share skill [--install]   the SKILL.md that teaches an agent to use share
@@ -1186,16 +1186,53 @@ profile_port() { # a named profile's first setup picks its own port pair, before
   echo "port:       $port (metrics $metrics_port)"
 }
 
+profiles_child_env() { # the overrides every per-profile child drops; the menu app's strip list names the same six
+  env -u SHARE_ROOT \
+      -u SHARE_CONFIG_DIR \
+      -u SHARE_PORT \
+      -u SHARE_HOSTNAME \
+      -u SHARE_HOSTS \
+      -u SHARE_SERVICE_LABEL "$@"
+}
+
 cmd_profiles() { # the default, then every directory under profiles/; state and host from each one's own `share state`
   local n d line
+  case "${1:-}" in
+    --json) [[ $# -eq 1 ]] || die "usage: share profiles [--json]"; cmd_profiles_json; return ;;
+    "") ;;
+    *) die "usage: share profiles [--json]" ;;
+  esac
   for n in default "$profiles_dir"/*/; do
     [[ $n == default || -d $n ]] || continue
     d="${n%/}"; d="${d##*/}"
     # the overrides are unset for the children: an inherited SHARE_ROOT or SHARE_HOSTNAME would make every row read one setup
-    line="$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_HOSTS -u SHARE_SERVICE_LABEL \
-      SHARE_PROFILE="$d" SHARE_STATE_BRIEF=1 bash "$0" state 2>/dev/null | jq -r '[.state, (.host // "-")] | @tsv' 2>/dev/null)" || line=""
+    line="$(profiles_child_env SHARE_PROFILE="$d" SHARE_STATE_BRIEF=1 bash "$0" state 2>/dev/null | jq -r '[.state, (.host // "-")] | @tsv' 2>/dev/null)" || line=""
     printf '%s\t%s\n' "$d" "${line:-error	-}"
   done
+}
+
+cmd_profiles_json() { # one read for the menu app: every profile's `state` object, or its error line, jq-built per entry
+  local n d out rc err
+  for n in default "$profiles_dir"/*/; do
+    [[ $n == default || -d $n ]] || continue
+    d="${n%/}"; d="${d##*/}"
+    if [[ $n != default && $d == default ]]; then   # reserved: `--profile default` is the unnamed profile
+      jq -nc --arg error "reserved name; rename or remove $profiles_dir/default" '{name:"profiles/default",error:$error}'
+      continue
+    fi
+    rc=0
+    out="$(profiles_child_env SHARE_PROFILE="$d" bash "$0" state 2>/dev/null)" || rc=$?
+    if [[ $rc -eq 0 ]] && jq -e . >/dev/null 2>&1 <<<"$out"; then
+      jq -nc --arg name "$d" --argjson state "$out" '{name:$name,state:$state}'
+      continue
+    fi
+    # rerun only the failed child, stdout discarded, to read its stderr without a temp file
+    err="$(profiles_child_env SHARE_PROFILE="$d" bash "$0" state 2>&1 >/dev/null | awk 'NF {l=$0} END {print l}' || true)"
+    if [[ -z $err ]]; then
+      if [[ $rc -ne 0 ]]; then err="state exited $rc"; else err="state printed invalid JSON"; fi
+    fi
+    jq -nc --arg name "$d" --arg error "$err" '{name:$name,error:$error}'
+  done | jq -s '{schema:1,profiles:.}'
 }
 
 write_config_quick() { # quick mode: a mode flag and the serving facts, nothing Cloudflare
@@ -3276,7 +3313,7 @@ case "${1:-status}" in
   stop) cmd_stop ;;
   status) cmd_status ;;
   state) cmd_state ;;
-  profiles) cmd_profiles ;;
+  profiles) shift; cmd_profiles "$@" ;;
   serve) cmd_serve ;;
   -h|--help|help) sed -n '2,/^# Docs:/p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) sed -n '2,/^# Docs:/p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;

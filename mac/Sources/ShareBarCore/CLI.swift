@@ -34,12 +34,29 @@ public enum CLI {
         return nil
     }
 
+    /// Location overrides and the profile selection removed from every child's
+    /// environment: the same six `profiles_child_env` unsets in `bin/share` (a
+    /// tests/share.sh grep keeps the two lists equal), plus `SHARE_PROFILE`, so a leaked
+    /// root or profile cannot point a verb at a setup the menu does not show.
+    static let strippedEnvironmentKeys = [
+        "SHARE_ROOT",
+        "SHARE_CONFIG_DIR",
+        "SHARE_PORT",
+        "SHARE_HOSTNAME",
+        "SHARE_HOSTS",
+        "SHARE_SERVICE_LABEL",
+        "SHARE_PROFILE",
+    ]
+
     /// Child environment: the app's own environment, with `PATH` replaced by the resolved
     /// CLI directory followed by the spec's fixed fallback PATH, `LANG` filled in only when
-    /// unset, and `SHARE_CLIPBOARD` always forced off.
+    /// unset, `SHARE_CLIPBOARD` always forced off, and `strippedEnvironmentKeys` removed.
     static func childEnvironment(cliDirectory: String, inherited: [String: String]) -> [String: String] {
         var env = inherited
         let home = inherited["HOME"] ?? NSHomeDirectory()
+        for key in strippedEnvironmentKeys {
+            env[key] = nil
+        }
         let fallbackPath = [
             "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin",
             "\(home)/.local/bin", "/opt/local/bin",
@@ -64,7 +81,7 @@ public enum CLI {
     public static func run(_ args: [String], timeout: TimeInterval?) async -> CLIResult {
         guard let url = locateForRun() else {
             logger.error(
-                "share CLI not found; verb=\(args.first ?? "", privacy: .public) args=\(args.joined(separator: " "), privacy: .private)"
+                "share CLI not found; verb=\(verbForLog(args), privacy: .public) args=\(args.joined(separator: " "), privacy: .private)"
             )
             return CLIResult(status: 127, stdout: "", stderr: "share: CLI not found", timedOut: false)
         }
@@ -77,19 +94,30 @@ public enum CLI {
         }.value
     }
 
-    /// Concurrent `state` calls share one in-flight run instead of spawning a process each.
-    public static func state(timeout: TimeInterval? = 10) async -> CLIResult {
-        await stateCoalescer.run(timeout: timeout)
+    /// The verb for the public `verb=` log field: skips a leading `--profile <name>` pair
+    /// so the field names the verb, never `--profile`.
+    static func verbForLog(_ argv: [String]) -> String {
+        if argv.first == "--profile", argv.count > 2 {
+            return argv[2]
+        }
+        return argv.first ?? ""
     }
 
-    private static let stateCoalescer = StateCoalescer()
+    /// Concurrent `profiles --json` calls share one in-flight run. A `fresh` call never
+    /// joins a run that started before it: it waits for that run to end, then starts a new
+    /// one, which later callers may join (the post-mutation re-read).
+    public static func profiles(fresh: Bool = false, timeout: TimeInterval? = 20) async -> CLIResult {
+        await profilesCoalescer.run(fresh: fresh, timeout: timeout)
+    }
+
+    private static let profilesCoalescer = ProfilesCoalescer()
 
     /// Spawns a long-running, cancellable verb (setup), streaming decoded output to
     /// `onOutput` as it arrives instead of buffering it until exit.
     public static func spawnCancellable(_ args: [String], onOutput: @escaping (String) -> Void) -> CLIJob {
         guard let url = locateForRun() else {
             logger.error(
-                "share CLI not found; verb=\(args.first ?? "", privacy: .public) args=\(args.joined(separator: " "), privacy: .private)"
+                "share CLI not found; verb=\(verbForLog(args), privacy: .public) args=\(args.joined(separator: " "), privacy: .private)"
             )
             onOutput("share: CLI not found")
             return CLIJob.failed(CLIResult(status: 127, stdout: "", stderr: "share: CLI not found", timedOut: false))
@@ -99,7 +127,7 @@ public enum CLI {
             inherited: ProcessInfo.processInfo.environment
         )
         let start = Date()
-        let verbForLog = args.first ?? ""
+        let verb = verbForLog(args)
         let argvForLog = ([url.path] + args).joined(separator: " ")
 
         do {
@@ -141,7 +169,7 @@ public enum CLI {
                 let exit = waitAndDrain()
                 let duration = Date().timeIntervalSince(start)
                 logger.log(
-                    "verb=\(verbForLog, privacy: .public) argv=\(argvForLog, privacy: .private) exit=\(exit, privacy: .public) duration=\(duration, privacy: .public) timedOut=false"
+                    "verb=\(verb, privacy: .public) argv=\(argvForLog, privacy: .private) exit=\(exit, privacy: .public) duration=\(duration, privacy: .public) timedOut=false"
                 )
                 return CLIResult(
                     status: exit,
@@ -153,7 +181,7 @@ public enum CLI {
             return CLIJob(pid: handle.pid, resultTask: resultTask)
         } catch {
             logger.error(
-                "spawn failed for verb=\(verbForLog, privacy: .public) argv=\(argvForLog, privacy: .private): \(String(describing: error), privacy: .public)"
+                "spawn failed for verb=\(verb, privacy: .public) argv=\(argvForLog, privacy: .private): \(String(describing: error), privacy: .public)"
             )
             return CLIJob.failed(CLIResult(status: -1, stdout: "", stderr: "share: failed to spawn", timedOut: false))
         }
@@ -170,7 +198,7 @@ public enum CLI {
         timeout: TimeInterval?
     ) -> CLIResult {
         let start = Date()
-        let verbForLog = argv.first ?? ""
+        let verb = verbForLog(argv)
         let argvForLog = ([executablePath] + argv).joined(separator: " ")
 
         let handle: Spawn.Handle
@@ -178,7 +206,7 @@ public enum CLI {
             handle = try Spawn.start(executablePath: executablePath, argv: argv, environment: environment)
         } catch {
             logger.error(
-                "spawn failed for verb=\(verbForLog, privacy: .public) argv=\(argvForLog, privacy: .private): \(String(describing: error), privacy: .public)"
+                "spawn failed for verb=\(verb, privacy: .public) argv=\(argvForLog, privacy: .private): \(String(describing: error), privacy: .public)"
             )
             return CLIResult(status: -1, stdout: "", stderr: "share: failed to spawn", timedOut: false)
         }
@@ -224,7 +252,7 @@ public enum CLI {
         let exit = Spawn.exitStatus(fromWaitStatus: waitStatus)
         let duration = Date().timeIntervalSince(start)
         logger.log(
-            "verb=\(verbForLog, privacy: .public) argv=\(argvForLog, privacy: .private) exit=\(exit, privacy: .public) duration=\(duration, privacy: .public) timedOut=\(timedOut, privacy: .public)"
+            "verb=\(verb, privacy: .public) argv=\(argvForLog, privacy: .private) exit=\(exit, privacy: .public) duration=\(duration, privacy: .public) timedOut=\(timedOut, privacy: .public)"
         )
 
         return CLIResult(
@@ -236,19 +264,60 @@ public enum CLI {
     }
 }
 
-/// Coalesces concurrent `state` calls into one in-flight run.
-private actor StateCoalescer {
-    private var inFlight: Task<CLIResult, Never>?
+/// Coalesces `profiles --json` calls into one in-flight run.
+private actor ProfilesCoalescer {
+    private var generation = 0
+    private var inFlight: (gen: Int, task: Task<CLIResult, Never>)?
 
-    func run(timeout: TimeInterval?) async -> CLIResult {
-        if let inFlight {
-            return await inFlight.value
+    func run(fresh: Bool, timeout: TimeInterval?) async -> CLIResult {
+        if let current = inFlight {
+            if !fresh {
+                return await current.task.value
+            }
+            _ = await current.task.value
+            if let next = inFlight {
+                if next.gen == current.gen {
+                    // Still the run we just waited on (its starter has not cleared it
+                    // yet); its result predates this call and must not be reused.
+                    inFlight = nil
+                } else {
+                    // A run another waiter started after the old one ended did not start
+                    // before this call, so a fresh caller may join it.
+                    return await next.task.value
+                }
+            }
         }
-        let task = Task { await CLI.run(["state"], timeout: timeout) }
-        inFlight = task
+        generation += 1
+        let task = Task { await CLI.run(["profiles", "--json"], timeout: timeout) }
+        inFlight = (generation, task)
         let result = await task.value
-        inFlight = nil
+        if inFlight?.gen == generation {
+            inFlight = nil
+        }
         return result
+    }
+}
+
+/// The `--profile <name>` prefix every per-profile verb carries, `default` included, so
+/// no app call depends on an inherited SHARE_PROFILE.
+public enum ProfileArgs {
+    public static func argv(_ profile: String, _ verbArgs: [String]) -> [String] {
+        ["--profile", profile] + verbArgs
+    }
+
+    public static func refresh(_ profile: String, id: String) -> [String] { argv(profile, ["refresh", id]) }
+    public static func remove(_ profile: String, id: String) -> [String] { argv(profile, ["rm", id]) }
+    public static func start(_ profile: String) -> [String] { argv(profile, ["start"]) }
+    public static func stop(_ profile: String) -> [String] { argv(profile, ["stop"]) }
+    public static func hits(_ profile: String, id: String) -> [String] { argv(profile, ["hits", id]) }
+    public static func setup(_ profile: String, host: String, quick: Bool) -> [String] {
+        argv(profile, quick ? ["setup", "--quick"] : ["setup", host])
+    }
+
+    /// The command the menu's hint lines and failure text name: `share` for the default
+    /// profile, `share --profile <name>` otherwise.
+    public static func commandName(_ profile: String) -> String {
+        profile == "default" ? "share" : "share --profile \(profile)"
     }
 }
 
