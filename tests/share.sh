@@ -745,6 +745,51 @@ env -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -
 check "profiles under an exported SHARE_ROOT still reads each profile's own state" "a	serving	prof-a.trycloudflare.com b	serving	prof-b.trycloudflare.com" \
   "$(grep '^[ab]	' "$WORK/profiles-override.out" | tr '\n' ' ' | sed 's/ $//')"
 
+echo "--- share profiles --json: every profile's state in one call ---"
+marker="$WORK/json.marker"; touch "$marker"; sleep 0.2
+psh a profiles --json >"$WORK/profiles.json"
+check "profiles --json exits 0" "0" "$?"
+check "profiles --json output parses" "0" "$(jq -e . "$WORK/profiles.json" >/dev/null 2>&1; echo $?)"
+check "profiles --json schema is 1" "1" "$(jq -r .schema "$WORK/profiles.json")"
+check "profiles --json names in listing order" "default a b" "$(jq -r '[.profiles[].name] | join(" ")' "$WORK/profiles.json")"
+for p in default a b; do
+  own="$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_HOSTS -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME \
+    HOME="$PHOME" SHARE_LIVE_CHECK=0 SHARE_TUNNEL=1 PATH="$QPATH" SHARE_PROFILE="$p" bash "$SH" state)"
+  check "profiles --json: $p's state equals its own share state" "true" \
+    "$(jq --arg name "$p" --argjson own "$own" -r '[.profiles[] | select(.name == $name) | .state == $own][0]' "$WORK/profiles.json")"
+done
+check "profiles --json wrote nothing under HOME" "0" "$(find "$PHOME" -newer "$marker" | wc -l | tr -d ' ')"
+out=$(psh a profiles --bogus 2>&1); rc=$?
+check "profiles --bogus exits 1" "1" "$rc"
+check "profiles --bogus prints the usage" "share: usage: share profiles [--json]" "$out"
+out=$(psh a profiles --json --bogus 2>&1); rc=$?
+check "profiles --json plus a second arg exits 1" "1" "$rc"
+check "plain profiles is still the TSV listing" "$(printf 'default\tnot_setup\t-\na\tserving\tprof-a.trycloudflare.com\nb\tserving\tprof-b.trycloudflare.com')" "$(psh a profiles)"
+# an exported SHARE_ROOT must not leak into the JSON children either: the listing is the same
+env -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME HOME="$PHOME" SHARE_ROOT="$WORK/elsewhere" \
+  SHARE_LIVE_CHECK=0 SHARE_TUNNEL=1 PATH="$QPATH" bash "$SH" --profile a profiles --json >"$WORK/profiles-root.json"
+check "profiles --json ignores an exported SHARE_ROOT" "$(jq -Sc . "$WORK/profiles.json")" "$(jq -Sc . "$WORK/profiles-root.json")"
+
+echo "--- profiles --json: a bad slug, a quote in a name, and profiles/default are error entries ---"
+mkdir -p "$PHOME/.config/share/profiles/Bad" "$PHOME/.config/share/profiles/default" "$PHOME/.config/share/profiles/a\"b"
+psh a profiles --json >"$WORK/profiles-badnames.json"
+check "profiles --json with bad names exits 0 and parses" "0" "$(jq -e . "$WORK/profiles-badnames.json" >/dev/null 2>&1; echo $?)"
+check "profiles --json: Bad is an error entry" "share: bad profile name 'Bad' (a-z, 0-9, -; 32 chars max)" \
+  "$(jq -r '.profiles[] | select(.name == "Bad") | .error' "$WORK/profiles-badnames.json")"
+check "profiles --json: a quote in a name stays one escaped entry" "share: bad profile name 'a\"b' (a-z, 0-9, -; 32 chars max)" \
+  "$(jq -r '.profiles[] | select(.name == "a\"b") | .error' "$WORK/profiles-badnames.json")"
+check "profiles --json: profiles/default is the reserved-name entry" "reserved name; rename or remove $PHOME/.config/share/profiles/default" \
+  "$(jq -r '.profiles[] | select(.name == "profiles/default") | .error' "$WORK/profiles-badnames.json")"
+check "profiles --json: exactly one entry is named default" "1" "$(jq '[.profiles[] | select(.name == "default")] | length' "$WORK/profiles-badnames.json")"
+check "profiles --json: the good profiles still carry state" "3" "$(jq '[.profiles[] | select(.state != null)] | length' "$WORK/profiles-badnames.json")"
+rmdir "$PHOME/.config/share/profiles/Bad" "$PHOME/.config/share/profiles/default" "$PHOME/.config/share/profiles/a\"b"
+
+echo "--- the child-env strip lists agree between bash and Swift ---"
+MAC_CLI="$(cd "$(dirname "$0")/.." && pwd)/mac/Sources/ShareBarCore/CLI.swift"
+bash_list="$(sed -n '/^profiles_child_env()/,/^}/p' "$SH" | grep -o '\-u [A-Z_]*' | awk '{print $2}' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+swift_list="$(sed -n '/static let strippedEnvironmentKeys/,/^ *\]$/p' "$MAC_CLI" | grep -o '"SHARE_[A-Z_]*"' | tr -d '"' | grep -v '^SHARE_PROFILE$' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+check "the env -u list and the Swift strip list name the same overrides" "$bash_list" "$swift_list"
+
 echo "--- rerun setup keeps the port; rm, refresh, hits, state act on one profile ---"
 SHARE_FAKE_QUICK_URL=prof-a psh a setup --quick --no-service >/dev/null 2>&1
 check "rerun keeps a's port" "$pa" "$(pcfg a)"
