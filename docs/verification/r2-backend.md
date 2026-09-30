@@ -164,3 +164,33 @@ Regression checks added with the live fixes, each red against the code before it
 ### Rollback
 
 Code: revert the branch commits; a tunnel profile reads no r2 key (row 1 green). Live state: [UNAVAILABLE: nothing persists; every e2e object was deleted and verified gone through the API]. A future live r2 profile is removed with `share --profile <p> teardown --yes --purge` and the admin token.
+
+## Batch 5: review fixes (PR #41)
+
+Each fix landed test first. RED is the new test against the commit before the fix (`git show HEAD:bin/share` swapped in); GREEN is the fix. The share.sh rows ran through a focused runner (the suite preamble, a minimal r2 fixture, and the named sections verbatim); the full suite then ran once on the final tree.
+
+| # | Commit | Test | RED (before the fix) | GREEN |
+|---|---|---|---|---|
+| 1 | d991c56 | row 6: `add` of a stage holding `a/\.\./\.\./outside.txt`, `x\y`, or `q"t.txt` | 9 FAIL: each add exits 0 and PUTs 3 objects | 9 ok: exit 1, the file named, no PUT |
+| 1 | d991c56 | real curl: `r2-put-tree` outside the dry seam against a local S3 stand-in, every object compared byte for byte with its staged file | 2 FAIL: the `"` name broke the config, 4 files never arrived, and the run still exited 0. With the `"` file removed, the backslash path uploaded the stage's parent `outside.txt` (`LEAKED`) and `x\y` uploaded `xy` | 3 ok: 7 objects, all bytes equal |
+| 2 | 7359939 | row 6: an admin token, then an account-wide R2 token, in `CLOUDFLARE_API_TOKEN` with no stored source; then a bucket token | 7 FAIL: both adds exit 0 and PUT 4 objects; the bucket token publishes with no Worker-settings or bucket-list call | 8 ok: both refused naming `CLOUDFLARE_API_TOKEN`, no PUT; the bucket token publishes after one settings and one bucket-list call |
+| 3 | db316db | r28: record with `opts: access=<uuid>`, no `aud`, valid JWT | test only; negative control: `isGated` without the `opts` fallback answers 200 (FAIL), restored with `git checkout -- bin/share` | ok: 404 |
+| 4 | a72a1f7 | r28: `nbf` 300 s ahead, `nbf` a string, `nbf` 5 s back | 2 FAIL: 200 for the future and the string `nbf` | 3 ok: 404, 404, 200; `WORKER_VERSION` 2 |
+| 5 | 144d776 | r17: `bytes=-4`, `bytes=-50`, `bytes=20-30`, a Range on a missing file; the test bucket now throws on a range past the end and serves suffixes, as live R2 does | 2 FAIL: `bytes -40-9/10`; `404 null` for the unsatisfiable range | ok: `206 bytes 6-9/10`, `206 bytes 0-9/10`, `416 bytes */10` with `no-store`, 404 |
+| 6 | bf7b1d8 | `api-token` with no argument on an r2 profile under `expect` (a pseudo-terminal), the pasted token checked and stored | 5 FAIL: the Access form (`share access (r2x)`, keys `access`, `access_acct`, `zone`), no bucket permission named | 6 ok: `profile/api-tokens` form, keys `[{"key":"zone","type":"read"}]`, `accountId` from `r2_endpoint`, name `share publisher (r2x)`, the prompt names Workers R2 Storage Bucket Item Write on `ok-bucket` only |
+| 7 | 2c7f8e9 | admin setup with no token: the block names Access: Apps and Policies Edit for `teardown --purge` | 1 FAIL | ok |
+
+Fix 6 source check: Cloudflare's template-URL page documents short keys only (`workers_r2` is the one R2 key, and it maps to the account-wide group the publisher check refuses) and says resource scoping is set in the form. The bucket-item group IDs (`2efd5506...` Write, `6a018a9f...` Read) are accepted only by account-token links, per an open docs change; an account token fails `/user/tokens/verify`, which share uses for the S3 key. The live `permission_groups` list was not reachable with the Toolkit token (9109). So the link presets Zone Read, the account, and the name, and the prompt names the bucket permission to add.
+
+Not changed: when curl's parallel run dies before any transfer, `r2_put_tree` returns 0 with nothing uploaded (RED row 1 above shows it). `add` still refuses the publish, because its prefix read-back (`r2_prefix_matches`) must equal the stage before `PUT m/<id>`.
+
+Suites on the final tree (2c7f8e9):
+
+| Command | Result |
+|---|---|
+| `SHARE_TEST_PORT_BASE=38787 bash tests/share.sh` | exit 0, 1075 ok, 0 FAIL (1038 ok before the batch; one tunnel row 6 probe-watcher FAIL in that baseline run did not recur) |
+| `node tests/worker.mjs` | PASS, 80 ok |
+| `swift test --package-path mac` | 153 tests, 0 failures |
+| `shellcheck bin/share install.sh tests/share.sh tests/e2e.sh tests/e2e-r2.sh demo/render.sh mac/*.sh` | clean |
+
+Nothing ran against the real Cloudflare account beyond two read-only `permission_groups` lookups, both refused (9109).
