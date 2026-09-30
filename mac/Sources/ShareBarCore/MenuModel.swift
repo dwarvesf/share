@@ -189,7 +189,9 @@ public struct MenuModel: Sendable {
         showCopyInstallCommand = failure == .cliNotFound
         showCopyUpgradeCommand = failure == .oldCLI
 
-        let entries = profiles?.profiles ?? []
+        // A top-level `schema` above 1 is a listing this app cannot read: like `.oldCLI`,
+        // no sections, never `connected`, nothing to publish to.
+        let entries = (profiles?.schema ?? 1) > 1 ? [] : (profiles?.profiles ?? [])
         let setUpCount = entries.filter { Health.of($0) != .notSetUp }.count
         let cap = setUpCount <= 1 ? MenuModel.rowCapSingle : MenuModel.rowCapEach
         sections = entries.map { Section(entry: $0, rowCap: cap, now: now) }

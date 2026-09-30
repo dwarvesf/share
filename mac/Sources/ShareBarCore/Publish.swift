@@ -26,8 +26,10 @@ public enum Audience: Sendable, Equatable {
 public enum PublishChoice {
     /// Eligible profiles: `stopped` or `serving` with no `error`, in listing order. `add`
     /// auto-starts a stopped profile; an `elsewhere` profile keeps its post-add notice.
+    /// None when the listing's top-level `schema` is above 1 (the app cannot read it).
     public static func eligible(_ snapshot: ProfilesSnapshot) -> [String] {
-        snapshot.profiles.compactMap { isEligible($0) ? $0.name : nil }
+        guard snapshot.schema <= 1 else { return [] }
+        return snapshot.profiles.compactMap { isEligible($0) ? $0.name : nil }
     }
 
     public static func isEligible(_ entry: ProfileEntry) -> Bool {

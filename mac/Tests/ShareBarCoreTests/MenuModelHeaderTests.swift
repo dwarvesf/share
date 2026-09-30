@@ -67,7 +67,10 @@ final class MenuModelHeaderTests: XCTestCase {
         let model = MenuModel(profiles: profiles, failure: nil, now: Date())
 
         XCTAssertEqual(model.header, "Update Share Bar")
-        XCTAssertEqual(model.sections.count, 1, "entries still render under the header override")
+        XCTAssertTrue(model.sections.isEmpty, "a listing this app cannot read renders like .oldCLI: no sections")
+        XCTAssertEqual(model.icon, .disconnected)
+        XCTAssertFalse(model.canPublish)
+        XCTAssertTrue(PublishChoice.eligible(profiles).isEmpty, "the publish dialog offers no profile")
     }
 
     func testTheFailureLineWinsOverEveryProfileRuleWhenThereIsNoSnapshot() {
