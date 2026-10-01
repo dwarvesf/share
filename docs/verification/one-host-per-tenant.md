@@ -68,3 +68,32 @@ Negative controls: each patch went into a copy of tree `25dd9e9` (commit 6df0318
 | let the sweep count a machine pointer as unreadable (`r2_record_raw`'s machine branch raises) | row 26 origin and member sweeps (got `0 0 1`: skipped, warning printed), the not-JSON leg (got `0 0 0`: the warning named the pointer instead); `fails=3` |
 
 Dry trace for the first control: the member's `rm e10001` reads the snapshot, finds `e10001` in `r2_machine`, and with the patch logs `DELETE m/e10001`; the check reads one DELETE line in the member's `r2-calls.log` where it wants none.
+
+## TASK-3: Worker v3 and r2_healthz (rows 7 to 10, 29)
+
+```
+Command: SHARE_TEST_PORT_BASE=28787 gtimeout 900 bash tests/share.sh
+Exit:    0
+Checks:  1211 ok, 0 FAIL, 0 SKIP (PASS), at 2fcbdb1
+Section: === tenant: the Worker is up while the origin is off (row 29) ===, 6 checks
+Verdict: PASS
+```
+
+```
+Command: node tests/worker.mjs
+Exit:    0
+Checks:  134 ok, 0 FAIL (PASS), at 2fcbdb1; the tenant rows 7 to 10 add 58
+Verdict: PASS
+```
+
+`shellcheck` and `/bin/bash -n bin/share` clean on the same tree. One earlier full run on this tree failed `500-row index answers under 3s` once while the machine was busy; the rerun took 0.84 s and passed.
+
+Negative controls on a copy of tree `a6ff281` (commit 2fcbdb1):
+
+| Patch | Runner | Red | Green (unpatched) |
+|---|---|---|---|
+| the Worker passes an expired cloud record through instead of 404 | `node tests/worker.mjs` | `r7 an expired cloud record is 404, never passed through` (got `200 1`), plus the WORKER_SHA self-check | PASS |
+| the Worker passes a miss through with `PASS` empty | `node tests/worker.mjs` | `r9 PASS empty: a miss is 404 with no fetch call` (got `101 1`: the stub's last answer came back) and the machine-pointer leg (got `404 1`), plus the WORKER_SHA self-check | PASS |
+| read the healthz status alone in `r2_healthz` (the header branch never fires) | full suite | row 29 tunnel-down: `state` (got `0 false`), the gated add (got `1`), the join (got `1 0`) | row 29 green; the copy has no `.git`, so the two `v0.5.1 CLI` checks that run `git show` fail in both runs (and `profiles --json wrote nothing under HOME` once in the red run, a flake); the worktree run above is 0 FAIL |
+
+Dry trace for the third control: the dry Worker writes `HTTP/2 503` with the pair and `x-share-tunnel: 0`; with the patch `hz_code` stays 503, so `state` reports `ready: false`, the gated add dies at its healthz check, and the join's three-in-a-row wait times out.

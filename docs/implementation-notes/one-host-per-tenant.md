@@ -134,3 +134,13 @@ Deviations from the spec, per task. A task with none is not listed.
 - A member's bare prune and `ls` delete a machine pointer whose `expires` is past (pointer rule 3).
 - The 14-day warning: `api-token` (`--check`, the paste, `--cmd`) on an r2 member and on an R2-on origin reads `expires_on` from `/user/tokens/verify` and warns at 14 days or fewer, or once expired. Not on every add (`r2_key_id` in the config skips the verify call there). Test seam: `SHARE_R2_DRY_EXPIRES`.
 
+
+### TASK-3 (Worker v3, r2_healthz)
+
+- The method rule: with `PASS` empty the Worker keeps SPEC-007's early 405 for any method but GET and HEAD, so SPEC-007 rows 17 to 19 and 28 run unchanged. With `PASS` set, the 405 applies only to what the Worker answers itself (`/healthz`, a cloud record, after its record and JWT checks); a pass-through takes any method.
+- The record branches read `v == 1` with no `storage` key as a cloud record and `v == 2` with `storage == "machine"` as a pointer; everything else (a missing `v` included, which SPEC-007's `v > 1` test let through) answers 404 and never passes through.
+- The offline page also answers a thrown `fetch`. Its body is plain text with `Content-Type: text/plain; charset=utf-8`.
+- Hits: a pass-through is marked in a `WeakSet` and the outer handler returns it untouched, so no data point is written and a 101 keeps its `webSocket`.
+- `r2_healthz` reads one header file for both the live call and the dry seam (`SHARE_R2_DRY_HEALTHZ=tunnel-down` and `503-bare` write the 503 a tenant Worker sends with and without its headers), and strips the status line's carriage return.
+- `tests/worker.mjs`'s stub origin returns a real `Response` whose `headers` throw on `set`, `append`, and `delete`. Node unrefs `AbortSignal.timeout`'s timer, so the hang case keeps the event loop alive with its own timer.
+- Not measured or built: the slow-R2 2 s cap has no test row (only the throw); the Cache API memo and the Worker-wall-time failure line from the round-1 and round-2 warnings wait for L3's numbers (TASK-9a).
