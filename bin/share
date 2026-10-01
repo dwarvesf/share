@@ -2513,8 +2513,8 @@ access_open_url() { # the platform opener, backgrounded; skipped over ssh or wit
 # port=r2 sentinel: an older share dies on that port at load, so it can never
 # write pub/ or an Access app against an r2 profile.
 
-WORKER_VERSION=3            # bump on every Worker source change; deploys refuse a downgrade without --force
-WORKER_SHA=ed4784bd9005     # first 12 hex of the emitted source's sha256; the suite fails when it drifts
+WORKER_VERSION=4            # bump on every Worker source change; deploys refuse a downgrade without --force
+WORKER_SHA=2209e2a60db0     # first 12 hex of the emitted source's sha256; the suite fails when it drifts
 WORKER_COMPAT_DATE=2026-09-30   # moves only with a WORKER_VERSION bump
 WORKER_RECORD_V=2           # the record schema this source understands: v:1 cloud records, v:2 machine pointers; a newer record answers 404
 worker_meta() { printf '%s\n' "$WORKER_VERSION" "$WORKER_SHA" "$WORKER_COMPAT_DATE" "$WORKER_RECORD_V"; }   # one line, four fields, for the deploy and sweep paths
@@ -2604,8 +2604,10 @@ async function pass(request) {   // the route is skipped for a same-host fetch, 
   let r;
   try { r = await fetch(request); } catch { r = null; }
   if (r && r.status === 101) { passed.add(r); return r; }   // a WebSocket upgrade goes back untouched
-  // an edge error carries no cf-cache-status; the origin's own answers do (spike TASK-1a(e))
-  const down = !r || r.status === 502 || r.status === 530 || (r.status >= 520 && r.status <= 527) ||
+  // an edge error carries no cf-cache-status; the origin's own answers do (spike TASK-1a(e)).
+  // 502 is never one of Cloudflare's own edge codes (521-527, 530): it is Caddy's reverse_proxy
+  // answer for a dead live port, a working machine, so it goes back unchanged like any other origin answer.
+  const down = !r || r.status === 530 || (r.status >= 520 && r.status <= 527) ||
     (r.status === 503 && !r.headers.has("cf-cache-status"));
   const out = down
     ? new Response(OFFLINE, { status: 503, headers: { "Retry-After": "60", "Content-Type": "text/plain; charset=utf-8" } })

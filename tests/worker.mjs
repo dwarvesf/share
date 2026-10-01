@@ -399,13 +399,16 @@ stubOrigin();
   check("r8 the origin's 404 goes back unchanged", "404 nope", `${r.status} ${await bodyOf(r)}`);
   r = await via(503, { "cf-cache-status": "DYNAMIC" }, "caddy 503");
   check("r8 the origin's own 503 (cf-cache-status) goes back unchanged", "503 caddy 503", `${r.status} ${await bodyOf(r)}`);
+  r = await via(502, { "cf-cache-status": "DYNAMIC" }, "dead port");
+  check("r8 a dead live port's 502 (cf-cache-status) goes back unchanged, not the offline page", "502 dead port", `${r.status} ${await bodyOf(r)}`);
+  r = await via(502, { server: "cloudflare" }, "<title>502</title>");
+  check("r8 a 502 with no cf-cache-status also goes back unchanged (only 530/52x/503-no-cache mean offline)", "502 <title>502</title>", `${r.status} ${await bodyOf(r)}`);
   const offline = async (label, resp) => {
     check(`r8 ${label}: the 503 offline page`, "503 60 the machine serving this link is offline; try again later",
       `${resp.status} ${resp.headers.get("retry-after")} ${await bodyOf(resp)}`);
     check(`r8 ${label}: no-store and noindex`, "no-store|noindex, nofollow", nsni(resp));
   };
   await offline("530", await via(530, {}, "error code: 1033"));
-  await offline("502", await via(502, { server: "cloudflare" }, "<title>502</title>"));
   await offline("an edge 503 (no cf-cache-status)", await via(503, {}, "edge"));
   await offline("522", await via(522, {}, "timeout"));
   answer = () => { throw new Error("connect failed"); };
