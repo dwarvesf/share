@@ -56,7 +56,10 @@ mkdir -p "$WORK/bin" "$WORK/kc"
 cat >"$WORK/bin/security" <<'PY'
 #!/usr/bin/env python3
 import sys, os, re
-store = os.environ["SHARE_E2E_KC_STORE"]
+# launchd's plist carries only PATH/SHARE_CONFIG_DIR/SHARE_ROOT (svc_install in bin/share), so a
+# serve process started by launchd never sees SHARE_E2E_KC_STORE; fall back to the store next to
+# this stub itself ($WORK/bin/security -> $WORK/kc), which launchd's baked PATH still resolves to.
+store = os.environ.get("SHARE_E2E_KC_STORE") or os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "kc")
 def path(key): return os.path.join(store, re.sub(r"[^A-Za-z0-9_.-]", "_", key))
 args = sys.argv[1:]
 if args[:1] == ["-i"]:
@@ -368,8 +371,14 @@ out="$(pubtoken_as "$B" "$BTOK" setup "$tenant" --backend r2 --bucket "$bucket" 
 indent <<<"$out"
 check "B join exits 0" 0 "$rc"
 check "B join says joining as publisher" 1 "$(grep -c '^joining as publisher' <<<"$out")"
-# shellcheck disable=SC2016 # share evals the command later; the variable must stay literal here
-env -u CLOUDFLARE_API_TOKEN HOME="$B" BTOK_VALUE="$BTOK" "$share" api-token --cmd 'printf %s "$BTOK_VALUE"' >/dev/null 2>&1
+# api_token_cmd is eval'd by every later `as "$B" ...` call, each a fresh process; a value held
+# only in BTOK_VALUE never survives those (as() does not export it, and bin/share runs under
+# set -u, so the eval dies on the unbound var). File-backed, like the security stub: $HOME is
+# re-set correctly by as()/pubtoken_as()/admin_as() on every call, so $HOME/.share-e2e-tok always
+# resolves to this actor's own token.
+(umask 077 && printf %s "$BTOK" >"$B/.share-e2e-tok")
+# shellcheck disable=SC2016 # share evals the command later; $HOME must stay literal here
+env -u CLOUDFLARE_API_TOKEN HOME="$B" "$share" api-token --cmd 'cat "$HOME/.share-e2e-tok"' >/dev/null 2>&1
 echo "from b" >"$WORK/b.txt"
 blink="$(as "$B" add "$WORK/b.txt" 2>/dev/null | head -1)"; bid="$(cut -d/ -f4 <<<"$blink")"
 check "B's cloud link answers" "from b" "$(fetch "$blink")"
@@ -390,8 +399,10 @@ pub_token d-fresh "$bucket"; DTOK="$PUBTOK"
 out="$(pubtoken_as "$D" "$DTOK" setup "$tenant" --backend r2 --bucket "$bucket" 2>&1)"; rc=$?
 indent <<<"$out"
 check "fresh member D joins during the outage" 0 "$rc"
-# shellcheck disable=SC2016 # share evals the command later; the variable must stay literal here
-env -u CLOUDFLARE_API_TOKEN HOME="$D" DTOK_VALUE="$DTOK" "$share" api-token --cmd 'printf %s "$DTOK_VALUE"' >/dev/null 2>&1
+# file-backed for the same reason as B's registration above: DTOK_VALUE would not survive a later as() call.
+(umask 077 && printf %s "$DTOK" >"$D/.share-e2e-tok")
+# shellcheck disable=SC2016 # share evals the command later; $HOME must stay literal here
+env -u CLOUDFLARE_API_TOKEN HOME="$D" "$share" api-token --cmd 'cat "$HOME/.share-e2e-tok"' >/dev/null 2>&1
 dgid=""
 if [[ -n $rule ]]; then
   mkdir -p "$WORK/dgated" && echo "d gated" >"$WORK/dgated/index.html"
@@ -467,8 +478,10 @@ out="$(HOME="$C" CLOUDFLARE_API_TOKEN="$admin" "$share" setup "$alias_host" --ba
 indent <<<"$out"
 check "R1: C's standalone r2 origin on the alias exits 0" 0 "$rc"
 pub_token c-admin "$bucket2"; CTOK="$PUBTOK"
-# shellcheck disable=SC2016 # share evals the command later; the variable must stay literal here
-env -u CLOUDFLARE_API_TOKEN HOME="$C" CTOK_VALUE="$CTOK" "$share" api-token --cmd 'printf %s "$CTOK_VALUE"' >/dev/null 2>&1
+# file-backed for the same reason as B's registration above: CTOK_VALUE would not survive a later as() call.
+(umask 077 && printf %s "$CTOK" >"$C/.share-e2e-tok")
+# shellcheck disable=SC2016 # share evals the command later; $HOME must stay literal here
+env -u CLOUDFLARE_API_TOKEN HOME="$C" "$share" api-token --cmd 'cat "$HOME/.share-e2e-tok"' >/dev/null 2>&1
 mkdir -p "$WORK/calias" && echo "alias gated" >"$WORK/calias/index.html"
 if [[ -n $rule ]]; then
   cglink="$(as "$C" add "$WORK/calias" --access "$rule" 2>"$WORK/cgate.err" | head -1)"
