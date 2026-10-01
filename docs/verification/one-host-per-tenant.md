@@ -97,3 +97,26 @@ Negative controls on a copy of tree `a6ff281` (commit 2fcbdb1):
 | read the healthz status alone in `r2_healthz` (the header branch never fires) | full suite | row 29 tunnel-down: `state` (got `0 false`), the gated add (got `1`), the join (got `1 0`) | row 29 green; the copy has no `.git`, so the two `v0.5.1 CLI` checks that run `git show` fail in both runs (and `profiles --json wrote nothing under HOME` once in the red run, a flake); the worktree run above is 0 FAIL |
 
 Dry trace for the third control: the dry Worker writes `HTTP/2 503` with the pair and `x-share-tunnel: 0`; with the patch `hz_code` stays 503, so `state` reports `ready: false`, the gated add dies at its healthz check, and the join's three-in-a-row wait times out.
+
+## TASK-4: setup --r2 and --no-r2, no alias (rows 11, 12, 13, 32)
+
+```
+Command: SHARE_TEST_PORT_BASE=28787 gtimeout 900 bash tests/share.sh
+Exit:    0
+Checks:  1243 ok, 0 FAIL, 0 SKIP (PASS), at 19926b1
+Section: === tenant: setup --r2 and --no-r2 on the origin (rows 11, 12, 13, 32) ===, 32 checks
+Verdict: PASS
+```
+
+`node tests/worker.mjs` PASS, `shellcheck` and `/bin/bash -n bin/share` clean on the same tree. Every call ran against the dry seam (`SHARE_R2_DRY=1`, a `.test` hostname); nothing was created on a Cloudflare account.
+
+Negative controls on copies of tree `a2cd324` (commit 19926b1), the full suite each:
+
+| Patch | Red | Green (unpatched copy) |
+|---|---|---|
+| attach the route before the pointer backfill (a route POST above step 9) | row 11 call order (stops at `^API POST /zones/zone-dry/workers/routes$`), the rerun (a second route POST), row 13 (a route left after `--no-r2`), the fresh-bucket order; `fails=7` with the copy's two `git show` checks and one load flake | every tenant row green; the two `git show` checks and one load flake (`cleanup: nocred1 row gone`, an unrelated SPEC-004 row; both copies ran at once) |
+| let SPEC-007's r2 setup take a tenant host with `--force` (the `PASS` refusal skipped when `--force` is set) | row 32 "a tenant Worker (PASS) is refused with --force, before any write" (got `0 0 1`: the setup ran on and wrote); `fails=3` with the two `git show` checks | row 32 green; only the two `git show` checks |
+
+The copies carry no `.git`, so the two `v0.5.1 CLI` checks that run `git show` fail in every copy run; the worktree run above is 0 FAIL.
+
+Dry trace for the first control: the patched setup logs `API POST /zones/zone-dry/workers/routes` before the first `PUT m/0a000`, so the order check finds the route POST's first line above the pointer PUTs and stops at that pattern; the rerun then finds the early route under the id `early`, which no route carries, and POSTs a second one.

@@ -144,3 +144,19 @@ Deviations from the spec, per task. A task with none is not listed.
 - `r2_healthz` reads one header file for both the live call and the dry seam (`SHARE_R2_DRY_HEALTHZ=tunnel-down` and `503-bare` write the 503 a tenant Worker sends with and without its headers), and strips the status line's carriage return.
 - `tests/worker.mjs`'s stub origin returns a real `Response` whose `headers` throw on `set`, `append`, and `delete`. Node unrefs `AbortSignal.timeout`'s timer, so the hang case keeps the event loop alive with its own timer.
 - Not measured or built: the slow-R2 2 s cap has no test row (only the throw); the Cache API memo and the Worker-wall-time failure line from the round-1 and round-2 warnings wait for L3's numbers (TASK-9a).
+
+### TASK-4 (setup --r2, --no-r2, no alias)
+
+- `--alias` is not parsed yet (TASK-5); `setup <host> --r2` takes `--bucket`, `--storage-default`, and `--force` (a Worker version downgrade, as SPEC-007). A rerun keeps the stored `storage_default` unless the flag is given.
+- Step 1 adds two refusals: a profile whose config holds another bucket (`--no-r2` first), and an origin that is not serving (`share start` first), since step 15 probes a file through the tunnel. The dry seam skips the probe and logs `TUNNEL-PROBE`.
+- Step 3 keeps SPEC-007 step 7 (`GET access/organizations`) so the tenant Worker's `TEAM` binding serves gated cloud links; it runs after the routes read.
+- Step 5 refuses any route whose host part (a glob) matches the tenant host and names another script, narrower patterns included, not only `<host>/*` and wider ones.
+- Step 6 runs only on an existing bucket; on a new one the bucket POST and the `{"v":1,"host"}` marker PUT come before the Worker deploy and every pointer (the round-2 fresh-bucket rule). The index lock is held from step 6 through step 11. Residual: an add that read its config before step 11 writes no pointer; the next reconcile writes it.
+- Step 9 skips an id that already holds this origin's machine pointer (the rerun's convergence); a 412 on any other id dies before the route.
+- Step 13 PUTs `request_limit_fail_open: true` onto an existing route of this Worker that lacks it; a rerun with the flag set attaches nothing.
+- The step-15 die names the leg (Worker or tunnel) and the `--no-r2` rollback.
+- `write_config` (a tunnel setup rerun on the origin) keeps the four tenant keys, so a rerun never turns R2 off in the config while the route stays.
+- `--no-r2` refuses while the config's `aliases=` is set; the marker's `aliases` and the printed rollback list wait for TASK-5.
+- SPEC-007's admin path now reads `zones/<z>/workers/routes` before its DNS read; a 403 there passes (round-3 rule), any other non-200 dies. A member purge refuses a Worker that binds `PASS="1"` (round-2 rule). The origin-side purge of a tenant (route, pointers, records, script, bucket) is not built.
+- Round-3 rule on a marker field that v0.8.0's admin setup refuses: v0.8.0 checks the marker with one test (`.v == 1 and .host == <host>`) for both roles, so any field that fails its admin path fails its join too. None was added; D1's check that every machine holding the admin token runs the release stays the guard.
+- Dry seam: `zones/<z>/workers/routes` GET, POST, PUT, DELETE on `.cf/routes.json`; `SHARE_R2_DRY_ROUTES=deny` answers 403; the dry `/healthz` answers through a route as well as a custom domain and adds `x-share-tunnel: 1` for a `PASS` Worker.
