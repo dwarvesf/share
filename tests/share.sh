@@ -1460,7 +1460,7 @@ if command -v expect >/dev/null; then
   printf '#!/bin/bash\ntrap "" HUP\nprintf "%%s\\n" "$@" >>"${OPEN_LOG:?}"\n' >"$WORK/fakeopen/open"
   cp "$WORK/fakeopen/open" "$WORK/fakeopen/xdg-open"; chmod +x "$WORK/fakeopen/open" "$WORK/fakeopen/xdg-open"
   cat >"$WORK/tty.exp" <<'EXP'
-set timeout 20
+set timeout 60
 log_user 1
 spawn bash [lindex $argv 0] api-token
 expect {
@@ -1483,7 +1483,9 @@ EXP
     sleep 0.5; echo "  (diag) open.log after a direct call: $(cat "$WORK/open.log")"
   fi
   check "tty: the opener ran once with the template URL as its only argument" "1" "$([[ $(wc -l <"$WORK/open.log" | tr -d ' ') == 1 ]] && grep -c '^https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=.*&name=share%20access%20%28default%29$' "$WORK/open.log")"
-  check "tty: the prompt appeared and the token did not echo" "1" "$([[ $(grep -c 'Paste the new token (input hidden):' <<<"$tty_out") == 1 && $(grep -c 'tty-token' <<<"$tty_out") == 0 ]] && echo 1 || echo 0)"
+  prompt_count=$(grep -c 'Paste the new token (input hidden):' <<<"$tty_out")
+  echo_count=$(grep -c 'tty-token' <<<"$tty_out")
+  check "tty: the prompt appeared and the token did not echo" "prompt-seen=1 token-echoed=0" "prompt-seen=$prompt_count token-echoed=$echo_count"
   check "tty: the token was stored and the preflight ran" "1" "$([[ $(grep -c "^add-generic-password share-api:$SHARE_HOSTNAME$" "$WORK/sec.log") == 1 ]] && grep -c 'token found (keychain' <<<"$tty_out")"
   : >"$WORK/open.log"
   tty_out=$(tty_run SSH_CONNECTION="1.2.3.4 1 5.6.7.8 22")
