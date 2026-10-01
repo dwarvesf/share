@@ -139,6 +139,24 @@ pub_token() { # pub_token <name> <bucket>: PUBTOK holds the value
   fi
   mint_val=""
 }
+wait_r2_propagate() { # wait_r2_propagate <token> <bucket>: the tests/e2e-r2.sh model -- a new token reaches
+  # the S3 endpoint a few seconds after it is minted; poll a bucket listing instead of using it cold
+  local tok=$1 buck=$2 n=0 kid sec
+  kid="$(apit "$tok" /user/tokens/verify | jq -r '.result.id // empty')"
+  sec="$(printf '%s' "$tok" | shasum -a 256 | cut -d' ' -f1)"
+  until [[ "$(curl -s -o /dev/null -w '%{http_code}' "https://$acct.r2.cloudflarestorage.com/$buck?list-type=2&max-keys=1" --aws-sigv4 'aws:amz:auto:s3' -K <(printf 'user = "%s:%s"\n' "$kid" "$sec"))" == 200 || $n -ge 30 ]]; do
+    sleep 2; n=$((n + 1))
+  done
+  note "token lists bucket $buck after $((n * 2))s"
+}
+etag_direct() { # etag_direct <token> <bucket> <key>: a pointer's ETag via direct S3 HEAD, the same sigv4 pattern leftovers() uses;
+  # independent of any local profile's bucket= (A's loses it for the span between --no-r2 and the next --r2)
+  local tok=$1 buck=$2 key=$3 kid sec
+  kid="$(apit "$tok" /user/tokens/verify | jq -r '.result.id // empty')"
+  sec="$(printf '%s' "$tok" | shasum -a 256 | cut -d' ' -f1)"
+  curl -s -D - -o /dev/null "https://$acct.r2.cloudflarestorage.com/$buck/$key" --aws-sigv4 'aws:amz:auto:s3' -K <(printf 'user = "%s:%s"\n' "$kid" "$sec") |
+    awk 'tolower($1) == "etag:" {gsub(/[\r"]/, "", $2); print $2}'
+}
 
 # --- leftover tracking: every name this run mints, swept on exit regardless of where it stopped ---
 HOSTS=() WORKERS=() BUCKETS=()
@@ -234,8 +252,11 @@ import socket, threading, hashlib, base64, sys
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 def handle(conn):
     try:
-        data = conn.recv(65536)
-        if not data: return
+        data = b""
+        while b"\r\n\r\n" not in data:
+            chunk = conn.recv(65536)
+            if not chunk: return
+            data += chunk
         head, _, body = data.partition(b"\r\n\r\n")
         lines = head.split(b"\r\n")
         method, _path, _ = lines[0].split(b" ")
@@ -243,6 +264,12 @@ def handle(conn):
         for l in lines[1:]:
             if b":" in l:
                 k, v = l.split(b":", 1); headers[k.strip().lower()] = v.strip()
+        # a POST's body can land in a later TCP segment than the headers; keep reading to Content-Length
+        need = int(headers.get(b"content-length", b"0") or 0)
+        while len(body) < need:
+            chunk = conn.recv(65536)
+            if not chunk: break
+            body += chunk
         if headers.get(b"upgrade", b"").lower() == b"websocket":
             key = headers[b"sec-websocket-key"]
             accept = base64.b64encode(hashlib.sha1(key + GUID.encode()).digest())
@@ -304,6 +331,16 @@ export SHARE_PORT=$APORT
 out="$(HOME="$A" CLOUDFLARE_API_TOKEN="$admin" "$share" setup "$tenant" 2>&1)"; rc=$?
 indent <<<"$out"
 check "A setup exits 0" 0 "$rc"
+# A is the origin: it needs its own stored token (Access scopes for the gated add below, R2
+# scopes once L2 turns R2 on) the same way B/D/C get one later, per bin/share's own "Store this
+# origin's publisher token: share api-token" guidance printed after setup --r2. The bucket name
+# is minted now (not at L2) so one token covers both the L1 gated-local leg and every L2+ r2-call.
+bucket="share-e2e-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+BUCKETS+=("$bucket")
+pub_token a-origin "$bucket"; ATOK="$PUBTOK"
+(umask 077 && printf %s "$ATOK" >"$A/.share-e2e-tok")
+# shellcheck disable=SC2016 # share evals the command later; $HOME must stay literal here
+env -u CLOUDFLARE_API_TOKEN HOME="$A" "$share" api-token --cmd 'cat "$HOME/.share-e2e-tok"' >/dev/null 2>&1
 mkdir -p "$WORK/doc" "$WORK/gated"
 echo "e2e tenant doc" >"$WORK/doc/index.html"
 echo SECRET=x >"$WORK/doc/.env"
@@ -325,7 +362,7 @@ if [[ -n $rule ]]; then
   indent <"$WORK/gate.err"
   gid="$(cut -d/ -f4 <<<"$glink")"
   check "gated add printed a link" "0 https://$tenant/$gid/gated/" "0 $glink"
-  check "no 200 on the gated link during the wait" 0 "$(wc -l <"$WORK/gate.seen" 2>/dev/null | tr -d ' ')"
+  check "no 200 on the gated link during the wait" 0 "$([[ -f $WORK/gate.seen ]] && wc -l <"$WORK/gate.seen" | tr -d ' ' || echo 0)"
   gaud="$(api "/accounts/$acct/access/apps?per_page=100" | jq -r --arg s "share $gid $tenant " '[.result[]? | select(.name | startswith($s))] | first | .aud // empty')"
   out="$(fetch -o /dev/null -w '%{http_code} %{redirect_url}' --path-as-is "https://$tenant/$gid/gated/")"
   check "gated local link 302s to Access with kid == aud" 1 "$([[ $out == 302* && $out == *"kid=$gaud"* ]] && echo 1 || echo "0 ($out)")"
@@ -334,16 +371,15 @@ else
 fi
 
 echo "=== L2 setup --r2 on A ==="
-bucket="share-e2e-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
-BUCKETS+=("$bucket")
 out="$(admin_as "$A" setup "$tenant" --r2 --bucket "$bucket" 2>&1)"; rc=$?
 indent <<<"$out"
 check "setup --r2 exits 0" 0 "$rc"
+wait_r2_propagate "$ATOK" "$bucket"   # the bucket now exists; A's token was minted before it did
 hz="$(fetch -D - -o "$WORK/hz" "https://$tenant/healthz" | awk 'tolower($1) == "x-share-tunnel:" {sub(/\r$/, ""); print $2}')"
 check "/healthz carries X-Share-Tunnel: 1" 1 "$hz"
 check "/healthz carries this CLI's pair" "$pair" "$(hdr "https://$tenant/healthz" | awk 'tolower($1) == "x-share-worker:" {sub(/\r$/, ""); print $2 " " $3}')"
 for id in "$mid" "$lid"; do
-  out="$(admin_as "$A" r2-call GET "m/$id")"
+  out="$(as "$A" r2-call GET "m/$id")"
   check "pointer m/$id exists after setup --r2" 1 "$(grep -c '^code=200' <<<"$out")"
 done
 sub="$(api "/accounts/$acct/workers/subdomain" | jq -r '.result.subdomain // empty')"
@@ -367,6 +403,7 @@ check "A's cloud link answers" "a cloud doc" "$(fetch "$clink")"
 check "A's cloud link carries no-store" 1 "$(hdr "$clink" | grep -ci '^cache-control: no-store')"
 B="$WORK/b"; mkdir -p "$B"
 pub_token b-member "$bucket"; BTOK="$PUBTOK"
+wait_r2_propagate "$BTOK" "$bucket"
 out="$(pubtoken_as "$B" "$BTOK" setup "$tenant" --backend r2 --bucket "$bucket" 2>&1)"; rc=$?
 indent <<<"$out"
 check "B join exits 0" 0 "$rc"
@@ -396,6 +433,7 @@ hz2="$(hdr "https://$tenant/healthz" | awk 'tolower($1) == "x-share-tunnel:" {su
 check "/healthz answers X-Share-Tunnel: 0 with the tunnel down" 0 "$hz2"
 D="$WORK/d"; mkdir -p "$D"
 pub_token d-fresh "$bucket"; DTOK="$PUBTOK"
+wait_r2_propagate "$DTOK" "$bucket"
 out="$(pubtoken_as "$D" "$DTOK" setup "$tenant" --backend r2 --bucket "$bucket" 2>&1)"; rc=$?
 indent <<<"$out"
 check "fresh member D joins during the outage" 0 "$rc"
@@ -434,11 +472,12 @@ check "machine link serves straight from the tunnel (no X-Share-Worker)" 0 "$(hd
 check "cloud link 404s at Caddy (no route left to the Worker)" 404 "$(code "$clink")"
 
 echo "=== L8 setup --r2 again ==="
-etag_before="$(admin_as "$A" r2-call GET "m/$mid" | awk -F= '/^code=/ {split($0,a," "); print a[2]}')"
+# A's own profile lost bucket= when L7's --no-r2 ran; read the pointer directly by bucket name, not through A's config
+etag_before="$(etag_direct "$ATOK" "$bucket" "m/$mid")"
 out="$(admin_as "$A" setup "$tenant" --r2 --bucket "$bucket" 2>&1)"; rc=$?
 indent <<<"$out"
 check "rerun --r2 exits 0" 0 "$rc"
-etag_after="$(admin_as "$A" r2-call GET "m/$mid" | awk -F= '/^code=/ {split($0,a," "); print a[2]}')"
+etag_after="$(etag_direct "$ATOK" "$bucket" "m/$mid")"
 check "no new pointer PUT for an existing id (etag unchanged)" "$etag_before" "$etag_after"
 check "cloud link answers again" "a cloud doc" "$(fetch "$clink")"
 
@@ -448,7 +487,7 @@ check "B's config is gone" 1 "$([[ ! -f $B/.config/share/config ]] && echo 1 || 
 check "the bucket is unaffected by B's local teardown" 200 "$(code "$blink")"
 for id in "$mid" "$lid" "${gid:-}" "$cid" "$bid" "${dgid:-}"; do
   [[ -n $id ]] || continue
-  admin_as "$A" rm "$id" >/dev/null 2>&1
+  as "$A" rm "$id" >/dev/null 2>&1
 done
 check "A's ls is empty" "no shares" "$(as "$A" ls 2>&1)"
 check "machine link gone" 1 "$(c=$(code "$mlink"); [[ $c != 200 ]] && echo 1 || echo "0 ($c)")"
@@ -478,6 +517,7 @@ out="$(HOME="$C" CLOUDFLARE_API_TOKEN="$admin" "$share" setup "$alias_host" --ba
 indent <<<"$out"
 check "R1: C's standalone r2 origin on the alias exits 0" 0 "$rc"
 pub_token c-admin "$bucket2"; CTOK="$PUBTOK"
+wait_r2_propagate "$CTOK" "$bucket2"
 # file-backed for the same reason as B's registration above: CTOK_VALUE would not survive a later as() call.
 (umask 077 && printf %s "$CTOK" >"$C/.share-e2e-tok")
 # shellcheck disable=SC2016 # share evals the command later; $HOME must stay literal here
@@ -503,7 +543,8 @@ check "R1: the fold (setup --r2 --alias) exits 0" 0 "$rc"
 aliasout="$(fetch -o /dev/null -w '%{http_code} %{redirect_url}' "https://$alias_host/healthz")"
 check "R1 after fold: alias 301s to the tenant" 1 "$([[ $aliasout == 301* && $aliasout == *"https://$tenant"* ]] && echo 1 || echo "0 ($aliasout)")"
 if [[ -n ${cgid:-} ]]; then
-  gaud2="$(api "/accounts/$acct/access/apps?per_page=100" | jq -r --arg s "share $cgid $tenant " '[.result[]? | select(.name | startswith($s))] | first | .aud // empty')"
+  # SPEC-008 line 120: a folded app keeps its name "share <id> <alias> <nonce>" (never renamed to the tenant)
+  gaud2="$(api "/accounts/$acct/access/apps?per_page=100" | jq -r --arg s "share $cgid $alias_host " '[.result[]? | select(.name | startswith($s))] | first | .aud // empty')"
   out="$(fetch -o /dev/null -w '%{http_code} %{redirect_url}' --path-as-is "https://$tenant/$cgid/calias/")"
   check "R1 after fold: the folded gated link 302s on the tenant with kid == aud" 1 "$([[ $out == 302* && -n $gaud2 && $out == *"kid=$gaud2"* ]] && echo 1 || echo "0 ($out, aud=$gaud2)")"
 fi
@@ -511,7 +552,8 @@ fi
 echo "--- R1 rollback (### Dwarves order, the admin token) ---"
 r2call_admin() { HOME="$A2" CLOUDFLARE_API_TOKEN="$admin" SHARE_R2_TOKEN="$admin" "$share" r2-call "$@"; }
 if [[ -n ${cgid:-} ]]; then
-  appjson="$(api "/accounts/$acct/access/apps?per_page=100" | jq -c --arg s "share $cgid $tenant " '[.result[]? | select(.name | startswith($s))] | first')"
+  # same naming fact as the gaud2 lookup above: the app is still named for the alias
+  appjson="$(api "/accounts/$acct/access/apps?per_page=100" | jq -c --arg s "share $cgid $alias_host " '[.result[]? | select(.name | startswith($s))] | first')"
   appid="$(jq -r '.id' <<<"$appjson")"
   full="$(api "/accounts/$acct/access/apps/$appid")"
   dests="$(jq -c --arg h "$alias_host" --arg i "$cgid" '.result.self_hosted_domains + [$h + "/" + $i, $h + "/" + $i + "/*"]' <<<"$full")"
