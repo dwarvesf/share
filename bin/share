@@ -1032,6 +1032,11 @@ cmd_migrate() {
   fi
 
   local old_tunnel_name; old_tunnel_name="$(cfg tunnel_name)"
+  if [[ -z $old_tunnel_name ]]; then   # an older share, or a hand-edited config, can hold tunnel_id with no tunnel_name; read it back by id so the rollback line below is never printed with an empty --tunnel-name
+    local old_tunnel_id; old_tunnel_id="$(cfg tunnel_id)"
+    [[ -n $old_tunnel_id ]] && old_tunnel_name="$(cf GET "/accounts/$account/cfd_tunnel/$old_tunnel_id" | jq -r '.result.name // empty')"
+  fi
+  [[ -n $old_tunnel_name ]] || die "migrate: this profile's config has neither tunnel_name nor a tunnel_id the API still knows; run '$me setup $host_name --tunnel-name <name> --force' by hand first"
   local new_tunnel_name="${old_tunnel_name}-m"   # DEC-010: the new origin always gets its own tunnel; a name this machine already holds would reuse its tunnel id, and migrate_retire would later delete the new origin's only tunnel
   local switch_rc=0
   printf '%s\n' "$CLOUDFLARE_API_TOKEN" | migrate_remote_run "$rbin" "$maxbytes" "$rprofile" setup "$host_name" --tunnel-name "$new_tunnel_name" --force --token-stdin >/dev/null || switch_rc=$?

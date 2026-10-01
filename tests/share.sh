@@ -3527,6 +3527,7 @@ case "\$method \$url" in
       *"name=tun-A&"*) body='{"success":true,"result":[{"id":"tid-A"}]}' ;;   # anchored on the trailing & so a migrate's "-m"-suffixed name never collides with this one
       *) body='{"success":true,"result":[]}' ;;
     esac ;;
+  "GET https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel/tid-A") body='{"success":true,"result":{"id":"tid-A","name":"tun-A"}}' ;;
   "POST https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel") body='{"success":true,"result":{"id":"tid-new"}}' ;;
   "PUT https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel/tid-new/configurations") body='{"success":true,"result":{}}' ;;
   "GET https://api.cloudflare.com/client/v4/zones/zone1/dns_records?"*) body='{"success":true,"result":[{"id":"rec1","type":"CNAME","content":"'"\${DNS_POINTS_AT:-tid-new}"'.cfargotunnel.com"}]}' ;;
@@ -3741,6 +3742,17 @@ out=$(mig_a "$AH" "$BH" "$MW/clog31b" setup "$MHOST" --tunnel-name tun-A --force
 check "row 31: the rollback in dry mode names A's own tunnel; no call names a new tunnel id" "0 1 0" \
   "$rc $(grep -c 'tunnel:     reusing tun-A' <<<"$out") $(grep -c 'tid-new' "$MW/clog31b")"
 check "row 31: A's config keeps its own tunnel_id" "tid-A" "$(sed -n 's/^tunnel_id=//p' "$AH/.config/share/config")"
+
+echo "--- row 31b: a config missing tunnel_name reads it back by tunnel_id before the rollback line is built ---"
+AHN="$MW/A31b"; BHN="$MW/B31b"; rm -rf "$AHN" "$BHN"; mkdir -p "$AHN" "$BHN"
+mig_fixture "$AHN"
+sed -i.bak '/^tunnel_name=/d' "$AHN/.config/share/config"   # an older share, or a hand-edited config: tunnel_id present, tunnel_name missing
+mkdir -p "$BHN/.config/share"; printf 'hosts=nobody\nport=19568\n' > "$BHN/.config/share/config"
+: > "$MW/clog31b2"
+out=$(mig_a "$AHN" "$BHN" "$MW/clog31b2" migrate --to m31b-target --remote-bin "$FAIL_SETUP" --yes 2>&1); rc=$?
+check "row 31b: a remote-setup failure still stops before retire" "1 0" "$rc $([[ -f $AHN/share/index.migrated ]] && echo 1 || echo 0)"
+check "row 31b: the printed rollback never carries an empty --tunnel-name" "0" "$(grep -c -- '--tunnel-name  --force' <<<"$out")"
+check "row 31b: the printed rollback names the tunnel read back by tunnel_id" "1" "$(grep -c -- '--tunnel-name tun-A --force' <<<"$out")"
 
 echo "--- setup: old_host empty must not skip the gated-share guard (import into a not_setup profile, then setup) ---"
 OH="$MW/oldhostempty"; rm -rf "$OH"; mkdir -p "$OH/.config/share" "$OH/share/pub/aa0001"
