@@ -2848,6 +2848,149 @@ out=$(tn org api-token --check 2>&1); rc=$?
 check "api-token, R2-on origin: an admin token is refused" "1 1" "$rc $(grep -c 'it is an admin token' <<<"$out")"
 rm -f "$DRYT/.cf/script.json"
 
+echo "=== tenant: storage dispatch, member refusals, reconcile, sweep (rows 3, 6, 26, 27) ==="
+rm -rf "$DRYT" "$troot"; mkdir -p "$DRYT" "$troot"; : >"$tlog"
+TMH="$WORK/tenant-member"; mkdir -p "$TMH/.config/share/profiles/org"
+printf 'backend=r2\nhostname=org.example.test\nzone=example.test\nbucket=ok-bucket\nport=r2\nr2_endpoint=https://acct.example.r2.cloudflarestorage.com\nr2_key_id=keyid42\n' >"$TMH/.config/share/profiles/org/config"
+tm() { # tm <verb...>: a member of the same tenant, an r2 profile on the origin's dry bucket
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS \
+    HOME="$TMH" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$DRYT" SHARE_R2_TOKEN=drytoken \
+    SHARE_ACCESS_DRY=1 SHARE_ACCESS_POLL=0 CLOUDFLARE_API_TOKEN=faketoken bash "$SH" --profile org "$@"
+}
+mlog="$TMH/share/profiles/org/r2-calls.log"; mkdir -p "$TMH/share/profiles/org"
+mdel() { grep -c "^DELETE m/$1\$" "$2" 2>/dev/null || true; }
+md5of() { [[ -f $1 ]] && r2_md5_of "$1" || echo none; }
+r2_md5_of() { if command -v md5 >/dev/null; then md5 -q "$1"; else md5sum "$1" | cut -d' ' -f1; fi; }
+printf 'hello\n' >"$WORK/tn/note.txt"; tn2="$WORK/tn/note.txt"
+out=$(SHARE_TEST_IDS=e10001 tn org add "$tn2" 2>&1); rc=$?
+check "row 3: the origin's local add, with its pointer" "0 2" "$rc $(jq -r .v "$DRYT/m/e10001" 2>/dev/null)"
+# row 3: a member publishes cloud links only and never removes, refreshes, or counts a machine link
+out=$(SHARE_TEST_IDS=e20001 tm add "$tn2" 2>&1); rc=$?
+check "row 3: member add f is cloud" "0 1" "$rc $(jq -r .v "$DRYT/m/e20001" 2>/dev/null)"
+out=$(SHARE_TEST_IDS=e20002 tm add --local "$tn2" 2>&1); rc=$?
+check "row 3: member add --local f is refused" "1 1" "$rc $(grep -c 'org.example.test serves local links from its origin; this machine publishes cloud links only' <<<"$out")"
+out=$(SHARE_TEST_IDS=e20003 tm add "$lport" 2>&1); rc=$?
+check "row 3: member add <port> is refused" "1 0" "$rc $([[ -e $DRYT/m/e20003 ]] && echo 1 || echo 0)"
+: >"$mlog"
+out=$(tm rm e10001 2>&1); rc=$?
+check "row 3: member rm of a machine row is refused" "1 1" "$rc $(grep -c "e10001 is served from the tenant's origin; remove it there" <<<"$out")"
+check "row 3: no DELETE m/<id>, the pointer stays" "0 2" "$(mdel e10001 "$mlog") $(jq -r .v "$DRYT/m/e10001")"
+: >"$mlog"
+out=$(tm refresh e10001 2>&1); rc=$?
+check "row 3: member refresh of a machine row is refused" "1 1 0" "$rc $(grep -c "e10001 is served from the tenant's origin; remove it there" <<<"$out") $(grep -c '^PUT\|^DELETE' "$mlog")"
+: >"$mlog"
+out=$(tm hits e10001 2>&1); rc=$?
+check "row 3: member hits keeps one account call and no bucket read (SPEC-007 row 13)" "0 0 1" "$rc $(grep -c '^GET' "$mlog") $(grep -c '^SQL' "$mlog")"
+: >"$mlog"
+out=$(tm rm e20001 2>&1); rc=$?
+check "row 3: member rm of a cloud row runs the r2 path" "0 1 0" "$rc $(mdel e20001 "$mlog") $([[ -e $DRYT/m/e20001 ]] && echo 1 || echo 0)"
+# row 27: on the origin each verb dispatches on the row's storage
+out=$(SHARE_TEST_IDS=e30001 tn org add --cloud "$tn2" 2>&1); rc=$?
+check "row 27: the origin's cloud add" "0 1" "$rc $(jq -r .v "$DRYT/m/e30001" 2>/dev/null)"
+idx0="$(md5of "$troot/index.tsv")"; cad0="$(md5of "$troot/Caddyfile")"
+mkdir -p "$DRYT/.cf"; printf '{"meta":[],"data":[{"hits":"3","visitors":"2","last":"2026-10-01 10:00:00"}],"rows":1}' >"$DRYT/.cf/sql.json"
+: >"$tlog"
+out=$(tn org hits e30001 2>&1); rc=$?
+check "row 27: hits of a cloud row reads Analytics Engine" "0 1 1" "$rc $(grep -c "^SQL .*index1 = 'e30001'" "$tlog") $(grep -c '^3 hits, 2 visitors' <<<"$out")"
+: >"$tlog"
+out=$(tn org hits e10001 2>&1); rc=$?
+check "row 27: hits of a machine row reads the access log" "0 0 0 hits" "$rc $(grep -c '^SQL' "$tlog") $out"
+rm -f "$DRYT/.cf/sql.json"
+out=$(tn org hits e9e9e9 2>&1); rc=$?
+check "row 27: hits of an unknown id" "1 1" "$rc $(grep -c "no share with id 'e9e9e9'" <<<"$out")"
+: >"$tlog"; p0="$(jq -r .prefix "$DRYT/m/e30001")"
+out=$(tn org refresh e30001 2>&1); rc=$?
+check "row 27: refresh of a cloud row swaps its prefix" "0 1 1" "$rc $(grep -c '^refreshed e30001 from' <<<"$out") $([[ $(jq -r .prefix "$DRYT/m/e30001") != "$p0" ]] && echo 1 || echo 0)"
+check "row 27: the cloud refresh ran S3 calls under If-Match" "1" "$(grep -c '^PUT m/e30001$' "$tlog")"
+: >"$tlog"
+out=$(tn org refresh e10001 2>&1); rc=$?
+check "row 27: refresh of a machine row re-copies locally, no S3 write" "0 1 0" "$rc $(grep -c '^refreshed e10001 from' <<<"$out") $(grep -c '^PUT\|^DELETE' "$tlog")"
+: >"$tlog"
+out=$(tn org rm e30001 2>&1); rc=$?
+check "row 27: rm of a cloud row takes the r2 path" "0 1 0 1" "$rc $(mdel e30001 "$tlog") $([[ -e $DRYT/m/e30001 ]] && echo 1 || echo 0) $(grep -c '^unpublished e30001$' <<<"$out")"
+check "row 27: the cloud upload is gone" "0" "$(find "$DRYT/o" -path '*/e30001.*' -type f | grep -c .)"
+check "row 27: the cloud rm never wrote index.tsv or the Caddyfile" "$idx0 $cad0" "$(md5of "$troot/index.tsv") $(md5of "$troot/Caddyfile")"
+: >"$tlog"
+out=$(tn org rm e10001 2>&1); rc=$?
+check "row 27: rm of a machine row takes the tunnel path plus the pointer DELETE" "0 1 0 0" "$rc $(mdel e10001 "$tlog") $(trow e10001 "$troot" | grep -c .) $([[ -e $troot/pub/e10001 ]] && echo 1 || echo 0)"
+# the origin's cloud expiry runs through its own reader: a cloud row expires, index.tsv is never written
+out=$(SHARE_TEST_IDS=e40001 tn org add "$tn2" 2>&1)
+jq -nc '{v: 1, id: "e00001", name: "f.txt", src: "/elsewhere/f.txt", added: "2026-09-01", expires: 1000, opts: "", prefix: "o/e00001.00000001/", by: "peer"}' >"$DRYT/m/e00001"
+mkdir -p "$DRYT/o/e00001.00000001"; printf 'x\n' >"$DRYT/o/e00001.00000001/f.txt"
+idx0="$(md5of "$troot/index.tsv")"; cad0="$(md5of "$troot/Caddyfile")"
+out=$(tn org ls 2>&1); rc=$?
+check "origin ls: an expired cloud record expires" "0 1 0" "$rc $(grep -c '^unpublished e00001 (expired)$' <<<"$out") $([[ -e $DRYT/m/e00001 ]] && echo 1 || echo 0)"
+check "origin ls: index.tsv and the Caddyfile are untouched by the cloud expiry" "$idx0 $cad0" "$(md5of "$troot/index.tsv") $(md5of "$troot/Caddyfile")"
+check "origin ls: the local row still lists" "1" "$(grep -c 'id=e40001' <<<"$out")"
+# a member's prune deletes a machine pointer past its expiry, never a live one
+jq -nc '{v: 2, id: "e50001", storage: "machine", name: "old.txt", by: "mac-mini", added: "2026-09-01", expires: 1000, opts: "", type: "text"}' >"$DRYT/m/e50001"
+: >"$mlog"
+out=$(tm prune 2>&1); rc=$?
+check "member prune: the expired pointer goes, the live one stays" "0 1 1 2" "$rc $(grep -c '^removed expired pointer m/e50001$' <<<"$out") $(mdel e50001 "$mlog") $(jq -r .v "$DRYT/m/e40001")"
+# row 6: the origin's reconcile on ls
+rm -rf "$DRYT" "$troot"; mkdir -p "$DRYT" "$troot"
+out=$(SHARE_TEST_IDS=f10001 tn org add "$tn2" 2>&1); rm -f "$DRYT/m/f10001"   # a local row with no pointer (an older CLI added it)
+out=$(SHARE_TEST_IDS=f10002 tn org add "$tn2" 2>&1)   # a local row whose id holds a cloud record (a pre-existing collision)
+jq -nc '{v: 1, id: "f10002", name: "x.txt", src: "/x", added: "2026-09-01", expires: 0, opts: "", prefix: "o/f10002.00000002/", by: "peer"}' >"$DRYT/m/f10002"
+orphan() { jq -nc --arg id "$1" --arg by "$2" '{v: 2, id: $id, storage: "machine", name: "gone.txt", by: $by, added: "2026-09-01", expires: 0, opts: "", type: "text"}' >"$DRYT/m/$1"; aged "$3" "$DRYT/m/$1"; }
+orphan f20001 "$(uname -n | cut -d. -f1 | tr '[:upper:]' '[:lower:]')" 660
+orphan f20002 other-mac 660
+orphan f20003 other-mac 60
+orphan f20004 other-mac 660; printf 'f20004\t-:0000abcd\t0\t-\t%s\n' "$(date +%s)" >>"$troot/access-pending"
+orphan f20005 other-mac 660; ln -s "$$" "$troot/.lock-add-f20005"
+: >"$tlog"
+out=$(tn org ls 2>&1); rc=$?
+check "row 6: ls exits 0" "0" "$rc"
+check "row 6: both old orphan pointers deleted" "1 1 2" "$(mdel f20001 "$tlog") $(mdel f20002 "$tlog") $(grep -c '^removed orphan pointer m/f2000[12]$' <<<"$out")"
+check "row 6: the young, the pending, and the held one kept" "2 2 2 0" "$(jq -r .v "$DRYT/m/f20003") $(jq -r .v "$DRYT/m/f20004") $(jq -r .v "$DRYT/m/f20005") $(grep -c '^DELETE m/f2000[345]$' "$tlog")"
+check "row 6: a pointer written for the bare row (If-None-Match, its own added date)" "2 machine note.txt text $(date +%F)" "$(jq -r '"\(.v) \(.storage) \(.name) \(.type) \(.added)"' "$DRYT/m/f10001" 2>/dev/null)"
+check "row 6: the shadow is named, nothing written or deleted" "1 1 0 0" "$(grep -c 'f10002 is shadowed by a cloud link; rm one of them' <<<"$out") $(jq -r .v "$DRYT/m/f10002") $(grep -c '^PUT m/f10002$' "$tlog") $(mdel f10002 "$tlog")"
+rm -f "$troot/.lock-add-f20005"
+# rm and prune of local rows: the pointer goes with a token, stays without one
+out=$(SHARE_TEST_IDS=f30001 tn org add "$tn2" 2>&1); out=$(SHARE_TEST_IDS=f30002 tn org add "$tn2" 2>&1)
+awk -F'\t' 'BEGIN {OFS = "\t"} $1 == "f30001" || $1 == "f30002" {$5 = 1000} {print}' "$troot/index.tsv" >"$troot/index.tmp" && mv "$troot/index.tmp" "$troot/index.tsv"
+out=$(TN_TOK="" TN_CF="" tn org prune 2>&1); rc=$?
+check "row 6: prune with no token expires both rows, the pointers stay" "0 0 2 2" "$rc $(trow f30001 "$troot" | grep -c .) $(jq -r .v "$DRYT/m/f30001") $(jq -r .v "$DRYT/m/f30002")"
+check "row 6: prune with no token says the cloud side was not checked" "1" "$(grep -c 'were not checked: no publisher token' <<<"$out")"
+out=$(SHARE_TEST_IDS=f30003 tn org add "$tn2" 2>&1)
+awk -F'\t' 'BEGIN {OFS = "\t"} $1 == "f30003" {$5 = 1000} {print}' "$troot/index.tsv" >"$troot/index.tmp" && mv "$troot/index.tmp" "$troot/index.tsv"
+: >"$tlog"
+out=$(tn org prune 2>&1); rc=$?
+check "row 6: prune with a token deletes the expired row's pointer" "0 1 0" "$rc $(mdel f30003 "$tlog") $([[ -e $DRYT/m/f30003 ]] && echo 1 || echo 0)"
+# row 26: pointers never block the orphan sweep, on the origin and on a member
+rm -rf "$DRYT" "$troot"; mkdir -p "$DRYT" "$troot"
+out=$(SHARE_TEST_IDS=d10001 tn org add "$tn2" 2>&1)
+mkdir -p "$DRYT/o/d20001.00000001"; printf 'x\n' >"$DRYT/o/d20001.00000001/f.txt"; aged 90000 "$DRYT/o/d20001.00000001/f.txt"
+: >"$tlog"
+out=$(tn org prune 2>&1); rc=$?
+check "row 26: origin prune with a pointer present sweeps the old upload" "0 1 0" "$rc $(grep -c '^removed orphan upload o/d20001.00000001/$' <<<"$out") $(grep -c 'orphan sweep skipped' <<<"$out")"
+mkdir -p "$DRYT/o/d20002.00000002"; printf 'x\n' >"$DRYT/o/d20002.00000002/f.txt"; aged 90000 "$DRYT/o/d20002.00000002/f.txt"
+out=$(tm prune 2>&1); rc=$?
+check "row 26: member prune with a pointer present sweeps the old upload" "0 1 0" "$rc $(grep -c '^removed orphan upload o/d20002.00000002/$' <<<"$out") $(grep -c 'orphan sweep skipped' <<<"$out")"
+printf 'not json\n' >"$DRYT/m/d30001"
+mkdir -p "$DRYT/o/d20003.00000003"; printf 'x\n' >"$DRYT/o/d20003.00000003/f.txt"; aged 90000 "$DRYT/o/d20003.00000003/f.txt"
+: >"$tlog"
+out=$(tn org prune 2>&1); rc=$?
+check "row 26: a record that is not JSON skips the sweep and is named" "0 0 1" "$rc $(grep -c '^DELETE o/' "$tlog") $(grep -c 'orphan sweep skipped: m/d30001' <<<"$out")"
+rm -f "$DRYT/m/d30001"
+# the access sweep decides per id: a stale line of a published gated cloud link keeps its app
+uuid="00000000-0000-4000-8000-0000000c0001"
+jq -nc --arg u "$uuid" --arg a "$aud64" '{v: 1, id: "c00c01", name: "f.txt", src: "/x", added: "2026-09-01", expires: 0, opts: ("access=" + $u + " access_rule=email:a@example.test"), prefix: "o/c00c01.0000000c/", by: "peer", aud: $a}' >"$DRYT/m/c00c01"
+mkdir -p "$troot/.access-dry"; jq -nc --arg u "$uuid" '{id: $u, name: "share c00c01 org.example.test 0000000c", aud: "x"}' >"$troot/.access-dry/$uuid.json"
+printf 'c00c01\t%s\t0\t-\t%s\n' "$uuid" "$(date +%s)" >>"$troot/access-pending"
+: >"$tlog"
+out=$(tn org prune 2>&1); rc=$?
+check "sweep: a published gated cloud link's stale line is dropped, its app kept" "0 0 1 0" "$rc $(grep -c "^DELETE app $uuid" "$tlog") $([[ -f $troot/.access-dry/$uuid.json ]] && echo 1 || echo 0) $(grep -c '^c00c01' "$troot/access-pending")"
+rm -f "$DRYT/m/c00c01"
+# api-token warns 14 days before the publisher token expires
+fut() { date -u -v+"$1"d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "+$1 days" +%Y-%m-%dT%H:%M:%SZ; }
+out=$(SHARE_R2_DRY_ROLE=deny SHARE_R2_DRY_EXPIRES="$(fut 5)" tn org api-token --check 2>&1); rc=$?
+check "expiry: an origin token five days from expiry warns" "0 1" "$rc $(grep -Ec 'the publisher token expires on [0-9-]{10} \(in [45] days\); then every add to org.example.test fails' <<<"$out")"
+out=$(SHARE_R2_DRY_ROLE=deny SHARE_R2_DRY_EXPIRES="$(fut 60)" tn org api-token --check 2>&1); rc=$?
+check "expiry: sixty days out says nothing" "0 0" "$rc $(grep -c 'the publisher token expire' <<<"$out")"
+out=$(SHARE_R2_DRY_ROLE=deny SHARE_R2_DRY_EXPIRES="2026-01-01T00:00:00Z" tm api-token --check 2>&1); rc=$?
+check "expiry: a member token already expired says so" "0 1" "$rc $(grep -c 'the publisher token expired on 2026-01-01' <<<"$out")"
+
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then
   wout="$(node "$(dirname "$SH")/../tests/worker.mjs" 2>&1)"; wrc=$?

@@ -82,10 +82,11 @@ running() { # the pid must still be a share serve: an unclean exit leaves the fi
   local pid; pid="$(cat "$pidfile")"
   kill -0 "$pid" 2>/dev/null && [[ $(ps -o command= -p "$pid" 2>/dev/null) == *share*serve* ]]
 }
-rows() { # the only index reader: a forged row (bad id, main or malformed host=, a bad access= or access_rule=) never reaches a path, Caddyfile, or Cloudflare call
-  [[ -f $index ]] || return 0
+rows() { rows_in "$index" "$backend"; }   # the only index reader
+rows_in() { # rows_in <file> <backend>: a forged row (bad id, main or malformed host=, a bad access= or access_rule=) never reaches a path, Caddyfile, or Cloudflare call
+  [[ -f $1 ]] || return 0
   # no {n} intervals: mawk lacks them; the host regex is setup's hostname check; the rule grammar is access_parse's
-  awk -F'\t' -v main="$host_name" -v be="$backend" '
+  awk -F'\t' -v main="$host_name" -v be="$2" '
     function hostname(h) { return h ~ /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z][a-z]+$/ }
     function uuid(u) { return length(u) == 36 && u !~ /[^0-9a-f-]/ && substr(u, 9, 1) == "-" && substr(u, 14, 1) == "-" && substr(u, 19, 1) == "-" && substr(u, 24, 1) == "-" && gsub(/-/, "-", u) == 4 }
     function rule(r,   k, v, m, e, j, at) {
@@ -127,9 +128,11 @@ rows() { # the only index reader: a forged row (bad id, main or malformed host=,
       }
       if (app != rl || !hp || !hb) next   # a gated row carries both, or it is a hand edit; an r2 row needs its prefix and host
       print
-    }' "$index"
+    }' "$1"
 }
 row() { rows | awk -F'\t' -v id="$1" '$1 == id'; }
+crows() { rows_in "${r2_snap_file:-/dev/null}" r2; }   # the cloud rows of this process's bucket read; on an origin its own file, never $index
+crow() { crows | awk -F'\t' -v id="$1" '$1 == id'; }
 id_of() { # accept an id or a pasted share link: https://host/<id>/name -> <id>; a bare https://<fqdn>/ resolves to the host row
   case ${1:-} in
     *://*)
@@ -563,6 +566,7 @@ cmd_add() {
   [[ -n $access ]] && pending_drop "$id" "$access_app"
   held_fqdn="" held_access_id=""
   lock_release index   # before cmd_start: serve's startup render takes the lock itself
+  [[ $r2on == 0 ]] || lock_release "add-$id"
   share_url "$id" "$name" "$opts"
   url="$share_url_out"
   echo "$url"
@@ -599,6 +603,7 @@ access_col() { local r; r="$(opt_val access_rule "$1" || true)"; [[ -n $r ]] && 
 
 cmd_refresh() {
   [[ $backend != r2 ]] || { cmd_refresh_r2 "$@"; return; }
+  if [[ $r2on == 1 && -z "$(row "${1:-}")" ]]; then cmd_refresh_r2 "$@"; return; fi   # an origin with R2 on: an id with no local row is a cloud link
   local r src opts
   r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
@@ -618,6 +623,7 @@ cmd_refresh() {
 
 cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so expiry is never blocked (DEC-016)
   [[ $backend != r2 ]] || { cmd_rm_r2 "$@"; return; }
+  if [[ $r2on == 1 && -z "$(row "${1:-}")" ]]; then cmd_rm_r2 "$@"; return; fi   # an origin with R2 on: an id with no local row is a cloud link
   local r opts fqdn="" app="" tmp reloaded=1
   r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
@@ -660,6 +666,11 @@ cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so ex
 
 cmd_prune() { # cmd_prune [quiet|listing]: unpublish every share past its expiry; sweep waiting Access apps when a token resolves
   if [[ $backend == r2 ]]; then r2_prune "${1:-}"; return 0; fi
+  if [[ $r2on == 1 && ${1:-} != quiet ]]; then   # an origin with R2 on, interactive: cloud expiry, the sweep, and the reconcile through its own reader
+    local pm=soft; [[ ${1:-} != listing ]] || pm="env"
+    if r2_token_ok "$pm"; then ( r2_prune "${1:-}"; r2_reconcile ) || echo "share: the cloud links of $host_name were not checked (see above); local links were" >&2
+    elif [[ -z ${1:-} ]]; then echo "share: the cloud links and pointers of $host_name were not checked: no publisher token ($me api-token)" >&2; fi
+  fi
   # quiet (serve, status): no token from any source, so neither touches Access; an expired gated share defers its
   # app. listing (ls): only an exported CLOUDFLARE_API_TOKEN, never api_token_cmd or the Keychain, so a listing
   # never runs `op read`. bare (the prune verb): the full resolver, soft on a failing api_token_cmd. A token for another
@@ -684,6 +695,7 @@ cmd_prune() { # cmd_prune [quiet|listing]: unpublish every share past its expiry
 
 cmd_hits() {
   [[ $backend != r2 ]] || { cmd_hits_r2 "$@"; return; }
+  if [[ $r2on == 1 && -z "$(row "${1:-}")" ]]; then cmd_hits_r2 "$@"; return; fi   # an origin with R2 on: an id with no local row is a cloud link
   local r opts fqdn="" log="$root/access.log"
   r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
@@ -1932,7 +1944,7 @@ access_sweep() { # every pending line: a live owner is skipped, a finished add's
   # (orphaned bytes trashed first), then each app deleted with no lock held. A line that is not done stays claimed by
   # this process; once it exits, the next sweep sees a dead owner and retries.
   [[ -s $pending ]] || return 0
-  local id app pid st created tmp reload=0 claimed="" uuid mcode=""
+  local id app pid st created tmp reload=0 claimed="" uuid mcode="" r2side
   lock_take index
   tmp="$(mktemp "$root/.pending.XXXXXX")"
   while IFS=$'\t' read -r id app pid st created; do
@@ -1970,7 +1982,10 @@ access_sweep() { # every pending line: a live owner is skipped, a finished add's
         continue
       fi
     fi
-    if [[ $backend == r2 ]]; then   # never the snapshot: a record naming this app is a finished add; a 404 frees the app; anything else keeps the line
+    # an origin with R2 on decides per id: a line with no local row may be a gated --cloud add, which takes the r2 rule
+    r2side=0; [[ $backend == r2 || ( $r2on == 1 && -z "$(row "$id")" ) ]] && r2side=1
+    mcode=""
+    if [[ $r2side == 1 ]]; then   # never the snapshot: a record naming this app is a finished add; a 404 frees the app; anything else keeps the line
       r2_call GET "m/$id"; mcode=$cf_code
       if [[ $cf_code == 200 && "$(jq -r '.opts // ""' <<<"$cf_body" 2>/dev/null | tr ' ' '\n' | sed -n 's/^access=//p')" == "$uuid" ]]; then
         lock_take index; pending_drop "$id" "$app"; lock_release index
@@ -1981,7 +1996,7 @@ access_sweep() { # every pending line: a live owner is skipped, a finished add's
     if access_delete "$uuid" "$id"; then
       lock_take index; pending_drop "$id" "$app"; lock_release index
       # the upload of an add that never published: its own nonce only, never another publisher's prefix
-      if [[ $backend == r2 && $mcode == 404 && $access_deleted_nonce =~ ^[0-9a-f]{8}$ ]]; then
+      if [[ $r2side == 1 && $mcode == 404 && $access_deleted_nonce =~ ^[0-9a-f]{8}$ ]]; then
         (r2_delete_prefix "o/$id.$access_deleted_nonce/") >/dev/null 2>&1 || true
       fi
     fi
@@ -2061,6 +2076,7 @@ cmd_api_token() { # cmd_api_token [--cmd '<command>' | --check]: store a token c
       r2_publisher_check "$api_token"
     fi
     echo "share: a publisher token for bucket $(cfg bucket || true): not an admin token, no other bucket in reach" >&2
+    r2_expiry_note
     access_preflight || echo "share: ungated adds work with this token; gated adds and their removal also need the Access scopes above" >&2
     return 0
   fi
@@ -2071,8 +2087,26 @@ cmd_api_token() { # cmd_api_token [--cmd '<command>' | --check]: store a token c
       r2_publisher_check "$api_token"
     fi
     echo "share: a publisher token for bucket $(cfg bucket || true): not an admin token, no other bucket in reach" >&2
+    r2_expiry_note
   fi
   access_preflight
+}
+r2_expiry_note() { # r2_expiry_note: the publisher token's expires_on from /user/tokens/verify; a warning 14 days ahead, since an expired token stops every add (on an origin with R2 on, local adds too)
+  local e left
+  api_token_resolve
+  [[ -n $api_token ]] || return 0
+  r2_api GET /user/tokens/verify
+  [[ $cf_code == 200 ]] || return 0
+  e="$(jq -r '.result.expires_on // empty' <<<"$cf_body" 2>/dev/null)" || return 0
+  [[ -n $e ]] || return 0
+  left="$(jq -rn --arg e "$e" '(($e | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) - now) / 86400 | floor' 2>/dev/null)" || return 0
+  [[ $left =~ ^-?[0-9]+$ ]] || return 0
+  if [[ $left -lt 0 ]]; then
+    echo "share: the publisher token expired on ${e%%T*}; every add to $host_name fails until a new one is stored: $me api-token" >&2
+  elif [[ $left -le 14 ]]; then
+    echo "share: the publisher token expires on ${e%%T*} (in $left days); then every add to $host_name fails; mint a new one and store it: $me api-token" >&2
+  fi
+  return 0
 }
 r2_publisher_check() { # r2_publisher_check <token> [env]: before a publisher token is stored or used from CLOUDFLARE_API_TOKEN, refuse one that edits the Worker (admin) or lists another bucket (account-wide R2)
   local ep a worker="share-${host_name//./-}" bucket others tail="nothing was stored"
@@ -2375,25 +2409,66 @@ r2_token_ok() { # r2_token_ok off|env|soft: a publisher token resolves, never a 
   r2_creds
 }
 
-r2_pointer_put() { # r2_pointer_put <kind> <name> <src> <expires> <opts> [rule]: the origin's v:2 machine record for cmd_add's $id, If-None-Match: *
-  # a 412 means the bucket holds the id: cmd_add's id moves to a fresh one; any other answer dies before anything is served
-  local po="" t rec w i
+r2_pointer_write() { # r2_pointer_write <id> <name> <type> <expires> <opts> <gated> <added>: one v:2 machine record, If-None-Match: *; the answer in cf_code
+  local po="" w rec
   for w in $5; do case $w in noindex|live) po="${po:+$po }$w" ;; esac; done
-  [[ -z ${6:-} ]] || po="${po:+$po }gated"   # a flag, never the rule: every member reads this object
+  [[ -z $6 ]] || po="${po:+$po }gated"   # a flag, never the rule: every member reads this object
+  rec="$(mktemp "$root/.r2rec.XXXXXX")"
+  jq -nc --arg id "$1" --arg name "$2" --arg by "$(r2_by)" --arg added "$7" --argjson exp "$4" --arg opts "$po" --arg type "$3" \
+    '{v: 2, id: $id, storage: "machine", name: $name, by: $by, added: $added, expires: $exp, opts: $opts, type: $type}' >"$rec"
+  r2_call PUT "m/$1" "$rec" -H 'If-None-Match: *' || true
+  rm -f "$rec"
+}
+
+r2_pointer_put() { # r2_pointer_put <kind> <name> <src> <expires> <opts> [rule]: the origin's v:2 machine record for cmd_add's $id, If-None-Match: *
+  # a 412 means the bucket holds the id: cmd_add's id moves to a fresh one; any other answer dies before anything is served.
+  # The add lock on the id tells the reconcile that this pointer has a row on the way.
+  local t i
   if [[ $1 == live ]]; then t=site; else t="$(share_type "$3")"; fi
   for i in 1 2 3 4 5; do
-    rec="$(mktemp "$root/.r2rec.XXXXXX")"
-    jq -nc --arg id "$id" --arg name "$2" --arg by "$(r2_by)" --arg added "$(date +%F)" --argjson exp "$4" --arg opts "$po" --arg type "$t" \
-      '{v: 2, id: $id, storage: "machine", name: $name, by: $by, added: $added, expires: $exp, opts: $opts, type: $type}' >"$rec"
-    r2_call PUT "m/$id" "$rec" -H 'If-None-Match: *' || true
-    rm -f "$rec"
+    lock_take "add-$id" 5
+    r2_pointer_write "$id" "$2" "$t" "$4" "$5" "${6:-}" "$(date +%F)"
     case $cf_code in
       200) return 0 ;;
-      412) id="$(rand_id)" || exit 1 ;;
+      412) lock_release "add-$id"; id="$(rand_id)" || exit 1 ;;
       *) die "R2 did not take the pointer record m/$id (HTTP $cf_code${cf_err:+, $cf_err}); $host_name has R2 on, so a local link needs one; nothing was published" ;;
     esac
   done
   die "R2 answered 412 for five ids in a row; nothing was published; rerun the same $me add"
+}
+
+add_held() { local p; p="$(readlink "$root/.lock-add-$1" 2>/dev/null)" && [[ -n $p ]] && kill -0 "$p" 2>/dev/null; }   # a live add holds this id's pointer
+
+r2_reconcile() { # after r2_read, on the origin's interactive ls and prune: an orphan pointer goes, a row with no pointer gets one, a shadowed id is named
+  local now cut ids id e lm name src date exp opts t
+  now="$(date +%s)"; cut="$(r2_ago $((now - 600)))"
+  ids="$(rows | cut -f1)"
+  while IFS=$'\t' read -r id e; do   # one origin per tenant: every machine pointer is this machine's
+    [[ -n $id ]] || continue
+    grep -qx "$id" <<<"$ids" && continue
+    lm="$(awk -F'\t' -v k="m/$id" '$1 == k {print $2; exit}' <<<"$r2_mmods")"
+    [[ -n $lm && ${lm:0:19} < $cut ]] || continue   # under 10 minutes old: an add may not have written its row yet
+    pending_has_id "$id" && continue   # a gated add inside its wait
+    add_held "$id" && continue
+    r2_call DELETE "m/$id" || true
+    if [[ $cf_code == 20? || $cf_code == 404 ]]; then echo "removed orphan pointer m/$id"
+    else echo "share: deleting the orphan pointer m/$id answered HTTP $cf_code; the next $me prune retries" >&2; fi
+  done <<<"$r2_machine"
+  while IFS=$'\t' read -r id name src date exp opts; do
+    [[ -n $id ]] || continue
+    [[ $exp == 0 || $exp -gt $now ]] || continue   # an expired row is the local prune's
+    grep -q "^$id"$'\t' <<<"$r2_machine" && continue
+    if ! grep -qx "$id" <<<"$r2_mkeys"; then
+      if has_opt live "$opts"; then t=site; else t="$(share_type "$pub/$id/$name")"; fi
+      r2_pointer_write "$id" "$name" "$t" "$exp" "$opts" "$(opt_val access "$opts" || true)" "$date"
+      case $cf_code in
+        200) echo "share: wrote the missing pointer m/$id" >&2; continue ;;
+        412) ;;
+        *) echo "share: writing the pointer m/$id answered HTTP $cf_code; the next $me ls or prune retries" >&2; continue ;;
+      esac
+    fi
+    echo "share: $id is shadowed by a cloud link; rm one of them" >&2   # never deleted here: either side may be the link someone holds
+  done < <(rows)
 }
 
 r2_pointer_drop() { # r2_pointer_drop <id> off|env|soft: after a local row is gone, its machine pointer goes too; without a token it stays (the Worker passes it to Caddy, which 404s)
@@ -2616,7 +2691,7 @@ r2_fetch_records() { # r2_fetch_records <snap>: parallel-GET every key in r2_lis
       [[ $code == 200 ]] && printf '%s' "$cf_body" >"$f"
     fi
     case $code in
-      200) r2_record_row "$key" "$(cat "$f")" >>"$snap"; r2_record_raw "$key" "$(cat "$f")" ;;
+      200) r2_take "$snap" "$key" "$(cat "$f")" ;;
       404) ;;
       *) rm -rf "$wd"; die "r2 snapshot: GET $key answered HTTP $code" ;;
     esac
@@ -2624,19 +2699,23 @@ r2_fetch_records() { # r2_fetch_records <snap>: parallel-GET every key in r2_lis
   rm -rf "$wd"
 }
 
-r2_snapshot() { # r2_snapshot: every m/ record into a mktemp file that $index then names, so rows() stays the only reader
+r2_snapshot() { r2_read; index="$r2_snap_file"; }   # an r2 profile: the bucket read is its index, so rows() stays the only reader
+
+r2_read() { # r2_read: every m/ record into this process's own file (r2_snap_file, read through crows), the sweep view, and the machine pointers; never assigns $index
   local snap k
   mkdir -p "$root"
   snap="$(mktemp "$root/.r2-index.XXXXXX")"
   r2_snap_file="$snap"; trap release_locks EXIT
-  r2_refs="" r2_sweep_block=""
+  r2_refs="" r2_sweep_block="" r2_machine=""
   r2_list "m/"
+  r2_list_out="$(grep -E '^m/[0-9a-f]{6}$' <<<"$r2_list_out" || true)"   # a key is read, shown, or deleted only in the shape share writes
+  r2_mkeys="${r2_list_out//m\//}" r2_mmods="$r2_list_mods"
   if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then
     while IFS= read -r k; do
-      [[ $k == m/* ]] || continue
+      [[ -n $k ]] || continue
       r2_call GET "$k"
       case $cf_code in
-        200) r2_record_row "$k" "$cf_body" >>"$snap"; r2_record_raw "$k" "$cf_body" ;;
+        200) r2_take "$snap" "$k" "$cf_body" ;;
         404) ;;
         *) die "r2 snapshot: GET $k answered HTTP $cf_code" ;;
       esac
@@ -2644,14 +2723,24 @@ r2_snapshot() { # r2_snapshot: every m/ record into a mktemp file that $index th
   else
     r2_fetch_records "$snap" || die "r2 snapshot: a record fetch failed; nothing was listed"
   fi
-  index="$snap"
+}
+
+r2_take() { # r2_take <snap> <m/ key> <json>: one record into the cloud rows, the sweep view, and r2_machine ("<id>\t<expires>" per v:2 machine pointer)
+  local e
+  r2_record_row "$2" "$3" >>"$1"; r2_record_raw "$2" "$3"
+  e="$(jq -r --arg id "${2#m/}" 'select(.v == 2 and .storage == "machine" and .id == $id and (.expires | type == "number" and . >= 0 and . < 1e11)) | .expires | floor' <<<"$3" 2>/dev/null)" || return 0
+  [[ -z $e ]] || r2_machine+="${2#m/}"$'\t'"$e"$'\n'
+  return 0
 }
 
 r2_record_raw() { # r2_record_raw <m/ key> <json>: the orphan sweep's own view; the prefix into r2_refs, or the first key this CLI cannot read into r2_sweep_block
+  # a cloud record (v:1) names its upload; an origin's machine pointer (v:2, storage machine, no prefix) is readable and names none
   local p
-  p="$(jq -r --argjson v "$WORKER_RECORD_V" 'if type == "object" and (.prefix | type == "string") and (.v | type == "number") and .v <= $v then .prefix else error("unreadable") end' <<<"$2" 2>/dev/null)" ||
+  p="$(jq -r 'if type == "object" and .v == 1 and (.prefix | type == "string") then .prefix
+    elif type == "object" and .v == 2 and .storage == "machine" and (has("prefix") | not) then ""
+    else error("unreadable") end' <<<"$2" 2>/dev/null)" ||
     { r2_sweep_block="${r2_sweep_block:-$1}"; return 0; }
-  r2_refs+="$p"$'\n'
+  [[ -z $p ]] || r2_refs+="$p"$'\n'
 }
 
 r2_ago() { date -u -r "$1" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d "@$1" +%Y-%m-%dT%H:%M:%S; }   # epoch -> the ISO form S3's LastModified starts with
@@ -2681,15 +2770,16 @@ r2_sweep_orphans() { # bare prune: every o/<id>.<nonce>/ no record names, whose 
 }
 
 r2_prune() { # r2_prune [quiet|listing]: the snapshot; unless quiet, every expired row through rm, a gated one only with an Access-proven token; a bare prune then sweeps orphan uploads
-  r2_snapshot
+  # on an origin with R2 on (cmd_prune calls it first) the cloud rows come from its own reader and never touch $index; cmd_prune runs the access sweep there
+  if [[ $backend == r2 ]]; then r2_snapshot; else r2_read; fi
   [[ ${1:-} != quiet ]] || return 0
-  local now id opts expired gate_ok=0
+  local now id opts expired gate_ok=0 e
   now="$(date +%s)"
-  expired="$(rows | awk -F'\t' -v now="$now" '$5 > 0 && $5 < now {print $1 "\t" $6}')"
+  expired="$(crows | awk -F'\t' -v now="$now" '$5 > 0 && $5 < now {print $1 "\t" $6}')"
   if [[ -s $pending || $expired == *access=* ]]; then   # listing: the environment only, never op read; bare: the full resolver, soft
     if [[ ${1:-} == listing ]]; then api_token_resolve env; else api_token_resolve soft; fi
     [[ -n $api_token ]] && access_account soft && access_apps_edit_ok && gate_ok=1
-    [[ $gate_ok == 0 ]] || access_sweep
+    [[ $gate_ok == 0 || $backend != r2 ]] || access_sweep
   fi
   while IFS=$'\t' read -r id opts; do
     [[ -n $id ]] || continue
@@ -2697,16 +2787,27 @@ r2_prune() { # r2_prune [quiet|listing]: the snapshot; unless quiet, every expir
       echo "share: expired gated share $id waits for a publisher with the Access token" >&2
       continue
     fi
-    cmd_rm "$id" prune | sed 's/$/ (expired)/' || true   # a listing never dies on one row
+    cmd_rm_r2 "$id" prune | sed 's/$/ (expired)/' || true   # a listing never dies on one row
   done <<<"$expired"
+  if [[ $backend == r2 ]]; then   # a member: a machine pointer past its expiry goes; the origin's own prune unpublishes the link
+    while IFS=$'\t' read -r id e; do
+      [[ -n $id && $e -gt 0 && $e -lt $now ]] || continue
+      r2_call DELETE "m/$id" || true
+      if [[ $cf_code == 20? || $cf_code == 404 ]]; then echo "removed expired pointer m/$id"; fi
+    done <<<"$r2_machine"
+  fi
   [[ -n ${1:-} ]] || r2_sweep_orphans
 }
 
 cmd_rm_r2() { # cmd_rm_r2 <id> [prune]: the record, a fresh read proving it gone, then every nonce's objects, then a gated share's app
   # any publisher may rm any share; a gated one needs a token that passes the Apps Edit probe first (prune: r2_prune proved it)
   local r opts tmp app
-  [[ -n ${r2_snap_file:-} ]] || r2_snapshot
-  r="$(row "${1:-}")"; [[ -n $r ]] || die "no share with id '${1:-}'"
+  [[ -n ${r2_snap_file:-} ]] || { if [[ $backend == r2 ]]; then r2_snapshot; else r2_read; fi; }
+  r="$(crow "${1:-}")"
+  if [[ -z $r ]]; then   # a member never removes the origin's machine link: the origin keeps serving it and its reconcile writes the pointer back
+    [[ $backend == r2 ]] && grep -q "^${1:-x}"$'\t' <<<"$r2_machine" && die "$1 is served from the tenant's origin; remove it there"
+    die "no share with id '${1:-}'"
+  fi
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
   app="$(opt_val access "$opts" || true)"
   if [[ -n $app ]]; then
@@ -2723,7 +2824,7 @@ cmd_rm_r2() { # cmd_rm_r2 <id> [prune]: the record, a fresh read proving it gone
   r2_call GET "m/$1"   # a lost DELETE must not look done; a gated line and its app stay
   [[ $cf_code == 404 ]] || die "m/$1 still answers HTTP $cf_code after its delete (HTTP $dcode); its objects${app:+ and its Access app} were kept; rerun $me rm $1"
   tmp="$(mktemp "$root/.r2-index.XXXXXX")"
-  awk -F'\t' -v id="$1" '$1 != id' "$index" >"$tmp" && mv -f "$tmp" "$index"   # this process's listing drops the row too
+  awk -F'\t' -v id="$1" '$1 != id' "$r2_snap_file" >"$tmp" && mv -f "$tmp" "$r2_snap_file"   # this process's listing drops the row too; on an origin never $index
   r2_own_drop "$1"
   (r2_delete_prefix "o/$1.") || echo "share: some objects under o/$1. remain; nothing serves them, and a $me prune removes them after 24 h" >&2
   echo "unpublished $1"
@@ -2744,6 +2845,8 @@ cmd_refresh_r2() { # cmd_refresh_r2 <id>: this install's own share only; a new p
     *) die "reading m/$1 answered HTTP $cf_code; nothing was changed" ;;
   esac
   body=$cf_body etag=$r2_etag
+  [[ $backend != r2 || "$(jq -r 'if .v == 2 and .storage == "machine" then 1 else 0 end' <<<"$body" 2>/dev/null)" != 1 ]] ||
+    die "$1 is served from the tenant's origin; remove it there"
   [[ -n "$(r2_record_row "m/$1" "$body")" && -n $etag ]] || die "no share with id '$1'"
   oprefix="$(jq -r '.prefix' <<<"$body")"
   own="$(r2_own_get "$1" || true)"
@@ -2776,6 +2879,10 @@ cmd_refresh_r2() { # cmd_refresh_r2 <id>: this install's own share only; a new p
 cmd_hits_r2() { # cmd_hits_r2 <id>: one Analytics Engine SQL call; the id is checked before it can reach the query
   [[ ${1:-} =~ ^[0-9a-f]{6}$ ]] || die "no share with id '${1:-}'"
   local ds="share_${host_name//[.-]/_}" ep
+  if [[ $backend != r2 ]]; then   # an origin: only a sound cloud record reaches the query; a member keeps one account call and no bucket read
+    r2_call GET "m/$1" || true
+    [[ $cf_code == 200 && -n "$(r2_record_row "m/$1" "$cf_body")" ]] || die "no share with id '$1'"
+  fi
   [[ $ds =~ ^[a-z0-9_]+$ ]] || die "bad hostname '$host_name' for a dataset name"
   ep="$(cfg r2_endpoint || true)"; acct="${ep#https://}"; acct="${acct%%.*}"
   [[ -n $ep && $acct =~ ^[A-Za-z0-9-]+$ ]] || die "the profile config has no r2_endpoint; rerun $me setup $host_name --backend r2 --bucket $(cfg bucket || true)"
@@ -2978,7 +3085,7 @@ r2_api_dry() { # the account API under SHARE_R2_DRY: state files in $SHARE_R2_DR
   printf 'API %s %s\n' "$1" "$p" >>"$root/r2-calls.log"
   cf_code=200 cf_err="" cf_body='{"success":true,"result":[]}'
   case "$1 $p" in
-    "GET /user/tokens/verify") cf_body='{"success":true,"result":{"id":"dry-token-id","status":"active"}}' ;;
+    "GET /user/tokens/verify") cf_body="$(jq -nc --arg e "${SHARE_R2_DRY_EXPIRES:-}" '{success: true, result: ({id: "dry-token-id", status: "active"} + (if $e == "" then {} else {expires_on: $e} end))}')" ;;
     "GET /zones?name="*)
       n="${p#*name=}"; n="${n%%&*}"
       [[ $n == "${host_name#*.}" ]] && cf_body="{\"success\":true,\"result\":[{\"id\":\"zone-dry\",\"name\":\"$n\",\"account\":{\"id\":\"acct-dry\"}}]}" ;;
