@@ -533,6 +533,16 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         audiencePopup.addItems(withTitles: ["Anyone with the link", "Only people who log in"])
         audiencePopup.selectItem(at: form.audience == .login ? 1 : 0)
 
+        // One `Storage:` row holds two possible controls: the picker an r2-on origin
+        // gets, and the disabled label a member gets. `sync` picks between them (and
+        // hides the row entirely for a plain tunnel profile) as the profile changes.
+        let storagePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        let storageLabel = NSTextField(labelWithString: "In the cloud")
+        storageLabel.isEnabled = false
+        let storageControls = NSStackView(views: [storagePopup, storageLabel])
+        storageControls.orientation = .horizontal
+        let storageRow = labeledRow("Storage:", storageControls)
+
         let ruleField = NSTextField(frame: .zero)
         ruleField.placeholderString = "group:<name>, email:a@x.io,b@y.io, or domain:<domain>"
         ruleField.stringValue = form.rule
@@ -544,6 +554,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
 
         let accessory = NSStackView(views: [
             labeledRow("Profile:", profilePopup),
+            storageRow,
             labeledRow("Who can open:", audiencePopup),
             labeledRow("Rule:", ruleField),
             loginNote,
@@ -557,13 +568,34 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         ruleField.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
         alert.accessoryView = accessory
 
-        let sync: (PublishForm) -> Void = { [ruleField, loginNote, alert] form in
+        let sync: (PublishForm) -> Void = { [ruleField, loginNote, storageRow, storagePopup, storageLabel, alert] form in
             // Only on a real change: rewriting the text mid-edit would move the caret.
             if ruleField.stringValue != form.rule {
                 ruleField.stringValue = form.rule
             }
             ruleField.isEnabled = form.audience == .login
             loginNote.isHidden = !(form.audience == .login && !form.loginAvailable)
+            switch form.storageField {
+            case .none:
+                storageRow.isHidden = true
+            case .member:
+                storageRow.isHidden = false
+                storagePopup.isHidden = true
+                storageLabel.isHidden = false
+            case .picker(let machine):
+                storageRow.isHidden = false
+                storageLabel.isHidden = true
+                storagePopup.isHidden = false
+                let titles = ["On \(machine)", "In the cloud"]
+                if storagePopup.itemTitles != titles {
+                    storagePopup.removeAllItems()
+                    storagePopup.addItems(withTitles: titles)
+                }
+                let index = form.storage == .cloud ? 1 : 0
+                if storagePopup.indexOfSelectedItem != index {
+                    storagePopup.selectItem(at: index)
+                }
+            }
             alert.buttons[0].title = form.buttonTitle
             alert.buttons[0].isEnabled = form.canPublish
         }
@@ -574,6 +606,8 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         profilePopup.action = #selector(AlertForm.profileChanged(_:))
         audiencePopup.target = alertForm
         audiencePopup.action = #selector(AlertForm.audienceChanged(_:))
+        storagePopup.target = alertForm
+        storagePopup.action = #selector(AlertForm.storageChanged(_:))
         ruleField.target = alertForm
         ruleField.action = #selector(AlertForm.ruleEdited(_:))
         ruleField.delegate = alertForm
@@ -587,7 +621,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         defaults.set(profile, forKey: "publish.lastProfile")
         defaults.set(rule ?? "", forKey: PublishForm.ruleKey(for: profile))
         Task { [weak self] in
-            await self?.publishBatch(paths: paths, profile: profile, rule: rule)
+            await self?.publishBatch(paths: paths, profile: profile, rule: rule, storage: form.storageFlag)
         }
     }
 
@@ -608,9 +642,9 @@ final class StatusItemController: NSObject, @unchecked Sendable {
     /// failed re-read; the alert for that event adds `Not published: <names>` for the
     /// paths that never ran.
     @MainActor
-    private func publishBatch(paths: [String], profile: String, rule: String?) async {
+    private func publishBatch(paths: [String], profile: String, rule: String?, storage: PublishStorage? = nil) async {
         for (index, path) in paths.enumerated() {
-            guard let argv = PublishChoice.args(profile: profile, rule: rule, path: path) else { continue }
+            guard let argv = PublishChoice.args(profile: profile, rule: rule, path: path, storage: storage) else { continue }
             actionLogger.log("add profile=\(profile, privacy: .public) path=\(path, privacy: .private)")
             let unpublished = Array(paths.dropFirst(index + 1))
             let ok = await performMutation(
@@ -633,7 +667,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
     #if DEBUG
     func debugAddPaths(_ paths: [String]) {
         guard let profiles = currentProfiles, let profile = PublishChoice.eligible(profiles).first else { return }
-        Task { [weak self] in await self?.publishBatch(paths: paths, profile: profile, rule: nil) }
+        Task { [weak self] in await self?.publishBatch(paths: paths, profile: profile, rule: nil, storage: nil) }
     }
     #endif
 
@@ -1045,6 +1079,11 @@ private final class AlertForm: NSObject, NSTextFieldDelegate, @unchecked Sendabl
 
     @objc func audienceChanged(_ sender: NSPopUpButton) {
         form.choose(sender.indexOfSelectedItem == 1 ? .login : .anyone)
+        resync()
+    }
+
+    @objc func storageChanged(_ sender: NSPopUpButton) {
+        form.choose(storage: sender.indexOfSelectedItem == 1 ? .cloud : .local)
         resync()
     }
 
