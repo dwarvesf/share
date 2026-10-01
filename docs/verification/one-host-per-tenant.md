@@ -43,3 +43,28 @@ Dry trace for the first control: the row 4 run holds the add at `PUT m/c00001` t
 ## Live spikes
 
 TASK-1a and TASK-1b ran against throwaway Cloudflare objects only (names `share-e2e-spk584462` and `share-e2e-spk13b60d`). Every object was deleted and checked from outside: the API listed none of them on either account afterwards, the minted token's id answered 404, and each zone's authoritative server answered NXDOMAIN for both names.
+
+# Batch 2
+
+Batch 2 is TASK-2b, TASK-3, and TASK-4, each committed and checked on its own.
+
+## TASK-2b: dispatch, reconcile, sweep (rows 3, 6, 26, 27)
+
+```
+Command: SHARE_TEST_PORT_BASE=28787 gtimeout 900 bash tests/share.sh
+Exit:    0
+Checks:  1151 ok, 0 FAIL, 0 SKIP (PASS), at 6df0318
+Section: === tenant: storage dispatch, member refusals, reconcile, sweep (rows 3, 6, 26, 27) ===, 39 checks
+Verdict: PASS
+```
+
+`node tests/worker.mjs` PASS, and `shellcheck bin/share install.sh tests/share.sh tests/e2e.sh tests/e2e-r2.sh demo/render.sh mac/*.sh` clean, on the same tree.
+
+Negative controls: each patch went into a copy of tree `25dd9e9` (commit 6df0318), the tenant sections ran alone, then the unpatched copy ran green (0 FAIL).
+
+| Patch | Red rows |
+|---|---|
+| let a member `rm` a machine row (the refusal in `cmd_rm_r2` becomes a `DELETE m/<id>`) | row 3 "member rm of a machine row is refused" (got `0 0`), "no DELETE m/<id>, the pointer stays" (got `1`), "member refresh ... refused" (got `1 0 0`: the pointer was gone, so the message changed), row 27's machine rm (no pointer left to delete); `fails=4` |
+| let the sweep count a machine pointer as unreadable (`r2_record_raw`'s machine branch raises) | row 26 origin and member sweeps (got `0 0 1`: skipped, warning printed), the not-JSON leg (got `0 0 0`: the warning named the pointer instead); `fails=3` |
+
+Dry trace for the first control: the member's `rm e10001` reads the snapshot, finds `e10001` in `r2_machine`, and with the patch logs `DELETE m/e10001`; the check reads one DELETE line in the member's `r2-calls.log` where it wants none.

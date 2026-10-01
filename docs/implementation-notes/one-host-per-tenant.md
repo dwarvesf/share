@@ -121,3 +121,16 @@ Deviations from the spec, per task. A task with none is not listed.
 - `api-token` on an R2-on origin: `--cmd`, the paste, and `--check` run `r2_publisher_check`; the paste names the bucket scope beside the prefilled Access form; `access_preflight` stays required. Not built yet: the 14-day `expires_on` warning (round-1 warning), left for TASK-11a's token work.
 - Test seams: `SHARE_R2_DRY_PUT=500` (every PUT answers 500), `SHARE_R2_DRY_PUT=race-once` (the first conditional PUT of an `m/` key finds a peer's record written just before it, so `If-None-Match: *` answers 412), and `SHARE_R2_DRY_PAUSE` now drops `.paused` in the dry bucket, so row 4 inspects `pub/` while the pointer PUT is held instead of racing a watcher.
 - Left for TASK-2b: on the origin, `rm`, `refresh`, and `hits` of a cloud id still read the local index only (`no share with id`).
+
+### TASK-2b (dispatch, reconcile, sweep, origin cloud expiry)
+
+- Fixes TASK-2a's leftover: on an origin with R2 on, `rm`, `refresh`, and `hits` of an id with no local row take the r2 path. A local row wins on a shadowed id.
+- The bucket reader is `r2_read`: one mktemp file per process (`r2_snap_file`), read through `crows`; it never assigns or writes `$index`. `r2_snapshot` (members) is `r2_read` plus the old `index` rebind. `cmd_rm_r2` and `r2_prune` read and rewrite the reader's file only. Keys outside `^m/[0-9a-f]{6}$` are dropped before any GET, on members too.
+- `hits` on a member does not refuse a machine row. SPEC-007 row 13 pins member `hits` to one account call and no bucket read, and a refusal needs a `GET m/<id>`. The spec test wins over the round-2 build rule; a member's `hits` of a machine id prints the Analytics count (0: the Worker counts no pass-through). The origin's `hits` of a cloud id reads `m/<id>` first, as row 27 asks.
+- A member's `rm` and `refresh` of a machine row die after the read that identifies the row (the snapshot for `rm`, `GET m/<id>` for `refresh`) and before any write.
+- No add lock existed. `r2_pointer_put` now takes `.lock-add-<id>` before the pointer PUT; `cmd_add` releases it after the row write, the EXIT trap on a die. The reconcile skips an id whose lock names a live pid.
+- The origin's interactive pass runs in a subshell before the local expiry: cloud expiry, the orphan sweep (bare prune only, as SPEC-007), then the reconcile. A bucket failure prints one line and the local expiry still runs. The reconcile skips expired local rows (the local prune's) and prints its shadow and backfill lines on stderr. `access_sweep` runs once, in `cmd_prune`.
+- `r2_record_raw` reads the cloud shape as `v:1` exactly instead of `v <= WORKER_RECORD_V`, so TASK-3's bump to 2 keeps a `v:2` record without `storage:"machine"` unreadable for the sweep.
+- A member's bare prune and `ls` delete a machine pointer whose `expires` is past (pointer rule 3).
+- The 14-day warning: `api-token` (`--check`, the paste, `--cmd`) on an r2 member and on an R2-on origin reads `expires_on` from `/user/tokens/verify` and warns at 14 days or fewer, or once expired. Not on every add (`r2_key_id` in the config skips the verify call there). Test seam: `SHARE_R2_DRY_EXPIRES`.
+
