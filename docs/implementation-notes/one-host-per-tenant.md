@@ -176,3 +176,11 @@ Deviations from the spec, per task. A task with none is not listed.
 - A member's join reads the marker's `aliases` once and keeps each one only after `https://<alias>/healthz` answers 301 to the tenant three times; it stores them as `aliases=` in its r2 config. `access_delete` and the purge's by-name pass accept an app named for the host or any stored alias.
 - Dry seams: `SHARE_R2_DRY_FAIL` (`API <METHOD> <path glob>`, `PUT <key>`, or `ALIAS-301`) fails one call with no state change; `.cf/script-<worker>.json` answers the settings of a second Worker; the Access dry answers `PUT access/apps/<uuid>`; the dry alias answers 301 once its domain names the tenant Worker and that Worker binds it.
 
+### TASK-8 (Share Bar tenant rows)
+
+- Every new field decodes optional, so a pre-tenant CLI's `state` still renders: a missing `type` maps to `doc`/`file`, a missing `storage` shows no badge, and the `Storage` row hides when `r2` is absent or false.
+- `RowGlyphs` in ShareBarCore holds the spec's symbol/word table as plain strings; `StatusItemController` resolves names with `NSImage(systemSymbolName:)` and drops any that fail. The lock moved out of `item.image` (now the type symbol) into the trailing attachment group: storage, link, lock.
+- `state`'s `cloud_more` count rides the section's existing `more` line; `cloud_error` renders as one disabled line after the rows.
+- The publish dialog's `Storage` row has three shapes the `sync` pass switches between: a picker (`On <hosts>` / `In the cloud`, preselected from `storage_default`) only when `r2 && serves_here`; a disabled `In the cloud` label on an r2 member; hidden otherwise. Only the picker adds `--cloud`/`--local` to the argv. A profile switch reloads the selection from the new profile's `storage_default`, since the picker is per-tenant.
+- Not covered by tests: the visual layout of the attachment column and the dialog row switching (AppKit-only, manual).
+
