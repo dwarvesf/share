@@ -2277,7 +2277,11 @@ check "row 13: hits takes the pasted link" "1" "$(grep -c '^3 hits, 2 visitors' 
 out=$(CLOUDFLARE_API_TOKEN=faketoken r2a hits "abc' OR '1'='1" 2>&1); rc=$?
 check "row 13: an injected id is refused before any call" "1 0" "$rc $(grep -c . "$rlog" || true)"
 printf '%s\n' '{"meta":[],"data":[{"hits":"0","visitors":"0","last":"1970-01-01 00:00:00"}],"rows":1}' >"$DRYA/.cf/sql.json"
-check "row 13: no visits" "0 hits, 0 visitors" "$(CLOUDFLARE_API_TOKEN=faketoken r2a hits 130002 2>&1)"
+hnote130002="this machine counts cloud links only; if 130002 is a machine link, its stats are on the tenant's origin: share --profile r2x hits 130002 there"
+check "row 13: no visits on an id another publisher added: the count plus the machine-link note" "0 hits, 0 visitors|$hnote130002" "$(CLOUDFLARE_API_TOKEN=faketoken r2a hits 130002 2>&1 | paste -sd'|' -)"
+r2a r2-own put 130002 o/130002.0badf00d/ "$WORK/x"
+check "row 13: no visits on this install's own cloud link: the bare count" "0 hits, 0 visitors" "$(CLOUDFLARE_API_TOKEN=faketoken r2a hits 130002 2>&1)"
+r2a r2-own drop 130002
 out=$(CLOUDFLARE_API_TOKEN="" r2a hits 130001 2>&1); rc=$?
 check "row 13: hits with no API token exits 1 naming the scope" "1 1" "$rc $(grep -c 'Account Analytics: Read' <<<"$out")"
 
@@ -2881,6 +2885,9 @@ check "row 3: member refresh of a machine row is refused" "1 1 0" "$rc $(grep -c
 : >"$mlog"
 out=$(tm hits e10001 2>&1); rc=$?
 check "row 3: member hits keeps one account call and no bucket read (SPEC-007 row 13)" "0 0 1" "$rc $(grep -c '^GET' "$mlog") $(grep -c '^SQL' "$mlog")"
+check "row 3: member hits of a machine id never prints a bare 0" "0 hits, 0 visitors|this machine counts cloud links only; if e10001 is a machine link, its stats are on the tenant's origin: share --profile org hits e10001 there" "$(paste -sd'|' - <<<"$out")"
+out=$(tm hits e20001 2>&1)
+check "row 3: member hits of its own cloud link is the bare count" "0 hits, 0 visitors" "$out"
 : >"$mlog"
 out=$(tm rm e20001 2>&1); rc=$?
 check "row 3: member rm of a cloud row runs the r2 path" "0 1 0" "$rc $(mdel e20001 "$mlog") $([[ -e $DRYT/m/e20001 ]] && echo 1 || echo 0)"

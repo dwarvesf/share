@@ -564,6 +564,7 @@ Moving a tunnel tenant's local shares into its bucket (a `--cloud` re-add covers
 - DEC-009: `share migrate` moves an origin over ssh with the receiver's `import`, keeping ids, names, dates, expiries, and gates; nothing on the old origin is deleted, only moved aside.
 - DEC-010: the new origin gets its own tunnel; reusing the old one would leave its id in the old machine's config, where a later teardown deletes the new origin's tunnel.
 - DEC-011: bucket rows are display data only; the origin's index, Caddyfile, and stage paths never read a record another publisher could write.
+- DEC-012 (lead, build batch 3): a member's `hits` keeps SPEC-007's rule of one account call and no bucket read, so it never refuses a machine row. It must not print a bare 0 for a link it cannot count: when the count is 0 and the id is not one of this install's own cloud adds (`r2-own`), it prints the count and then `this machine counts cloud links only; if <id> is a machine link, its stats are on the tenant's origin: <me> hits <id> there`. This replaces the round-2 build rule that a member refuses a machine row.
 - Round 1 (seven fresh-context reviewers, 2026-10-01): eleven criticals, all folded. Warnings that do not change the design went to `docs/implementation-notes/one-host-per-tenant.md` for the builder.
 
 | Change | Why (reviewer) |

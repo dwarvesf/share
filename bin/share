@@ -2941,6 +2941,10 @@ cmd_hits_r2() { # cmd_hits_r2 <id>: one Analytics Engine SQL call; the id is che
     (.data[0] // {}) as $r | ($r.hits // 0 | tonumber) as $h | ($r.visitors // 0 | tonumber) as $v
     | n($h; "hit") + ", " + n($v; "visitor")
       + (if $h > 0 and ($r.last // "") != "" then ", last " + ($r.last | strptime("%Y-%m-%d %H:%M:%S") | mktime | strflocaltime("%F %H:%M")) else "" end)' <<<"$cf_body"
+  # a member reads no bucket here, so a 0 for an id it did not add may be a machine link the Worker never counts
+  [[ $backend == r2 && "$(jq -r '.data[0].hits // 0 | tonumber' <<<"$cf_body")" == 0 && -z "$(r2_own_get "$1")" ]] &&
+    echo "this machine counts cloud links only; if $1 is a machine link, its stats are on the tenant's origin: $me hits $1 there"
+  return 0
 }
 
 cmd_status_r2() { # read-only: the Worker's health and version, then the listing without its prune (status never deletes)
