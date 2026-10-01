@@ -1317,6 +1317,7 @@ write_config() { # write_config <tunnel_id> <tunnel_name>; keeps a token_cmd and
     [[ -n $zone_name ]] && echo "zone=$zone_name"
     [[ -n $keep ]] && echo "token_cmd=$keep"
     [[ -n $keep_api ]] && echo "api_token_cmd=$keep_api"
+    [[ -f $config ]] && grep -E '^(bucket|r2_endpoint|storage_default|aliases)=' "$config" || true   # an origin with R2 on stays on through a tunnel rerun
   } >"$config.tmp"
   mv -f "$config.tmp" "$config"
 }
@@ -3160,6 +3161,17 @@ r2_api_dry() { # the account API under SHARE_R2_DRY: state files in $SHARE_R2_DR
       if [[ ${SHARE_R2_DRY_DOMAINS:-} == 500 ]]; then cf_code=500 cf_body='{"success":false,"errors":[{"code":10013}]}'
       elif [[ -f $d/domain.json ]]; then cf_body="{\"success\":true,\"result\":[$(jq -c '{id: "dom-dry"} + .' "$d/domain.json")]}"; fi ;;
     "DELETE "*/workers/domains/*) rm -f "$d/domain.json" ;;
+    "GET /zones/"*/workers/routes)
+      if [[ ${SHARE_R2_DRY_ROUTES:-} == deny ]]; then cf_code=403 cf_body=$deny
+      else cf_body="{\"success\":true,\"result\":$(cat "$d/routes.json" 2>/dev/null || echo '[]')}"; fi ;;
+    "POST /zones/"*/workers/routes)
+      jq -c --argjson r "$3" '. + [$r + {id: "route-\(length + 1)"}]' "$d/routes.json" 2>/dev/null >"$d/routes.tmp" || jq -nc --argjson r "$3" '[$r + {id: "route-1"}]' >"$d/routes.tmp"
+      mv -f "$d/routes.tmp" "$d/routes.json"; cf_body='{"success":true,"result":{}}' ;;
+    "PUT /zones/"*/workers/routes/*)
+      jq -c --argjson r "$3" --arg id "${p##*/}" 'map(if .id == $id then $r + {id: $id} else . end)' "$d/routes.json" >"$d/routes.tmp" && mv -f "$d/routes.tmp" "$d/routes.json"
+      cf_body='{"success":true,"result":{}}' ;;
+    "DELETE /zones/"*/workers/routes/*)
+      jq -c --arg id "${p##*/}" 'map(select(.id != $id))' "$d/routes.json" >"$d/routes.tmp" && mv -f "$d/routes.tmp" "$d/routes.json" ;;
     "DELETE "*/workers/scripts/*) rm -f "$d/script.json" ;;
     "DELETE "*/r2/buckets/*) rm -f "$d/bucket" ;;
     "PUT "*/workers/domains) jq -c '{hostname, service}' <<<"$3" >"$d/domain.json"; cf_body='{"success":true,"result":{}}' ;;
@@ -3182,13 +3194,16 @@ r2_healthz() { # r2_healthz [secs]: hz_code (200 only for a "200 ok" body), hz_p
   if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then   # the dry Worker's answer as a header file and a body, read by the same lines below
     local d="${SHARE_R2_DRY_DIR:-$root/r2-dry}/.cf" pair gate
     printf 'HEALTHZ\n' >>"$root/r2-calls.log"
-    if [[ ${SHARE_R2_DRY_HEALTHZ:-} != down && -f $d/domain.json && -f $d/script.json ]]; then
+    local routed=0   # a tenant Worker answers through its route on <host>/*, an r2 profile's through its custom domain
+    [[ -f $d/routes.json ]] && jq -e --arg p "$host_name/*" 'any(.[]; .pattern == $p)' "$d/routes.json" >/dev/null 2>&1 && routed=1
+    if [[ ${SHARE_R2_DRY_HEALTHZ:-} != down && ( -f $d/domain.json || $routed == 1 ) && -f $d/script.json ]]; then
       pair="$(jq -r '[(.bindings[] | select(.name == "VERSION") | .text), (.bindings[] | select(.name == "SHA") | .text)] | join(" ")' "$d/script.json")"
       gate="$(jq -r 'if any(.bindings[]; .name == "TEAM" and (.text // "") != "") then 1 else 0 end' "$d/script.json")"
       case ${SHARE_R2_DRY_HEALTHZ:-} in
         tunnel-down) printf 'HTTP/2 503 \r\nx-share-worker: %s\r\nx-share-gate: %s\r\nx-share-tunnel: 0\r\n\r\n' "$pair" "$gate" >"$h"; b="tunnel down" ;;
         503-bare) printf 'HTTP/2 503 \r\n\r\n' >"$h"; b="" ;;
-        *) printf 'HTTP/2 200 \r\nx-share-worker: %s\r\nx-share-gate: %s\r\n\r\n' "$pair" "$gate" >"$h"; b="ok" ;;
+        *) local tl=""; jq -e 'any(.bindings[]; .name == "PASS" and .text == "1")' "$d/script.json" >/dev/null && tl=$'x-share-tunnel: 1\r\n'
+           printf 'HTTP/2 200 \r\nx-share-worker: %s\r\nx-share-gate: %s\r\n%s\r\n' "$pair" "$gate" "$tl" >"$h"; b="ok" ;;
       esac
     fi
   else
@@ -3211,10 +3226,14 @@ r2_wait_healthz() { # r2_wait_healthz admin|join: three 200s in a row within SHA
   [[ ${SHARE_R2_DRY:-0} == 1 ]] && poll=0
   while :; do
     r2_healthz
-    if [[ $hz_code == 200 && ( $1 == join || $hz_pair == "$WORKER_VERSION $WORKER_SHA" ) ]]; then
+    if [[ $hz_code == 200 && ( $1 == join || $hz_pair == "$WORKER_VERSION $WORKER_SHA" ) && ( $1 != tenant || $hz_tunnel == 1 ) ]]; then
       streak=$((streak + 1)); [[ $streak -ge 3 ]] && return 0
     else
       streak=0
+    fi
+    if [[ $1 == tenant && $((SECONDS - start)) -ge $wait ]]; then   # the config is written by now: the rollback is --no-r2
+      local leg="the Worker leg"; [[ $hz_code == 200 && $hz_pair == "$WORKER_VERSION $WORKER_SHA" ]] && leg="the tunnel leg (X-Share-Tunnel: ${hz_tunnel:-none})"
+      die "https://$host_name/healthz did not answer 200 ok with this share's Worker and X-Share-Tunnel: 1 three times in a row within ${wait}s (last: $hz_code ${hz_pair:-no pair}); $leg is down; roll back with: $me setup $host_name --no-r2"
     fi
     [[ $((SECONDS - start)) -lt $wait ]] ||
       die "https://$host_name/healthz did not answer 200 ok three times in a row within ${wait}s (last: $hz_code ${hz_pair:-no pair}); the config was not written; rerun setup once the certificate is issued"
@@ -3225,8 +3244,10 @@ r2_wait_healthz() { # r2_wait_healthz admin|join: three 200s in a row within SHA
 r2_deploy_meta() { # r2_deploy_meta <team> <dataset> [salt]: the multipart metadata; printf only, so the salt never reaches an argv
   local salt=""
   [[ -n ${3:-} ]] && salt=',{"type":"secret_text","name":"SALT","text":"'"$3"'"}'
-  printf '{"main_module":"share.js","compatibility_date":"%s","bindings":[{"type":"r2_bucket","name":"BUCKET","bucket_name":"%s"},{"type":"analytics_engine","name":"HITS","dataset":"%s"},{"type":"plain_text","name":"HOST","text":"%s"},{"type":"plain_text","name":"TEAM","text":"%s"},{"type":"plain_text","name":"VERSION","text":"%s"},{"type":"plain_text","name":"SHA","text":"%s"}%s],"keep_bindings":["secret_text"]}\n' \
-    "$WORKER_COMPAT_DATE" "$r2_bucket" "$2" "$host_name" "$1" "$WORKER_VERSION" "$WORKER_SHA" "$salt"
+  local tenant=""   # a tenant Worker (setup --r2) passes misses to the origin and 301s its aliases; an r2-only profile binds neither
+  [[ -z ${r2_pass:-} ]] || tenant=',{"type":"plain_text","name":"PASS","text":"1"},{"type":"plain_text","name":"ALIASES","text":"'"${r2_aliases:-}"'"}'
+  printf '{"main_module":"share.js","compatibility_date":"%s","bindings":[{"type":"r2_bucket","name":"BUCKET","bucket_name":"%s"},{"type":"analytics_engine","name":"HITS","dataset":"%s"},{"type":"plain_text","name":"HOST","text":"%s"},{"type":"plain_text","name":"TEAM","text":"%s"},{"type":"plain_text","name":"VERSION","text":"%s"},{"type":"plain_text","name":"SHA","text":"%s"}%s%s],"keep_bindings":["secret_text"]}\n' \
+    "$WORKER_COMPAT_DATE" "$r2_bucket" "$2" "$host_name" "$1" "$WORKER_VERSION" "$WORKER_SHA" "$tenant" "$salt"
 }
 
 r2_deploy() { # r2_deploy <worker> <team> <dataset> <first>: one multipart PUT; the first deploy adds the SALT secret, later ones keep it
@@ -3292,6 +3313,219 @@ write_config_r2() { # write_config_r2 <bucket>: the r2 profile config; keeps api
   mv -f "$config.tmp" "$config"
 }
 
+tenant_admin() { # tenant_admin <bucket>: setup --r2 and --no-r2 on the origin: the profile checks, the admin token, zone, and the admin's own S3 pair
+  [[ $mode != quick ]] || die "$host_name is a quick tunnel; R2 needs a named tunnel tenant: '$me teardown', then '$me setup <hostname>'"
+  [[ -n $(cfg tunnel_id || true) && "$(cfg hostname || true)" == "$host_name" && $backend != r2 ]] ||
+    die "this profile is not the tunnel origin of $host_name; run '$me setup $host_name' on the origin first"
+  host_ok || die "run this on the origin, $hosts"
+  local c
+  for c in jq curl; do command -v "$c" >/dev/null || die "missing: $c (brew install $c)"; done
+  api_token="${CLOUDFLARE_API_TOKEN:-}"
+  [[ -n $api_token ]] || die "setup --r2 and --no-r2 read the tenant admin token from CLOUDFLARE_API_TOKEN only (Workers Scripts Edit, Workers R2 Storage Edit, Workers Routes Edit, Zone Read, DNS Read, Access Organizations Read); nothing was changed"
+  r2_setup_zone
+  r2_endpoint="https://$acct.r2.cloudflarestorage.com" r2_bucket=$1
+  r2_api GET /user/tokens/verify   # the admin token's own S3 pair, as SPEC-007's setup uses it
+  r2_key_id="$(jq -r '.result.id // empty' <<<"$cf_body" 2>/dev/null || true)"
+  [[ $cf_code == 200 && -n $r2_key_id ]] || die "the token did not verify (HTTP $cf_code); nothing was changed"
+  r2_secret="$(printf '%s' "$api_token" | shasum -a 256 | cut -d' ' -f1)"
+  r2on=1
+}
+
+tenant_route() { # tenant_route <worker>: the routes on the zone; sets route_id and route_open for <host>/* naming the worker; dies on a route of another script on this host
+  local w=$1 p sc
+  route_id="" route_open=""
+  r2_api GET "/zones/$zone_id/workers/routes"
+  [[ $cf_code == 200 ]] || die "reading Worker routes answered HTTP $cf_code (the token needs Workers Routes Edit); nothing was changed"
+  while IFS=$'\t' read -r p sc; do   # any pattern whose host part matches this host and names another script would shadow or be shadowed by ours
+    [[ -n $p ]] || continue
+    # shellcheck disable=SC2053 # the route's host part is a glob on purpose
+    [[ $host_name == ${p%%/*} ]] || continue
+    [[ $sc == "$w" ]] || die "Worker route $p names script ${sc:-none}, not $w; refused, nothing was changed"
+  done < <(jq -r '.result[]? | [.pattern, (.script // "")] | @tsv' <<<"$cf_body")
+  route_id="$(jq -r --arg p "$host_name/*" --arg w "$w" '[.result[]? | select(.pattern == $p and .script == $w) | .id] | first // empty' <<<"$cf_body")"
+  route_open="$(jq -r --arg p "$host_name/*" --arg w "$w" '[.result[]? | select(.pattern == $p and .script == $w) | .request_limit_fail_open] | first // empty' <<<"$cf_body")"
+}
+
+tenant_config() { # tenant_config [<bucket> <endpoint> <storage_default> <aliases>]: the four tenant keys in the tunnel config; none given drops them
+  local tmp; tmp="$(mktemp "$config_dir/.config.XXXXXX")"
+  grep -vE '^(bucket|r2_endpoint|storage_default|aliases)=' "$config" >"$tmp" || true
+  [[ $# == 0 ]] || printf 'bucket=%s\nr2_endpoint=%s\nstorage_default=%s\naliases=%s\n' "$1" "$2" "$3" "$4" >>"$tmp"
+  mv -f "$tmp" "$config"
+  if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then if [[ $# == 0 ]]; then echo "CONFIG r2 off"; else echo "CONFIG r2 on"; fi >>"$root/r2-calls.log"; fi
+}
+
+cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force>: setup <host> --r2 on the origin; every read and refusal before the first write; a rerun converges
+  local bucket=$1 sdef=$2 force=$3 worker="share-${host_name//./-}" dataset="share_${host_name//[.-]/_}"
+  [[ $bucket =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] || die "bad bucket name '$bucket' (3-63 chars of a-z 0-9 -; no leading or trailing -)"
+  [[ $dataset =~ ^[a-z0-9_]+$ ]] || die "bad hostname '$host_name' for a dataset name"
+  local cur; cur="$(cfg bucket || true)"
+  [[ -z $cur || $cur == "$bucket" ]] || die "R2 is on for $host_name with bucket $cur; '$me setup $host_name --no-r2' first"
+  [[ $tunnel == 0 ]] || running || die "$host_name is not serving on this machine; '$me start', then rerun; nothing was changed"
+  sdef="${sdef:-$(cfg storage_default || true)}"; sdef="${sdef:-local}"
+  tenant_admin "$bucket"
+
+  # step 2: only an admin token reads the Worker's settings
+  local first=0 dep_v=0 dep_sha="" dep_team="" dep_pass="" dep_aliases=""
+  r2_api GET "/accounts/$acct/workers/scripts/$worker/settings"
+  case $cf_code in
+    200) ;;
+    404) first=1 ;;
+    401|403) die "the token cannot read Worker $worker's settings: only the tenant admin enables R2 (an admin token in CLOUDFLARE_API_TOKEN); nothing was changed" ;;
+    *) die "reading Worker $worker answered HTTP $cf_code; nothing was changed" ;;
+  esac
+  echo "deploying as admin"
+  if [[ $first == 0 ]]; then   # step 3, SPEC-007 step 4: share's Worker for this host and bucket, never a downgrade
+    jq -e --arg h "$host_name" --arg b "$bucket" '.result.bindings as $bs
+      | ($bs | any(.name == "HOST" and .text == $h)) and ($bs | any(.name == "BUCKET" and .bucket_name == $b))
+        and ($bs | any(.name == "VERSION" and (.text | test("^[0-9]+$"))))' <<<"$cf_body" >/dev/null ||
+      die "Worker $worker exists but is not share's Worker for $host_name on bucket $bucket (its bindings differ); refused, nothing was changed"
+    dep_v="$(jq -r '.result.bindings[] | select(.name == "VERSION") | .text' <<<"$cf_body")"
+    dep_sha="$(jq -r '[.result.bindings[] | select(.name == "SHA") | .text] | first // ""' <<<"$cf_body")"
+    dep_team="$(jq -r '[.result.bindings[] | select(.name == "TEAM") | .text] | first // ""' <<<"$cf_body")"
+    dep_pass="$(jq -r '[.result.bindings[] | select(.name == "PASS") | .text] | first // ""' <<<"$cf_body")"
+    dep_aliases="$(jq -r '[.result.bindings[] | select(.name == "ALIASES") | .text] | first // ""' <<<"$cf_body")"
+    [[ $dep_v -le $WORKER_VERSION || $force == 1 ]] ||
+      die "Worker $worker runs version $dep_v, newer than this share's $WORKER_VERSION; upgrade share, or pass --force to downgrade it; nothing was changed"
+  fi
+
+  # step 3, SPEC-007 step 5: a private bucket, empty or holding this host's marker
+  local bucket_new=0 marker=""
+  r2_api GET "/accounts/$acct/r2/buckets/$bucket"
+  case $cf_code in
+    404) bucket_new=1 ;;
+    200)
+      r2_api GET "/accounts/$acct/r2/buckets/$bucket/domains/managed"
+      [[ $cf_code == 200 ]] || die "reading bucket $bucket's r2.dev setting answered HTTP $cf_code; nothing was changed"
+      [[ "$(jq -r '.result.enabled' <<<"$cf_body")" == false ]] || die "bucket $bucket has its public r2.dev URL on; a share bucket must be private; refused, nothing was changed"
+      r2_api GET "/accounts/$acct/r2/buckets/$bucket/domains/custom"
+      [[ $cf_code == 200 ]] || die "reading bucket $bucket's custom domains answered HTTP $cf_code; nothing was changed"
+      [[ "$(jq '.result.domains | length' <<<"$cf_body")" == 0 ]] || die "bucket $bucket has a public custom domain; a share bucket must be private; refused, nothing was changed"
+      r2_call LIST ""
+      [[ $cf_code == 200 ]] || die "listing bucket $bucket answered HTTP $cf_code; nothing was changed"
+      local has_objects=0; [[ $cf_body == *"<Key>"* ]] && has_objects=1
+      r2_call GET share.json
+      case $cf_code in
+        200) marker="$cf_body"
+          jq -e --arg h "$host_name" '.v == 1 and .host == $h' <<<"$marker" >/dev/null 2>&1 ||
+            die "bucket $bucket's share.json names another hostname; refused, nothing was changed" ;;
+        404) [[ $has_objects == 0 ]] || die "bucket $bucket holds objects and no share.json; it is not a share bucket; refused, nothing was changed" ;;
+        *) die "reading $bucket/share.json answered HTTP $cf_code; nothing was changed" ;;
+      esac ;;
+    *) die "reading bucket $bucket answered HTTP $cf_code (the token needs Workers R2 Storage: Edit); nothing was changed" ;;
+  esac
+
+  # step 5: no route of another script on this host
+  tenant_route "$worker"
+
+  local team=""   # SPEC-007 step 7: the Access team for gated cloud links
+  r2_api GET "/accounts/$acct/access/organizations"
+  if [[ $cf_code == 200 ]]; then
+    team="$(jq -r '.result.auth_domain // empty' <<<"$cf_body")"
+    [[ $team =~ ^[a-z0-9-]+\.cloudflareaccess\.com$ ]] || team=""
+  else
+    team="$dep_team"
+  fi
+
+  # step 6, under the index lock through step 11 so a concurrent add waits: the bucket snapshot against the local index
+  mkdir -p "$root"
+  lock_take index
+  local ids id clash=""
+  ids="$(rows | cut -f1)"
+  if [[ $bucket_new == 0 ]]; then
+    r2_read
+    for id in $ids; do
+      grep -qx "$id" <<<"$r2_mkeys" || continue
+      grep -q "^$id"$'\t' <<<"$r2_machine" || clash="${clash:+$clash }$id"
+    done
+    [[ -z $clash ]] || die "local links $clash share an id with a record in bucket $bucket (a cloud link); rm one of each pair, then rerun; nothing was changed"
+  fi
+
+  # writes. A new bucket gets its marker before any pointer, so a die below leaves a bucket that names this host
+  if [[ $bucket_new == 1 ]]; then
+    r2_api POST "/accounts/$acct/r2/buckets" "{\"name\":\"$bucket\"}"
+    [[ $cf_code == 200 ]] || die "creating bucket $bucket answered HTTP $cf_code"
+  fi
+  if [[ -z $marker ]]; then
+    local mf; mf="$(mktemp "$root/.marker.XXXXXX")"
+    printf '{"v":1,"host":"%s"}\n' "$host_name" >"$mf"
+    r2_call PUT share.json "$mf" -H 'If-None-Match: *'
+    rm -f "$mf"
+    [[ $cf_code == 200 || $cf_code == 412 ]] || die "writing $bucket/share.json answered HTTP $cf_code"
+    if [[ $cf_code == 412 ]]; then
+      r2_call GET share.json
+      jq -e --arg h "$host_name" '.v == 1 and .host == $h' <<<"$cf_body" >/dev/null 2>&1 || die "bucket $bucket's share.json names another hostname"
+    fi
+  fi
+  # step 8: the Worker with PASS and ALIASES, workers.dev off
+  r2_pass=1 r2_aliases=""
+  if [[ $first == 1 || $dep_v != "$WORKER_VERSION" || $dep_sha != "$WORKER_SHA" || $dep_team != "$team" || $dep_pass != 1 || $dep_aliases != "$r2_aliases" ]]; then
+    r2_deploy "$worker" "$team" "$dataset" "$first"
+    echo "worker:     $worker $WORKER_VERSION $WORKER_SHA deployed (passes misses to the tunnel)"
+  else
+    echo "worker:     $worker $WORKER_VERSION $WORKER_SHA already deployed"
+  fi
+  r2_api POST "/accounts/$acct/workers/scripts/$worker/subdomain" '{"enabled":false,"previews_enabled":false}'
+  [[ $cf_code == 200 ]] || die "turning off $worker's workers.dev route answered HTTP $cf_code; no route exists yet, nothing is exposed"
+  r2_api GET "/accounts/$acct/workers/scripts/$worker/subdomain"
+  [[ $cf_code == 200 && "$(jq -r '"\(.result.enabled),\(.result.previews_enabled)"' <<<"$cf_body")" == false,false ]] ||
+    die "$worker's workers.dev route still reads on; no route exists yet, nothing is exposed; rerun setup"
+
+  # step 9: a pointer for every local row; one that holds this origin's pointer already is done
+  local n=0
+  for id in $ids; do
+    grep -q "^$id"$'\t' <<<"${r2_machine:-}" && continue
+    local name src date exp opts t
+    IFS=$'\t' read -r _ name src date exp opts <<<"$(row "$id")"
+    if has_opt live "$opts"; then t=site; else t="$(share_type "$pub/$id/$name")"; fi
+    r2_pointer_write "$id" "$name" "$t" "$exp" "$opts" "$(opt_val access "$opts" || true)" "$date"
+    case $cf_code in
+      200) n=$((n + 1)) ;;
+      412) die "another publisher took id $id in bucket $bucket during setup; the route is not attached; rm one of them, then rerun" ;;
+      *) die "writing the pointer m/$id answered HTTP $cf_code; the route is not attached; rerun the same setup" ;;
+    esac
+  done
+  echo "pointers:   $n written"
+
+  # step 11: the config, before the route, so every later die leaves a state --no-r2 and a rerun can read
+  tenant_config "$bucket" "$r2_endpoint" "$sdef" ""
+  lock_release index
+
+  # step 13: the route; fail open at a request limit (a drop to the free plan) keeps machine links up
+  local body="{\"pattern\":\"$host_name/*\",\"script\":\"$worker\",\"request_limit_fail_open\":true}"
+  if [[ -z $route_id ]]; then
+    r2_api POST "/zones/$zone_id/workers/routes" "$body"
+    [[ $cf_code == 200 ]] || die "attaching the route $host_name/* answered HTTP $cf_code; links still serve from the tunnel; roll back with: $me setup $host_name --no-r2"
+    echo "route:      $host_name/* -> $worker"
+  elif [[ $route_open != true ]]; then
+    r2_api PUT "/zones/$zone_id/workers/routes/$route_id" "$body"
+    [[ $cf_code == 200 ]] || die "setting the route $host_name/* to fail open answered HTTP $cf_code; roll back with: $me setup $host_name --no-r2"
+    echo "route:      $host_name/* -> $worker (now fails open)"
+  else
+    echo "route:      $host_name/* -> $worker already attached"
+  fi
+
+  # step 15: both legs, then a probe file through the tunnel leg
+  r2_wait_healthz tenant
+  if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then echo "TUNNEL-PROBE" >>"$root/r2-calls.log"
+  else live_check 60 "$host_name" || die "a probe file did not answer through https://$host_name/ three times in a row; the tunnel leg is down; roll back with: $me setup $host_name --no-r2"; fi
+  echo "ready:      R2 is on for https://$host_name/ (bucket $bucket, storage default $sdef). Store this origin's publisher token: $me api-token"
+}
+
+cmd_setup_no_r2() { # cmd_setup_no_r2: the rollback without an alias: the route goes, then the four config keys; the bucket, records, and Worker stay
+  local bucket worker="share-${host_name//./-}"
+  bucket="$(cfg bucket || true)"
+  [[ -z "$(cfg aliases || true)" ]] || die "$(cfg aliases) redirects here; run the alias rollback first; nothing was changed"
+  tenant_admin "${bucket:-none}"
+  tenant_route "$worker"
+  if [[ -n $route_id ]]; then
+    r2_api DELETE "/zones/$zone_id/workers/routes/$route_id"
+    [[ $cf_code == 200 || $cf_code == 404 ]] || die "deleting the route $host_name/* answered HTTP $cf_code; R2 stays on; rerun"
+    echo "route:      $host_name/* removed"
+  fi
+  tenant_config
+  echo "ready:      R2 is off for https://$host_name/: the tunnel serves it alone. The bucket, its records, and Worker $worker stay"
+}
+
 cmd_setup_r2() { # cmd_setup_r2 <force> <bucket> <tname> <login> <service> <quick>: every refusal before the first write
   local force=$1 bucket=$2 tname=$3 login=$4 service=$5 quick=$6
   local rusage="usage: share setup <hostname> --backend r2 --bucket <name> [--force]"
@@ -3339,6 +3573,9 @@ cmd_setup_r2() { # cmd_setup_r2 <force> <bucket> <tname> <login> <service> <quic
     dep_team="$(jq -r '[.result.bindings[] | select(.name == "TEAM") | .text] | first // ""' <<<"$cf_body")"
     [[ $dep_v -le $WORKER_VERSION || $force == 1 ]] ||
       die "Worker $worker runs version $dep_v, newer than this share's $WORKER_VERSION; upgrade share, or pass --force to downgrade it; nothing was changed"
+    # a tenant Worker (PASS) sits in front of a tunnel: this path would drop PASS and ALIASES and swap the CNAME for a custom domain
+    jq -e '.result.bindings | any(.name == "PASS" and .text == "1")' <<<"$cf_body" >/dev/null &&
+      die "$host_name is a tenant with R2 on (its Worker passes misses to a tunnel); refused even with --force, nothing was changed; run '$me setup $host_name --r2 --bucket $bucket' on the origin"
   fi
 
   local bucket_new=0 marker="" skipped=0
@@ -3367,7 +3604,9 @@ cmd_setup_r2() { # cmd_setup_r2 <force> <bucket> <tname> <login> <service> <quic
       case $cf_code in
         200) marker="$cf_body"
           jq -e --arg h "$host_name" '.v == 1 and .host == $h' <<<"$marker" >/dev/null 2>&1 ||
-            die "bucket $bucket's share.json names another hostname; refused, nothing was changed" ;;
+            die "bucket $bucket's share.json names another hostname; refused, nothing was changed"
+          [[ $role != admin ]] || ! jq -e '(.aliases // []) | length > 0' <<<"$marker" >/dev/null 2>&1 ||
+            die "$host_name is a tenant with R2 on (its marker holds aliases); refused even with --force, nothing was changed; run '$me setup $host_name --r2 --bucket $bucket' on the origin" ;;
         404) [[ $role == admin ]] || die "bucket $bucket has no share.json; whoever holds the admin token runs '$me setup $host_name --backend r2 --bucket $bucket' first"
           [[ $has_objects == 0 ]] || die "bucket $bucket holds objects and no share.json; it is not a share bucket; refused, nothing was changed" ;;
         *) die "reading $bucket/share.json answered HTTP $cf_code; nothing was changed" ;;
@@ -3377,13 +3616,23 @@ cmd_setup_r2() { # cmd_setup_r2 <force> <bucket> <tname> <login> <service> <quic
 
   if [[ $role == join ]]; then   # join writes nothing on Cloudflare: the live check, then the local config
     r2_wait_healthz join
-    [[ $hz_pair == "$WORKER_VERSION $WORKER_SHA" ]] ||
+    if [[ $hz_pair != "$WORKER_VERSION $WORKER_SHA" && -n $hz_tunnel ]]; then   # a tenant Worker: only its origin redeploys it
+      echo "the Worker at $host_name runs $hz_pair; this share ships $WORKER_VERSION $WORKER_SHA; whoever holds the admin token runs '$me setup $host_name --r2 --bucket $bucket' on the tenant's origin"
+    elif [[ $hz_pair != "$WORKER_VERSION $WORKER_SHA" ]]; then
       echo "the Worker at $host_name runs $hz_pair; this share ships $WORKER_VERSION $WORKER_SHA; whoever holds the admin token reruns '$me setup $host_name --backend r2 --bucket $bucket'"
+    fi
     write_config_r2 "$bucket"
     echo "ready:      https://$host_name/ serves from bucket $bucket. Store your publisher token: $me api-token; then: $me add <file|dir>"
     return 0
   fi
 
+  r2_api GET "/zones/$zone_id/workers/routes"   # a route on the hostname means a tenant; SPEC-007's minimal admin set may answer 403, which the PASS check covers
+  case $cf_code in
+    200) [[ "$(jq --arg p "$host_name/*" '[.result[]? | select(.pattern == $p)] | length' <<<"$cf_body")" == 0 ]] ||
+           die "$host_name has a Worker route on $host_name/* (a tenant with R2 on); refused even with --force, nothing was changed; run '$me setup $host_name --r2 --bucket $bucket' on the origin" ;;
+    403) ;;
+    *) die "reading Worker routes answered HTTP $cf_code; nothing was changed" ;;
+  esac
   r2_api GET "/zones/$zone_id/dns_records?name=$host_name"
   [[ $cf_code == 200 ]] || die "reading DNS for $host_name answered HTTP $cf_code (the token needs DNS: Read); nothing was changed"
   local ndns ours theirs
@@ -3444,8 +3693,9 @@ cmd_setup_r2() { # cmd_setup_r2 <force> <bucket> <tname> <login> <service> <quic
   echo "ready:      https://$host_name/ serves from bucket $bucket. Next: $me add <file|dir>"
 }
 
+tusage="usage: share setup <hostname> --r2 --bucket <name> [--storage-default local|cloud] | share setup <hostname> --no-r2"
 cmd_setup() {
-  local tunnel_name="" force=0 service=1 login=0 quick_setup=0 had_host_arg=0 backend_arg="" bucket=""
+  local tunnel_name="" force=0 service=1 login=0 quick_setup=0 had_host_arg=0 backend_arg="" bucket="" r2flag="" sdef=""
   [[ -n ${1:-} && ${1:-} != --* ]] && { host_name="$1"; had_host_arg=1; shift; }
   while [[ $# -gt 0 ]]; do
     case $1 in
@@ -3456,9 +3706,23 @@ cmd_setup() {
       --quick) quick_setup=1; shift ;;
       --backend) backend_arg="${2:-}"; shift 2 ;;
       --bucket) bucket="${2:-}"; shift 2 ;;
-      *) die "usage: share setup [hostname] [--tunnel-name N] [--force] [--no-service] [--login] [--backend tunnel|r2 --bucket <name>] | share setup --quick [--no-service]" ;;
+      --r2|--no-r2) [[ -z $r2flag ]] || die "$tusage"; r2flag="$1"; shift ;;
+      --storage-default) sdef="${2:-}"; shift 2 ;;
+      *) die "usage: share setup [hostname] [--tunnel-name N] [--force] [--no-service] [--login] [--backend tunnel|r2 --bucket <name>] | share setup --quick [--no-service] | $tusage" ;;
     esac
   done
+  if [[ -n $r2flag ]]; then   # R2 on a tunnel tenant: the origin's own setup, never a new tunnel
+    [[ $had_host_arg == 1 && -z $backend_arg && -z $tunnel_name && $service == 1 && $login == 0 && $quick_setup == 0 ]] || die "$tusage"
+    if [[ $r2flag == --r2 ]]; then
+      [[ -n $bucket && ( -z $sdef || $sdef == local || $sdef == cloud ) ]] || die "$tusage"
+      cmd_setup_tenant "$bucket" "$sdef" "$force"
+    else
+      [[ -z $bucket && -z $sdef && $force == 0 ]] || die "$tusage"
+      cmd_setup_no_r2
+    fi
+    return
+  fi
+  [[ -z $sdef ]] || die "--storage-default needs --r2"
   [[ -z $backend_arg || $backend_arg == tunnel || $backend_arg == r2 ]] || die "--backend must be 'tunnel' or 'r2'"
   [[ -z $bucket || $backend_arg == r2 ]] || die "--bucket needs --backend r2"
   if [[ $backend_arg == r2 ]]; then
@@ -3700,6 +3964,8 @@ r2_purge() { # r2_purge <bucket>: the admin token from the environment; every ch
   jq -e --arg h "$host_name" --arg b "$bucket" '.result.bindings as $bs
     | ($bs | any(.name == "HOST" and .text == $h)) and ($bs | any(.name == "BUCKET" and .bucket_name == $b))' <<<"$cf_body" >/dev/null ||
     die "Worker $worker is not share's Worker for $host_name on bucket $bucket (its bindings differ); refused, nothing was changed"
+  ! jq -e '.result.bindings | any(.name == "PASS" and .text == "1")' <<<"$cf_body" >/dev/null ||
+    die "$host_name is a tenant with R2 on: its origin runs '$me setup $host_name --no-r2' first; refused, nothing was changed"
   r2_call GET share.json
   if [[ $cf_code != 200 ]] || ! jq -e --arg h "$host_name" '.v == 1 and .host == $h' <<<"$cf_body" >/dev/null 2>&1; then
     die "bucket $bucket's share.json does not name $host_name (HTTP $cf_code); refused, nothing was changed"

@@ -3013,6 +3013,123 @@ for mode in tunnel-down 503-bare; do
 done
 rm -f "$jconf" "$s2conf"
 
+echo "=== tenant: setup --r2 and --no-r2 on the origin (rows 11, 12, 13, 32) ==="
+T5H="$WORK/tenant-admin"; DRYV="$WORK/tenant-admin-bucket"
+vdir="$T5H/.config/share/profiles/ten"; vconf="$vdir/config"; vroot="$T5H/share/profiles/ten"; vlog="$vroot/r2-calls.log"
+tv() { # tv <verb...>: the tunnel origin of ten.example.test with the admin token; hosts names this machine only through SHARE_HOSTS (TV_HOSTS=nobody for adds, so nothing serves)
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND \
+    HOME="$T5H" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$DRYV" SHARE_R2_TOKEN=drytoken SHARE_ACCESS_DRY=1 SHARE_ACCESS_POLL=0 \
+    CLOUDFLARE_API_TOKEN="${TV_TOK-admintoken}" SHARE_R2_WAIT="${SHARE_R2_WAIT:-2}" SHARE_HOSTS="${TV_HOSTS-$SHARE_HOSTS}" bash "$SH" --profile ten "$@"
+}
+tvsetup() { tv setup ten.example.test --r2 --bucket ok-bucket; }
+vwrites() { grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$vlog" 2>/dev/null || true; }
+vord() { # vord <pattern>...: 1 when each first match in the setup log sits below the previous one
+  local p prev=0 n
+  for p in "$@"; do n="$(grep -n -- "$p" "$vlog" | head -1 | cut -d: -f1)"; [[ -n $n && $n -gt $prev ]] || { echo "0 at $p"; return; }; prev=$n; done
+  echo 1
+}
+vfresh() { # the origin with three local rows (a file, a live port, a gated file) and R2 off; the bucket exists with its marker and one member's cloud link
+  rm -rf "$T5H" "$DRYV"; mkdir -p "$vdir" "$DRYV/.cf" "$DRYV/m" "$DRYV/o/0b0001.0000000b"
+  printf 'hostname=ten.example.test\ntunnel_id=tid-ten\ntunnel_name=share-ten-example-test\nauth=api\nhosts=nobody\nport=%s\n' $((base + 50)) >"$vconf"
+  SHARE_TEST_IDS=0a0001 TV_HOSTS=nobody tv add "$tn2" >/dev/null 2>&1
+  SHARE_TEST_IDS=0a0002 TV_HOSTS=nobody tv add $((base + 55)) >/dev/null 2>&1
+  mkdir -p "$vroot/pub/0a0003"; printf 'g\n' >"$vroot/pub/0a0003/g.txt"
+  printf '0a0003\tg.txt\t/x/g.txt\t2026-10-01\t0\taccess=00000000-0000-4000-8000-0000000a0003 access_rule=email:a@example.test\n' >>"$vroot/index.tsv"
+  : >"$DRYV/.cf/bucket"; printf '{"v":1,"host":"ten.example.test"}\n' >"$DRYV/share.json"
+  printf 'x\n' >"$DRYV/o/0b0001.0000000b/f.txt"
+  jq -nc '{v: 1, id: "0b0001", name: "f.txt", src: "/m/f.txt", added: "2026-10-01", expires: 0, opts: "", prefix: "o/0b0001.0000000b/", by: "member"}' >"$DRYV/m/0b0001"
+  : >"$vlog"
+}
+vfresh
+cp "$vconf" "$WORK/ten.config.before"; cp "$vroot/index.tsv" "$WORK/ten.index.before"; sec0="$(grep -c 'add-generic' "$STUBSEC_LOG" || true)"
+check "row 11 fixture: three local rows, R2 off, no pointer" "3 0" "$(tnrows "$vroot") $(find "$DRYV/m" -name '0a*' | grep -c .)"
+out=$(tvsetup 2>&1); rc=$?
+check "row 11: setup --r2 exits 0" "0" "$rc"
+check "row 11: the call order" "1" "$(vord '^API GET /accounts/acct-dry/workers/scripts/share-ten-example-test/settings$' '^API GET /accounts/acct-dry/r2/buckets/ok-bucket$' \
+  '^GET share.json$' '^API GET /zones/zone-dry/workers/routes$' '^LIST m/$' '^API PUT /accounts/acct-dry/workers/scripts/share-ten-example-test$' \
+  '^API POST .*/subdomain$' '^API GET .*/subdomain$' '^PUT m/0a000' '^CONFIG r2 on$' '^API POST /zones/zone-dry/workers/routes$' '^HEALTHZ$' '^TUNNEL-PROBE$')"
+check "row 11: every pointer PUT precedes the config write" "1" "$([[ $(grep -n '^PUT m/' "$vlog" | tail -1 | cut -d: -f1) -lt $(grep -n '^CONFIG' "$vlog" | cut -d: -f1) ]] && echo 1 || echo 0)"
+check "row 11: config gains the four keys" "bucket=ok-bucket|r2_endpoint=https://acct-dry.r2.cloudflarestorage.com|storage_default=local|aliases=|" \
+  "$(grep -E '^(bucket|r2_endpoint|storage_default|aliases)=' "$vconf" | tr '\n' '|')"
+check "row 11: the tunnel config lines are unchanged" "$(cat "$WORK/ten.config.before")" "$(grep -vE '^(bucket|r2_endpoint|storage_default|aliases)=' "$vconf")"
+check "row 11: no Keychain item written" "$sec0" "$(grep -c 'add-generic' "$STUBSEC_LOG" || true)"
+check "row 11: a pointer per local row (file, live site, gated flag)" "2 machine text |2 machine site live|2 machine text gated|" \
+  "$(for i in 0a0001 0a0002 0a0003; do jq -r '"\(.v) \(.storage) \(.type) \(.opts)"' "$DRYV/m/$i"; done | tr '\n' '|')"
+check "row 11: the Worker binds PASS and an empty ALIASES" "PASS=1 ALIASES=" "$(jq -r '[.bindings[] | select(.name == "PASS" or .name == "ALIASES") | "\(.name)=\(.text)"] | join(" ")' "$DRYV/.cf/script.json")"
+check "row 11: the route fails open and names the Worker" "ten.example.test/* share-ten-example-test true" "$(jq -r '.[0] | "\(.pattern) \(.script) \(.request_limit_fail_open)"' "$DRYV/.cf/routes.json")"
+check "row 11: the member's cloud record is untouched" "1 member" "$(jq -r '"\(.v) \(.by)"' "$DRYV/m/0b0001")"
+# a rerun converges: nothing deployed, written, or attached again
+cp "$vconf" "$WORK/ten.config.on"; : >"$vlog"
+out=$(tvsetup 2>&1); rc=$?
+check "rerun: exit 0, no script PUT, no pointer PUT, no route POST" "0 0 0 0" "$rc $(grep -c '^API PUT .*/workers/scripts/' "$vlog") $(grep -c '^PUT m/' "$vlog") $(grep -c '^API POST /zones/' "$vlog")"
+check "rerun: the config is the same" "$(cat "$WORK/ten.config.on")" "$(cat "$vconf")"
+# a member's join sees the tenant Worker; the version hint names the tenant command; a member purge is refused
+TVM="$WORK/tenant-admin-member"; mkdir -p "$TVM"
+tvm() { env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS \
+  HOME="$TVM" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$DRYV" CLOUDFLARE_API_TOKEN="${TVM_TOK-pubtoken}" SHARE_R2_WAIT=2 ${TVM_ENV[@]+"${TVM_ENV[@]}"} bash "$SH" --profile ten "$@"; }
+jq -c '(.bindings[] | select(.name == "SHA")).text = "000000000000"' "$DRYV/.cf/script.json" >"$DRYV/.cf/s.tmp" && cp "$DRYV/.cf/script.json" "$WORK/ten.script" && mv -f "$DRYV/.cf/s.tmp" "$DRYV/.cf/script.json"
+TVM_ENV=(SHARE_R2_DRY_ROLE=deny SHARE_R2_DRY_BUCKETDOM=deny)
+out=$(tvm setup ten.example.test --backend r2 --bucket ok-bucket 2>&1); rc=$?
+check "join: a member joins a tenant; the hint names --r2 on the origin" "0 1" "$rc $(grep -c "runs '.* setup ten.example.test --r2 --bucket ok-bucket' on the tenant's origin" <<<"$out")"
+cp "$WORK/ten.script" "$DRYV/.cf/script.json"; TVM_ENV=(); : >"$TVM/share/profiles/ten/r2-calls.log"
+out=$(TVM_TOK=admintoken tvm teardown --yes --purge 2>&1); rc=$?
+check "purge: a member purge of a tenant is refused before any write" "1 1 0" "$rc $(grep -c "its origin runs 'share --profile ten setup ten.example.test --no-r2' first" <<<"$out") $(grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$TVM/share/profiles/ten/r2-calls.log" || true)"
+# row 13: --no-r2 is the rollback without an alias
+: >"$vlog"
+out=$(tv setup ten.example.test --no-r2 2>&1); rc=$?
+check "row 13: --no-r2 exits 0 and deletes the route" "0 1 0" "$rc $(grep -c '^API DELETE /zones/zone-dry/workers/routes/route-1$' "$vlog") $(jq length "$DRYV/.cf/routes.json")"
+check "row 13: the config is the one before setup --r2" "$(cat "$WORK/ten.config.before")" "$(cat "$vconf")"
+: >"$vlog"
+out=$(SHARE_TEST_IDS=0a0004 TV_HOSTS=nobody tv add "$tn2" 2>&1); rc=$?
+check "row 13: the next add writes no pointer" "0 0" "$rc $(grep -c '^PUT m/' "$vlog" 2>/dev/null || true)"
+check "row 13: index.tsv equals the one before setup --r2 plus that add" "$(cat "$WORK/ten.index.before")" "$(grep -v '^0a0004' "$vroot/index.tsv")"
+check "row 13: the bucket, its records, and the Worker stay" "1 1 1" "$([[ -f $DRYV/m/0a0001 ]] && echo 1 || echo 0) $([[ -f $DRYV/m/0b0001 ]] && echo 1 || echo 0) $([[ -f $DRYV/.cf/script.json ]] && echo 1 || echo 0)"
+# fresh bucket: the bucket and its marker come before any pointer
+vfresh; rm -rf "$DRYV/m" "$DRYV/o" "$DRYV/share.json" "$DRYV/.cf/bucket"
+out=$(tvsetup 2>&1); rc=$?
+check "row 11 (fresh bucket): exit 0, bucket POST < marker PUT < script PUT < pointer PUTs < config < route" "0 1" \
+  "$rc $(vord '^API POST /accounts/acct-dry/r2/buckets$' '^PUT share.json$' '^API PUT .*/workers/scripts/share-ten-example-test$' '^PUT m/0a000' '^CONFIG r2 on$' '^API POST /zones/zone-dry/workers/routes$')"
+check "row 11 (fresh bucket): no m/ list on a bucket that did not exist" "0" "$(grep -c '^LIST m/' "$vlog")"
+# row 12: refusals, each before any write
+vrefuse() { # vrefuse <label> <message> <env...>: setup --r2 dies naming it, with no PUT, POST, or DELETE logged
+  local label=$1 msg=$2; shift 2
+  : >"$vlog"
+  # shellcheck disable=SC2163 # each argument is a NAME=value pair to export, on purpose
+  out=$(export "$@"; tvsetup 2>&1); rc=$?
+  check "row 12: $label is refused before any write" "1 1 0" "$rc $(grep -c -- "$msg" <<<"$out") $(vwrites)"
+}
+vfresh
+vrefuse "a non-origin" "run this on the origin, nobody" TV_HOSTS=nobody
+vrefuse "a publisher token" "only the tenant admin enables R2" SHARE_R2_DRY_ROLE=deny
+printf '[{"id":"route-9","pattern":"*.example.test/*","script":"other-worker","request_limit_fail_open":false}]\n' >"$DRYV/.cf/routes.json"
+vrefuse "a wider route naming another script" "Worker route \*.example.test/\* names script other-worker" X=1
+rm -f "$DRYV/.cf/routes.json"
+jq -c '.id = "0a0001" | .prefix = "o/0a0001.0000000b/"' "$DRYV/m/0b0001" >"$DRYV/m/0a0001"
+vrefuse "a local id holding a cloud record" "local links 0a0001 share an id with a record in bucket ok-bucket" X=1
+rm -f "$DRYV/m/0a0001"
+printf '{"v":1,"host":"third.example.test"}\n' >"$DRYV/share.json"
+vrefuse "a marker naming a third host" "share.json names another hostname" X=1
+printf '{"v":1,"host":"ten.example.test"}\n' >"$DRYV/share.json"
+printf 'mode=quick\nport=%s\nhosts=nobody\n' $((base + 50)) >"$vconf"
+: >"$vlog"; out=$(tv setup ten.example.test --r2 --bucket ok-bucket 2>&1); rc=$?
+check "row 12: quick mode is refused before any call" "1 1 0" "$rc $(grep -c 'is a quick tunnel; R2 needs a named tunnel tenant' <<<"$out") $(grep -c . "$vlog" || true)"
+# row 32: SPEC-007's r2 setup refuses a tenant host, even with --force; a 403 on the routes read alone is tolerated
+s_fresh; echo dwarves.cloudflareaccess.com >"$DRYS/.cf/team"; out=$(r2s 2>&1)
+jq -c '.bindings += [{"type": "plain_text", "name": "PASS", "text": "1"}, {"type": "plain_text", "name": "ALIASES", "text": ""}]' "$DRYS/.cf/script.json" >"$DRYS/.cf/s.tmp" && mv -f "$DRYS/.cf/s.tmp" "$DRYS/.cf/script.json"
+: >"$slog"; out=$(r2s --force 2>&1); rc=$?
+check "row 32: a tenant Worker (PASS) is refused with --force, before any write" "1 1 0" "$rc $(grep -c "run 'share --profile r2s setup r2s.example.test --r2 --bucket ok-bucket' on the origin" <<<"$out") $(grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$slog" || true)"
+s_fresh; out=$(r2s 2>&1)
+printf '{"v":1,"host":"r2s.example.test","aliases":["f.example.test"]}\n' >"$DRYS/share.json"
+: >"$slog"; out=$(r2s --force 2>&1); rc=$?
+check "row 32: a marker holding aliases is refused with --force, before any write" "1 1 0" "$rc $(grep -c 'its marker holds aliases' <<<"$out") $(grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$slog" || true)"
+s_fresh; out=$(r2s 2>&1)
+printf '[{"id":"route-1","pattern":"r2s.example.test/*","script":"share-r2s-example-test","request_limit_fail_open":true}]\n' >"$DRYS/.cf/routes.json"
+: >"$slog"; out=$(r2s --force 2>&1); rc=$?
+check "row 32: a route on <host>/* is refused with --force, before any write" "1 1 0" "$rc $(grep -c 'has a Worker route on r2s.example.test/\*' <<<"$out") $(grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$slog" || true)"
+s_fresh; : >"$slog"; out=$(SHARE_R2_DRY_ROUTES=deny r2s 2>&1); rc=$?
+check "row 32: a 403 on the routes read alone is tolerated" "0 1" "$rc $(grep -c '^API GET /zones/zone-dry/workers/routes$' "$slog")"
+s_fresh; rm -f "$s2conf"
+
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then
   wout="$(node "$(dirname "$SH")/../tests/worker.mjs" 2>&1)"; wrc=$?
