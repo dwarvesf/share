@@ -151,6 +151,100 @@ final class PublishFormTests: XCTestCase {
         XCTAssertNil(PublishChoice.args(profile: "p", rule: nil, path: "report.pdf"), "no bare filename reaches add")
     }
 
+    // MARK: - storage field
+
+    private func origin(r2: Bool, storageDefault: String? = nil, servesHere: Bool = true, name: String = "dfoundation", hosts: String = "Mac-mini") -> ProfileEntry {
+        makeEntry(name: name, state: makeSnapshot(
+            state: "serving", hosts: hosts, servesHere: servesHere, r2: r2, storageDefault: storageDefault
+        ))
+    }
+
+    func testAnOriginWithR2ShowsThePickerPreselectedFromStorageDefault() {
+        var snapshot = makeProfiles([origin(r2: true, storageDefault: "cloud")])
+        var form = PublishForm(profiles: snapshot, lastProfile: nil, lastRules: [:])
+        XCTAssertEqual(form.storageField, .picker(machine: "Mac-mini"))
+        XCTAssertEqual(form.storage, .cloud)
+        XCTAssertEqual(form.storageFlag, .cloud)
+
+        snapshot = makeProfiles([origin(r2: true, storageDefault: "local")])
+        form = PublishForm(profiles: snapshot, lastProfile: nil, lastRules: [:])
+        XCTAssertEqual(form.storage, .local)
+        XCTAssertEqual(form.storageFlag, .local)
+
+        // A chosen value reaches the argv as --cloud / --local.
+        form.choose(storage: .cloud)
+        XCTAssertEqual(
+            PublishChoice.args(profile: "dfoundation", rule: nil, path: "/tmp/a", storage: form.storageFlag),
+            ["--profile", "dfoundation", "add", "--cloud", "/tmp/a"]
+        )
+        form.choose(storage: .local)
+        XCTAssertEqual(
+            PublishChoice.args(profile: "dfoundation", rule: nil, path: "/tmp/a", storage: form.storageFlag),
+            ["--profile", "dfoundation", "add", "--local", "/tmp/a"]
+        )
+    }
+
+    func testPickerNamesTheCurrentMachineWhenHostsListsMoreThanOne() {
+        PublishForm.currentMachineName = { "air" }
+        defer { PublishForm.currentMachineName = PublishForm.defaultCurrentMachineName }
+
+        let snapshot = makeProfiles([origin(r2: true, storageDefault: "cloud", hosts: "mini air")])
+        let form = PublishForm(profiles: snapshot, lastProfile: nil, lastRules: [:])
+        XCTAssertEqual(form.storageField, .picker(machine: "air"), "picks this Mac out of a multi-host hosts= value")
+    }
+
+    func testPickerFallsBackToTheFirstHostWhenThisMachineIsNotInHosts() {
+        PublishForm.currentMachineName = { "neither-of-these" }
+        defer { PublishForm.currentMachineName = PublishForm.defaultCurrentMachineName }
+
+        let snapshot = makeProfiles([origin(r2: true, storageDefault: "cloud", hosts: "mini air")])
+        let form = PublishForm(profiles: snapshot, lastProfile: nil, lastRules: [:])
+        XCTAssertEqual(form.storageField, .picker(machine: "mini"), "falls back to the first host, never the whole list")
+    }
+
+    func testAMemberProfileShowsADisabledCloudLabelAndNoFlag() {
+        let member = makeEntry(name: "files", state: makeSnapshot(
+            state: "serving", host: "s.d.foundation", hosts: "", servesHere: false, backend: "r2", r2: true
+        ))
+        let form = PublishForm(profiles: makeProfiles([member]), lastProfile: nil, lastRules: [:])
+
+        XCTAssertEqual(form.storageField, .member)
+        XCTAssertNil(form.storageFlag, "a member adds cloud links with no flag")
+    }
+
+    func testATunnelProfileWithR2OffShowsNoStorageControl() {
+        let form = PublishForm(profiles: makeProfiles([serving("a")]), lastProfile: nil, lastRules: [:])
+        XCTAssertEqual(form.storageField, .none)
+        XCTAssertNil(form.storageFlag)
+
+        // An older CLI emits no r2 key at all: same shape, no control.
+        let legacy = makeEntry(name: "old", state: makeSnapshot(state: "serving"))
+        XCTAssertEqual(PublishForm(profiles: makeProfiles([legacy]), lastProfile: nil, lastRules: [:]).storageField, .none)
+    }
+
+    func testAnOriginNotServingHereShowsNoStorageControl() {
+        let form = PublishForm(profiles: makeProfiles([origin(r2: true, storageDefault: "cloud", servesHere: false)]),
+                               lastProfile: nil, lastRules: [:])
+        XCTAssertEqual(form.storageField, .none, "the popup belongs to the origin only")
+        XCTAssertNil(form.storageFlag)
+    }
+
+    func testAProfileSwitchReloadsStorageFromTheNewProfilesDefault() {
+        let snapshot = makeProfiles([
+            origin(r2: true, storageDefault: "cloud"),
+            serving("plain"),
+        ])
+        var form = PublishForm(profiles: snapshot, lastProfile: nil, lastRules: [:])
+        XCTAssertEqual(form.storage, .cloud)
+
+        form.select(profile: "plain")
+        XCTAssertEqual(form.storageField, .none)
+        XCTAssertNil(form.storageFlag)
+
+        form.select(profile: "dfoundation")
+        XCTAssertEqual(form.storage, .cloud, "the picker re-preselects from storage_default")
+    }
+
     // MARK: - MenuModel.canPublish
 
     func testCanPublishIsFalseOnlyWhenNoProfileIsEligible() {

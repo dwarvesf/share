@@ -22,6 +22,24 @@ public enum Audience: Sendable, Equatable {
     case login
 }
 
+/// Where one published link lives; the argv flag it maps to.
+public enum PublishStorage: Sendable, Equatable {
+    case local // --local: this tenant's origin machine
+    case cloud // --cloud: the tenant's bucket
+}
+
+/// What the dialog's `Storage` row shows for the selected profile.
+public enum StorageField: Sendable, Equatable {
+    /// No control at all: a tunnel profile with R2 off, or an older CLI with no `r2` key.
+    case none
+    /// An r2 member profile publishes cloud links only: a disabled `In the cloud` label.
+    case member
+    /// An origin with R2 on (the tunnel runs here): an `On <machine>` / `In the cloud`
+    /// popup, `machine` being this Mac's name out of the state `hosts` line (or its first
+    /// entry when this Mac is not named there).
+    case picker(machine: String)
+}
+
 /// Which profiles can take an `add`, and the argv each add runs.
 public enum PublishChoice {
     /// Eligible profiles: `stopped` or `serving` with no `error`, in listing order. `add`
@@ -38,13 +56,19 @@ public enum PublishChoice {
     }
 
     /// argv for one add; nil unless `path` is absolute, so a bare `8080` can never reach
-    /// `add` and become a live port share by accident.
-    public static func args(profile: String, rule: String?, path: String) -> [String]? {
+    /// `add` and become a live port share by accident. `storage` adds `--cloud` or
+    /// `--local`; nil leaves the choice to the CLI's `storage_default`.
+    public static func args(profile: String, rule: String?, path: String, storage: PublishStorage? = nil) -> [String]? {
         guard path.hasPrefix("/") else { return nil }
+        var argv = ["--profile", profile, "add"]
         if let rule, !rule.isEmpty {
-            return ["--profile", profile, "add", "--access", rule, path]
+            argv += ["--access", rule]
         }
-        return ["--profile", profile, "add", path]
+        if let storage {
+            argv.append(storage == .cloud ? "--cloud" : "--local")
+        }
+        argv.append(path)
+        return argv
     }
 }
 
@@ -57,6 +81,17 @@ public struct PublishForm: Sendable, Equatable {
     public private(set) var audience: Audience
     /// The rule field's text; meaningful only while `audience == .login`.
     public var rule: String
+    /// The `Storage` popup's selection; read through `storageField`/`storageFlag`, which
+    /// decide whether the choice applies at all.
+    public private(set) var storage: PublishStorage
+
+    /// This Mac's name, as the `hosts=` config key would spell it (the CLI's `this_host`:
+    /// `uname -n` before the first dot). Overridable in tests.
+    public static let defaultCurrentMachineName: () -> String = {
+        ProcessInfo.processInfo.hostName.split(separator: ".", maxSplits: 1).first.map(String.init)
+            ?? ProcessInfo.processInfo.hostName
+    }
+    public static var currentMachineName: () -> String = defaultCurrentMachineName
 
     private let profiles: ProfilesSnapshot
     private let lastRules: [String: String]
@@ -75,13 +110,16 @@ public struct PublishForm: Sendable, Equatable {
         let stored = lastRules[profile ?? ""] ?? ""
         rule = stored
         audience = stored.isEmpty ? .anyone : .login
+        storage = PublishForm.defaultStorage(of: profile, in: profiles)
     }
 
     /// Under `login` the audience and the typed rule survive a profile switch, even when
     /// the new profile's stored choice is `anyone`. Under `anyone` the new profile's own
-    /// stored choice loads.
+    /// stored choice loads. Storage reloads from the new profile's `storage_default`
+    /// either way: the picker is per-tenant, not a remembered preference.
     public mutating func select(profile name: String) {
         profile = name
+        storage = PublishForm.defaultStorage(of: name, in: profiles)
         if audience == .anyone {
             let stored = lastRules[name] ?? ""
             rule = stored
@@ -91,6 +129,38 @@ public struct PublishForm: Sendable, Equatable {
 
     public mutating func choose(_ newAudience: Audience) {
         audience = newAudience
+    }
+
+    public mutating func choose(storage newStorage: PublishStorage) {
+        storage = newStorage
+    }
+
+    /// The `Storage` row for the selected profile: a picker on an R2-on origin serving
+    /// here, a disabled `In the cloud` label on an r2 member, nothing otherwise.
+    public var storageField: StorageField {
+        guard let state = profiles.profiles.first(where: { $0.name == profile })?.state else { return .none }
+        if state.backend == "r2" { return .member }
+        if state.r2 == true && state.servesHere {
+            guard !state.hosts.isEmpty else { return .picker(machine: "this machine") }
+            let names = state.hosts.split(separator: " ").map(String.init)
+            let mine = PublishForm.currentMachineName()
+            let machine = names.contains(mine) ? mine : (names.first ?? state.hosts)
+            return .picker(machine: machine)
+        }
+        return .none
+    }
+
+    /// The `--cloud`/`--local` flag the add argv gains; nil unless the picker is showing
+    /// (a member's adds are cloud already, and a plain tunnel profile takes no flag).
+    public var storageFlag: PublishStorage? {
+        if case .picker = storageField { return storage }
+        return nil
+    }
+
+    /// A picker's preselection: the profile's `storage_default`, local when unset.
+    private static func defaultStorage(of profile: String?, in profiles: ProfilesSnapshot) -> PublishStorage {
+        let state = profile.flatMap { name in profiles.profiles.first { $0.name == name }?.state }
+        return state?.storageDefault == "cloud" ? .cloud : .local
     }
 
     /// `login` needs a named setup; a quick-mode profile cannot take `--access`.
