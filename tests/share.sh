@@ -3742,6 +3742,26 @@ check "row 31: the rollback in dry mode names A's own tunnel; no call names a ne
   "$rc $(grep -c 'tunnel:     reusing tun-A' <<<"$out") $(grep -c 'tid-new' "$MW/clog31b")"
 check "row 31: A's config keeps its own tunnel_id" "tid-A" "$(sed -n 's/^tunnel_id=//p' "$AH/.config/share/config")"
 
+echo "--- setup: old_host empty must not skip the gated-share guard (import into a not_setup profile, then setup) ---"
+OH="$MW/oldhostempty"; rm -rf "$OH"; mkdir -p "$OH/.config/share" "$OH/share/pub/aa0001"
+printf 'secret\n' > "$OH/share/pub/aa0001/g.txt"
+printf 'aa0001\tg.txt\t/src/g.txt\t2026-09-01\t0\taccess=00000000-0000-4000-8000-0000000000aa access_rule=email:a@x.test\n' > "$OH/share/index.tsv"
+# no .config/share/config at all: cmd_import never writes one, so a profile fed only by `import` is not_setup
+mkdir -p "$MW/nocurl-oh"
+cat > "$MW/nocurl-oh/curl" <<'EOF'
+#!/bin/bash
+echo "CALL $*" >> "${OH_CURL_LOG:?}"
+echo '{"success":false,"errors":[{"code":0}]}'
+EOF
+chmod +x "$MW/nocurl-oh/curl"
+: > "$MW/clogoh"
+out=$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS -u SHARE_TUNNEL \
+  HOME="$OH" PATH="$MW/nocurl-oh:$PATH" CLOUDFLARE_API_TOKEN=faketoken OH_CURL_LOG="$MW/clogoh" bash "$SH" setup other.example.test --no-service 2>&1); rc=$?
+check "setup on a not_setup profile already holding a gated row is refused" "1" "$rc"
+check "the refusal names the gated row, not a Cloudflare error" "1" "$(grep -c 'already holds gated shares' <<<"$out")"
+check "the refusal happens before any Cloudflare call" "0" "$(grep -c . "$MW/clogoh")"
+check "the gated row is untouched" "1" "$(grep -c '^aa0001	' "$OH/share/index.tsv")"
+
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then
   wout="$(node "$(dirname "$SH")/../tests/worker.mjs" 2>&1)"; wrc=$?

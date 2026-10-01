@@ -4383,6 +4383,9 @@ cmd_setup() {
   if [[ -n $old_host && $old_host != "$host_name" ]]; then   # the main site would answer the new name for the whole pub tree; the apps cover only the old one
     [[ -z "$(host_name="$old_host" rows | awk -F'\t' '$6 ~ /(^| )access=/')" && $(pending_count) == 0 ]] ||
       die "$old_host has gated shares or Access apps awaiting deletion; under $host_name they would be served with no gate; remove them first ('$me rm <id>', see '$me ls', then '$me prune' with the token; a line prune reports as malformed is yours to delete from $pending) or run '$me teardown'"
+  elif [[ -z $old_host && $token_stdin == 0 ]]; then   # a not_setup profile can still hold rows from an earlier import; the first setup must not start serving a gated one with no gate. migrate's own switch (--token-stdin) is exempt: it never renames the hostname, so a row's existing Access app still covers it
+    [[ -z "$(rows | awk -F'\t' '$6 ~ /(^| )access=/')" ]] ||
+      die "this not-yet-set-up profile already holds gated shares; under $host_name they would be served with no gate; remove them first ('$me rm <id>', see '$me ls') or run '$me teardown'"
   fi
   tunnel_name="${tunnel_name:-share-${host_name//./-}}"
   local other   # two profiles on one hostname or one tunnel name would reuse, then delete, one tunnel
