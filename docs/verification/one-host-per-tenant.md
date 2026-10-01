@@ -162,3 +162,44 @@ TASK-7a's first step ran on bsdtar 3.5.3 and GNU tar 1.35; the table and the fla
 ## Rollback
 
 Batch 3 changes only `bin/share`, its tests, and docs on the PR branch; no release, tap bump, or Cloudflare object exists for it. Rolling it back is reverting commits fcd24bd, d246452, 1f9fb4b, and 32a502e on the branch.
+
+# Batch 4
+
+Batch 4 is TASK-7b (`migrate`, rows 19, 20, 21, 31), committed at f0dc1ac. No dry seam exists for `migrate` (it refuses an R2-on tenant), so its local coverage is a `curl`/`security` shim pair plus `SHARE_MIGRATE_SSH` pointing at a wrapper that joins its own argv with spaces and replays it through `fish -c` (or `sh -c`) on the same machine, exactly mirroring what a real ssh round trip does to the command line; nothing was created on a Cloudflare account.
+
+## Green run
+
+```
+Command: SHARE_TEST_PORT_BASE=30787 gtimeout 900 bash tests/share.sh
+Exit:    1 (one pre-existing, unrelated flake; see below)
+Checks:  1360 ok, 1 FAIL
+Section: === migrate: moving a tenant's origin (rows 19, 20, 21, 31) ===, 20 checks, all ok
+Tail:    ok    no real launchd or systemd share job appeared during the run
+         ok    no real Keychain share item changed during the run
+```
+
+```
+Command: node tests/worker.mjs
+Exit:    0
+Verdict: PASS
+```
+
+`shellcheck bin/share install.sh tests/share.sh tests/e2e.sh tests/e2e-r2.sh tests/e2e-tenant.sh demo/render.sh mac/*.sh` and `/bin/bash -n bin/share` are clean on the same tree (`tests/e2e-migrate.sh` does not exist yet; it is TASK-9b's deliverable).
+
+The one failing line, `profiles --json wrote nothing under HOME` (a `find -newer` marker check, pre-existing code untouched by this batch), is unrelated to migrate: it passed on a first full run of the same tree and failed on a second run of the identical code, the same intermittent-under-load pattern the TASK-3 and TASK-6 batches above already recorded for other lines. A rerun confined to the migrate section alone (the 20 checks above) is green every time.
+
+## Negative controls
+
+Each guarantee's patch ran as a one-off (a `sed`-patched copy of `bin/share`, the relevant migrate scenario run standalone against it, the stock file confirmed green immediately after). No patch was committed.
+
+| Guarantee | Patch | Red | Green (unpatched) |
+|---|---|---|---|
+| ids preserved | the remote `import` call for one id is rewritten to a different id before `bin/share` runs it | B's index never gains the original id (the renamed one lands instead) | row 19: B's index holds exactly A's own ids |
+| source never deleted | `migrate_retire`'s `mv "$pub/$id" "$root/migrated/$id"` replaced with `rm -rf "$pub/$id"` | `migrated/<id>` never exists after a run that otherwise completes | row 19: every moved id's tree lands in `migrated/`, byte for byte equal to B's copy |
+| retire runs only after verify passes | the gated-link `access_probe_round ... || die` turned into `access_probe_round ...; true \|\| die` (the die never fires) | with a wrong Access `kid` forced on the gate check, `index.migrated` still gets written: retire ran past a verify that should have stopped it | row 20: the same wrong-`kid` scenario, unpatched, stops before retire and names the gated id |
+
+Dry trace for the first control: `cmd_import`'s own id argument comes from the sender's positional argv, so a wrapper script that rewrites `$2` before `exec`ing the real binary is enough to desync the id client-side of any base64 or checksum check; the manifest digest still matches (it is a digest of the tar's own bytes, not the id), so nothing else catches it except the id itself showing up wrong in B's index, which is exactly what the "ids preserved" guarantee asserts directly.
+
+## Rollback
+
+Batch 4 changes only `bin/share`, `tests/share.sh`, and docs on the PR branch; no release, tap bump, or Cloudflare object exists for it. Rolling it back is reverting commit f0dc1ac on the branch.

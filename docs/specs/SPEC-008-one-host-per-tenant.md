@@ -389,7 +389,7 @@ A tunnel profile with no `bucket=` (every R2-off tenant) keeps every file, outpu
 - [x] TASK-5: `--alias` (steps 4, 7, 10, 12, 14, 16), the `--no-r2` alias refusal, the printed rollback list. Depends on TASK-4 and TASK-1b(f)(g). AC: rows 14, 30.
 - [x] TASK-6: one shared list: the separate bucket reader, merged display rows, the `v:2` reader's checks, `storage`, `type`, `by`, `r2`, `storage_default`, `cloud_error`, `cloud_more`, the listing token rule, the newest-25 fetch in `state`. Depends on TASK-2b. AC: rows 1, 15, 16, 17, 28.
 - [x] TASK-7a: `import` and `setup --token-stdin`. Depends on no other task; its first step measures the tar flags on bsdtar and GNU tar (absolute, `..`, symlink, and hardlink members) before the pre-scan is written. AC: row 18.
-- [ ] TASK-7b: `migrate` (preflight, copy, switch, verify, retire, the printed rollback). Depends on TASK-7a and TASK-1b(i). AC: rows 19, 20, 21, 31.
+- [x] TASK-7b: `migrate` (preflight, copy, switch, verify, retire, the printed rollback). Depends on TASK-7a and TASK-1b(i). AC: rows 19, 20, 21, 31.
 - [ ] TASK-8: Share Bar: decode, `RowGlyphs`, row rendering, the `cloud_error` line, the `Storage` popup. Depends on TASK-6. AC: rows 22 to 25; `swift build` passes.
 - [ ] TASK-9a: `tests/e2e-tenant.sh` (L1 to L10) and rehearsal R1, with its run log. Depends on TASK-2a to TASK-6. AC: L1 to L10, R1, every cleanup assertion.
 - [ ] TASK-9b: `tests/e2e-migrate.sh` and rehearsal R2 (the one-machine leg, then the Air to the Mini on a throwaway name), with its run log. Depends on TASK-7b. AC: R2 and its cleanup assertions.
