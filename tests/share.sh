@@ -835,6 +835,19 @@ check "profile c's service file carries SHARE_PROFILE=c" "1" "$(grep -c 'SHARE_P
 check "profile c's service file pins its own config dir and root" "1" "$({ grep -qF "SHARE_CONFIG_DIR</key><string>$PHOME/.config/share/profiles/c<" "$svc_file" || grep -qF "SHARE_CONFIG_DIR=$PHOME/.config/share/profiles/c\"" "$svc_file"; } && { grep -qF "SHARE_ROOT</key><string>$PHOME/share/profiles/c<" "$svc_file" || grep -qF "SHARE_ROOT=$PHOME/share/profiles/c\"" "$svc_file"; } && echo 1 || echo 0)"
 rmdir "$PHOME/share/profiles/c" 2>/dev/null; rm -rf "$PHOME/.config/share/profiles/c"
 
+echo "--- the service PATH keeps the caller's own precedence (a stub ahead of /usr/bin must stay ahead) ---"
+mkdir -p "$WORK/svcpath-stub"
+printf '#!/bin/bash\nexit 0\n' >"$WORK/svcpath-stub/security"
+chmod +x "$WORK/svcpath-stub/security"
+env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME \
+  HOME="$PHOME" SHARE_LIVE_CHECK=0 SHARE_TUNNEL=1 PATH="$WORK/svcpath-stub:$QPATH" bash "$SH" --profile c service install >/dev/null 2>&1
+svc_file=""
+for f in "$PHOME/Library/LaunchAgents/foundation.d.share.c.plist" "$PHOME/.config/systemd/user/foundation.d.share.c.service"; do [[ -f $f ]] && svc_file="$f"; done
+pathval="$(grep -oE 'PATH</key><string>[^<]*|PATH=[^ "]*' "$svc_file" 2>/dev/null | head -1)"
+check "the baked service PATH keeps a caller stub dir ahead of /usr/bin, never the fixed tool-list order" "1" \
+  "$([[ $pathval == *"$WORK/svcpath-stub"*"/usr/bin"* ]] && echo 1 || echo 0)"
+rmdir "$PHOME/share/profiles/c" 2>/dev/null; rm -rf "$PHOME/.config/share/profiles/c"
+
 echo "--- collisions between profiles are refused, never silent ---"
 out=$(psh a add "$pb" 2>&1 1>/dev/null); rc=$?
 check "add of another profile's caddy port is refused" "1" "$rc"
@@ -1816,6 +1829,11 @@ if [[ -s $main_bin ]]; then
     sed -i.bak -E 's/^(machine|live|cloud) +[a-z]+ +by=[a-z0-9.-]+  (https:)/\2/' "$WORK/compat-$c/ls.out"
     jq -S 'del(.r2, .storage_default, .cloud_error, .cloud_more) | .shares |= map(del(.storage, .type, .by))' "$WORK/compat-$c/state.out" >"$WORK/compat-$c/state.tmp" && mv -f "$WORK/compat-$c/state.tmp" "$WORK/compat-$c/state.out"
     jq -S '.profiles |= map(if .state then .state |= (del(.r2, .storage_default, .cloud_error, .cloud_more) | .shares |= map(del(.storage, .type, .by))) else . end)' "$WORK/compat-$c/profiles.out" >"$WORK/compat-$c/p.tmp" && mv -f "$WORK/compat-$c/p.tmp" "$WORK/compat-$c/profiles.out"
+    # another allowed difference: svc_path (TASK-7b) now walks the caller's own PATH directories in
+    # their own order instead of resolving each tool from a fixed list, so a plist's baked PATH value
+    # reorders even though the directory set is the same; normalize it like the binary's own path above
+    find "$WORK/compat-$c" -name '*.plist' -exec sed -i.bak -E 's#(<key>PATH</key><string>)[^<]*(</string>)#\1PATH\2#' {} + 2>/dev/null
+    find "$WORK/compat-$c" -name '*.bak' -delete 2>/dev/null
     rm -f "$WORK/compat-$c/ls.out.bak"
   done
   check "row 1: every artifact byte-identical but the listing additions" "" "$(diff -r "$WORK/compat-main" "$WORK/compat-new" 2>&1)"
@@ -3444,6 +3462,223 @@ out=$(TV_TOK="" tv setup ten.example.test --r2 --bucket ok-bucket </dev/null 2>&
 check "setup --token-stdin: without it an empty token is refused" "1 1" "$rc $(grep -c 'read the tenant admin token from CLOUDFLARE_API_TOKEN only' <<<"$out")"
 out=$(TV_TOK="" tv setup ten.example.test --r2 --bucket ok-bucket --token-stdin </dev/null 2>&1); rc=$?
 check "setup --token-stdin: an empty stdin is refused before any call" "1 1 0" "$rc $(grep -c -- '--token-stdin read no token' <<<"$out") $(vwrites)"
+
+echo "=== migrate: moving a tenant's origin (rows 19, 20, 21, 31) ==="
+MW="$WORK/migrate"; mkdir -p "$MW/stubsvc" "$MW/remotebin" "$MW/seckv"
+MHOST="mig.example.test"
+GID="00000000-0000-4000-8000-000000000001"
+GAUD="gated-aud-marker-for-row19-not-a-real-hex-digest"
+GATEDID="bbbbbb"
+
+cat > "$MW/stubsvc/security" <<SECEOF
+#!/bin/bash
+store_from_args() {
+  local svc="" val="" prev=""
+  for a in "\$@"; do case "\$prev" in -s) svc="\$a" ;; -w) val="\$a" ;; esac; prev="\$a"; done
+  printf '%s' "\$val" > "$MW/seckv/\$svc"
+}
+case "\$1" in
+  add-generic-password) shift; store_from_args "\$@"; exit 0 ;;
+  find-generic-password)
+    svc="" prev=""
+    for a in "\$@"; do [[ "\$prev" == -s ]] && svc="\$a"; prev="\$a"; done
+    [[ -f "$MW/seckv/\$svc" ]] && cat "$MW/seckv/\$svc" || exit 44
+    exit 0 ;;
+  delete-generic-password)
+    svc="" prev=""
+    for a in "\$@"; do [[ "\$prev" == -s ]] && svc="\$a"; prev="\$a"; done
+    rm -f "$MW/seckv/\$svc"; exit 0 ;;
+esac
+exit 0
+SECEOF
+chmod +x "$MW/stubsvc/security"
+
+cat > "$MW/remotebin/curl" <<CURLEOF
+#!/bin/bash
+url="" data="" method=GET fmt=""; prev=""
+for a in "\$@"; do
+  case \$prev in --data) data="\$a" ;; -X) method="\$a" ;; -w) fmt="\$a" ;; esac
+  case \$a in http*) url="\$a" ;; esac
+  prev="\$a"
+done
+echo "CURL \$method \$url" >> "\${CURL_LOG:?}"
+body='{"success":true,"result":[]}'; code=200
+case "\$method \$url" in
+  "GET https://api.cloudflare.com/client/v4/user/tokens/verify") body='{"success":true,"result":{"status":"active"}}' ;;
+  "GET https://api.cloudflare.com/client/v4/zones?"*) body='{"success":true,"result":[{"id":"zone1","account":{"id":"acct1"},"name":"$MHOST"}]}' ;;
+  "GET https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel?"*)
+    case "\$url" in
+      *"name=tun-A"*) body='{"success":true,"result":[{"id":"tid-A"}]}' ;;
+      *) body='{"success":true,"result":[]}' ;;
+    esac ;;
+  "POST https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel") body='{"success":true,"result":{"id":"tid-new"}}' ;;
+  "PUT https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel/tid-new/configurations") body='{"success":true,"result":{}}' ;;
+  "GET https://api.cloudflare.com/client/v4/zones/zone1/dns_records?"*) body='{"success":true,"result":[{"id":"rec1","type":"CNAME","content":"'"\${DNS_POINTS_AT:-tid-new}"'.cfargotunnel.com"}]}' ;;
+  "POST https://api.cloudflare.com/client/v4/zones/zone1/dns_records") body='{"success":true,"result":{}}' ;;
+  "GET https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel/tid-new/token") body='{"success":true,"result":"FAKE-TUNNEL-TOKEN"}' ;;
+  "DELETE https://api.cloudflare.com/client/v4/zones/zone1/dns_records/rec1") body='{"success":true}' ;;
+  "DELETE https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel/"*"/connections") body='{"success":true}' ;;
+  "DELETE https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel/"*) body='{"success":true}' ;;
+  "GET https://api.cloudflare.com/client/v4/accounts/acct1/access/apps/$GID") body='{"success":true,"result":{"aud":"$GAUD"}}' ;;
+  "GET https://$MHOST/$GATEDID"*)
+    printf '302 https://dwarves.cloudflareaccess.com/cdn-cgi/access/login/$MHOST?kid='"\${GATE_KID:-$GAUD}"''; exit 0 ;;
+  "GET https://$MHOST/"*) printf '200'; exit 0 ;;
+esac
+[[ \$fmt == *http_code* ]] && printf '%s\n%s' "\$body" "\$code" || printf '%s' "\$body"
+CURLEOF
+chmod +x "$MW/remotebin/curl"
+cp "$MW/stubsvc/security" "$MW/remotebin/security"; chmod +x "$MW/remotebin/security"
+cat > "$MW/remotebin/share" <<EOF
+#!/bin/bash
+exec bash "$SH" "\$@"
+EOF
+chmod +x "$MW/remotebin/share"
+
+: > "$MW/mssh.log"
+cat > "$MW/mssh" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$MW/mssh.log"
+joined=""
+for a in "\$@"; do joined="\$joined \$a"; done
+sh=sh; command -v fish >/dev/null 2>&1 && sh=fish
+exec env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS -u SHARE_TUNNEL \\
+  HOME="\$MIG_B_HOME" PATH="$MW/remotebin:\$PATH" CURL_LOG="\$MIG_CURL_LOG" "\$sh" -c "\$joined"
+EOF
+chmod +x "$MW/mssh"
+
+mig_a() { # mig_a <HOME> <B_HOME> <curl.log> <verb...>: share against the given A HOME, wired to migrate to B_HOME
+  local ahome=$1 bhome=$2 clog=$3; shift 3
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS -u SHARE_TUNNEL \
+    HOME="$ahome" PATH="$MW/stubsvc:$MW/remotebin:$PATH" CURL_LOG="$clog" CLOUDFLARE_API_TOKEN=migtoken \
+    MIG_B_HOME="$bhome" MIG_CURL_LOG="$clog" SHARE_MIGRATE_SSH="$MW/mssh" \
+    bash "$SH" "$@"
+}
+mig_fixture() { # mig_fixture <AHOME>: a snapshot, a folder, a gated snapshot, a live row
+  local a=$1
+  mkdir -p "$a/.config/share" "$a/share/pub/1a0001" "$a/share/pub/1a0002/doc" "$a/share/pub/$GATEDID"
+  printf 'one\n' > "$a/share/pub/1a0001/one.txt"
+  printf 'x\n' > "$a/share/pub/1a0002/doc/a.txt"
+  printf 'y\n' > "$a/share/pub/1a0002/doc/sub.txt"
+  printf 'secret\n' > "$a/share/pub/$GATEDID/g.txt"
+  cat > "$a/.config/share/config" <<EOF
+hostname=$MHOST
+tunnel_id=tid-A
+tunnel_name=tun-A
+hosts=$mthis
+port=18995
+EOF
+  {
+    printf '1a0001\tone.txt\t/src/one.txt\t2026-09-01\t0\t\n'
+    printf '1a0002\tdoc\t/src/doc\t2026-09-01\t0\t\n'
+    printf '%s\tg.txt\t/src/g.txt\t2026-09-01\t0\taccess=%s access_rule=email:a@x.test\n' "$GATEDID" "$GID"
+    printf '9b0001\tlocalhost:19580\thttp://127.0.0.1:19580\t2026-09-01\t0\tlive\n'
+  } > "$a/share/index.tsv"
+}
+mthis="$(uname -n)"; mthis="${mthis%%.*}"
+
+echo "--- row 19: a full migrate moves every snapshot, reports the live row, retires the origin ---"
+AH="$MW/A19"; BH="$MW/B19"; rm -rf "$AH" "$BH"; mkdir -p "$AH" "$BH"
+mig_fixture "$AH"
+mkdir -p "$BH/.config/share"; printf 'hosts=nobody\nport=19561\n' > "$BH/.config/share/config"
+: > "$MW/clog19"; : > "$MW/mssh.log"
+out=$(mig_a "$AH" "$BH" "$MW/clog19" migrate --to m19-target --remote-bin "$MW/remotebin" --yes 2>&1); rc=$?
+check "row 19: migrate exits 0" "0" "$rc"
+check "row 19: B's index holds the three snapshots with A's ids and names" "1a0001 1a0002 $GATEDID" "$(cut -f1 "$BH/share/index.tsv" | sort | tr '\n' ' ' | sed 's/ $//')"
+check "row 19: B's gated row keeps access= and access_rule=" "1" "$(awk -F'\t' -v id="$GATEDID" '$1==id' "$BH/share/index.tsv" | grep -c "access=$GID access_rule=email:a@x.test")"
+check "row 19: B's pub/<id> trees equal A's migrated/<id> byte for byte" "1 1 1" \
+  "$(diff -r "$AH/share/migrated/1a0001" "$BH/share/pub/1a0001" >/dev/null && echo 1 || echo 0) $(diff -r "$AH/share/migrated/1a0002" "$BH/share/pub/1a0002" >/dev/null && echo 1 || echo 0) $(diff -r "$AH/share/migrated/$GATEDID" "$BH/share/pub/$GATEDID" >/dev/null && echo 1 || echo 0)"
+check "row 19: the live row is listed as not moved" "1" "$(grep -c 'not moved:  live link 9b0001 (port 19580)' <<<"$out")"
+check "row 19: the switch ran --force --token-stdin; the token is in no logged argv" "1 0" \
+  "$(grep -c -- '--force' "$MW/mssh.log") $(grep -c 'migtoken' "$MW/mssh.log" "$MW/clog19" | awk -F: '{s+=$2} END{print s+0}')"
+check "row 19: A's rows moved to index.migrated, A's live row stays in index.tsv" "1a0001 1a0002 $GATEDID" "$(cut -f1 "$AH/share/index.migrated" | sort | tr '\n' ' ' | sed 's/ $//')"
+check "row 19: A's live row is untouched in its own index" "9b0001" "$(cut -f1 "$AH/share/index.tsv")"
+check "row 19: A's trees moved aside to migrated/, not pub/" "0 1" "$([[ -e $AH/share/pub/1a0001 ]] && echo 1 || echo 0) $([[ -d $AH/share/migrated/1a0001 ]] && echo 1 || echo 0)"
+check "row 19: A's teardown path ran and logged no DELETE of an Access app" "0" "$(grep -c 'DELETE.*access/apps' "$MW/clog19")"
+
+echo "--- row 20: refusals before any copy ---"
+AH="$MW/A20"; BH="$MW/B20"; rm -rf "$AH" "$BH"; mkdir -p "$AH" "$BH"
+mig_fixture "$AH"
+printf '9c0001\town.txt\t/x\t2026-09-01\t0\thost=h.example.test\n' >> "$AH/share/index.tsv"
+: > "$MW/clog20"
+out=$(mig_a "$AH" "$BH" "$MW/clog20" migrate --to m20-target --remote-bin "$MW/remotebin" --yes 2>&1); rc=$?
+check "row 20: a --host row on A refuses before any copy" "1 0" "$rc $(wc -l <"$MW/clog20" | tr -d ' ')"
+
+AH="$MW/A20b"; BH="$MW/B20b"; rm -rf "$AH" "$BH"; mkdir -p "$AH" "$BH"
+mig_fixture "$AH"
+printf 'bucket=share-demo\n' >> "$AH/.config/share/config"
+: > "$MW/clog20b"
+out=$(mig_a "$AH" "$BH" "$MW/clog20b" migrate --to m20-target --remote-bin "$MW/remotebin" --yes 2>&1); rc=$?
+check "row 20: bucket= on A (R2 on) refuses before any copy" "1 0" "$rc $(wc -l <"$MW/clog20b" | tr -d ' ')"
+
+AH="$MW/A20c"; BH="$MW/B20c"; rm -rf "$AH" "$BH"; mkdir -p "$AH" "$BH"
+mig_fixture "$AH"
+mkdir -p "$BH/.config/share"; printf 'hostname=other.example.test\n' > "$BH/.config/share/config"
+: > "$MW/clog20c"
+out=$(mig_a "$AH" "$BH" "$MW/clog20c" migrate --to m20c-target --remote-bin "$MW/remotebin" --yes 2>&1); rc=$?
+check "row 20: B already set up for another hostname refuses before any copy" "1 0" "$rc $(grep -c '^CURL POST' "$MW/clog20c")"
+
+AH="$MW/A20d"; BH="$MW/B20d"; rm -rf "$AH" "$BH"; mkdir -p "$AH" "$BH"
+mig_fixture "$AH"
+mkdir -p "$BH/.config/share" "$BH/share/pub/zzzzzz"
+printf 'hosts=nobody\nport=19562\n' > "$BH/.config/share/config"
+printf 'zzzzzz\told.txt\t/old\t2026-01-01\t0\t\n' > "$BH/share/index.tsv"
+: > "$MW/clog20d"
+out=$(mig_a "$AH" "$BH" "$MW/clog20d" migrate --to m20d-target --remote-bin "$MW/remotebin" --yes 2>&1); rc=$?
+check "row 20: B's not_setup profile already holding a row refuses before any copy" "1 0" "$rc $(grep -c '^CURL POST' "$MW/clog20d")"
+
+echo "--- row 20/21: a copy failure stops before the switch; a rerun skips the moved id ---"
+AH="$MW/A21"; BH="$MW/B21"; rm -rf "$AH" "$BH"; mkdir -p "$AH" "$BH"
+mig_fixture "$AH"
+mkdir -p "$BH/.config/share"; printf 'hosts=nobody\nport=19563\n' > "$BH/.config/share/config"
+: > "$MW/clog21"; : > "$MW/mssh.log"
+FAIL_SECOND="$MW/fail-second-remotebin"; mkdir -p "$FAIL_SECOND"
+cp "$MW/remotebin/curl" "$FAIL_SECOND/curl"; cp "$MW/remotebin/security" "$FAIL_SECOND/security"
+chmod +x "$FAIL_SECOND/curl" "$FAIL_SECOND/security"
+cat > "$FAIL_SECOND/share" <<EOF
+#!/bin/bash
+if [[ "\$1" == import && "\$2" == 1a0002 ]]; then echo "share: import: simulated failure" >&2; exit 1; fi
+exec bash "$SH" "\$@"
+EOF
+chmod +x "$FAIL_SECOND/share"
+out=$(mig_a "$AH" "$BH" "$MW/clog21" migrate --to m21-target --remote-bin "$FAIL_SECOND" --yes 2>&1); rc=$?
+check "row 20: the copy failing on the second id stops; the first id is on B, A unchanged" "1 1 1 1" \
+  "$rc $(grep -qc '^1a0001	' "$AH/share/index.tsv" >/dev/null && echo 1 || echo 0) $(grep -qc '^1a0001	' "$BH/share/index.tsv" >/dev/null && echo 1 || echo 0) $([[ ! -f $AH/share/index.migrated ]] && echo 1 || echo 0)"
+out=$(mig_a "$AH" "$BH" "$MW/clog21" migrate --to m21-target --remote-bin "$MW/remotebin" --yes 2>&1); rc=$?
+check "row 21: a rerun skips the id already on B and copies the rest" "0 1 1" \
+  "$rc $(grep -c '1a0001 already on' <<<"$out") $(grep -c '^1a0002	' "$BH/share/index.tsv")"
+
+echo "--- row 20: a gated link that fails to gate correctly stops before retire ---"
+AH="$MW/A20e"; BH="$MW/B20e"; rm -rf "$AH" "$BH"; mkdir -p "$AH" "$BH"
+mig_fixture "$AH"
+mkdir -p "$BH/.config/share"; printf 'hosts=nobody\nport=19564\n' > "$BH/.config/share/config"
+: > "$MW/clog20e"
+out=$(GATE_KID=wrong-aud mig_a "$AH" "$BH" "$MW/clog20e" migrate --to m20e-target --remote-bin "$MW/remotebin" --yes 2>&1); rc=$?
+check "row 20: a gated link that fails to gate correctly stops before retire, naming it" "1 1 0" \
+  "$rc $([[ $(grep -c "$GATEDID" <<<"$out") -ge 1 ]] && echo 1 || echo 0) $([[ -f $AH/share/index.migrated ]] && echo 1 || echo 0)"
+
+echo "--- row 31: the printed rollback, run in dry mode, touches only A's own tunnel ---"
+AH="$MW/A31"; BH="$MW/B31"; rm -rf "$AH" "$BH"; mkdir -p "$AH" "$BH"
+mig_fixture "$AH"
+mkdir -p "$BH/.config/share"; printf 'hosts=nobody\nport=19565\n' > "$BH/.config/share/config"
+: > "$MW/clog31"
+FAIL_SETUP="$MW/fail-setup-remotebin"; mkdir -p "$FAIL_SETUP"
+cp "$MW/remotebin/curl" "$FAIL_SETUP/curl"; cp "$MW/remotebin/security" "$FAIL_SETUP/security"
+chmod +x "$FAIL_SETUP/curl" "$FAIL_SETUP/security"
+cat > "$FAIL_SETUP/share" <<EOF
+#!/bin/bash
+[[ "\$1" == setup ]] && { echo "share: setup: simulated remote-setup failure" >&2; exit 1; }
+exec bash "$SH" "\$@"
+EOF
+chmod +x "$FAIL_SETUP/share"
+out=$(mig_a "$AH" "$BH" "$MW/clog31" migrate --to m31-target --remote-bin "$FAIL_SETUP" --yes 2>&1); rc=$?
+check "row 20: a remote-setup failure stops before retire, printing the rollback with A's own tunnel-name" "1 1 0" \
+  "$rc $(grep -c -- '--tunnel-name tun-A' <<<"$out") $([[ -f $AH/share/index.migrated ]] && echo 1 || echo 0)"
+: > "$MW/clog31b"
+sed -i.bak 's/^hosts=.*/hosts=nobody/' "$AH/.config/share/config"   # the rollback check below is about the tunnel/DNS calls, not a live service; keep it off this machine's real launchd
+out=$(mig_a "$AH" "$BH" "$MW/clog31b" setup "$MHOST" --tunnel-name tun-A --force 2>&1); rc=$?
+check "row 31: the rollback in dry mode names A's own tunnel; no call names a new tunnel id" "0 1 0" \
+  "$rc $(grep -c 'tunnel:     reusing tun-A' <<<"$out") $(grep -c 'tid-new' "$MW/clog31b")"
+check "row 31: A's config keeps its own tunnel_id" "tid-A" "$(sed -n 's/^tunnel_id=//p' "$AH/.config/share/config")"
 
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then

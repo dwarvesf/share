@@ -25,6 +25,7 @@
 #   share skill [--install]   the SKILL.md that teaches an agent to use share
 #   share teardown [--yes]    delete the tunnel, DNS record, service, and stored token
 #   share import ...          used by migrate over ssh
+#   share migrate --to <ssh-target>   move this tenant's origin to another machine (snapshots only, R2 off)
 #   share setup <hostname> --backend r2 --bucket <name>   an R2 profile: a private bucket and a Worker
 #      serve links while this machine is off; teardown --yes --purge (admin token) deletes it all
 #
@@ -823,6 +824,241 @@ cmd_import() { # cmd_import --probe | <args> (iusage): one share moved here by m
   echo "imported $id"
 }
 
+# --- migrate (the sending side; import above is the receiving side) ---
+
+musage="usage: share migrate --to <ssh-target> [--remote-profile <name>] [--remote-bin <path>] [--max-bytes <n>] [--yes]"
+b64enc() { printf '%s' "$1" | base64 | tr -d '\n'; }   # the counterpart of b64dec: never the multi-line default GNU base64 gives
+migrate_target=""   # the --to value; read by migrate_remote_run, never by anything else
+
+migrate_script() { # migrate_script <bindir> <maxbytes>: the fixed remote wrapper source; no quote or backslash, so the base64 round trip loses nothing
+  local bindir="${1:-}" max="${2:-}"
+  printf 'export PATH=%s/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\n' "${bindir:+$bindir:}"
+  [[ -n $max ]] && printf 'export SHARE_IMPORT_MAX_BYTES=%s\n' "$max"
+  # ssh joins argv with spaces for the remote shell to reparse, so a zero-length argument (base64 of empty opts)
+  # would vanish and shift every argument after it; the sender replaces "" with this sentinel, undone here.
+  # shellcheck disable=SC2016 # literal source for the decoded remote script, not this shell's own expansion
+  printf 'a=(); for x in "$@"; do [ "$x" = "__share_empty_arg__" ] && x=""; a+=("$x"); done\n'
+  # shellcheck disable=SC2016
+  printf 'exec share "${a[@]}"\n'
+}
+mr_out="" mr_code=0
+migrate_remote_run() { # migrate_remote_run <bindir> <maxbytes> <rprofile> <arg>...: the fixed base64 template over ssh, or SHARE_MIGRATE_SSH; forwards this call's own stdin
+  local bindir="$1" max="$2" rprofile="$3" b64 sshcmd a; shift 3
+  b64="$(migrate_script "$bindir" "$max" | base64 | tr -d '\n')"
+  local rargs=()
+  [[ -z $rprofile || $rprofile == default ]] || rargs=(--profile "$rprofile")
+  for a in "$@"; do rargs+=("${a:-__share_empty_arg__}"); done
+  if [[ -n ${SHARE_MIGRATE_SSH:-} ]]; then sshcmd="$SHARE_MIGRATE_SSH"; else sshcmd="ssh -o BatchMode=yes $migrate_target"; fi
+  # shellcheck disable=SC2086 # sshcmd is a fixed word list (ssh plus its flags), never a single string needing quotes
+  # the argv element below must CONTAIN literal " characters around $(...): ssh joins argv with spaces and the remote
+  # login shell reparses the joined string, so an unquoted $(...) would word-split the decoded script on its own newlines
+  mr_out="$($sshcmd /bin/bash -c "\"\$(printf %s $b64 | base64 -D 2>/dev/null || printf %s $b64 | base64 -d)\"" share-migrate "${rargs[@]}")"
+  mr_code=$?
+  return "$mr_code"   # the line above is an assignment, always 0 on its own; every caller of "|| rc=$?" needs this function's OWN exit status to be the real one
+}
+migrate_remote() { migrate_remote_run "$@" </dev/null; }   # every call except the tar copy and the token switch: no stdin to forward
+
+migrate_keychain_check() { # a throwaway Keychain round trip (a random probe value, never a real secret, so plain argv is fine here, unlike token_store); synchronous, same as every other Keychain call in this file (token_store, api_token): a locked Keychain's GUI prompt is the operator's to answer, in the GUI session migrate runs in
+  command -v security >/dev/null || { echo 1; return; }
+  local k="share-migrate-check.$$" v="probe-$RANDOM-$RANDOM" got=""
+  security add-generic-password -U -a share -s "$k" -w "$v" >/dev/null 2>&1 || { echo 0; return; }
+  got="$(security find-generic-password -a share -s "$k" -w 2>/dev/null)"
+  security delete-generic-password -a share -s "$k" >/dev/null 2>&1
+  [[ $got == "$v" ]] && echo 1 || echo 0
+}
+cmd_migrate_probe() { # one line for the sender's preflight: state, host, pub emptiness, port freedom, Keychain and launchctl
+  local st pempty=1 pfree=1 kok lok=1
+  if running; then st=serving; elif [[ -n $host_name || $mode == quick ]]; then st=stopped; else st=not_setup; fi
+  [[ -z "$(find "$pub" -mindepth 1 -print -quit 2>/dev/null)" ]] || pempty=0
+  listening "$port" && pfree=0
+  [[ $tunnel == 0 ]] || { listening "$metrics_port" && pfree=0; }
+  kok="$(migrate_keychain_check </dev/null)"
+  [[ $(uname -s) != Darwin ]] || { launchctl print "gui/$(id -u)" </dev/null >/dev/null 2>&1 || lok=0; }
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$st" "${host_name:--}" "$pempty" "$pfree" "$kok" "$lok"
+}
+cmd_migrate_index() { [[ -f $index ]] && awk -F'\t' '{print $1"\t"$2"\t"$4}' "$index"; return 0; }
+cmd_migrate_nonce() { # a throwaway probe file only the target holds; the sender polls its URL
+  mk_root; mkdir -p "$pub"
+  local n; n="_migrate-probe-$(rand_id_raw).txt"
+  echo ok >"$pub/$n"
+  echo "$n"
+}
+
+migrate_row_bytes() { find "$pub/$1" -type f -exec wc -c {} \; 2>/dev/null | awk '{s+=$1} END{print s+0}'; }   # portable: no stat flag differs GNU/BSD
+migrate_tar() { # migrate_tar <id> <name>: the archive bytes on stdout; bsdtar (macOS) must drop AppleDouble members or the target's dotfile check refuses them
+  if tar --version 2>/dev/null | grep -q 'GNU tar'; then tar -C "$pub/$1" -cf - -- "$2"
+  else COPYFILE_DISABLE=1 tar -C "$pub/$1" -cf - --no-mac-metadata --no-xattrs -- "$2"; fi
+}
+
+migrate_retire() { # migrate_retire <id>...: index.migrated and migrated/ (nothing deleted), then the teardown path with no Access-app delete and no DNS delete unless it still points here
+  local mids=("$@") id midlist=" " line keep
+  for id in "${mids[@]}"; do midlist="$midlist$id "; done
+  lock_take index
+  mkdir -p "$root/migrated"
+  for id in "${mids[@]}"; do
+    line="$(awk -F'\t' -v id="$id" '$1 == id' "$index")"
+    [[ -n $line ]] || continue
+    printf '%s\n' "$line" >>"$root/index.migrated"
+    [[ -e $pub/$id ]] && mv "$pub/$id" "$root/migrated/$id"
+  done
+  keep=""; [[ -s $index ]] && keep="$(awk -F'\t' -v ids="$midlist" '{if (index(ids, " " $1 " ") == 0) print}' "$index")"
+  printf '%s\n' "$keep" | sed '/^$/d' >"$index.tmp"; mv -f "$index.tmp" "$index"
+  write_caddyfile; caddy_reload || true
+  lock_release index
+  svc_uninstall
+  cmd_stop >/dev/null 2>&1 || true
+  local tid rec rid; tid="$(cfg tunnel_id)"
+  rec="$(cf GET "/zones/$zone/dns_records?name=$host_name")"
+  rid="$(jq -r --arg t "$tid.cfargotunnel.com" '.result[] | select(.content == $t) | .id' <<<"$rec" | head -1)"
+  if [[ -n $rid ]]; then cf DELETE "/zones/$zone/dns_records/$rid" >/dev/null; echo "dns:        deleted (still pointed at this tunnel)"
+  else echo "dns:        $host_name no longer points at this tunnel, left alone"; fi
+  cf DELETE "/accounts/$account/cfd_tunnel/$tid/connections" >/dev/null 2>&1 || true
+  cf DELETE "/accounts/$account/cfd_tunnel/$tid" >/dev/null
+  echo "tunnel:     deleted"
+  token_forget; api_token_forget
+  rm -f "$config_dir/cert.zone"
+  [[ -f $cert ]] && to_trash "$cert"
+  return 0   # the line above is a bare test && action; under set -e its own false result must not become this function's (and so cmd_migrate's) exit status
+}
+
+cmd_migrate() {
+  local to="" rprofile="" rbin="" maxbytes="" yes=0
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --to) to="${2:-}"; shift 2 ;;
+      --remote-profile) rprofile="${2:-}"; shift 2 ;;
+      --remote-bin) rbin="${2:-}"; shift 2 ;;
+      --max-bytes) maxbytes="${2:-}"; shift 2 ;;
+      --yes) yes=1; shift ;;
+      *) die "$musage" ;;
+    esac
+  done
+  [[ -n $to ]] || die "$musage"
+  [[ $to != -* ]] || die "migrate: the target must not start with -"
+  [[ $to =~ ^[A-Za-z0-9_.@:-]+$ ]] || die "migrate: bad --to target '$to'"
+  [[ -z $rprofile || $rprofile == default || $rprofile =~ ^[a-z0-9][a-z0-9-]{0,31}$ ]] || die "migrate: bad --remote-profile '$rprofile'"
+  [[ -z $rbin || $rbin =~ ^[A-Za-z0-9/_.-]+$ ]] || die "migrate: bad --remote-bin '$rbin'"
+  [[ -z $maxbytes || $maxbytes =~ ^[0-9]+$ ]] || die "migrate: bad --max-bytes '$maxbytes'"
+  migrate_target="$to"
+
+  need_host
+  [[ $mode != quick ]] || die "migrate needs a named tunnel; quick mode has no hostname to move to another machine"
+  [[ $backend != r2 && $r2on == 0 ]] || die "R2 is on for $host_name; moving its origin also moves the pointers and the publisher token, which this version does not do"
+  host_ok || die "$(this_host) is not $host_name's serving host ($hosts); migrate runs on the origin"
+  local hostrow; hostrow="$(rows | awk -F'\t' '$6 ~ /(^| )host=/ {print $1; exit}')"
+  if [[ -n $hostrow ]]; then
+    local hfqdn; hfqdn="$(opt_val host "$(row "$hostrow" | cut -f6)")"
+    die "$hfqdn has its own hostname on this tunnel; remove it first: $me rm $hostrow"
+  fi
+  [[ -n ${CLOUDFLARE_API_TOKEN:-} ]] || die "migrate needs CLOUDFLARE_API_TOKEN (Cloudflare Tunnel Edit, DNS Edit, Zone Read on $host_name's zone)"
+  auth_api
+  local zone account _zn; read -r zone account _zn <<<"$(cf_zone)"
+
+  # split the rows: a live link is reported, never moved; everything else (the --host check above already refused) is a snapshot
+  local mids=() names=() srcs=() addeds=() exps=() optss=() live_lines="" i
+  while IFS=$'\t' read -r id name src added exp opts; do
+    if has_opt live "$opts"; then live_lines="$live_lines$id ${src##*:}"$'\n'; continue; fi
+    mids+=("$id"); names+=("$name"); srcs+=("$src"); addeds+=("$added"); exps+=("$exp"); optss+=("$opts")
+  done < <(rows)
+  local max="${maxbytes:-2147483648}" over=""
+  for i in "${!mids[@]}"; do [[ $(migrate_row_bytes "${mids[$i]}") -le $max ]] || over="$over ${mids[$i]}"; done
+  [[ -z $over ]] || die "migrate: over --max-bytes ($max):$over; pass --max-bytes <n>, or move them by hand first"
+
+  migrate_remote "$rbin" "" "$rprofile" import --probe || true   # a nonzero exit is a refusal to report below, never a reason for set -e to abort here
+  [[ $mr_code == 0 && $mr_out == "share-import 1" ]] || die "migrate: $to's share import --probe did not answer 'share-import 1' (got '$mr_out'); check --remote-bin, or upgrade share there"
+  migrate_remote "$rbin" "" "$rprofile" migrate-probe || true
+  [[ $mr_code == 0 ]] || die "migrate: the preflight check on $to failed"
+  local rstate rhost rpempty rpfree rkok rlok
+  IFS=$'\t' read -r rstate rhost rpempty rpfree rkok rlok <<<"$mr_out"
+  migrate_remote "$rbin" "" "$rprofile" migrate-index || true
+  local target_index="$mr_out"
+  case $rstate in
+    not_setup)
+      if [[ $rpempty != 1 ]]; then   # a bare row is a stranger; one matching this run's own ids is a rerun resuming a prior partial copy
+        local foreign=""; foreign="$(awk -F'\t' -v ids=" $(printf '%s ' "${mids[@]}")" '{if (index(ids, " " $1 " ") == 0) print $1}' <<<"$target_index")"
+        [[ -z $foreign ]] || die "migrate: $to's profile is not_setup but already has shares not in this move ($foreign); pick another --remote-profile"
+      fi ;;
+    stopped|serving) [[ $rhost == "$host_name" ]] || die "migrate: $to's profile is already set up for $rhost, not $host_name; pick another --remote-profile" ;;
+    *) die "migrate: unexpected state '$rstate' on $to" ;;
+  esac
+  [[ $rpfree == 1 ]] || die "migrate: $to's port for this profile is already in use"
+  [[ $rkok == 1 ]] || die "migrate: $to cannot write and read back a Keychain item for share"
+  [[ $rlok == 1 ]] || die "migrate: launchctl print gui/<uid> on $to did not answer; share's login service needs a GUI session there"
+
+  if [[ $yes != 1 ]]; then
+    [[ -t 0 ]] || die "rerun '$me migrate --to $to --yes' to confirm"
+    local a; read -rp "Move ${#mids[@]} link(s) of $host_name to $to and retire this machine as its origin? [y/N] " a
+    [[ $a == y* || $a == Y* ]] || die "aborted"
+  fi
+  echo "preflight:  ok ($to, $rstate)"
+
+  for i in "${!mids[@]}"; do
+    local id=${mids[$i]} name=${names[$i]} src=${srcs[$i]} added=${addeds[$i]} exp=${exps[$i]} opts=${optss[$i]} rc man by srcbare sendopts tarfile
+    if grep -qE "^$id	$name	$added\$" <<<"$target_index"; then echo "copy:       $id already on $to, skipping"; continue; fi
+    man="$(import_manifest "$pub/$id")"
+    # a row already carried here by an earlier import keeps its true publisher and bare source (by=<x> in opts,
+    # src stored as "<x>:<original src>"); import appends its own by=, so that token never rides along a second time
+    by="$(opt_val by "$opts" 2>/dev/null || true)"
+    if [[ -n $by ]]; then
+      srcbare="${src#"$by":}"
+      sendopts="$(sed -E 's/(^| )by=[^ ]*//' <<<"$opts")"
+    else
+      by="$(r2_by)"; srcbare="$src"; sendopts="$opts"
+    fi
+    # a plain redirect, never a pipe: migrate_remote_run's own mr_out/mr_code would be lost in a pipeline's trailing subshell.
+    # "cmd || rc=$?", never a bare statement: a nonzero exit here is this loop's to report, not set -e's to abort on
+    tarfile="$(mktemp "$root/.migrate-tar.XXXXXX")"
+    migrate_tar "$id" "$name" >"$tarfile"
+    rc=0
+    migrate_remote_run "$rbin" "$maxbytes" "$rprofile" import "$id" "$exp" "$by" "$added" \
+      "$(b64enc "$name")" "$(b64enc "$srcbare")" "$(b64enc "$sendopts")" "$man" <"$tarfile" || rc=$?
+    rm -f "$tarfile"
+    [[ $rc == 0 ]] || die "migrate: copying $id to $to failed: $mr_out"
+    echo "copy:       $id -> $to ($mr_out)"
+  done
+  if [[ -n $live_lines ]]; then
+    local lid lport
+    while IFS=' ' read -r lid lport; do
+      [[ -n $lid ]] && echo "not moved:  live link $lid (port $lport); after the move run '$me add $lport' on the new origin"
+    done <<<"$live_lines"
+  fi
+
+  local switch_rc=0
+  printf '%s\n' "$CLOUDFLARE_API_TOKEN" | migrate_remote_run "$rbin" "$maxbytes" "$rprofile" setup "$host_name" --force --token-stdin >/dev/null || switch_rc=$?
+  if [[ $switch_rc != 0 ]]; then
+    die "migrate: the switch on $to failed; this machine may still be serving, or the DNS record may already point at the new tunnel. Rollback if $host_name is down: $me setup $host_name --tunnel-name $(cfg tunnel_name) --force"
+  fi
+  echo "switch:     $to is the new origin for $host_name"
+
+  migrate_remote "$rbin" "" "$rprofile" migrate-nonce || true
+  local probe="$mr_out" streak=0 code _
+  for _ in $(seq 1 60); do
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 --doh-url https://1.1.1.1/dns-query "https://$host_name/$probe" 2>/dev/null || \
+      curl -s -o /dev/null -w '%{http_code}' --max-time 5 "https://$host_name/$probe" 2>/dev/null || true)"
+    [[ $code == 200 ]] && streak=$((streak + 1)) || streak=0
+    [[ $streak -ge 3 ]] && break
+    sleep 1
+  done
+  [[ $streak -ge 3 ]] || die "migrate: verify failed: $to did not answer https://$host_name/$probe three times in a row; nothing moved aside. Rollback if $host_name is down: $me setup $host_name --tunnel-name $(cfg tunnel_name) --force"
+  for i in "${!mids[@]}"; do
+    local id=${mids[$i]} name=${names[$i]} opts=${optss[$i]} uuid aud
+    share_url "$id" "$name" "$opts"
+    uuid="$(opt_val access "$opts" || true)"
+    if [[ -n $uuid ]]; then
+      aud="$(cf GET "/accounts/$account/access/apps/$uuid" | jq -r .result.aud)"
+      access_probe_round "$aud" "$share_url_out" || die "migrate: verify failed: the gated link $id does not answer 302 with its app's aud; nothing moved aside"
+    else
+      code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 --doh-url https://1.1.1.1/dns-query "$share_url_out" 2>/dev/null || \
+        curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$share_url_out" 2>/dev/null || true)"
+      [[ $code == 200 ]] || die "migrate: verify failed: $id does not answer at $share_url_out (got $code); nothing moved aside"
+    fi
+  done
+  echo "verify:     every moved link answers from $to"
+
+  migrate_retire "${mids[@]}"
+  echo "retire:     $host_name no longer serves from this machine; moved rows in index.migrated, trees in migrated/"
+}
+
 # --- serving ---
 
 write_caddyfile() { # rendered from index.tsv; no-store: Cloudflare must not cache past rm or stop
@@ -1001,10 +1237,16 @@ svc_unload() { # bootout returns before launchd lets the job go; a bootstrap rig
   for _ in $(seq 1 20); do launchctl print "gui/$(id -u)/$svc_label" >/dev/null 2>&1 || return 0; sleep 0.5; done
 }
 svc_load() { launchctl bootstrap "gui/$(id -u)" "$svc_plist" 2>/dev/null || { sleep 1; launchctl bootstrap "gui/$(id -u)" "$svc_plist"; }; }
-svc_path() { # PATH for the service: the directories of every tool share calls
-  local p="" c d
-  for c in caddy cloudflared jq curl pandoc gh trash security; do
-    d="$(dirname "$(command -v "$c" 2>/dev/null || echo /usr/bin/x)")"
+svc_path() { # PATH for the service: every PATH directory that holds a tool share calls, kept in the caller's own PATH order
+  # (never the tool list's order: a stub share's own test or CI PATH puts ahead of /usr/bin must stay ahead in the
+  # baked PATH too, or that PATH resolves the real /usr/bin/<tool> once anything shells out through a plain lookup)
+  local tools=(caddy cloudflared jq curl pandoc gh trash security) p="" d t needed dirs
+  IFS=: read -ra dirs <<<"$PATH"
+  for d in "${dirs[@]}"; do
+    [[ -n $d ]] || continue
+    needed=0
+    for t in "${tools[@]}"; do [[ -x "$d/$t" ]] && { needed=1; break; }; done
+    [[ $needed == 1 ]] || continue
     case ":$p:" in *":$d:"*) ;; *) p="${p:+$p:}$d" ;; esac
   done
   echo "$p:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -4478,6 +4720,10 @@ case "${1:-status}" in
   service) cmd_service "${2:-}" ;;
   add) shift; cmd_add "$@" ;;
   import) shift; cmd_import "$@" ;;
+  migrate) shift; cmd_migrate "$@" ;;
+  migrate-probe) cmd_migrate_probe ;;
+  migrate-index) cmd_migrate_index ;;
+  migrate-nonce) cmd_migrate_nonce ;;
   api-token) shift; cmd_api_token "$@" ;;
   ls) cmd_prune listing; cmd_ls ;;
   skill) cmd_skill "${2:-}" ;;
