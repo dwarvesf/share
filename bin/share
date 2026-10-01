@@ -1659,6 +1659,10 @@ cf_dry() { # the SHARE_ACCESS_DRY answers: fixtures and knobs in, one log line p
         cf_code=201 cf_body="{\"success\":true,\"result\":$(cat "$d/$uuid.json")}"
         dry_log "POST app"
       fi ;;
+    "PUT "*/access/apps/*)   # the full read-back with its destinations changed, as a real PUT replaces every field
+      uuid="${2##*/}"; dry_log "PUT app $uuid"
+      if [[ -f $d/$uuid.json ]]; then jq -c . <<<"$3" >"$d/$uuid.json"; cf_body="{\"success\":true,\"result\":$3}"
+      else cf_code=404 cf_body='{"success":false,"errors":[{"code":12103}]}' cf_err=12103; fi ;;
     "GET "*/access/apps/*)
       uuid="${2##*/}"; dry_log "GET app $uuid"
       if [[ -f $d/$uuid.json ]]; then cf_body="{\"success\":true,\"result\":$(cat "$d/$uuid.json")}"
@@ -1871,7 +1875,9 @@ access_delete() { # access_delete <uuid> <share id>: only an app whose name says
   if [[ $cf_code == 404 ]]; then access_proof; return; fi   # done only once Access read is proven: a scope-less token 404s on every id
   [[ $cf_code == 200 ]] || return 1
   name="$(jq -r '.result.name // empty' <<<"$cf_body")"
-  if [[ $name != "share $2 $host_name "* ]]; then   # a forged row or line must never delete a foreign app with an account-wide token
+  local a al ok=0; al="$(cfg aliases || true)"
+  for a in "$host_name" ${al//,/ }; do [[ $name == "share $2 $a "* ]] && ok=1; done   # a folded app keeps the name it got at its alias
+  if [[ $ok == 0 ]]; then   # a forged row or line must never delete a foreign app with an account-wide token
     echo "share: Access app $1 is not the app of share $2 (its name is '$name'); left alone" >&2
     return 1
   fi
@@ -3072,7 +3078,7 @@ r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "
   f="$d/$key"
   case $meth in
     PUT)
-      [[ ${SHARE_R2_DRY_PUT:-} == 500 ]] && { cf_code=500 cf_err=InternalError; return 0; }
+      [[ ${SHARE_R2_DRY_PUT:-} == 500 || ${SHARE_R2_DRY_FAIL:-} == "PUT $key" ]] && { cf_code=500 cf_err=InternalError; return 0; }
       if [[ ${SHARE_R2_DRY_PUT:-} == race-once && $key == m/* && ! -f $d/.fx/race.done ]]; then   # another publisher takes this id just before the PUT
         mkdir -p "$d/.fx" "${f%/*}"; : >"$d/.fx/race.done"
         printf '{"v":1,"id":"%s","name":"theirs.txt","src":"/x","added":"2026-10-01","expires":0,"opts":"","prefix":"o/%s.00000000/","by":"peer"}\n' "${key#m/}" "${key#m/}" >"$f"
@@ -3134,13 +3140,18 @@ r2_api_dry() { # the account API under SHARE_R2_DRY: state files in $SHARE_R2_DR
   mkdir -p "$d" "$root"
   printf 'API %s %s\n' "$1" "$p" >>"$root/r2-calls.log"
   cf_code=200 cf_err="" cf_body='{"success":true,"result":[]}'
+  # SHARE_R2_DRY_FAIL="API <METHOD> <path glob>": that call answers 500 and changes nothing; a die-injection seam
+  # shellcheck disable=SC2053 # the seam is a glob on purpose
+  if [[ -n ${SHARE_R2_DRY_FAIL:-} && "API $1 $p" == $SHARE_R2_DRY_FAIL ]]; then cf_code=500 cf_err=10013 cf_body='{"success":false,"errors":[{"code":10013}]}'; return 0; fi
   case "$1 $p" in
     "GET /user/tokens/verify") cf_body="$(jq -nc --arg e "${SHARE_R2_DRY_EXPIRES:-}" '{success: true, result: ({id: "dry-token-id", status: "active"} + (if $e == "" then {} else {expires_on: $e} end))}')" ;;
     "GET /zones?name="*)
       n="${p#*name=}"; n="${n%%&*}"
       [[ $n == "${host_name#*.}" ]] && cf_body="{\"success\":true,\"result\":[{\"id\":\"zone-dry\",\"name\":\"$n\",\"account\":{\"id\":\"acct-dry\"}}]}" ;;
     "GET "*/workers/scripts/*/settings)
+      n="${p%/settings}"; n="${n##*/}"
       if [[ ${SHARE_R2_DRY_ROLE:-} == deny ]]; then cf_code=403 cf_body=$deny
+      elif [[ -f $d/script-$n.json ]]; then cf_body="{\"success\":true,\"result\":$(cat "$d/script-$n.json")}"   # a second Worker on the account (an alias's)
       elif [[ -f $d/script.json ]]; then cf_body="{\"success\":true,\"result\":$(cat "$d/script.json")}"
       else cf_code=404 cf_body='{"success":false,"errors":[{"code":10007}]}'; fi ;;
     "PUT "*/workers/scripts/*) cf_body='{"success":true,"result":{}}' ;;   # r2_deploy writes script.json itself
@@ -3237,7 +3248,7 @@ r2_wait_healthz() { # r2_wait_healthz admin|join: three 200s in a row within SHA
     fi
     if [[ $1 == tenant && $((SECONDS - start)) -ge $wait ]]; then   # the config is written by now: the rollback is --no-r2
       local leg="the Worker leg"; [[ $hz_code == 200 && $hz_pair == "$WORKER_VERSION $WORKER_SHA" ]] && leg="the tunnel leg (X-Share-Tunnel: ${hz_tunnel:-none})"
-      die "https://$host_name/healthz did not answer 200 ok with this share's Worker and X-Share-Tunnel: 1 three times in a row within ${wait}s (last: $hz_code ${hz_pair:-no pair}); $leg is down; roll back with: $me setup $host_name --no-r2"
+      tenant_die "https://$host_name/healthz did not answer 200 ok with this share's Worker and X-Share-Tunnel: 1 three times in a row within ${wait}s (last: $hz_code ${hz_pair:-no pair}); $leg is down"
     fi
     [[ $((SECONDS - start)) -lt $wait ]] ||
       die "https://$host_name/healthz did not answer 200 ok three times in a row within ${wait}s (last: $hz_code ${hz_pair:-no pair}); the config was not written; rerun setup once the certificate is issued"
@@ -3311,6 +3322,7 @@ write_config_r2() { # write_config_r2 <bucket>: the r2 profile config; keeps api
     echo "bucket=$1"
     echo "port=r2"
     echo "r2_endpoint=$r2_endpoint"
+    [[ -n ${r2_join_aliases:-} ]] && echo "aliases=$r2_join_aliases"   # a member's rm and expiry of a folded share delete its app
     [[ -n $keep_api ]] && echo "api_token_cmd=$keep_api"
     [[ -n $keep_r2 ]] && echo "r2_token_cmd=$keep_r2"
   } >"$config.tmp"
@@ -3358,8 +3370,112 @@ tenant_config() { # tenant_config [<bucket> <endpoint> <storage_default> <aliase
   if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then if [[ $# == 0 ]]; then echo "CONFIG r2 off"; else echo "CONFIG r2 on"; fi >>"$root/r2-calls.log"; fi
 }
 
-cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force>: setup <host> --r2 on the origin; every read and refusal before the first write; a rerun converges
-  local bucket=$1 sdef=$2 force=$3 worker="share-${host_name//./-}" dataset="share_${host_name//[.-]/_}"
+alias_scan() { # alias_scan strict|list: after r2_read, every gated cloud record by its Access app's name: fold_apps ("<uuid> <id>" per app named for $alias), fold_late (ids gated at this host already: added since the fold); strict dies on any other app, before any write
+  local cid copts uuid nm checked=0
+  fold_apps="" fold_late=""
+  while IFS=$'\t' read -r cid _ _ _ _ copts; do
+    uuid="$(opt_val access "$copts" || true)"
+    [[ -n $uuid ]] || continue
+    if [[ $1 == strict && $checked == 0 ]]; then
+      access_apps_edit_ok || die "the token lacks Access: Apps and Policies Edit, which --alias needs to move each gated link's app to $host_name; nothing was changed"
+      checked=1
+    fi
+    cf_try GET "/accounts/$acct/access/apps/$uuid"
+    nm=""; [[ $cf_code == 200 ]] && nm="$(jq -r '.result.name // empty' <<<"$cf_body")"
+    case $nm in
+      "share $cid $alias "*) fold_apps+="$uuid $cid"$'\n' ;;
+      "share $cid $host_name "*) fold_late+="${fold_late:+ }$cid" ;;
+      *) [[ $1 != strict ]] || die "the Access app $uuid of cloud link $cid answered HTTP $cf_code named '$nm', not 'share $cid $alias <nonce>'; refused, nothing was changed" ;;
+    esac
+  done < <(crows)
+}
+
+alias_dests() { # alias_dests add|undo|drop: each fold app gains <host>/<id>{,/*}, loses them again, or loses <alias>/<id>{,/*}; the PUT sends the full read-back (an omitted field resets to its default) and is skipped when nothing changes; alias_moved gets "<id> <aud>" per changed app
+  local uuid id have want aud body
+  alias_moved=""
+  while read -r uuid id; do
+    [[ -n $uuid ]] || continue
+    cf_try GET "/accounts/$acct/access/apps/$uuid"
+    [[ $cf_code == 200 ]] || return 1
+    aud="$(jq -r '.result.aud // empty' <<<"$cf_body")"
+    have="$(jq -c '[.result.destinations[]?]' <<<"$cf_body")"
+    case $1 in
+      add) want="$(jq -c --arg u "$host_name/$id" 'reduce ($u, $u + "/*") as $x (.; if any(.[]; .uri == $x) then . else . + [{type: "public", uri: $x}] end)' <<<"$have")" ;;
+      undo) want="$(jq -c --arg u "$host_name/$id" 'map(select(.uri != $u and .uri != $u + "/*"))' <<<"$have")" ;;
+      drop) want="$(jq -c --arg u "$alias/$id" 'map(select(.uri != $u and .uri != $u + "/*"))' <<<"$have")" ;;
+    esac
+    [[ $want != "$have" ]] || continue
+    body="$(jq -c --argjson d "$want" '.result | .destinations = $d' <<<"$cf_body")"
+    cf_try PUT "/accounts/$acct/access/apps/$uuid" "$body"
+    [[ $cf_code == 200 && "$(jq -r '.result.aud // empty' <<<"$cf_body")" == "$aud" ]] || return 1
+    alias_moved+="$id $aud"$'\n'
+  done <<<"${fold_apps:-}"
+}
+
+alias_wait_301() { # alias_wait_301: https://<alias>/healthz answers 301 to https://<host>/healthz three times in a row within SHARE_R2_WAIT
+  local wait="${SHARE_R2_WAIT:-300}" start=$SECONDS streak=0 out d="${SHARE_R2_DRY_DIR:-$root/r2-dry}/.cf"
+  while :; do
+    out="000 "
+    if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then   # the dry alias answers 301 once its domain names this host's Worker and that Worker binds it in ALIASES
+      printf 'ALIAS-301 %s\n' "$alias" >>"$root/r2-calls.log"
+      if [[ ${SHARE_R2_DRY_FAIL:-} != ALIAS-301 && "$(jq -r .service "$d/domain.json" 2>/dev/null)" == "share-${host_name//./-}" ]] &&
+        jq -e --arg a "$alias" 'any(.bindings[]; .name == "ALIASES" and (.text | split(",") | index($a)))' "$d/script.json" >/dev/null 2>&1; then
+        out="301 https://$host_name/healthz"
+      fi
+    else
+      out="$(curl -s -o /dev/null --max-time 10 --doh-url https://1.1.1.1/dns-query -w '%{http_code} %{redirect_url}' "https://$alias/healthz" 2>/dev/null)" ||
+        out="$(curl -s -o /dev/null --max-time 10 -w '%{http_code} %{redirect_url}' "https://$alias/healthz" 2>/dev/null)" || out="000 "
+    fi
+    if [[ $out == "301 https://$host_name/healthz" ]]; then streak=$((streak + 1)); [[ $streak -ge 3 ]] && return 0; else streak=0; fi
+    [[ $((SECONDS - start)) -lt $wait ]] || return 1
+    if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then sleep 0.2; else sleep 2; fi
+  done
+}
+
+alias_rollback() { # alias_rollback: the alias rollback list on stderr, in the order R1 rehearses it (the app destinations come back before the rebind)
+  local apps="" ptrs cl uuid id
+  while read -r uuid id; do [[ -n $uuid ]] && apps+="${apps:+, }$uuid ($id)"; done <<<"${fold_apps:-}"
+  ptrs="$({ rows | cut -f1; cut -f1 <<<"${r2_machine:-}"; } | grep -E '^[0-9a-f]{6}$' | sort -u | sed 's|^|m/|' | tr '\n' ' ')"
+  cl="$(crows | cut -f1 | tr '\n' ' ')"
+  {
+    echo "alias rollback for $alias, in this order, each with the tenant admin token:"
+    echo "  1. each folded Access app gets $alias/<id> and $alias/<id>/* back (PUT the full GET result, only destinations changed): ${apps:-none}"
+    echo "  2. PUT /accounts/$acct/workers/domains {\"hostname\":\"$alias\",\"service\":\"share-${alias//./-}\",\"zone_id\":\"$zone_id\",\"environment\":\"production\",\"override_existing_origin\":true}"
+    echo "  3. PUT share.json in bucket $bucket with If-Match on its ETag: {\"v\":1,\"host\":\"$alias\"}"
+    echo "  4. remove the aliases= line from $config"
+    echo "  5. DELETE every v:2 machine record: ${ptrs:-none}"
+    echo "  6. $me setup $host_name --no-r2"
+    echo "  cloud links ${cl:-none }answer at https://$alias/<id>/ again, never at https://$host_name/<id>/; gated ones added since the fold (${fold_late:-none}) have no app on $alias: re-add them or tell their readers first"
+  } >&2
+}
+
+tenant_die() { # tenant_die <msg>: a die after the config write names the rollback: the alias list when an alias is folded, --no-r2 otherwise
+  if [[ -n ${alias:-} ]]; then alias_rollback; die "$1; roll back with the alias rollback list above, or rerun the same setup"; fi
+  die "$1; roll back with: $me setup $host_name --no-r2"
+}
+
+alias_own_handoff() { # the local profile serving $alias hands its r2-own lines to this profile, so refresh keeps working on the shares it added; its own file stays
+  local c n r id pfx src
+  for c in "${XDG_CONFIG_HOME:-$HOME/.config}/share/config" "$profiles_dir"/*/config; do
+    [[ -f $c && $c != "$config" ]] || continue
+    [[ "$(awk 'index($0, "hostname=") == 1 {print substr($0, 10); exit}' "$c")" == "$alias" ]] || continue
+    n="${c%/config}"; n="${n##*/}"
+    if [[ $c == */profiles/*/config ]]; then r="$HOME/share/profiles/$n"; else r="$HOME/share"; fi
+    [[ -f $r/r2-own ]] || continue
+    while IFS=$'\t' read -r id pfx src; do
+      [[ $id =~ ^[0-9a-f]{6}$ && $pfx == "o/$id."*/ ]] && r2_own_put "$id" "$pfx" "$src"
+    done <"$r/r2-own"
+    echo "r2-own:     the shares profile ${n:-default} added at $alias are this profile's to refresh"
+  done
+}
+
+cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alias]: setup <host> --r2 on the origin; every read and refusal before the first write; a rerun converges
+  local bucket=$1 sdef=$2 force=$3 alias=${4:-} worker="share-${host_name//./-}" dataset="share_${host_name//[.-]/_}" calias
+  calias="$(cfg aliases || true)"; alias="${alias:-$calias}"   # a rerun without --alias keeps the folded alias, so the redeploy keeps ALIASES
+  if [[ -n $alias ]]; then   # step 1: one alias, another hostname
+    if [[ $alias == "$host_name" ]] || ! hostname_ok "$alias"; then die "--alias needs another hostname, not '$alias'; nothing was changed"; fi
+    [[ -z $calias || $calias == "$alias" ]] || die "$host_name already folds $calias; one alias per tenant; nothing was changed"
+  fi
   [[ $bucket =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] || die "bad bucket name '$bucket' (3-63 chars of a-z 0-9 -; no leading or trailing -)"
   [[ $dataset =~ ^[a-z0-9_]+$ ]] || die "bad hostname '$host_name' for a dataset name"
   local cur; cur="$(cfg bucket || true)"
@@ -3367,6 +3483,7 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force>: setu
   [[ $tunnel == 0 ]] || running || die "$host_name is not serving on this machine; '$me start', then rerun; nothing was changed"
   sdef="${sdef:-$(cfg storage_default || true)}"; sdef="${sdef:-local}"
   tenant_admin "$bucket"
+  [[ -z $alias || $alias == *".$zone_name" ]] || die "--alias $alias is not in zone $zone_name, where the tenant Worker lives; nothing was changed"
 
   # step 2: only an admin token reads the Worker's settings
   local first=0 dep_v=0 dep_sha="" dep_team="" dep_pass="" dep_aliases=""
@@ -3393,7 +3510,7 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force>: setu
   fi
 
   # step 3, SPEC-007 step 5: a private bucket, empty or holding this host's marker
-  local bucket_new=0 marker=""
+  local bucket_new=0 marker="" marker_etag=""
   r2_api GET "/accounts/$acct/r2/buckets/$bucket"
   case $cf_code in
     404) bucket_new=1 ;;
@@ -3409,14 +3526,32 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force>: setu
       local has_objects=0; [[ $cf_body == *"<Key>"* ]] && has_objects=1
       r2_call GET share.json
       case $cf_code in
-        200) marker="$cf_body"
-          jq -e --arg h "$host_name" '.v == 1 and .host == $h' <<<"$marker" >/dev/null 2>&1 ||
-            die "bucket $bucket's share.json names another hostname; refused, nothing was changed" ;;
+        200) marker="$cf_body" marker_etag=$r2_etag   # the fold: a marker naming the alias is the alias's bucket, adopted in place
+          jq -e --arg h "$host_name" --arg a "$alias" '.v == 1 and (.host == $h or ($a != "" and .host == $a))
+            and ((.aliases // []) - [$a] | length == 0)' <<<"$marker" >/dev/null 2>&1 ||
+            die "bucket $bucket's share.json names another hostname or alias; refused, nothing was changed" ;;
         404) [[ $has_objects == 0 ]] || die "bucket $bucket holds objects and no share.json; it is not a share bucket; refused, nothing was changed" ;;
         *) die "reading $bucket/share.json answered HTTP $cf_code; nothing was changed" ;;
       esac ;;
     *) die "reading bucket $bucket answered HTTP $cf_code (the token needs Workers R2 Storage: Edit); nothing was changed" ;;
   esac
+
+  # step 4: the alias's custom domain is its own share Worker on this bucket, or this one's after an earlier fold
+  local alias_svc=""
+  if [[ -n $alias ]]; then
+    local aw="share-${alias//./-}"
+    r2_api GET "/accounts/$acct/workers/domains?hostname=$alias"
+    [[ $cf_code == 200 ]] || die "reading Worker custom domains answered HTTP $cf_code; nothing was changed"
+    alias_svc="$(jq -r --arg h "$alias" '[.result[]? | select(.hostname == $h) | .service] | first // empty' <<<"$cf_body")"
+    if [[ -n $alias_svc && $alias_svc != "$worker" ]]; then
+      [[ $alias_svc == "$aw" ]] || die "$alias is the custom domain of Worker $alias_svc, not $aw; refused, nothing was changed"
+      r2_api GET "/accounts/$acct/workers/scripts/$aw/settings"
+      [[ $cf_code == 200 ]] || cf_body='{}'
+      jq -e --arg h "$alias" --arg b "$bucket" '.result.bindings as $bs
+        | ($bs | any(.name == "HOST" and .text == $h)) and ($bs | any(.name == "BUCKET" and .bucket_name == $b))' <<<"$cf_body" >/dev/null 2>&1 ||
+        die "Worker $aw is not share's Worker for $alias on bucket $bucket (HTTP $cf_code, or its bindings differ); refused, nothing was changed"
+    fi
+  fi
 
   # step 5: no route of another script on this host
   tenant_route "$worker"
@@ -3443,6 +3578,8 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force>: setu
     done
     [[ -z $clash ]] || die "local links $clash share an id with a record in bucket $bucket (a cloud link); rm one of each pair, then rerun; nothing was changed"
   fi
+  fold_apps="" fold_late=""
+  [[ -z $alias || $bucket_new == 1 ]] || alias_scan strict   # step 7: every gated cloud link's app is the alias's (or this host's after a fold)
 
   # writes. A new bucket gets its marker before any pointer, so a die below leaves a bucket that names this host
   if [[ $bucket_new == 1 ]]; then
@@ -3453,15 +3590,18 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force>: setu
     local mf; mf="$(mktemp "$root/.marker.XXXXXX")"
     printf '{"v":1,"host":"%s"}\n' "$host_name" >"$mf"
     r2_call PUT share.json "$mf" -H 'If-None-Match: *'
-    rm -f "$mf"
-    [[ $cf_code == 200 || $cf_code == 412 ]] || die "writing $bucket/share.json answered HTTP $cf_code"
+    [[ $cf_code == 200 || $cf_code == 412 ]] || { rm -f "$mf"; die "writing $bucket/share.json answered HTTP $cf_code"; }
     if [[ $cf_code == 412 ]]; then
       r2_call GET share.json
-      jq -e --arg h "$host_name" '.v == 1 and .host == $h' <<<"$cf_body" >/dev/null 2>&1 || die "bucket $bucket's share.json names another hostname"
+      jq -e --arg h "$host_name" '.v == 1 and .host == $h' <<<"$cf_body" >/dev/null 2>&1 || { rm -f "$mf"; die "bucket $bucket's share.json names another hostname"; }
+      marker="$cf_body" marker_etag=$r2_etag
+    else
+      marker="$(cat "$mf")" marker_etag=$r2_etag
     fi
+    rm -f "$mf"
   fi
   # step 8: the Worker with PASS and ALIASES, workers.dev off
-  r2_pass=1 r2_aliases=""
+  r2_pass=1 r2_aliases="$alias"
   if [[ $first == 1 || $dep_v != "$WORKER_VERSION" || $dep_sha != "$WORKER_SHA" || $dep_team != "$team" || $dep_pass != 1 || $dep_aliases != "$r2_aliases" ]]; then
     r2_deploy "$worker" "$team" "$dataset" "$first"
     echo "worker:     $worker $WORKER_VERSION $WORKER_SHA deployed (passes misses to the tunnel)"
@@ -3475,7 +3615,8 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force>: setu
     die "$worker's workers.dev route still reads on; no route exists yet, nothing is exposed; rerun setup"
 
   # step 9: a pointer for every local row; one that holds this origin's pointer already is done
-  local n=0
+  local n=0 ptr_hint=""
+  [[ -z $alias ]] || ptr_hint=" (or DELETE the v:2 pointers written so far: an older member sweep cannot read them)"
   for id in $ids; do
     grep -q "^$id"$'\t' <<<"${r2_machine:-}" && continue
     local name src date exp opts t
@@ -3484,42 +3625,88 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force>: setu
     r2_pointer_write "$id" "$name" "$t" "$exp" "$opts" "$(opt_val access "$opts" || true)" "$date"
     case $cf_code in
       200) n=$((n + 1)) ;;
-      412) die "another publisher took id $id in bucket $bucket during setup; the route is not attached; rm one of them, then rerun" ;;
-      *) die "writing the pointer m/$id answered HTTP $cf_code; the route is not attached; rerun the same setup" ;;
+      412) die "another publisher took id $id in bucket $bucket during setup; the route is not attached; rm one of them, then rerun$ptr_hint" ;;
+      *) die "writing the pointer m/$id answered HTTP $cf_code; the route is not attached; rerun the same setup$ptr_hint" ;;
     esac
   done
   echo "pointers:   $n written"
 
-  # step 11: the config, before the route, so every later die leaves a state --no-r2 and a rerun can read
-  tenant_config "$bucket" "$r2_endpoint" "$sdef" ""
+  # step 10: each folded app gains this host's destinations (AUD kept); Access must enforce there before anything points visitors at it
+  if [[ -n $fold_apps ]]; then
+    alias_dests add || { alias_dests undo || true; die "moving the Access apps to $host_name answered HTTP $cf_code; the added destinations were removed; the route is not attached; rerun the same setup (or DELETE the v:2 pointers written so far)"; }
+    local gid gaud
+    while read -r gid gaud; do
+      [[ -n $gid ]] || continue
+      access_gate "$gid" "$gaud" || { alias_dests undo || true; die "Cloudflare Access did not enforce on $host_name/$gid within ${access_wait}s; the added destinations were removed; the route is not attached; rerun the same setup (or DELETE the v:2 pointers written so far)"; }
+    done <<<"$alias_moved"
+    echo "access:     $(grep -c . <<<"$fold_apps") gated link(s) also gated at $host_name"
+  fi
+
+  # step 11: the config, before the marker and the route, so every later die leaves a state a rerun and the rollback can read
+  tenant_config "$bucket" "$r2_endpoint" "$sdef" "$alias"
   lock_release index
+
+  # step 12: the marker names this host and its alias, written only over the copy read above
+  if [[ -n $alias ]]; then
+    local want; want="{\"v\":1,\"host\":\"$host_name\",\"aliases\":[\"$alias\"]}"
+    if [[ "$(jq -c . <<<"${marker:-null}" 2>/dev/null)" != "$want" ]]; then
+      local mf2; mf2="$(mktemp "$root/.marker.XXXXXX")"; printf '%s\n' "$want" >"$mf2"
+      if [[ -n $marker ]]; then r2_call PUT share.json "$mf2" -H "If-Match: \"$marker_etag\""; else r2_call PUT share.json "$mf2"; fi
+      rm -f "$mf2"
+      [[ $cf_code == 200 ]] || tenant_die "writing $bucket/share.json answered HTTP $cf_code (412: it changed since it was read)"
+    fi
+  fi
 
   # step 13: the route; fail open at a request limit (a drop to the free plan) keeps machine links up
   local body="{\"pattern\":\"$host_name/*\",\"script\":\"$worker\",\"request_limit_fail_open\":true}"
   if [[ -z $route_id ]]; then
     r2_api POST "/zones/$zone_id/workers/routes" "$body"
-    [[ $cf_code == 200 ]] || die "attaching the route $host_name/* answered HTTP $cf_code; links still serve from the tunnel; roll back with: $me setup $host_name --no-r2"
+    [[ $cf_code == 200 ]] || tenant_die "attaching the route $host_name/* answered HTTP $cf_code; links still serve from the tunnel"
     echo "route:      $host_name/* -> $worker"
   elif [[ $route_open != true ]]; then
     r2_api PUT "/zones/$zone_id/workers/routes/$route_id" "$body"
-    [[ $cf_code == 200 ]] || die "setting the route $host_name/* to fail open answered HTTP $cf_code; roll back with: $me setup $host_name --no-r2"
+    [[ $cf_code == 200 ]] || tenant_die "setting the route $host_name/* to fail open answered HTTP $cf_code"
     echo "route:      $host_name/* -> $worker (now fails open)"
   else
     echo "route:      $host_name/* -> $worker already attached"
   fi
 
-  # step 15: both legs, then a probe file through the tunnel leg
+  # step 14: the alias's custom domain moves to this Worker in place (the plain PUT refuses a bound name)
+  if [[ -n $alias && $alias_svc != "$worker" ]]; then
+    r2_api PUT "/accounts/$acct/workers/domains" "{\"hostname\":\"$alias\",\"service\":\"$worker\",\"zone_id\":\"$zone_id\",\"environment\":\"production\",\"override_existing_origin\":true}"
+    [[ $cf_code == 200 ]] || tenant_die "binding $alias to $worker answered HTTP $cf_code; ${alias_svc:-no Worker} still serves it"
+    echo "alias:      $alias -> $worker (answers 301 to $host_name)"
+  fi
+
+  # step 15: both legs, then a probe file through the tunnel leg, then the alias's 301
   r2_wait_healthz tenant
   if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then echo "TUNNEL-PROBE" >>"$root/r2-calls.log"
-  else live_check 60 "$host_name" || die "a probe file did not answer through https://$host_name/ three times in a row; the tunnel leg is down; roll back with: $me setup $host_name --no-r2"; fi
-  echo "ready:      R2 is on for https://$host_name/ (bucket $bucket, storage default $sdef). Store this origin's publisher token: $me api-token"
+  else live_check 60 "$host_name" || tenant_die "a probe file did not answer through https://$host_name/ three times in a row; the tunnel leg is down"; fi
+  [[ -z $alias ]] || alias_wait_301 || tenant_die "https://$alias/healthz did not answer 301 to https://$host_name/healthz three times in a row within ${SHARE_R2_WAIT:-300}s"
+
+  # step 16: the folded apps drop the alias's destinations; this profile takes over the alias profile's own shares
+  if [[ -n $alias ]]; then
+    alias_dests drop || die "dropping $alias from the folded Access apps answered HTTP $cf_code; the fold serves; rerun the same setup to finish"
+    alias_own_handoff
+  fi
+  echo "ready:      R2 is on for https://$host_name/ (bucket $bucket, storage default $sdef${alias:+, $alias redirects here}). Store this origin's publisher token: $me api-token"
 }
 
 cmd_setup_no_r2() { # cmd_setup_no_r2: the rollback without an alias: the route goes, then the four config keys; the bucket, records, and Worker stay
   local bucket worker="share-${host_name//./-}"
   bucket="$(cfg bucket || true)"
-  [[ -z "$(cfg aliases || true)" ]] || die "$(cfg aliases) redirects here; run the alias rollback first; nothing was changed"
+  local alias; alias="$(cfg aliases || true)"
   tenant_admin "${bucket:-none}"
+  if [[ -z $alias && -n $bucket ]]; then   # the marker's aliases count too: a 301 landing on a plain tunnel turns every folded cloud link into a 404
+    r2_call GET share.json
+    [[ $cf_code == 200 ]] && alias="$(jq -r '(.aliases // []) | join(",")' <<<"$cf_body" 2>/dev/null || true)"
+  fi
+  if [[ -n $alias ]]; then
+    fold_apps="" fold_late=""
+    r2_read; alias_scan list
+    alias_rollback
+    die "$alias redirects here; run the alias rollback above first; nothing was changed"
+  fi
   tenant_route "$worker"
   if [[ -n $route_id ]]; then
     r2_api DELETE "/zones/$zone_id/workers/routes/$route_id"
@@ -3620,6 +3807,12 @@ cmd_setup_r2() { # cmd_setup_r2 <force> <bucket> <tname> <login> <service> <quic
 
   if [[ $role == join ]]; then   # join writes nothing on Cloudflare: the live check, then the local config
     r2_wait_healthz join
+    local alias
+    r2_join_aliases=""   # read once from the marker (any publisher can write it), kept only when the alias really answers 301 here
+    for alias in $(jq -r '(.aliases // [])[] | strings' <<<"${marker:-null}" 2>/dev/null || true); do
+      if hostname_ok "$alias" && alias_wait_301; then r2_join_aliases+="${r2_join_aliases:+,}$alias"
+      else echo "alias $alias: the marker names it, but https://$alias/healthz does not answer 301 here; not kept"; fi
+    done
     if [[ $hz_pair != "$WORKER_VERSION $WORKER_SHA" && -n $hz_tunnel ]]; then   # a tenant Worker: only its origin redeploys it
       echo "the Worker at $host_name runs $hz_pair; this share ships $WORKER_VERSION $WORKER_SHA; whoever holds the admin token runs '$me setup $host_name --r2 --bucket $bucket' on the tenant's origin"
     elif [[ $hz_pair != "$WORKER_VERSION $WORKER_SHA" ]]; then
@@ -3697,9 +3890,9 @@ cmd_setup_r2() { # cmd_setup_r2 <force> <bucket> <tname> <login> <service> <quic
   echo "ready:      https://$host_name/ serves from bucket $bucket. Next: $me add <file|dir>"
 }
 
-tusage="usage: share setup <hostname> --r2 --bucket <name> [--storage-default local|cloud] | share setup <hostname> --no-r2"
+tusage="usage: share setup <hostname> --r2 --bucket <name> [--storage-default local|cloud] [--alias <old-host>] | share setup <hostname> --no-r2"
 cmd_setup() {
-  local tunnel_name="" force=0 service=1 login=0 quick_setup=0 had_host_arg=0 backend_arg="" bucket="" r2flag="" sdef=""
+  local tunnel_name="" force=0 service=1 login=0 quick_setup=0 had_host_arg=0 backend_arg="" bucket="" r2flag="" sdef="" alias_arg=""
   [[ -n ${1:-} && ${1:-} != --* ]] && { host_name="$1"; had_host_arg=1; shift; }
   while [[ $# -gt 0 ]]; do
     case $1 in
@@ -3712,6 +3905,7 @@ cmd_setup() {
       --bucket) bucket="${2:-}"; shift 2 ;;
       --r2|--no-r2) [[ -z $r2flag ]] || die "$tusage"; r2flag="$1"; shift ;;
       --storage-default) sdef="${2:-}"; shift 2 ;;
+      --alias) alias_arg="${2:-}"; [[ -n $alias_arg ]] || die "$tusage"; shift 2 ;;
       *) die "usage: share setup [hostname] [--tunnel-name N] [--force] [--no-service] [--login] [--backend tunnel|r2 --bucket <name>] | share setup --quick [--no-service] | $tusage" ;;
     esac
   done
@@ -3719,14 +3913,14 @@ cmd_setup() {
     [[ $had_host_arg == 1 && -z $backend_arg && -z $tunnel_name && $service == 1 && $login == 0 && $quick_setup == 0 ]] || die "$tusage"
     if [[ $r2flag == --r2 ]]; then
       [[ -n $bucket && ( -z $sdef || $sdef == local || $sdef == cloud ) ]] || die "$tusage"
-      cmd_setup_tenant "$bucket" "$sdef" "$force"
+      cmd_setup_tenant "$bucket" "$sdef" "$force" "$alias_arg"
     else
-      [[ -z $bucket && -z $sdef && $force == 0 ]] || die "$tusage"
+      [[ -z $bucket && -z $sdef && $force == 0 && -z $alias_arg ]] || die "$tusage"
       cmd_setup_no_r2
     fi
     return
   fi
-  [[ -z $sdef ]] || die "--storage-default needs --r2"
+  [[ -z $sdef && -z $alias_arg ]] || die "--storage-default and --alias need --r2"
   [[ -z $backend_arg || $backend_arg == tunnel || $backend_arg == r2 ]] || die "--backend must be 'tunnel' or 'r2'"
   [[ -z $bucket || $backend_arg == r2 ]] || die "--bucket needs --backend r2"
   if [[ $backend_arg == r2 ]]; then
@@ -4023,8 +4217,8 @@ r2_purge_apps() { # every Access app named "share <6 hex> <host> <8 hex>", read 
   while :; do
     cf_try GET "/accounts/$acct/access/apps?page=$page&per_page=100"
     [[ $cf_code == 200 ]] || die "listing Access apps answered HTTP $cf_code; the Worker, domain, and bucket stay"
-    ids="$ids$(jq -r --arg h "$host_name" '.result[] | (.name | split(" ")) as $w
-      | select(($w | length) == 4 and $w[0] == "share" and ($w[1] | test("^[0-9a-f]{6}$")) and $w[2] == $h and ($w[3] | test("^[0-9a-f]{8}$")))
+    ids="$ids$(jq -r --arg h "$host_name" --arg a "$(cfg aliases || true)" '.result[] | (.name | split(" ")) as $w
+      | select(($w | length) == 4 and $w[0] == "share" and ($w[1] | test("^[0-9a-f]{6}$")) and ([$h] + ($a | split(",")) | index($w[2])) and ($w[3] | test("^[0-9a-f]{8}$")))
       | "\(.id) \($w[1])"' <<<"$cf_body")"$'\n'
     pages="$(jq -r '.result_info.total_pages // 1' <<<"$cf_body")"
     [[ $page -lt $pages ]] || break

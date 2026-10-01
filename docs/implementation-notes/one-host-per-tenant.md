@@ -160,3 +160,19 @@ Deviations from the spec, per task. A task with none is not listed.
 - SPEC-007's admin path now reads `zones/<z>/workers/routes` before its DNS read; a 403 there passes (round-3 rule), any other non-200 dies. A member purge refuses a Worker that binds `PASS="1"` (round-2 rule). The origin-side purge of a tenant (route, pointers, records, script, bucket) is not built.
 - Round-3 rule on a marker field that v0.8.0's admin setup refuses: v0.8.0 checks the marker with one test (`.v == 1 and .host == <host>`) for both roles, so any field that fails its admin path fails its join too. None was added; D1's check that every machine holding the admin token runs the release stays the guard.
 - Dry seam: `zones/<z>/workers/routes` GET, POST, PUT, DELETE on `.cf/routes.json`; `SHARE_R2_DRY_ROUTES=deny` answers 403; the dry `/healthz` answers through a route as well as a custom domain and adds `x-share-tunnel: 1` for a `PASS` Worker.
+
+### TASK-5 (--alias, the alias rollback list)
+
+- One alias per tenant. A rerun without `--alias` takes the config's `aliases=`, so a redeploy keeps the `ALIASES` binding; a different `--alias` beside a stored one is refused. `--alias` must sit in the tenant's zone (step 14 binds it with that zone's id).
+- Step 3 accepts a marker naming the tenant host or the alias, with `aliases` empty or exactly `[<alias>]` (a rerun after step 12).
+- Step 4 also accepts the alias's domain already bound to the tenant Worker (a rerun after step 14), and no domain at all (step 14 creates it).
+- Step 7 checks Apps Edit (the `{}` probe) only when a gated cloud record exists. An app named `share <id> <host> <nonce>` is not refused: it is a gated cloud link added on the tenant after an earlier fold. Its id is listed in the rollback list as added since the fold.
+- Step 10 runs inside the index lock (step 6 to step 11), so a concurrent add can wait out `access_gate`. Only apps whose PUT changed something are probed; a rerun probes nothing.
+- Step 12 writes the marker with `If-Match` on the ETag read in step 3. On a fresh bucket the early `{"v":1,"host"}` marker's ETag is kept for it.
+- Step 15 waits for three 301 answers in a row, like the other live checks. The step-15 and step-13 dies and the healthz die go through `tenant_die`, which prints the alias list when an alias is folded and `--no-r2` otherwise.
+- Step 16 copies the alias profile's `r2-own` lines into this profile's file and leaves the alias profile's own file in place (nothing deleted; D4's teardown removes it).
+- The rollback list puts the app destinations first, then the rebind (the round-2 rule), unlike the spec's D3 prose order. It names every cloud id (they answer at the alias again, not at the tenant host) and, apart, the gated ones added since the fold (no app on the alias). It is a list of exact calls, not a command: R1 runs it by hand, and row 30 applies it to the dry account in the suite.
+- `--no-r2` now resolves the admin token and reads the marker before its alias refusal, so the refusal can print the list (a marker with `aliases` refuses too).
+- A member's join reads the marker's `aliases` once and keeps each one only after `https://<alias>/healthz` answers 301 to the tenant three times; it stores them as `aliases=` in its r2 config. `access_delete` and the purge's by-name pass accept an app named for the host or any stored alias.
+- Dry seams: `SHARE_R2_DRY_FAIL` (`API <METHOD> <path glob>`, `PUT <key>`, or `ALIAS-301`) fails one call with no state change; `.cf/script-<worker>.json` answers the settings of a second Worker; the Access dry answers `PUT access/apps/<uuid>`; the dry alias answers 301 once its domain names the tenant Worker and that Worker binds it.
+

@@ -3137,6 +3137,122 @@ s_fresh; : >"$slog"; out=$(SHARE_R2_DRY_ROUTES=deny r2s 2>&1); rc=$?
 check "row 32: a 403 on the routes read alone is tolerated" "0 1" "$rc $(grep -c '^API GET /zones/zone-dry/workers/routes$' "$slog")"
 s_fresh; rm -f "$s2conf"
 
+echo "=== tenant: setup --r2 --alias folds an r2 hostname in, and its rollback list (rows 14, 30) ==="
+fu1="00000000-0000-4000-8000-0000000c0001"; fu2="00000000-0000-4000-8000-0000000c0002"; faud1="$(printf 'c1' | shasum -a 256 | cut -c1-64)"; faud2="$(printf 'c2' | shasum -a 256 | cut -c1-64)"
+afold() { tv setup ten.example.test --r2 --bucket ok-bucket --alias f.example.test; }
+afresh() { # vfresh, then the bucket is the alias's: its marker, its Worker on its custom domain, two gated cloud links whose apps are named for it, and the alias's own r2 profile here
+  vfresh
+  printf '{"v":1,"host":"f.example.test"}\n' >"$DRYV/share.json"
+  echo dwarves.cloudflareaccess.com >"$DRYV/.cf/team"
+  printf '{"hostname":"f.example.test","service":"share-f-example-test"}\n' >"$DRYV/.cf/domain.json"
+  jq -nc '{bindings: [{type: "r2_bucket", name: "BUCKET", bucket_name: "ok-bucket"}, {type: "plain_text", name: "HOST", text: "f.example.test"}, {type: "plain_text", name: "VERSION", text: "2"}]}' >"$DRYV/.cf/script-share-f-example-test.json"
+  mkdir -p "$vroot/.access-dry" "$DRYV/o/0c0001.0000000c" "$DRYV/o/0c0002.0000000d"
+  local i u a n
+  for i in 1 2; do
+    if [[ $i == 1 ]]; then u=$fu1 a=$faud1 n=0000000c; else u=$fu2 a=$faud2 n=0000000d; fi
+    printf 'g\n' >"$DRYV/o/0c000$i.$n/g.txt"
+    jq -nc --arg id "0c000$i" --arg u "$u" --arg a "$a" --arg n "$n" '{v: 1, id: $id, name: "g.txt", src: "/m/g.txt", added: "2026-10-01", expires: 0,
+      opts: "access=\($u) access_rule=email:a@example.test", prefix: "o/\($id).\($n)/", by: "files-host", aud: $a}' >"$DRYV/m/0c000$i"
+    jq -nc --arg id "0c000$i" --arg u "$u" --arg a "$a" --arg n "$n" '{id: $u, aud: $a, name: "share \($id) f.example.test \($n)", type: "self_hosted",
+      destinations: [{type: "public", uri: "f.example.test/\($id)"}, {type: "public", uri: "f.example.test/\($id)/*"}], app_launcher_visible: false,
+      session_duration: "24h", policies: [{name: "share \($id)", decision: "allow", include: [{email: {email: "a@example.test"}}], precedence: 1}]}' >"$vroot/.access-dry/$u.json"
+  done
+  mkdir -p "$T5H/.config/share/profiles/f" "$T5H/share/profiles/f"
+  printf 'backend=r2\nhostname=f.example.test\nzone=example.test\nbucket=ok-bucket\nport=r2\n' >"$T5H/.config/share/profiles/f/config"
+  printf '0c0001\to/0c0001.0000000c/\t/m/g.txt\n' >"$T5H/share/profiles/f/r2-own"
+  : >"$vlog"
+}
+adests() { jq -r '[.destinations[].uri] | join(" ")' "$vroot/.access-dry/$1.json" 2>/dev/null; }
+aend() { # the end state of a finished fold, one line
+  echo "$(jq -c . "$DRYV/share.json") $(jq -r .service "$DRYV/.cf/domain.json") $(grep '^aliases=' "$vconf") $(jq -r '.bindings[] | select(.name == "ALIASES") | .text' "$DRYV/.cf/script.json") | $(adests $fu1) | $(adests $fu2) | $(jq -r '"\(.aud) \(.app_launcher_visible) \(.name)"' "$vroot/.access-dry/$fu1.json")"
+}
+row14end="{\"v\":1,\"host\":\"ten.example.test\",\"aliases\":[\"f.example.test\"]} share-ten-example-test aliases=f.example.test f.example.test | ten.example.test/0c0001 ten.example.test/0c0001/* | ten.example.test/0c0002 ten.example.test/0c0002/* | $faud1 false share 0c0001 f.example.test 0000000c"
+afresh
+out=$(afold 2>&1); rc=$?
+check "row 14: the fold exits 0" "0" "$rc"
+check "row 14: the call order" "1" "$(vord "^GET app $fu1\$" '^API PUT /accounts/acct-dry/workers/scripts/share-ten-example-test$' '^PUT m/0a000' "^PUT app $fu1\$" '^PROBE ' '^CONFIG r2 on$' \
+  '^PUT share.json$' '^API POST /zones/zone-dry/workers/routes$' '^API PUT /accounts/acct-dry/workers/domains$' '^HEALTHZ$' '^ALIAS-301 f.example.test$')"
+check "row 14: the alias destinations are dropped last, after the 301" "1" "$([[ $(grep -n "^PUT app $fu1\$" "$vlog" | tail -1 | cut -d: -f1) -gt $(grep -n '^ALIAS-301' "$vlog" | tail -1 | cut -d: -f1) ]] && echo 1 || echo 0)"
+check "row 14: marker, domain, config, ALIASES, both apps on the tenant host, AUD and fields kept" "$row14end" "$(aend)"
+check "row 14: the alias profile's own shares are this profile's to refresh" "1" "$(grep -c '^0c0001	o/0c0001.0000000c/	/m/g.txt$' "$vroot/r2-own")"
+check "row 14: the member's ungated cloud link is untouched" "1 member" "$(jq -r '"\(.v) \(.by)"' "$DRYV/m/0b0001")"
+: >"$vlog"; out=$(afold 2>&1); rc=$?
+check "row 14: a rerun converges with no write but the idempotent workers.dev off" "0 0 $row14end" "$rc $(grep -E '^(API (PUT|POST|DELETE) |PUT |DELETE |PUT app)' "$vlog" | grep -cv '/subdomain$') $(aend)"
+: >"$vlog"; out=$(tv rm 0c0001 2>&1); rc=$?
+check "row 14: rm of a folded gated link on the tenant deletes its app" "0 1 0 0" "$rc $(grep -c "^DELETE app $fu1\$" "$vlog") $([[ -f $vroot/.access-dry/$fu1.json ]] && echo 1 || echo 0) $([[ -f $DRYV/m/0c0001 ]] && echo 1 || echo 0)"
+# a member joining after the fold keeps the alias the 301 confirms, and its rm of a folded link deletes the app too
+rm -rf "$TVM"; mkdir -p "$TVM"
+TVM_ENV=(SHARE_R2_DRY_ROLE=deny SHARE_R2_DRY_BUCKETDOM=deny)
+out=$(tvm setup ten.example.test --backend r2 --bucket ok-bucket 2>&1); rc=$?
+check "row 14 (member): the join keeps the alias the 301 confirms" "0 aliases=f.example.test 0" "$rc $(grep '^aliases=' "$TVM/.config/share/profiles/ten/config") $(grep -c 'not kept' <<<"$out")"
+mkdir -p "$TVM/share/profiles/ten/.access-dry"; cp "$vroot/.access-dry/$fu2.json" "$TVM/share/profiles/ten/.access-dry/"
+TVM_ENV=(SHARE_ACCESS_DRY=1 SHARE_ACCESS_POLL=0 SHARE_R2_TOKEN=drytoken); : >"$TVM/share/profiles/ten/r2-calls.log"
+out=$(tvm rm 0c0002 2>&1); rc=$?
+check "row 14 (member): rm of a folded gated link deletes its app" "0 1 0" "$rc $(grep -c "^DELETE app $fu2\$" "$TVM/share/profiles/ten/r2-calls.log") $([[ -f $TVM/share/profiles/ten/.access-dry/$fu2.json ]] && echo 1 || echo 0)"
+TVM_ENV=()
+printf '{"v":1,"host":"ten.example.test","aliases":["g.example.test"]}\n' >"$DRYV/share.json"; rm -rf "$TVM"; mkdir -p "$TVM"
+TVM_ENV=(SHARE_R2_DRY_ROLE=deny SHARE_R2_DRY_BUCKETDOM=deny)
+out=$(tvm setup ten.example.test --backend r2 --bucket ok-bucket 2>&1); rc=$?
+check "row 14 (member): a marker alias that does not 301 here is not kept" "0 0 1" "$rc $(grep -c '^aliases=' "$TVM/.config/share/profiles/ten/config") $(grep -c 'alias g.example.test: .* not kept' <<<"$out")"
+TVM_ENV=()
+# refusals, each before any write
+arefuse() { # arefuse <label> <message> <alias> <env...>
+  local label=$1 msg=$2 al=$3; shift 3
+  : >"$vlog"
+  # shellcheck disable=SC2163 # each argument is a NAME=value pair to export, on purpose
+  out=$(export "$@"; tv setup ten.example.test --r2 --bucket ok-bucket --alias "$al" 2>&1); rc=$?
+  check "row 14: $label is refused before any write" "1 1 0" "$rc $(grep -c -- "$msg" <<<"$out") $(vwrites)"
+}
+afresh
+arefuse "--alias equal to the host" "--alias needs another hostname, not 'ten.example.test'" ten.example.test X=1
+arefuse "--alias that is not a hostname" "--alias needs another hostname" 'f_x' X=1
+arefuse "--alias in another zone" "--alias f.other.test is not in zone example.test" f.other.test X=1
+printf '{"hostname":"f.example.test","service":"other-worker"}\n' >"$DRYV/.cf/domain.json"
+arefuse "the alias domain naming another service" "f.example.test is the custom domain of Worker other-worker, not share-f-example-test" f.example.test X=1
+printf '{"hostname":"f.example.test","service":"share-f-example-test"}\n' >"$DRYV/.cf/domain.json"
+jq -c '.name = "share 0c0001 third.example.test 0000000c"' "$vroot/.access-dry/$fu1.json" >"$WORK/app.tmp" && mv -f "$WORK/app.tmp" "$vroot/.access-dry/$fu1.json"
+arefuse "a gated app named for a third host" "named 'share 0c0001 third.example.test 0000000c', not 'share 0c0001 f.example.test <nonce>'" f.example.test X=1
+afresh
+arefuse "a token without Access Apps Edit" "the token lacks Access: Apps and Policies Edit" f.example.test SHARE_ACCESS_DRY_APPS=deny
+# the gate probe fails: the added destinations go again, no marker, no route, no config
+afresh; printf 'fail\n' >"$vroot/access-probe-fixture"
+out=$(SHARE_ACCESS_WAIT=1 afold 2>&1); rc=$?
+check "row 14: a probe timeout dies naming Access" "1 1" "$rc $(grep -c 'Cloudflare Access did not enforce on ten.example.test/0c000[12]' <<<"$out")"
+check "row 14: probe timeout: the added destinations removed, no marker PUT, no route, no config" "f.example.test/0c0001 f.example.test/0c0001/* 0 0 0 0" \
+  "$(adests $fu1) $(grep -c '^PUT share.json$' "$vlog") $(grep -c '^API POST /zones/' "$vlog") $(grep -c '^CONFIG' "$vlog") $(grep -c '^aliases=' "$vconf")"
+rm -f "$vroot/access-probe-fixture"
+# row 30: a die at steps 12 to 15 prints the alias rollback list, --no-r2 refuses, a rerun converges
+for inj in "PUT share.json" "API POST /zones/*/workers/routes" "API PUT /accounts/*/workers/domains" "ALIAS-301"; do
+  afresh
+  out=$(SHARE_R2_DRY_FAIL="$inj" afold 2>&1); rc=$?
+  check "row 30 ($inj): the die prints the alias rollback list, not --no-r2 alone" "1 1 1 1 0" "$rc $(grep -c '^alias rollback for f.example.test, in this order' <<<"$out") \
+$(grep -c '^  6. share --profile ten setup ten.example.test --no-r2$' <<<"$out") $(grep -c 'roll back with the alias rollback list above' <<<"$out") $(grep -c 'roll back with: share' <<<"$out")"
+  : >"$vlog"; out=$(tv setup ten.example.test --no-r2 2>&1); rc=$?
+  check "row 30 ($inj): --no-r2 refuses with the list while the alias is set" "1 1 1 0" "$rc $(grep -c '^share: f.example.test redirects here; run the alias rollback above first' <<<"$out") $(grep -c '^alias rollback for f.example.test' <<<"$out") $(vwrites)"
+  [[ $inj == ALIAS-301 ]] && break
+  out=$(afold 2>&1); rc=$?
+  check "row 30 ($inj): a rerun converges to row 14's end state" "0 $row14end" "$rc $(aend)"
+done
+check "row 30: the list names the folded apps, the rebind, the marker, and every pointer" "1 1 1 1" \
+  "$(grep -c "^  1\. .*: $fu1 (0c0001), $fu2 (0c0002)\$" <<<"$out") $(grep -c '^  2\. PUT /accounts/acct-dry/workers/domains {"hostname":"f.example.test","service":"share-f-example-test","zone_id":"zone-dry","environment":"production","override_existing_origin":true}$' <<<"$out") \
+$(grep -c '^  3\. PUT share.json in bucket ok-bucket with If-Match on its ETag: {"v":1,"host":"f.example.test"}$' <<<"$out") $(grep -c '^  5\. DELETE every v:2 machine record: m/0a0001 m/0a0002 m/0a0003 $' <<<"$out")"
+# run the printed list on the dry account, in its order
+for u in $fu1 $fu2; do jq -c --arg i "$(jq -r '.name | split(" ")[1]' "$vroot/.access-dry/$u.json")" '.destinations = ([.destinations[] | select(.uri | startswith("f.example.test/") | not)] + [{type: "public", uri: "f.example.test/\($i)"}, {type: "public", uri: "f.example.test/\($i)/*"}])' "$vroot/.access-dry/$u.json" >"$WORK/app.tmp" && mv -f "$WORK/app.tmp" "$vroot/.access-dry/$u.json"; done
+printf '{"hostname":"f.example.test","service":"share-f-example-test"}\n' >"$DRYV/.cf/domain.json"
+printf '{"v":1,"host":"f.example.test"}\n' >"$DRYV/share.json"
+grep -v '^aliases=' "$vconf" >"$WORK/vconf.tmp"; cat "$WORK/vconf.tmp" >"$vconf"
+rm -f "$DRYV/m/0a0001" "$DRYV/m/0a0002" "$DRYV/m/0a0003"
+: >"$vlog"; out=$(tv setup ten.example.test --no-r2 2>&1); rc=$?
+check "row 30: after the list, --no-r2 removes the route" "0 1 0" "$rc $(grep -c '^API DELETE /zones/zone-dry/workers/routes/' "$vlog") $(jq length "$DRYV/.cf/routes.json")"
+check "row 30: after the list, the alias's own Worker serves its cloud records again" "share-f-example-test f.example.test ok-bucket f.example.test 1 1" \
+  "$(jq -r .service "$DRYV/.cf/domain.json") $(jq -r '[(.bindings[] | select(.name == "HOST") | .text), (.bindings[] | select(.name == "BUCKET") | .bucket_name)] | join(" ")' "$DRYV/.cf/script-share-f-example-test.json") $(jq -r .host "$DRYV/share.json") $(jq -r .v "$DRYV/m/0c0001") $(grep -c f.example.test/0c0001 "$vroot/.access-dry/$fu1.json")"
+: >"$vlog"; out=$(afold 2>&1); rc=$?
+check "row 30: the fold again converges to row 14's end state" "0 $row14end" "$rc $(aend)"
+# without an alias the step-15 die names --no-r2
+vfresh; out=$(SHARE_R2_DRY_HEALTHZ=down tvsetup 2>&1); rc=$?
+check "row 30: with no alias the step-15 die names --no-r2" "1 1 0" "$rc $(grep -c 'roll back with: share --profile ten setup ten.example.test --no-r2$' <<<"$out") $(grep -c 'alias rollback' <<<"$out")"
+rm -rf "$T5H/.config/share/profiles/f" "$T5H/share/profiles/f"
+
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then
   wout="$(node "$(dirname "$SH")/../tests/worker.mjs" 2>&1)"; wrc=$?
