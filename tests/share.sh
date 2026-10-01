@@ -3366,6 +3366,85 @@ done
 check "row 28: no forged field reached the shell" "0" "$([[ -e $WORK/l6/S ]] && echo 1 || echo 0)"
 unset SHARE_R2_DRY_LIST_EXTRA
 
+echo "=== import: one share moved in by migrate, its tar on stdin (row 18) ==="
+IMH="$WORK/import-home"; mkdir -p "$IMH" "$WORK/imp"
+imp() { # imp <args...>: share import into the default profile of a HOME with no setup (not_setup), stdin passed through
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS \
+    HOME="$IMH" SHARE_TUNNEL=0 bash "$SH" import "$@"
+}
+iroot="$IMH/share"
+b64() { printf '%s' "$1" | base64 | tr -d '\n'; }
+mktar() { # mktar <out.tar> <type:name[:link]>...: a ustar archive with exactly these members (f file "x", d dir, l symlink, h hardlink), built byte by byte so no tar tidies it
+  node -e '
+    const fs = require("fs"); const out = process.argv[1]; const blocks = [];
+    const oct = (n, w) => n.toString(8).padStart(w - 1, "0") + "\0";
+    for (const spec of process.argv.slice(2)) {
+      const [t, name, link = ""] = spec.split(":"); const body = t === "f" ? Buffer.from("x\n") : Buffer.alloc(0);
+      const h = Buffer.alloc(512); h.write(name, 0); h.write(oct(t === "d" ? 0o755 : 0o644, 8), 100); h.write(oct(0, 8), 108); h.write(oct(0, 8), 116);
+      h.write(oct(body.length, 12), 124); h.write(oct(0, 12), 136); h.write("        ", 148);
+      h.write({f: "0", d: "5", l: "2", h: "1"}[t], 156); h.write(link, 157); h.write("ustar\u000000", 257);
+      let sum = 0; for (const b of h) sum += b; h.write(oct(sum, 7) + " ", 148);
+      blocks.push(h, body, Buffer.alloc((512 - body.length % 512) % 512));
+    }
+    blocks.push(Buffer.alloc(1024)); fs.writeFileSync(out, Buffer.concat(blocks));' "$@"
+}
+inone() { # inone <label> <id> <tar> <name> [opts]: the import is refused, with no pub/<id> and no row
+  local label=$1 id=$2 t=$3 nm=$4 o=${5:-}
+  out=$(imp "$id" 0 air 2026-09-01 "$(b64 "$nm")" "$(b64 "/a/$nm")" "$(b64 "$o")" <"$t" 2>&1); rc=$?
+  check "row 18: $label is refused, no pub/<id>, no row" "1 0 0" "$rc $([[ -e $iroot/pub/$id ]] && echo 1 || echo 0) $(awk -F'\t' -v id="$id" '$1 == id' "$iroot/index.tsv" 2>/dev/null | grep -c .)"
+}
+check "row 18: import --probe" "share-import 1" "$(imp --probe 2>&1)"
+mkdir -p "$WORK/imp/src/doc/sub"; printf 'a\n' >"$WORK/imp/src/doc/a.txt"; printf 'b\n' >"$WORK/imp/src/doc/sub/b.md"
+COPYFILE_DISABLE=1 tar -C "$WORK/imp/src" -cf "$WORK/imp/good.tar" . 2>/dev/null
+iman="$(bash -c 'source <(sed -n "/^import_manifest() {/,/^}/p" "$1"); import_manifest "$2"' _ "$SH" "$WORK/imp/src")"
+out=$(imp 3c0001 1893456000 air 2026-09-01 "$(b64 doc)" "$(b64 /Users/x/doc)" "$(b64 'noindex access=00000000-0000-4000-8000-0000003c0001 access_rule=email:a@example.test')" "$iman" <"$WORK/imp/good.tar" 2>&1); rc=$?
+check "row 18: a regular tree is published with the original dates, by=, and src <by>:<src>" "0 imported 3c0001|3c0001	doc	air:/Users/x/doc	2026-09-01	1893456000	noindex access=00000000-0000-4000-8000-0000003c0001 access_rule=email:a@example.test by=air" \
+  "$rc $out|$(cat "$iroot/index.tsv")"
+check "row 18: the tree is byte for byte the source; no Access app was created" "1 0" "$(diff -r "$WORK/imp/src/doc" "$iroot/pub/3c0001/doc" >/dev/null && echo 1 || echo 0) $(cat "$iroot/access-calls.log" 2>/dev/null | grep -c POST)"
+check "row 18: no spool or stage left" "0" "$(find "$iroot" -maxdepth 1 \( -name '.import.*' -o -name '.stage.*' \) | grep -c .)"
+mktar "$WORK/imp/sym.tar" d:./doc/ f:./doc/a.txt l:./doc/l:/var/empty/target
+inone "a symlink" 3c0002 "$WORK/imp/sym.tar" doc
+mktar "$WORK/imp/hard.tar" d:./doc/ f:./doc/a.txt h:./doc/b.txt:./doc/a.txt
+inone "a sibling hardlink" 3c0003 "$WORK/imp/hard.tar" doc
+mktar "$WORK/imp/hardabs.tar" d:./doc/ h:./doc/b.txt:/var/empty/target
+inone "an absolute hardlink" 3c0004 "$WORK/imp/hardabs.tar" doc
+mktar "$WORK/imp/dot.tar" d:./doc/ f:./doc/a.txt f:./doc/.env
+inone "a dotfile" 3c0005 "$WORK/imp/dot.tar" doc
+mktar "$WORK/imp/up.tar" d:./doc/ f:./doc/../../x
+inone "a ../x member" 3c0006 "$WORK/imp/up.tar" doc
+mktar "$WORK/imp/abs.tar" f:/tmp/share-import-abs-x
+inone "an absolute member" 3c0007 "$WORK/imp/abs.tar" doc
+out=$(imp 3c0001 0 air 2026-09-01 "$(b64 doc)" "$(b64 /a/doc)" "" <"$WORK/imp/good.tar" 2>&1); rc=$?
+check "row 18: an id already in the index is refused, the first import kept" "1 1 1" "$rc $(grep -c '3c0001 is already here' <<<"$out") $(grep -c '^3c0001' "$iroot/index.tsv")"
+inone "opts live" 3c0008 "$WORK/imp/good.tar" doc live
+inone "opts host=x" 3c0009 "$WORK/imp/good.tar" doc host=x.example.test
+inone "a name with /" 3c000a "$WORK/imp/good.tar" doc/x
+inone "a dotfile name" 3c000b "$WORK/imp/good.tar" .doc
+inone "a name the archive does not hold" 3c000c "$WORK/imp/good.tar" other
+inone "an access= without its rule" 3c000d "$WORK/imp/good.tar" doc access=00000000-0000-4000-8000-0000003c000d
+out=$(imp 3c000e 0 air 2026-09-01 "$(b64 doc)" "$(b64 /a/doc)" "" "1:$(printf '%064d' 0)" <"$WORK/imp/good.tar" 2>&1); rc=$?
+check "row 18: a manifest mismatch (a truncated copy) is refused" "1 1 0" "$rc $(grep -c 'arrived as' <<<"$out") $([[ -e $iroot/pub/3c000e ]] && echo 1 || echo 0)"
+out=$(SHARE_IMPORT_MAX_BYTES=1000 imp 3c000f 0 air 2026-09-01 "$(b64 doc)" "$(b64 /a/doc)" "" <"$WORK/imp/good.tar" 2>&1); rc=$?
+check "row 18: an archive over SHARE_IMPORT_MAX_BYTES is refused" "1 1 0" "$rc $(grep -c 'over 1000 bytes' <<<"$out") $([[ -e $iroot/pub/3c000f ]] && echo 1 || echo 0)"
+for bad in "zz0001 0 air 2026-09-01" "3c0010 1e5 air 2026-09-01" "3c0010 0 Air 2026-09-01" "3c0010 0 air 2026-9-1"; do
+  # shellcheck disable=SC2086 # four words on purpose
+  out=$(imp $bad "$(b64 doc)" "$(b64 /a/doc)" "" <"$WORK/imp/good.tar" 2>&1); rc=$?
+  check "row 18: a bad id, expiry, by, or added is refused: $bad" "1 0" "$rc $([[ -e $iroot/pub/3c0010 ]] && echo 1 || echo 0)"
+done
+out=$(imp 3c0011 0 air 2026-09-01 "$(b64 doc)" "$(b64 $'/a/\tdoc')" "" <"$WORK/imp/good.tar" 2>&1); rc=$?
+check "row 18: a source with a tab is refused" "1 0" "$rc $([[ -e $iroot/pub/3c0011 ]] && echo 1 || echo 0)"
+out=$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND HOME="$IMH" SHARE_TUNNEL=0 bash "$SH" refresh 3c0001 2>&1); rc=$?
+check "row 18: refresh of a moved row names where it came from" "1 1" "$rc $(grep -c '3c0001 was moved from air; re-add it from a source on this machine' <<<"$out")"
+# setup --token-stdin: the token arrives on stdin, never argv
+vfresh
+out=$(printf 'admintoken\n' | TV_TOK="" tv setup ten.example.test --r2 --bucket ok-bucket --token-stdin 2>&1); rc=$?
+check "setup --token-stdin: the admin token read from stdin runs setup --r2" "0 1" "$rc $(grep -c '^ready:      R2 is on' <<<"$out")"
+vfresh
+out=$(TV_TOK="" tv setup ten.example.test --r2 --bucket ok-bucket </dev/null 2>&1); rc=$?
+check "setup --token-stdin: without it an empty token is refused" "1 1" "$rc $(grep -c 'read the tenant admin token from CLOUDFLARE_API_TOKEN only' <<<"$out")"
+out=$(TV_TOK="" tv setup ten.example.test --r2 --bucket ok-bucket --token-stdin </dev/null 2>&1); rc=$?
+check "setup --token-stdin: an empty stdin is refused before any call" "1 1 0" "$rc $(grep -c -- '--token-stdin read no token' <<<"$out") $(vwrites)"
+
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then
   wout="$(node "$(dirname "$SH")/../tests/worker.mjs" 2>&1)"; wrc=$?

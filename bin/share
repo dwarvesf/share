@@ -24,6 +24,7 @@
 #   share serve               serve in the foreground until Ctrl-C
 #   share skill [--install]   the SKILL.md that teaches an agent to use share
 #   share teardown [--yes]    delete the tunnel, DNS record, service, and stored token
+#   share import ...          used by migrate over ssh
 #   share setup <hostname> --backend r2 --bucket <name>   an R2 profile: a private bucket and a Worker
 #      serve links while this machine is off; teardown --yes --purge (admin token) deletes it all
 #
@@ -233,6 +234,7 @@ release_locks() { # the EXIT trap: every held lock, a stage still outside pub, a
   if [[ -n $held_fqdn ]]; then f="$held_fqdn"; held_fqdn=""; host_rm "$f" || true; fi
   if [[ -n $held_access_id ]]; then echo "share: nothing was published; the Access app of $held_access_id waits in access-pending, the next $me add --access or $me prune with a token removes it" >&2; held_access_id=""; fi
   [[ -n ${r2_snap_file:-} ]] && rm -f "$r2_snap_file"
+  [[ -n ${import_spool:-} ]] && rm -f "$import_spool"
   if [[ -n ${r2_held_prefix:-} ]]; then f="$r2_held_prefix"; r2_held_prefix=""; r2_release_prefix "$r2_held_id" "$f"; fi
   return 0
 }
@@ -635,6 +637,8 @@ cmd_refresh() {
   opts="$(awk -F'\t' '{print $6}' <<<"$r")"
   if has_opt live "$opts"; then echo "live share, nothing to refresh" >&2; return 0; fi
   src="$(cut -f3 <<<"$r")"
+  optv by "$opts"   # a row import moved here keeps <by>:<src>; that path is on the old origin
+  [[ -z $optv_out || $optv_out == "$(r2_by)" || $src != "$optv_out:"* ]] || die "$1 was moved from $optv_out; re-add it from a source on this machine"
   [[ -e $src ]] || die "source is gone: $src (the snapshot keeps serving; $me rm $1 to unpublish)"
   stage_copy "$src" "$opts"   # the slow copy runs outside the lock; the swap into pub waits for it
   lock_take index
@@ -733,6 +737,90 @@ cmd_hits() {
     | n($h | length; "hit") + ", "
       + n($h | map(.request.headers["Cf-Connecting-Ip"][0] // .request.remote_ip) | unique | length; "visitor")
       + (if ($h | length) > 0 then ", last \($h[-1].ts | floor | strflocaltime("%F %H:%M"))" else "" end)' "$log"
+}
+
+# --- import (the receiving side of migrate) ---
+
+iusage="usage: share import --probe | share import <id> <expires> <by> <added> <b64 name> <b64 src> <b64 opts> [<files>:<sha256>]   (a tar on stdin)"
+b64dec() { # b64dec <b64>: the bytes into b64_out; 1 on a non-base64 string. A decoded control byte is refused by the caller
+  [[ $1 =~ ^[A-Za-z0-9+/]*={0,2}$ ]] || return 1
+  b64_out="$(printf '%s' "$1" | base64 -d 2>/dev/null || printf '%s' "$1" | base64 -D 2>/dev/null)" || return 1
+}
+import_manifest() { # import_manifest <dir>: "<file count>:<sha256 of each file's sha256 and path, sorted>"; migrate sends the same digest of pub/<id>
+  local n sum
+  n="$(cd "$1" && find . -type f | grep -c . || true)"
+  sum="$(cd "$1" && find . -type f -print | LC_ALL=C sort | while IFS= read -r f; do shasum -a 256 "$f"; done | shasum -a 256 | cut -d' ' -f1)"
+  echo "$n:$sum"
+}
+import_scan() { # import_scan <tar>: every member a plain file or directory under a relative path with no .. and no dotfile; measured on bsdtar 3.5 and GNU tar 1.35
+  local names modes nn nm line p seg
+  names="$(tar -tf "$1" 2>/dev/null)" || die "import: stdin is not a tar archive; nothing was published"
+  modes="$(tar -tvf "$1" 2>/dev/null)" || die "import: stdin is not a tar archive; nothing was published"
+  nn="$(grep -c . <<<"$names" || true)"; nm="$(grep -c . <<<"$modes" || true)"
+  [[ $nn -gt 0 && $nn == "$nm" ]] || die "import: the archive listing does not parse (a name with a newline?); nothing was published"
+  while IFS= read -r line; do   # -tv: the type is the first mode character; a hardlink shows "link to", a symlink "->"
+    case $line in [-d]*) ;; *) die "import: the archive holds a member that is not a file or a directory ($line); nothing was published" ;; esac
+    case $line in *" link to "*|*" -> "*) die "import: the archive holds a link ($line); nothing was published" ;; esac
+  done <<<"$modes"
+  while IFS= read -r p; do
+    [[ $p != /* ]] || die "import: the archive holds an absolute path ($p); nothing was published"
+    p="${p#./}"; p="${p%/}"
+    [[ -n $p && $p != . ]] || continue
+    while IFS= read -r -d / seg || [[ -n $seg ]]; do
+      [[ $seg != .. ]] || die "import: the archive holds a .. path ($p); nothing was published"
+      [[ $seg != .* ]] || die "import: the archive holds a dotfile ($p); share never publishes one; nothing was published"
+    done < <(printf '%s' "$p")
+  done <<<"$names"
+}
+cmd_import() { # cmd_import --probe | <args> (iusage): one share moved here by migrate, its tar on stdin; validates, stages, publishes; never creates an Access app
+  if [[ ${1:-} == --probe ]]; then [[ $# == 1 ]] || die "$iusage"; echo "share-import 1"; return 0; fi
+  [[ $# == 7 || $# == 8 ]] || die "$iusage"
+  local id=$1 exp=$2 by=$3 added=$4 man=${8:-} name src opts w max="${SHARE_IMPORT_MAX_BYTES:-2147483648}" size stage got xflags
+  [[ $backend != r2 && $r2on == 0 ]] || die "import moves links into a tunnel profile with R2 off; $me reads a bucket"
+  [[ $id =~ ^[0-9a-f]{6}$ ]] || die "import: bad id '$id'"
+  [[ $exp =~ ^[0-9]{1,11}$ ]] || die "import: bad expiry for $id"
+  [[ $added =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "import: bad added date for $id"
+  [[ $by =~ ^[a-z0-9.-]+$ ]] || die "import: bad by for $id"
+  [[ -z $man || $man =~ ^[0-9]+:[0-9a-f]{64}$ ]] || die "import: bad manifest for $id"
+  b64dec "$5" || die "import: the name of $id is not base64"; name=$b64_out
+  b64dec "$6" || die "import: the source of $id is not base64"; src=$b64_out
+  b64dec "$7" || die "import: the opts of $id are not base64"; opts=$b64_out
+  [[ -n $name && $name != .* && $name != */* && $name != *[[:cntrl:]]* ]] || die "import: bad name for $id (empty, a dotfile, a /, or a control byte)"
+  [[ $src != *[[:cntrl:]]* ]] || die "import: the source path of $id holds a control byte"
+  for w in $opts; do   # a live or host= row never arrives: migrate moves snapshots only
+    case $w in noindex|access=*|access_rule=*) ;; *) die "import: opt '$w' of $id is not one import takes (noindex, access=, access_rule=)" ;; esac
+  done
+  opts="${opts:+$opts }by=$by"
+  mk_root; mkdir -p "$pub"
+  local rowf; rowf="$(mktemp "$root/.import-row.XXXXXX")"   # rows_in reads a regular file only
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$by:$src" "$added" "$exp" "$opts" >"$rowf"
+  [[ -n "$(rows_in "$rowf" "$backend")" ]] || { rm -f "$rowf"; die "import: the row for $id does not pass the index check (an access= without its rule?)"; }
+  rm -f "$rowf"
+  if [[ -n "$(awk -F'\t' -v id="$id" '$1 == id' "$index" 2>/dev/null)" || -e $pub/$id ]] || pending_has_id "$id"; then die "import: $id is already here; nothing was published"; fi
+  import_spool="$(mktemp "$root/.import.XXXXXX")"; trap release_locks EXIT
+  head -c $((max + 1)) >"$import_spool"
+  size="$(wc -c <"$import_spool" | tr -d ' ')"
+  [[ $size -le $max ]] || die "import: $id is over $max bytes (SHARE_IMPORT_MAX_BYTES); nothing was published"
+  import_scan "$import_spool"
+  # no owner, mode bits, xattrs, ACLs, or file flags from the archive
+  if tar --version 2>/dev/null | grep -q 'GNU tar'; then xflags=(--no-same-owner --no-same-permissions --no-xattrs --no-acls --no-selinux)
+  else xflags=(--no-same-owner --no-same-permissions --no-xattrs --no-acls --no-fflags --no-mac-metadata); fi
+  stage="$(mktemp -d "$root/.stage.XXXXXX")"; stage_out=$stage
+  tar -x "${xflags[@]}" -C "$stage" -f "$import_spool" 2>/dev/null || die "import: extracting $id failed; nothing was published"
+  rm -f "$import_spool"; import_spool=""
+  [[ -z "$(find "$stage" ! -type f ! -type d)" && -z "$(find "$stage" -type f -links +1)" ]] || die "import: $id extracted something besides plain files and directories; nothing was published"
+  [[ "$(find "$stage" -mindepth 1 -maxdepth 1 | sed 's|.*/||')" == "$name" ]] || die "import: the archive of $id does not hold exactly $name at its root; nothing was published"
+  if [[ -n $man ]]; then
+    got="$(import_manifest "$stage")"
+    [[ $got == "$man" ]] || die "import: $id arrived as $got, not $man (a truncated copy?); nothing was published"
+  fi
+  lock_take index
+  [[ -z "$(awk -F'\t' -v id="$id" '$1 == id' "$index" 2>/dev/null)" && ! -e $pub/$id ]] || { lock_release index; die "import: $id appeared during the import; nothing was published"; }
+  stage_publish "$id"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$by:$src" "$added" "$exp" "$opts" >>"$index"
+  if running; then write_caddyfile; caddy_reload || true; fi   # a stopped or not set up profile renders at its next start
+  lock_release index
+  echo "imported $id"
 }
 
 # --- serving ---
@@ -3989,7 +4077,7 @@ cmd_setup_r2() { # cmd_setup_r2 <force> <bucket> <tname> <login> <service> <quic
 
 tusage="usage: share setup <hostname> --r2 --bucket <name> [--storage-default local|cloud] [--alias <old-host>] | share setup <hostname> --no-r2"
 cmd_setup() {
-  local tunnel_name="" force=0 service=1 login=0 quick_setup=0 had_host_arg=0 backend_arg="" bucket="" r2flag="" sdef="" alias_arg=""
+  local tunnel_name="" force=0 service=1 login=0 quick_setup=0 had_host_arg=0 backend_arg="" bucket="" r2flag="" sdef="" alias_arg="" token_stdin=0
   [[ -n ${1:-} && ${1:-} != --* ]] && { host_name="$1"; had_host_arg=1; shift; }
   while [[ $# -gt 0 ]]; do
     case $1 in
@@ -4003,9 +4091,14 @@ cmd_setup() {
       --r2|--no-r2) [[ -z $r2flag ]] || die "$tusage"; r2flag="$1"; shift ;;
       --storage-default) sdef="${2:-}"; shift 2 ;;
       --alias) alias_arg="${2:-}"; [[ -n $alias_arg ]] || die "$tusage"; shift 2 ;;
+      --token-stdin) token_stdin=1; shift ;;
       *) die "usage: share setup [hostname] [--tunnel-name N] [--force] [--no-service] [--login] [--backend tunnel|r2 --bucket <name>] | share setup --quick [--no-service] | $tusage" ;;
     esac
   done
+  if [[ $token_stdin == 1 ]]; then   # migrate's switch: one line on stdin, into this process only; never argv, a file, or a child's environment
+    CLOUDFLARE_API_TOKEN=""; IFS= read -r CLOUDFLARE_API_TOKEN || true
+    [[ -n $CLOUDFLARE_API_TOKEN ]] || die "--token-stdin read no token"
+  fi
   if [[ -n $r2flag ]]; then   # R2 on a tunnel tenant: the origin's own setup, never a new tunnel
     [[ $had_host_arg == 1 && -z $backend_arg && -z $tunnel_name && $service == 1 && $login == 0 && $quick_setup == 0 ]] || die "$tusage"
     if [[ $r2flag == --r2 ]]; then
@@ -4384,6 +4477,7 @@ case "${1:-status}" in
   teardown) shift; cmd_teardown "$@" ;;
   service) cmd_service "${2:-}" ;;
   add) shift; cmd_add "$@" ;;
+  import) shift; cmd_import "$@" ;;
   api-token) shift; cmd_api_token "$@" ;;
   ls) cmd_prune listing; cmd_ls ;;
   skill) cmd_skill "${2:-}" ;;

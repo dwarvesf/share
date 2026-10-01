@@ -190,3 +190,36 @@ Deviations from the spec, per task. A task with none is not listed.
 - Row 28 checks the rendered Caddyfile and `index.tsv`, not a running Caddy: the dry tenant harness does not serve. The suite's other sections cover the Caddyfile-to-running-config path. The key `m/../share.json` comes from a new dry seam, `SHARE_R2_DRY_LIST_EXTRA`, since a directory-backed bucket cannot hold it.
 - Row 1 extends the existing byte-identity run with `profiles --json` and compares after removing the listing additions (the `ls` tag column, the new `state` keys). The named dry setup and the member leg of row 1 are covered by rows 15 and 17 rather than a second `origin/main` run.
 
+## TASK-7a: tar flag measurement (2026-10-01)
+
+Archives built byte by byte (Python `tarfile`, ustar) and by each tar, then listed and extracted on this Mac with bsdtar 3.5.3 (libarchive 3.7.4) and GNU tar 1.35 (Homebrew `gnu-tar`, installed for the measurement):
+
+| Member | `tar -tvf` (bsdtar / GNU) | `tar -xf` (bsdtar / GNU) |
+|---|---|---|
+| regular file, directory | `-rw-r--r--`, `drwxr-xr-x` on both; the name is the last field | extracted |
+| symlink `doc/l -> /var/empty/target` | `l...  ./doc/l -> /var/empty/target` on both | extracted as a symlink on both (exit 0): nothing stops it |
+| hardlink to a sibling | `h... ./doc/b.txt link to ./doc/a.txt` on both, for an archive from either tar and for a hand-built one | extracted with a link count of 2 on both |
+| hardlink to `/var/empty/target` | bsdtar: `link to /var/empty/target`; GNU: strips the `/` with a warning | both fail to link (exit 1 / 2) and leave the directory |
+| absolute member `/tmp/x` | listed as `/tmp/x` on both (GNU warns on stderr) | both strip the leading `/` and extract `tmp/x` inside the target (exit 0) |
+| `./doc/../../x` | listed as is on both | bsdtar refuses (`Path contains '..'`, exit 1); GNU refuses the member (exit 2) |
+| `./doc/.env` | listed as is | extracted |
+| FIFO | `p...` on both | not tried |
+| an archive bsdtar makes on macOS | read by GNU tar, it holds `._*` AppleDouble members (and `LIBARCHIVE.xattr` headers) | `COPYFILE_DISABLE=1` with `--no-mac-metadata --no-xattrs` removes them |
+
+Build rules taken from it:
+
+- The pre-scan reads `tar -tf` (names) and `tar -tvf` (types) and refuses the whole import on any line whose mode does not start with `-` or `d`, any ` link to ` or ` -> `, an absolute name, a `..` segment, or a segment starting with `.`; a different line count between the two listings (a name with a newline) refuses too. The listing columns differ between the two tars, so only the first mode character and those two markers are read from `-tv`.
+- Extraction flags: bsdtar `--no-same-owner --no-same-permissions --no-xattrs --no-acls --no-fflags --no-mac-metadata`; GNU tar `--no-same-owner --no-same-permissions --no-xattrs --no-acls --no-selinux` (it has no `--no-fflags`). Both sets extract the plain tree unchanged. The flavor comes from `tar --version`.
+- After extraction, `find` refuses anything but files and directories and any file with a link count above 1 (the second line of defence for a hardlink the listing missed).
+- For TASK-7b: `migrate` builds each tar with `COPYFILE_DISABLE=1` and `--no-mac-metadata --no-xattrs` on bsdtar, or the target's dotfile refusal trips on `._*` members.
+
+### TASK-7a (import, setup --token-stdin)
+
+- `import` takes an optional eighth argument, `<files>:<sha256>`, the round-1 manifest rule: the file count and a sha256 over each file's sha256 and path, sorted (`import_manifest`). A mismatch refuses the import. TASK-7b sends the same digest of `pub/<id>`.
+- `import` refuses on a profile that reads a bucket (an R2-on origin or an r2 profile): pointers are not written on that path, and `migrate` moves R2-off tenants only.
+- The archive's root must hold exactly the row's name, as `pub/<id>/<name>` does, so the row never points at a path the tar did not bring.
+- The candidate row also passes `rows_in`, so an `access=` without its `access_rule=` (or a bad rule) is refused. A gated row keeps its app id; no Access call is made.
+- The spool and the stage go through the EXIT trap. Caddy reloads only when the profile is serving; a stopped or `not_setup` profile renders at its next start.
+- `refresh` of a row whose `by=` is another machine and whose `src` starts with `<by>:` dies naming that machine.
+- `setup --token-stdin` reads one line into the process's own `CLOUDFLARE_API_TOKEN` before any branch runs, so it works for the tunnel setup migrate calls and for `--r2`. An empty line dies before any call. The test drives `--r2` because the suite has no dry seam for the tunnel setup's API path.
+
