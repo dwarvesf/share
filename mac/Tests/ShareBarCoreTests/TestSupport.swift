@@ -32,12 +32,18 @@ func makeSnapshot(
     service: Bool = true,
     shares: [Share] = [],
     skipped: Int? = nil,
-    accessPending: Int? = nil
+    accessPending: Int? = nil,
+    backend: String? = nil,
+    r2: Bool? = nil,
+    storageDefault: String? = nil,
+    cloudError: String? = nil,
+    cloudMore: Int? = nil
 ) -> Snapshot {
     Snapshot(
         schema: schema, state: state, ready: ready, mode: mode, host: host, hosts: hosts,
         servesHere: servesHere, service: service, shares: shares, skipped: skipped,
-        accessPending: accessPending
+        accessPending: accessPending, backend: backend, r2: r2,
+        storageDefault: storageDefault, cloudError: cloudError, cloudMore: cloudMore
     )
 }
 
@@ -50,9 +56,12 @@ func makeShare(
     kind: String = "snapshot",
     ownHost: String? = nil,
     expires: Int = 0,
-    access: String? = nil
+    access: String? = nil,
+    storage: String? = nil,
+    type: String? = nil,
+    by: String? = nil
 ) -> Share {
-    Share(id: id, name: name, url: url, kind: kind, ownHost: ownHost, expires: expires, access: access)
+    Share(id: id, name: name, url: url, kind: kind, ownHost: ownHost, expires: expires, access: access, storage: storage, type: type, by: by)
 }
 
 /// One profile entry: its `state`, or its `error` line (the JSON shape the CLI emits is
@@ -85,6 +94,16 @@ func loadFixtureSnapshot() throws -> Snapshot {
 /// `not_setup`, `dfoundation` serving a gated share).
 func loadFixtureProfiles() throws -> ProfilesSnapshot {
     guard let url = Bundle.module.url(forResource: "profiles", withExtension: "json") else {
+        throw NSError(domain: "TestSupport", code: 1, userInfo: [NSLocalizedDescriptionKey: "fixture not found"])
+    }
+    let data = try Data(contentsOf: url)
+    return try JSONDecoder().decode(ProfilesSnapshot.self, from: data)
+}
+
+/// Loads the tenant-era `share profiles --json` fixture: an R2-on origin, an r2 member
+/// carrying `cloud_error`, and an older-CLI-shaped tunnel profile with no new fields.
+func loadFixtureTenantProfiles() throws -> ProfilesSnapshot {
+    guard let url = Bundle.module.url(forResource: "profiles-tenant", withExtension: "json") else {
         throw NSError(domain: "TestSupport", code: 1, userInfo: [NSLocalizedDescriptionKey: "fixture not found"])
     }
     let data = try Data(contentsOf: url)
