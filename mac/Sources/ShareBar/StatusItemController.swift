@@ -239,9 +239,9 @@ final class StatusItemController: NSObject, @unchecked Sendable {
             let item = NSMenuItem(title: row.title, action: nil, keyEquivalent: "")
             item.attributedTitle = rowAttributedTitle(row, tabLocation: tabLocation, font: font)
             item.setAccessibilityTitle(row.accessibilityTitle)
-            if row.access != nil, let lock = NSImage(systemSymbolName: "lock.fill", accessibilityDescription: "Login required") {
-                lock.isTemplate = true
-                item.image = lock
+            if let typeImage = NSImage(systemSymbolName: row.typeGlyph.symbol, accessibilityDescription: row.typeGlyph.word) {
+                typeImage.isTemplate = true
+                item.image = typeImage
             }
             item.submenu = submenu(for: row)
             menu.addItem(item)
@@ -251,6 +251,12 @@ final class StatusItemController: NSObject, @unchecked Sendable {
             let moreItem = NSMenuItem(title: "\(section.more) more (\(section.command) ls)", action: nil, keyEquivalent: "")
             moreItem.isEnabled = false
             menu.addItem(moreItem)
+        }
+
+        if let cloudError = section.cloudError {
+            let errorItem = NSMenuItem(title: "Cloud links not listed: \(cloudError)", action: nil, keyEquivalent: "")
+            errorItem.isEnabled = false
+            menu.addItem(errorItem)
         }
 
         if section.showStop {
@@ -277,8 +283,11 @@ final class StatusItemController: NSObject, @unchecked Sendable {
     }
 
     /// The name in the plain font/color, a tab, then the trailing text right-aligned at
-    /// `tabLocation` in `secondaryLabelColor` (macOS's shortcut-hint grey). `item.title` is
-    /// still set to the plain name (see `addSection`) so accessibility reads the name alone.
+    /// `tabLocation` in `secondaryLabelColor` (macOS's shortcut-hint grey), and after it
+    /// the marker column: the storage badge, the link-type marker, and the lock on a
+    /// gated row. `item.title` is still set to the plain name (see `addSection`) so
+    /// accessibility reads the name alone. A symbol name that fails to resolve falls
+    /// back to no image rather than a blank box.
     private func rowAttributedTitle(_ row: Row, tabLocation: CGFloat, font: NSFont) -> NSAttributedString {
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.tabStops = [NSTextTab(textAlignment: .right, location: tabLocation, options: [:])]
@@ -296,6 +305,29 @@ final class StatusItemController: NSObject, @unchecked Sendable {
                 .paragraphStyle: paragraphStyle,
             ]
         ))
+
+        var markers = [row.linkGlyph]
+        if let storage = row.storageGlyph {
+            markers.insert(storage, at: 0)
+        }
+        if row.access != nil {
+            markers.append(RowGlyphs.lock)
+        }
+        let symbolConfig = NSImage.SymbolConfiguration(pointSize: font.pointSize, weight: .regular)
+        for marker in markers {
+            guard let image = NSImage(systemSymbolName: marker.symbol, accessibilityDescription: marker.word)?
+                .withSymbolConfiguration(symbolConfig) else { continue }
+            image.isTemplate = true
+            result.append(NSAttributedString(
+                string: " ",
+                attributes: [.font: font, .paragraphStyle: paragraphStyle]
+            ))
+            let attachment = NSTextAttachment()
+            attachment.image = image
+            // Baseline-to-descender alignment: the marker bottoms out where the text does.
+            attachment.bounds = CGRect(origin: CGPoint(x: 0, y: font.descender), size: image.size)
+            result.append(NSAttributedString(attachment: attachment))
+        }
         return result
     }
 
