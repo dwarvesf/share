@@ -877,6 +877,7 @@ cmd_migrate_probe() { # one line for the sender's preflight: state, host, pub em
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$st" "${host_name:--}" "$pempty" "$pfree" "$kok" "$lok"
 }
 cmd_migrate_index() { [[ -f $index ]] && awk -F'\t' '{print $1"\t"$2"\t"$4}' "$index"; return 0; }
+cmd_migrate_tunnel_id() { cfg tunnel_id; }   # read back after the switch, so the sender can refuse to delete a tunnel the new origin now depends on
 cmd_migrate_nonce() { # a throwaway probe file only the target holds; the sender polls its URL
   mk_root; mkdir -p "$pub"
   local n; n="_migrate-probe-$(rand_id_raw).txt"
@@ -890,7 +891,8 @@ migrate_tar() { # migrate_tar <id> <name>: the archive bytes on stdout; bsdtar (
   else COPYFILE_DISABLE=1 tar -C "$pub/$1" -cf - --no-mac-metadata --no-xattrs -- "$2"; fi
 }
 
-migrate_retire() { # migrate_retire <id>...: index.migrated and migrated/ (nothing deleted), then the teardown path with no Access-app delete and no DNS delete unless it still points here
+migrate_retire() { # migrate_retire <target_tid> <id>...: index.migrated and migrated/ (nothing deleted), then the teardown path with no Access-app delete and no DNS delete unless it still points here; target_tid is the new origin's own tunnel id, so a collision with this machine's refuses the tunnel and DNS deletes (DEC-010: the new origin always gets its own tunnel, never this one)
+  local target_tid="$1"; shift
   local mids=("$@") id midlist=" " line keep
   for id in "${mids[@]}"; do midlist="$midlist$id "; done
   lock_take index
@@ -907,14 +909,20 @@ migrate_retire() { # migrate_retire <id>...: index.migrated and migrated/ (nothi
   lock_release index
   svc_uninstall
   cmd_stop >/dev/null 2>&1 || true
-  local tid rec rid; tid="$(cfg tunnel_id)"
-  rec="$(cf GET "/zones/$zone/dns_records?name=$host_name")"
-  rid="$(jq -r --arg t "$tid.cfargotunnel.com" '.result[] | select(.content == $t) | .id' <<<"$rec" | head -1)"
-  if [[ -n $rid ]]; then cf DELETE "/zones/$zone/dns_records/$rid" >/dev/null; echo "dns:        deleted (still pointed at this tunnel)"
-  else echo "dns:        $host_name no longer points at this tunnel, left alone"; fi
-  cf DELETE "/accounts/$account/cfd_tunnel/$tid/connections" >/dev/null 2>&1 || true
-  cf DELETE "/accounts/$account/cfd_tunnel/$tid" >/dev/null
-  echo "tunnel:     deleted"
+  local tid; tid="$(cfg tunnel_id)"
+  if [[ -n $target_tid && $target_tid == "$tid" ]]; then
+    echo "dns:        left alone; $migrate_target's tunnel id matches this machine's, deleting it would take down the new origin"
+    echo "tunnel:     not deleted, for the same reason; clean it up by hand once $migrate_target is confirmed on its own tunnel"
+  else
+    local rec rid
+    rec="$(cf GET "/zones/$zone/dns_records?name=$host_name")"
+    rid="$(jq -r --arg t "$tid.cfargotunnel.com" '.result[] | select(.content == $t) | .id' <<<"$rec" | head -1)"
+    if [[ -n $rid ]]; then cf DELETE "/zones/$zone/dns_records/$rid" >/dev/null; echo "dns:        deleted (still pointed at this tunnel)"
+    else echo "dns:        $host_name no longer points at this tunnel, left alone"; fi
+    cf DELETE "/accounts/$account/cfd_tunnel/$tid/connections" >/dev/null 2>&1 || true
+    cf DELETE "/accounts/$account/cfd_tunnel/$tid" >/dev/null
+    echo "tunnel:     deleted"
+  fi
   token_forget; api_token_forget
   rm -f "$config_dir/cert.zone"
   [[ -f $cert ]] && to_trash "$cert"
@@ -1023,13 +1031,17 @@ cmd_migrate() {
     done <<<"$live_lines"
   fi
 
+  local old_tunnel_name; old_tunnel_name="$(cfg tunnel_name)"
+  local new_tunnel_name="${old_tunnel_name}-m"   # DEC-010: the new origin always gets its own tunnel; a name this machine already holds would reuse its tunnel id, and migrate_retire would later delete the new origin's only tunnel
   local switch_rc=0
-  printf '%s\n' "$CLOUDFLARE_API_TOKEN" | migrate_remote_run "$rbin" "$maxbytes" "$rprofile" setup "$host_name" --force --token-stdin >/dev/null || switch_rc=$?
+  printf '%s\n' "$CLOUDFLARE_API_TOKEN" | migrate_remote_run "$rbin" "$maxbytes" "$rprofile" setup "$host_name" --tunnel-name "$new_tunnel_name" --force --token-stdin >/dev/null || switch_rc=$?
   if [[ $switch_rc != 0 ]]; then
-    die "migrate: the switch on $to failed; this machine may still be serving, or the DNS record may already point at the new tunnel. Rollback if $host_name is down: $me setup $host_name --tunnel-name $(cfg tunnel_name) --force"
+    die "migrate: the switch on $to failed; this machine may still be serving, or the DNS record may already point at the new tunnel. Rollback if $host_name is down: $me setup $host_name --tunnel-name $old_tunnel_name --force"
   fi
   echo "switch:     $to is the new origin for $host_name"
 
+  migrate_remote "$rbin" "" "$rprofile" migrate-tunnel-id || true
+  local target_tid="$mr_out"
   migrate_remote "$rbin" "" "$rprofile" migrate-nonce || true
   local probe="$mr_out" streak=0 code _
   for _ in $(seq 1 60); do
@@ -1039,7 +1051,7 @@ cmd_migrate() {
     [[ $streak -ge 3 ]] && break
     sleep 1
   done
-  [[ $streak -ge 3 ]] || die "migrate: verify failed: $to did not answer https://$host_name/$probe three times in a row; nothing moved aside. Rollback if $host_name is down: $me setup $host_name --tunnel-name $(cfg tunnel_name) --force"
+  [[ $streak -ge 3 ]] || die "migrate: verify failed: $to did not answer https://$host_name/$probe three times in a row; nothing moved aside. Rollback if $host_name is down: $me setup $host_name --tunnel-name $old_tunnel_name --force"
   for i in "${!mids[@]}"; do
     local id=${mids[$i]} name=${names[$i]} opts=${optss[$i]} uuid aud
     share_url "$id" "$name" "$opts"
@@ -1055,7 +1067,7 @@ cmd_migrate() {
   done
   echo "verify:     every moved link answers from $to"
 
-  migrate_retire "${mids[@]}"
+  migrate_retire "$target_tid" "${mids[@]}"
   echo "retire:     $host_name no longer serves from this machine; moved rows in index.migrated, trees in migrated/"
 }
 
@@ -4723,6 +4735,7 @@ case "${1:-status}" in
   migrate) shift; cmd_migrate "$@" ;;
   migrate-probe) cmd_migrate_probe ;;
   migrate-index) cmd_migrate_index ;;
+  migrate-tunnel-id) cmd_migrate_tunnel_id ;;
   migrate-nonce) cmd_migrate_nonce ;;
   api-token) shift; cmd_api_token "$@" ;;
   ls) cmd_prune listing; cmd_ls ;;

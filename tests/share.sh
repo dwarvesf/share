@@ -3508,7 +3508,7 @@ case "\$method \$url" in
   "GET https://api.cloudflare.com/client/v4/zones?"*) body='{"success":true,"result":[{"id":"zone1","account":{"id":"acct1"},"name":"$MHOST"}]}' ;;
   "GET https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel?"*)
     case "\$url" in
-      *"name=tun-A"*) body='{"success":true,"result":[{"id":"tid-A"}]}' ;;
+      *"name=tun-A&"*) body='{"success":true,"result":[{"id":"tid-A"}]}' ;;   # anchored on the trailing & so a migrate's "-m"-suffixed name never collides with this one
       *) body='{"success":true,"result":[]}' ;;
     esac ;;
   "POST https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel") body='{"success":true,"result":{"id":"tid-new"}}' ;;
@@ -3594,6 +3594,52 @@ check "row 19: A's rows moved to index.migrated, A's live row stays in index.tsv
 check "row 19: A's live row is untouched in its own index" "9b0001" "$(cut -f1 "$AH/share/index.tsv")"
 check "row 19: A's trees moved aside to migrated/, not pub/" "0 1" "$([[ -e $AH/share/pub/1a0001 ]] && echo 1 || echo 0) $([[ -d $AH/share/migrated/1a0001 ]] && echo 1 || echo 0)"
 check "row 19: A's teardown path ran and logged no DELETE of an Access app" "0" "$(grep -c 'DELETE.*access/apps' "$MW/clog19")"
+
+echo "--- row 19m: a source on the default tunnel name must not hand the target the same tunnel (DEC-010) ---"
+AHD="$MW/A19m"; BHD="$MW/B19m"; rm -rf "$AHD" "$BHD"; mkdir -p "$AHD" "$BHD"
+mig_fixture "$AHD"
+DEFAULT_TUN="share-${MHOST//./-}"
+sed -i.bak "s/^tunnel_name=.*/tunnel_name=$DEFAULT_TUN/" "$AHD/.config/share/config"
+mkdir -p "$BHD/.config/share"; printf 'hosts=nobody\nport=19567\n' > "$BHD/.config/share/config"
+MWDEF="$MW/remotebin-defaultname"; mkdir -p "$MWDEF"
+cp "$MW/remotebin/security" "$MWDEF/security"; cp "$MW/remotebin/share" "$MWDEF/share"
+chmod +x "$MWDEF/security" "$MWDEF/share"
+cat > "$MWDEF/curl" <<CURLEOF
+#!/bin/bash
+url="" data="" method=GET fmt=""; prev=""
+for a in "\$@"; do
+  case \$prev in --data) data="\$a" ;; -X) method="\$a" ;; -w) fmt="\$a" ;; esac
+  case \$a in http*) url="\$a" ;; esac
+  prev="\$a"
+done
+echo "CALL \$method \$url" >> "\${CURL_LOG:?}"
+body='{"success":true,"result":[]}'; code=200
+case "\$method \$url" in
+  "GET https://api.cloudflare.com/client/v4/user/tokens/verify") body='{"success":true,"result":{"status":"active"}}' ;;
+  "GET https://api.cloudflare.com/client/v4/zones?"*) body='{"success":true,"result":[{"id":"zone1","account":{"id":"acct1"},"name":"$MHOST"}]}' ;;
+  "GET https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel?"*)
+    case "\$url" in
+      *"name=$DEFAULT_TUN&"*) body='{"success":true,"result":[{"id":"tid-A"}]}' ;;   # the account already holds a tunnel under the default name: this IS the source's own tunnel
+      *) body='{"success":true,"result":[]}' ;;
+    esac ;;
+  "POST https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel") body='{"success":true,"result":{"id":"tid-new"}}' ;;
+  "PUT https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel/"*"/configurations") body='{"success":true,"result":{}}' ;;
+  "GET https://api.cloudflare.com/client/v4/zones/zone1/dns_records?"*) body='{"success":true,"result":[{"id":"rec1","type":"CNAME","content":"tid-new.cfargotunnel.com"}]}' ;;
+  "PUT https://api.cloudflare.com/client/v4/zones/zone1/dns_records/rec1") body='{"success":true,"result":{}}' ;;
+  "GET https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel/"*"/token") body='{"success":true,"result":"FAKE-TUNNEL-TOKEN"}' ;;
+  "DELETE https://api.cloudflare.com/client/v4/zones/zone1/dns_records/rec1") body='{"success":true}' ;;
+  "DELETE https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel/"*"/connections") body='{"success":true}' ;;
+  "DELETE https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel/"*) body='{"success":true}' ;;
+  "GET https://\$MHOST/"*) printf '200'; exit 0 ;;
+esac
+[[ \$fmt == *http_code* ]] && printf '%s\n%s' "\$body" "\$code" || printf '%s' "\$body"
+CURLEOF
+chmod +x "$MWDEF/curl"
+: > "$MW/clog19m"; : > "$MW/mssh.log"
+out=$(mig_a "$AHD" "$BHD" "$MW/clog19m" migrate --to m19m-target --remote-bin "$MWDEF" --yes 2>&1); rc=$?
+check "row 19: migrate still exits 0 (the danger is silent, not a reported failure)" "0" "$rc"
+check "row 19: the target's own tunnel id never equals the source's (DEC-010, no shared-tunnel teardown)" "1" \
+  "$([[ "$(sed -n 's/^tunnel_id=//p' "$BHD/.config/share/config")" != "$(sed -n 's/^tunnel_id=//p' "$AHD/.config/share/config")" ]] && echo 1 || echo 0)"
 
 echo "--- row 20: refusals before any copy ---"
 AH="$MW/A20"; BH="$MW/B20"; rm -rf "$AH" "$BH"; mkdir -p "$AH" "$BH"
