@@ -42,3 +42,40 @@ Round 2 warnings, same rule:
 | bsdtar lists a hardlink as a regular mode with `link to`; archive flags can pin files | the pre-scan rejects any `link to`; extract with no file flags or xattrs; row 18 gains a sibling hardlink and an absolute one | TASK-7a |
 | Pointers expose every machine link's URL to every member | `docs/setup.md` says so in the onboarding | TASK-10 |
 | The D3 rollback rebinds before restoring app destinations | restore destinations first, then rebind | TASK-5 |
+
+## TASK-1a: edge spike (2026-10-01)
+
+Throwaway objects on the Dwarves account, all created with the Toolkit admin token: hostname `share-e2e-spk584462.d.foundation` (proxied CNAME to tunnel `share-e2e-spk584462`), a route Worker of the same name on `<host>/*`, a service token, and one Access app on `<host>/gated{,/*}` with a `non_identity` service-token policy plus an email include (so an unauthenticated browser gets 302, not 403). The origin ran on the Mini: `cloudflared tunnel run` (token from the environment) to Caddy on 127.0.0.1:28990, which proxied to a node echo server that logged every request it received and spoke a WebSocket echo. The spike Worker answered 418 `REENTERED` for any request carrying `x-spike-pass`, answered `/__w` itself, fetched `https://<HOST>/healthz` on `/__hz`, and otherwise ran `fetch(request)`; `?mark=1` cloned the request with `x-spike-pass: 1` first, and `x-spike-raw: 1` returned the subrequest's status and headers as JSON. Every probe used `curl --doh-url https://1.1.1.1/dns-query`.
+
+| Q | Command (shape) | Observed |
+|---|---|---|
+| (a) | `GET https://<host>/abc123/f?x=1` | 200 with `x-spike-worker: 1` and `x-origin: 1`; the origin logged the request with `cf-worker: d.foundation` |
+| (a) | `GET https://<host>/abc123/f?mark=1` | 200 from the origin, which logged `x-spike-pass: 1`; no 418, so the subrequest skipped the route Worker |
+| (a) | `GET https://<host>/__hz` (Worker fetches `https://<HOST>/healthz` with `x-spike-pass`, `AbortSignal.timeout(3000)`) | `{"status":200,"body":"ok","reentered":null}`; the origin logged `GET /healthz` |
+| (b) | unauthenticated `GET /gated/x`, `/gated/__w`, `/gated` | 302 to `https://dwarves.cloudflareaccess.com/cdn-cgi/access/login/<host>?kid=<AUD>`, `kid` equal to the app's AUD; no `x-spike-worker` header on any; the origin log stayed empty, and `/gated/__w` (answered by the Worker itself) also got the 302, so Access runs before the route Worker |
+| (b) | `GET /gated/__w` with `CF-Access-Client-Id`/`-Secret` | 200 from the Worker, `{"worker":true,"jwt":true,"cookie":true}`: the admitted request carries `Cf-Access-Jwt-Assertion` and a `CF_Authorization` cookie |
+| (b) | the same with a wrong secret | 302 to the login flow, never admitted |
+| (c) | `GET /gated/x` with the service token | 200 from the origin; the origin logged `jwt=1` and `cookie` present: `fetch(request)` forwards the JWT and the cookie |
+| (d) | `POST /live/api` with 100000 random bytes; `PUT`; `DELETE` | 200 each; the origin logged `POST body=100000`, `PUT body=1`, `DELETE` |
+| (d) | node 22 `new WebSocket("wss://<host>/live/ws")`, send `ping1` | `["hello-from-origin","echo:ping1"]`; the origin logged `UPGRADE /live/ws cfworker=d.foundation`; the Worker returned the 101 response object as is |
+| (d) | the same on `/gated/ws` without, then with, the service token | without: handshake refused (non-101); with: echo works, the origin logged `jwt=1` |
+| (e) | Caddy up, `/dead/x` proxied to a closed port (Caddy answers `502`, `Server: Caddy`, empty body, checked locally) | the Worker's subrequest sees `502` with Cloudflare's own HTML page (`<title>d.foundation \| 502: Bad gateway</title>`), `server: cloudflare`, `retry-after: 60`, no `cf-cache-status` |
+| (e) | Caddy `respond "caddy 502 with body" 502` | the same Cloudflare 502 page; Cloudflare replaces every origin 502, body or not |
+| (e) | Caddy stopped, cloudflared up | `502`, the same Cloudflare page and headers as above; `/__hz` got `502 error code: 502` |
+| (e) | cloudflared stopped | `530` (`error code: 1033`, the Cloudflare Tunnel error page) to both the pass-through and `/__hz`; `retry-after` present, no `cf-cache-status`; the client saw the 530 through the Worker |
+| (e) | Caddy `respond "caddy 503" 503`; Caddy `respond 404`; the node origin's own `503` | `503` with body `caddy 503` and `cf-cache-status: DYNAMIC`; `404` with `cf-cache-status: DYNAMIC`; `503` with `cf-cache-status: DYNAMIC` and `via: 1.1 Caddy` |
+
+Answers:
+
+- (a) holds: a route Worker's `fetch(request)` and its `fetch("https://<HOST>/healthz")` both reach the tunnel origin and never re-enter the Worker. Approach (A) stands.
+- (b) holds: Access answers an unauthenticated gated path with its 302 before the route Worker runs; an admitted request reaches the Worker with `Cf-Access-Jwt-Assertion`.
+- (c) holds: the pass-through keeps the JWT header and the `CF_Authorization` cookie.
+- (d) holds: POST, PUT, DELETE with bodies and a WebSocket upgrade pass through; `return r` on a 101 is enough.
+- (e) the pass-through sees 530 with the connector down and 502 with the connector up but nothing answering. An origin's own 502 never reaches the Worker: Cloudflare swaps it for its own page, so a Caddy 502 and an edge 502 look the same and both get the offline page (as the spec wants). The header that tells an origin answer apart is `cf-cache-status`: present on every response the origin produced (503, 404, 200), absent on every edge-generated error (502, 530). `via: 1.1 Caddy` appears only on responses Caddy proxied, so it is not a general marker. Build rule for TASK-3: offline page when the status is 530, 520 to 527, or 502; or 503 without `cf-cache-status`. Not measured: 520 to 527 and an edge-generated 503 (no way to force them with a tunnel origin); the rule keys them on the same header.
+
+Side findings for later tasks:
+
+- A route object carries `request_limit_fail_open` (default `false`); `PUT zones/<z>/workers/routes/<id>` with `true` was accepted and read back. TASK-1b(k) uses this.
+- After the DNS record was deleted, the authoritative server answered NXDOMAIN at once, while 1.1.1.1 still served its cached proxied A records (the edge answered 530) until the TTL ran out.
+
+Cleanup, checked through the API afterwards: route 0, Worker settings 404, DNS records for the name 0, Access apps and service tokens named `share-e2e-spk*` 0, tunnels named `share-e2e-spk*` (not deleted) 0, no spike process left on the Mini; `dig @david.ns.cloudflare.com <host>` NXDOMAIN.
