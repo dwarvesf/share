@@ -56,12 +56,28 @@ real_keychain_share() { # service name and modify date of every share* item in t
 keychain_before="$(real_keychain_share)"
 export PATH="$WORK/stubsvc:$PATH"
 fix_pid=""
-trap 'bash "$SH" stop >/dev/null 2>&1; [[ -n $fix_pid ]] && kill "$fix_pid" 2>/dev/null; rm -rf "$WORK"' EXIT
-
 fails=0
+total=0
+reached_end=0
+on_exit() { # a crash or an interrupt leaves reached_end unset, so this never reports a clean summary for a run that never finished
+  local rc=$?
+  bash "$SH" stop >/dev/null 2>&1
+  [[ -n ${fix_pid:-} ]] && kill "$fix_pid" 2>/dev/null
+  rm -rf "$WORK"
+  if [[ ${reached_end:-0} != 1 ]]; then
+    echo "ABORTED after ${total:-0} check(s), ${fails:-0} failed so far" >&2
+    exit 2
+  fi
+  exit "$rc"
+}
+trap on_exit EXIT
+
 check() { # check <label> <expected> <actual>
+  total=$((total + 1))
   if [[ $2 == "$3" ]]; then echo "  ok    $1"; else echo "  FAIL  $1: expected '$2', got '$3'"; fails=$((fails + 1)); fi
 }
+# share-test-abort-anchor: a truncation of this file ending here (everything above runs,
+# nothing below) must still make on_exit report ABORTED and exit 2, never a clean summary
 local_url() { echo "${1/https:\/\/$SHARE_HOSTNAME/http://127.0.0.1:$SHARE_PORT}"; }
 code() { curl -s -o /dev/null -w '%{http_code}' "$(local_url "$1")"; }
 hcode() { curl -s -o /dev/null -w '%{http_code}' -H "Host: $2" "$(local_url "$1")"; }
@@ -3744,6 +3760,13 @@ echo "=== NEGATIVE CONTROL: a host outside hosts must not serve ==="
 SHARE_HOSTS=not-this-host bash "$SH" start >/dev/null 2>&1
 check "start refused on another host" 1 "$?"
 
+echo "=== self-test: an aborted run reports ABORTED, never a clean summary ==="
+ABORT_SELFTEST="$WORK/abort-selftest.sh"
+sed -n '1,/^# share-test-abort-anchor:/p' "$0" >"$ABORT_SELFTEST"
+aout=$(SHARE_TEST_PORT_BASE=$((base + 2000)) bash "$ABORT_SELFTEST" 2>&1); arc=$?
+check "a run truncated before the end exits 2" "2" "$arc"
+check "a run truncated before the end reports ABORTED" "1" "$(grep -c '^ABORTED' <<<"$aout")"
+
 echo "=== process leaks ==="
 # The live-share backend fixture is the last suite-spawned process left; kill it
 # now (the EXIT trap would) so the checks below can assert NOTHING is alive.
@@ -3775,12 +3798,13 @@ check "no real launchd or systemd share job appeared during the run" "$jobs_befo
 # added, changed, or removed here means a call reached the real binary.
 check "no real Keychain share item changed during the run" "$keychain_before" "$(real_keychain_share)"
 
+reached_end=1
 echo
 if [[ $fails -gt 0 ]]; then
-  echo "$fails FAILED"
+  echo "$fails/$total FAILED"
   for log in serve.log caddy.log; do
     echo "--- $log"; tail -20 "$SHARE_ROOT/$log" 2>/dev/null
   done
   exit 1
 fi
-echo "PASS"
+echo "$total checks, PASS"
