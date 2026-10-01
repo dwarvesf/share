@@ -2752,6 +2752,102 @@ out=$(r2j SHARE_R2_DRY_HEALTHZ=down SHARE_R2_WAIT=1 2>&1); rc=$?
 check "join, Worker down: exit 1, no config" "1 0" "$rc $([[ -f $jconf ]] && echo 1 || echo 0)"
 rm -f "$s2conf"
 
+echo "=== tenant: per-link storage on the origin (rows 2, 4, 5) ==="
+T2H="$WORK/tenant-home"; DRYT="$WORK/tenant-bucket"; mkdir -p "$T2H/.config/share/profiles/org" "$T2H/.config/share/profiles/off" "$DRYT"
+torg="$T2H/.config/share/profiles/org/config"; troot="$T2H/share/profiles/org"; tlog="$troot/r2-calls.log"; toffroot="$T2H/share/profiles/off"
+printf 'hostname=org.example.test\ntunnel_id=tid-org\ntunnel_name=share-org-example-test\nhosts=not-this-host\nport=%s\nbucket=ok-bucket\nr2_endpoint=https://acct.example.r2.cloudflarestorage.com\nstorage_default=local\n' $((base + 40)) >"$torg"
+printf 'hostname=off.example.test\ntunnel_id=tid-off\ntunnel_name=share-off-example-test\nhosts=not-this-host\nport=%s\n' $((base + 42)) >"$T2H/.config/share/profiles/off/config"
+tn() { # tn <profile> <verb...>: a tunnel origin under its own HOME on a dry bucket, Access dry; hosts names no machine, so nothing serves
+  local p=$1; shift
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS \
+    HOME="$T2H" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$DRYT" SHARE_R2_TOKEN="${TN_TOK-drytoken}" \
+    SHARE_ACCESS_DRY=1 SHARE_ACCESS_POLL=0 CLOUDFLARE_API_TOKEN="${TN_CF-faketoken}" bash "$SH" --profile "$p" "$@"
+}
+tline() { grep -n -- "$1" "$tlog" | head -1 | cut -d: -f1; }
+trow() { awk -F'\t' -v id="$1" '$1 == id' "$2/index.tsv" 2>/dev/null; }
+tnrows() { [[ -f $1/index.tsv ]] && grep -c . "$1/index.tsv" || echo 0; }
+tputs() { grep -c '^PUT ' "$tlog" 2>/dev/null || true; }
+mkdir -p "$WORK/tn"; printf '%%PDF-1.4\n' >"$WORK/tn/Report.PDF"; tf="$WORK/tn/Report.PDF"
+lport=$((base + 45))
+# R2 off: today's add, no bucket call; --cloud is refused with the admin's command
+out=$(SHARE_TEST_IDS=f00001 tn off add "$tf" 2>&1); rc=$?
+check "row 2: R2 off, add f is local" "0 1 1" "$rc $(trow f00001 "$toffroot" | grep -c .) $([[ -d $toffroot/pub/f00001 ]] && echo 1 || echo 0)"
+out=$(SHARE_TEST_IDS=f00002 tn off add --local "$tf" 2>&1); rc=$?
+check "row 2: R2 off, add --local f is local" "0 1" "$rc $(trow f00002 "$toffroot" | grep -c .)"
+out=$(SHARE_TEST_IDS=f00003 tn off add --cloud "$tf" 2>&1); rc=$?
+check "row 2: R2 off, add --cloud f is refused" "1" "$rc"
+check "row 2: R2 off, the refusal names the admin's command" "1" "$(grep -c "R2 is off for off.example.test; the tenant admin enables it with 'share --profile off setup off.example.test --r2 --bucket <name>'" <<<"$out")"
+check "row 2: R2 off, no bucket call and no new row" "0 2" "$([[ -e $toffroot/r2-calls.log ]] && echo 1 || echo 0) $(tnrows "$toffroot")"
+# R2 on, storage_default=local
+mkdir -p "$troot"; : >"$tlog"
+out=$(SHARE_TEST_IDS=a00001 tn org add "$tf" 2>&1); rc=$?
+check "row 2: R2 on, add f is local" "0 1 1" "$rc $(trow a00001 "$troot" | grep -c .) $([[ -d $troot/pub/a00001 ]] && echo 1 || echo 0)"
+check "row 2: R2 on, add f writes its pointer" "2 machine Report.PDF pdf " "$(jq -r '"\(.v) \(.storage) \(.name) \(.type) \(.opts)"' "$DRYT/m/a00001" 2>/dev/null)"
+check "row 2: the pointer's by and added" "1 $(date +%F)" "$(jq -r '.by' "$DRYT/m/a00001" | grep -c '^[a-z0-9.-]*$') $(jq -r .added "$DRYT/m/a00001")"
+out=$(SHARE_TEST_IDS=a00002 tn org add --cloud "$tf" 2>&1); rc=$?
+check "row 2: R2 on, add --cloud f is cloud" "0 0 0 1 pdf" "$rc $(trow a00002 "$troot" | grep -c .) $([[ -e $troot/pub/a00002 ]] && echo 1 || echo 0) $(jq -r .v "$DRYT/m/a00002" 2>/dev/null) $(jq -r .type "$DRYT/m/a00002" 2>/dev/null)"
+check "row 2: the cloud link" "https://org.example.test/a00002/Report.PDF" "$(grep '^https://' <<<"$out")"
+check "row 2: the cloud upload sits under its own prefix" "1" "$(find "$DRYT/o" -path '*/a00002.*/Report.PDF' | grep -c .)"
+out=$(SHARE_TEST_IDS=a00003 tn org add "$lport" 2>&1); rc=$?
+check "row 2: R2 on, add <port> is live with a pointer" "0 1 2 live site" "$rc $(trow a00003 "$troot" | grep -c .) $(jq -r '"\(.v) \(.opts) \(.type)"' "$DRYT/m/a00003" 2>/dev/null)"
+nrows="$(tnrows "$troot")"; nput="$(tputs)"
+out=$(SHARE_TEST_IDS=a00009 tn org add --cloud "$lport" 2>&1); rc=$?
+check "row 2: R2 on, add --cloud <port> is refused" "1 1" "$rc $(grep -c "live links and --host stay on the origin's tunnel" <<<"$out")"
+out=$(SHARE_TEST_IDS=a00009 tn org add --cloud --host x.example.test "$tf" 2>&1); rc=$?
+check "row 2: R2 on, add --cloud --host is refused" "1 1" "$rc $(grep -c "live links and --host stay on the origin's tunnel" <<<"$out")"
+out=$(SHARE_TEST_IDS=a00009 tn org add --cloud --local "$tf" 2>&1); rc=$?
+check "row 2: R2 on, add --cloud --local is a usage error" "1 1" "$rc $(grep -c 'usage: share add' <<<"$out")"
+check "row 2: the refusals log no PUT and write no row" "$nput $nrows 0" "$(tputs) $(tnrows "$troot") $([[ -e $DRYT/m/a00009 ]] && echo 1 || echo 0)"
+# R2 on, storage_default=cloud
+sed -i.bak 's/^storage_default=local$/storage_default=cloud/' "$torg" && rm -f "$torg.bak"
+out=$(SHARE_TEST_IDS=a00004 tn org add "$tf" 2>&1); rc=$?
+check "row 2: default cloud, add f is cloud" "0 0 1" "$rc $(trow a00004 "$troot" | grep -c .) $(jq -r .v "$DRYT/m/a00004" 2>/dev/null)"
+out=$(SHARE_TEST_IDS=a00005 tn org add --local "$tf" 2>&1); rc=$?
+check "row 2: default cloud, add --local f is local with a pointer" "0 1 2" "$rc $(trow a00005 "$troot" | grep -c .) $(jq -r .v "$DRYT/m/a00005" 2>/dev/null)"
+sed -i.bak 's/^storage_default=cloud$/storage_default=local/' "$torg" && rm -f "$torg.bak"
+# row 4: the pointer is the first write; a 412 takes a fresh id; the record carries the gated flag, never the rule or the host
+: >"$tlog"; rm -rf "$DRYT/.fx"
+out=$(SHARE_TEST_IDS="b00001 b00002" SHARE_R2_DRY_PUT=race-once tn org add --access email:a@example.test "$tf" 2>&1); rc=$?
+check "row 4: the gated add exits 0 on the second id" "0 1 0" "$rc $(trow b00002 "$troot" | grep -c .) $(trow b00001 "$troot" | grep -c .)"
+check "row 4: GET m/<id> and the prefix scan precede the pointer PUT" "1" "$([[ -n $(tline '^PUT m/b00001$') && $(tline '^GET m/b00001$') -lt $(tline '^LIST o/b00001\.$') && $(tline '^LIST o/b00001\.$') -lt $(tline '^PUT m/b00001$') ]] && echo 1 || echo 0)"
+check "row 4: the 412 leaves the other publisher's record (If-None-Match: *)" "1 theirs.txt" "$(jq -r '"\(.v) \(.name)"' "$DRYT/m/b00001")"
+check "row 4: the fresh id is checked, then reserved" "1" "$([[ $(tline '^PUT m/b00001$') -lt $(tline '^GET m/b00002$') && $(tline '^GET m/b00002$') -lt $(tline '^PUT m/b00002$') ]] && echo 1 || echo 0)"
+check "row 4: the pointer: v:2, machine, gated, no rule, no host" "2 machine gated 0" "$(jq -r '"\(.v) \(.storage) \(.opts)"' "$DRYT/m/b00002") $(grep -c 'access\|host=\|example.test' "$DRYT/m/b00002" || true)"
+check "row 4: a gated add's pointer PUT precedes POST app" "1" "$([[ -n $(tline '^POST app$') && $(tline '^PUT m/b00002$') -lt $(tline '^POST app$') ]] && echo 1 || echo 0)"
+: >"$tlog"; rm -f "$DRYT/.resume" "$DRYT/.paused"
+(SHARE_TEST_IDS=c00001 SHARE_R2_DRY_PAUSE="PUT m/c00001" tn org add "$tf" >/dev/null 2>&1; echo $? >"$WORK/tn/c1.rc") &
+for _ in $(seq 1 200); do [[ -f $DRYT/.paused ]] && break; sleep 0.05; done
+check "row 4: held at the pointer PUT, pub/<id> does not exist yet" "1 0" "$([[ -f $DRYT/.paused ]] && echo 1 || echo 0) $([[ -e $troot/pub/c00001 ]] && echo 1 || echo 0)"
+: >"$DRYT/.resume"; wait "$!"; rm -f "$DRYT/.resume" "$DRYT/.paused"
+check "row 4: released, the add publishes" "0 1" "$(cat "$WORK/tn/c1.rc") $([[ -d $troot/pub/c00001 ]] && echo 1 || echo 0)"
+# row 5: the pointer PUT fails: nothing is served, no row, no app
+for g in "" "--access email:a@example.test"; do
+  : >"$tlog"
+  # shellcheck disable=SC2086 # $g is zero or two words on purpose
+  out=$(SHARE_TEST_IDS=d00001 SHARE_R2_DRY_PUT=500 tn org add $g "$tf" 2>&1); rc=$?
+  check "row 5: pointer PUT 500 ${g:+(gated) }exits 1 naming R2" "1 1" "$rc $(grep -c 'R2 did not take the pointer record m/d00001 (HTTP 500' <<<"$out")"
+  check "row 5: ${g:+(gated) }no pub/<id>, no row, no app, no stage" "0 0 0 0" "$([[ -e $troot/pub/d00001 ]] && echo 1 || echo 0) $(trow d00001 "$troot" | grep -c .) $(grep -c '^POST app$' "$tlog") $(find "$troot" -maxdepth 1 -name '.stage.*' | grep -c .)"
+done
+# rm of a local row deletes its own pointer; never a cloud record on the same id; without a token the pointer stays
+: >"$tlog"
+out=$(tn org rm a00001 2>&1); rc=$?
+check "rm: a local row's pointer goes after the row" "0 0 1" "$rc $([[ -e $DRYT/m/a00001 ]] && echo 1 || echo 0) $(grep -c '^DELETE m/a00001$' "$tlog")"
+cp "$DRYT/m/a00002" "$WORK/tn/cloud-a00002"; jq -c '.id = "a00005"' "$WORK/tn/cloud-a00002" >"$DRYT/m/a00005"   # a cloud record shadows the local a00005
+: >"$tlog"
+out=$(tn org rm a00005 2>&1); rc=$?
+check "rm: a cloud record on the same id is never deleted" "0 1 0" "$rc $(jq -r .v "$DRYT/m/a00005") $(grep -c '^DELETE m/a00005$' "$tlog")"
+: >"$tlog"
+out=$(TN_TOK="" TN_CF="" tn org rm a00003 2>&1); rc=$?
+check "rm: with no token the pointer stays and is named" "0 2 1" "$rc $(jq -r .v "$DRYT/m/a00003") $(grep -c 'the pointer m/a00003 stays' <<<"$out")"
+# api-token on an origin keys the publisher refusals on bucket=, and the Access preflight still runs
+: >"$tlog"
+out=$(SHARE_R2_DRY_ROLE=deny tn org api-token --check 2>&1); rc=$?
+check "api-token, R2-on origin: a publisher token passes and the Access preflight runs" "0 1 1" "$rc $(grep -c 'a publisher token for bucket ok-bucket' <<<"$out") $(grep -c '^GET orgs$' "$tlog")"
+mkdir -p "$DRYT/.cf"; echo '{}' >"$DRYT/.cf/script.json"
+out=$(tn org api-token --check 2>&1); rc=$?
+check "api-token, R2-on origin: an admin token is refused" "1 1" "$rc $(grep -c 'it is an admin token' <<<"$out")"
+rm -f "$DRYT/.cf/script.json"
+
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then
   wout="$(node "$(dirname "$SH")/../tests/worker.mjs" 2>&1)"; wrc=$?

@@ -105,3 +105,19 @@ Answers:
 - (k) Both accounts are on Workers Paid, so no daily request limit applies and the route never hits the free plan's failure mode. TASK-4 sets `request_limit_fail_open: true` on the route anyway: it costs nothing on a paid plan and keeps machine links up if an account ever drops to free.
 
 Cleanup, checked through the API afterwards on both accounts: Workers, custom domains, Access apps, service tokens, tunnels, routes, and DNS records with names starting `share-e2e-spk` all 0; buckets starting `share-e2e` 0; user tokens starting `share-e2e-spk` 0 and the minted token's id answers 404; `dig` at each zone's authoritative server answers NXDOMAIN for both throwaway names.
+
+## Build deltas
+
+Deviations from the spec, per task. A task with none is not listed.
+
+### TASK-2a (per-link storage on the origin)
+
+- An origin with R2 on is a tunnel profile whose config holds `bucket=`; the process flag `r2on` keys every bucket call (`r2_call`), the dry log (`dry_log` writes `r2-calls.log`, so one log orders bucket PUTs, probes, and Access calls), `rand_id`'s bucket leg, and `api-token`'s publisher refusals. `backend` stays the tunnel, so a cloud add on the origin runs `cmd_add_r2` unchanged; `share_url` reads `r2_link_base` whenever it is set, and the origin keeps its own `r2-own` file.
+- `--cloud` with a port or `--host` dies with `--cloud: live links and --host stay on the origin's tunnel` on every tunnel profile, R2 on or off, before the R2-off line. `--cloud --local` is the usage line. A bad `storage_default` dies naming the config.
+- A local add on an R2-on origin runs `r2_token_check` before `rand_id`, so no token means no stage, no id, no write.
+- The pointer PUT retries a 412 with a fresh `rand_id` up to five ids, then dies. The `type` is `site` for a live link, else the source's type.
+- Cloud records written by `cmd_add_r2` now carry `type` too (the spec's "new cloud records store `type` at add time"); `v:1` readers ignore it.
+- `rm` deletes the pointer only after a `GET m/<id>` shows `v:2` with `storage:"machine"`: a cloud record on the same id (a shadow) is never deleted from the origin. Token modes: `rm` and bare `prune` use the soft resolver; `ls`'s listing prune only an environment token; serve's hourly prune never. An admin token from the environment counts as no token there (its `r2_publisher_check` refusal is probed in a subshell), so a listing never dies on it.
+- `api-token` on an R2-on origin: `--cmd`, the paste, and `--check` run `r2_publisher_check`; the paste names the bucket scope beside the prefilled Access form; `access_preflight` stays required. Not built yet: the 14-day `expires_on` warning (round-1 warning), left for TASK-11a's token work.
+- Test seams: `SHARE_R2_DRY_PUT=500` (every PUT answers 500), `SHARE_R2_DRY_PUT=race-once` (the first conditional PUT of an `m/` key finds a peer's record written just before it, so `If-None-Match: *` answers 412), and `SHARE_R2_DRY_PAUSE` now drops `.paused` in the dry bucket, so row 4 inspects `pub/` while the pointer PUT is held instead of racing a watcher.
+- Left for TASK-2b: on the origin, `rm`, `refresh`, and `hits` of a cloud id still read the local index only (`no share with id`).
