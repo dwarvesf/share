@@ -580,15 +580,24 @@ cmd_add() {
 
 cmd_ls() {
   access_pending_note
-  [[ -s $index ]] || { echo "no shares"; return 0; }
-  local id name src date exp opts size until gone by
-  while IFS=$'\t' read -r id name src date exp opts; do
+  [[ -s $index || $backend == r2 || $r2on == 1 ]] || { echo "no shares"; return 0; }
+  local id name src date exp opts storage t by size until gone tag acc us=$'\x1f'
+  list_rows ls
+  if [[ -z $list_out && ( $backend == r2 || $r2on == 1 ) ]]; then
+    [[ -z $list_cloud_error ]] || echo "share: cloud links not listed: $list_cloud_error" >&2
+    echo "no shares"; return 0
+  fi
+  while IFS=$us read -r id name src date exp opts storage t by; do
+    [[ -n $id ]] || continue
     until="never"; [[ ${exp:-0} -gt 0 ]] && until="$(day_of "$exp")"
     share_url "$id" "$name" "$opts"
-    echo "$share_url_out"
-    if [[ $backend == r2 ]]; then
-      by="$(opt_val by "$opts" || true)"
-      echo "    id=$id  added=$date  expires=$until$(access_col "$opts")  by=${by:-?}  from=$src"
+    tag=$storage; [[ $storage == machine ]] && has_opt live "$opts" && tag=live
+    printf '%-7s  %-8s  by=%s  %s\n' "$tag" "$t" "$by" "$share_url_out"
+    if [[ $storage == cloud ]]; then
+      echo "    id=$id  added=$date  expires=$until$(access_col "$opts")  by=$by  from=$src"
+    elif [[ $backend == r2 ]]; then   # a member: the origin's link, read from its pointer
+      acc=""; has_opt gated "$opts" && acc="  access=gated"
+      echo "    id=$id  added=$date  expires=$until$acc  served by the tenant's origin"
     elif has_opt live "$opts"; then
       echo "    id=$id  live -> $src  added=$date  expires=$until$(access_col "$opts")"
     else
@@ -596,8 +605,25 @@ cmd_ls() {
       gone=""; [[ -e $src ]] || gone="  (source gone, snapshot still served)"
       echo "    id=$id  size=${size:-?}  added=$date  expires=$until$(access_col "$opts")  from=$src$gone"
     fi
-  done < <(rows)   # a 5-field row (v0.1.x) reads with opts empty; malformed rows are skipped
+  done <<<"$list_out"   # a 5-field row (v0.1.x) reads with opts empty; malformed rows and records are skipped
+  [[ -z $list_cloud_error ]] || echo "share: cloud links not listed: $list_cloud_error" >&2
   access_ls_check
+}
+state_lines() { # state_lines: list_out as the tab lines cmd_state's jq reads (id name url kind own_host expires access storage type by), this machine's rows newest first, then the bucket's
+  local id name src date exp opts storage t by kind oh rule line mine=() rest=() i us=$'\x1f'
+  while IFS=$us read -r id name src date exp opts storage t by; do
+    [[ -n $id ]] || continue
+    kind="snapshot"; has_opt live "$opts" && [[ $storage == machine ]] && kind="live"
+    optv host "$opts"; oh=$optv_out
+    [[ $storage == cloud ]] && oh=""
+    optv access_rule "$opts"; rule=$optv_out
+    [[ $storage == machine && $backend == r2 ]] && { rule=""; has_opt gated "$opts" && rule="gated"; }   # a pointer carries the flag, never the rule
+    share_url "$id" "$name" "$opts"
+    printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$id" "$name" "$share_url_out" "$kind" "$oh" "${exp:-0}" "$rule" "$storage" "$t" "$by"
+    if [[ $storage == machine && $backend != r2 ]]; then mine+=("$line"); else rest+=("$line"); fi
+  done <<<"$list_out"
+  for ((i = ${#mine[@]} - 1; i >= 0; i--)); do printf '%s\n' "${mine[i]}"; done
+  [[ ${#rest[@]} == 0 ]] || printf '%s\n' "${rest[@]}"
 }
 access_col() { local r; r="$(opt_val access_rule "$1" || true)"; [[ -n $r ]] && printf '  access=%s' "$r"; return 0; }
 
@@ -1090,34 +1116,26 @@ cmd_state() { # read-only JSON snapshot for the menu bar app: never prunes, writ
   # forks the left side, so an assignment made there never reaches this shell's copy
   # of the variable, and jq's --argjson would see only the local's initial "0".
   [[ -s $index ]] && skipped_n=$(($(awk 'length {c++} END {print c+0}' "$index") - $(rows | awk 'END {print NR}')))
-  {
-    if [[ -s $index ]]; then
-      local id name src date exp opts kind own_host rule line rows=() i
-      while IFS=$'\t' read -r id name src date exp opts; do
-        kind="snapshot"; has_opt live "$opts" && kind="live"
-        own_host="${opts#*host=}"
-        [[ $own_host == "$opts" ]] && own_host="" || own_host="${own_host%% *}"
-        rule="${opts#*access_rule=}"
-        [[ $rule == "$opts" ]] && rule="" || rule="${rule%% *}"
-        share_url "$id" "$name" "$opts"
-        printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s' "$id" "$name" "$share_url_out" "$kind" "$own_host" "${exp:-0}" "$rule"
-        rows+=("$line")
-      done < <(rows)
-      for ((i = ${#rows[@]} - 1; i >= 0; i--)); do printf '%s\n' "${rows[i]}"; done
-    fi
-  } | jq -nR \
+  # SHARE_STATE_BRIEF (the text profiles list) reads no bucket; the menu poll reads it with a stored token only
+  if [[ ${SHARE_STATE_BRIEF:-0} == 1 ]]; then list_rows brief; else list_rows state; fi
+  state_lines | jq -nR \
     --arg state "$state_val" --argjson ready "$ready_val" --arg mode "$mode_val" \
     --arg host "$host_val" --arg hosts "$hosts" --argjson serves_here "$serves_val" \
-    --argjson service "$service_val" --argjson skipped "$skipped_n" --argjson access_pending "$(pending_count)" '
-    def row: split("\t") | {id: .[0], name: .[1], url: .[2], kind: .[3],
-      own_host: (if .[4] == "" then null else .[4] end), expires: (.[5] | tonumber),
-      access: (if .[6] == "" then null else .[6] end)};
+    --argjson service "$service_val" --argjson skipped "$skipped_n" --argjson access_pending "$(pending_count)" \
+    --argjson r2 "$([[ $r2on == 1 ]] && echo true || echo false)" --arg sdef "$([[ $r2on == 1 ]] && { cfg storage_default || true; })" \
+    --arg cerr "$list_cloud_error" --argjson cmore "$list_cloud_more" "$state_jq_row"'
     {schema: 1, state: $state, ready: $ready, mode: $mode,
      host: (if $host == "" then null else $host end), hosts: $hosts,
      serves_here: $serves_here, service: $service, access_pending: $access_pending,
      shares: [inputs | select(length > 0) | row]}
-    + (if $skipped > 0 then {skipped: $skipped} else {} end)'
+    + (if $skipped > 0 then {skipped: $skipped} else {} end)
+    + {r2: $r2} + (if $r2 then {storage_default: (if $sdef == "" then "local" else $sdef end)} else {} end)
+    + (if $cerr == "" then {} else {cloud_error: $cerr} end) + (if $cmore > 0 then {cloud_more: $cmore} else {} end)'
 }
+state_jq_row='def row: split("\t") | {id: .[0], name: .[1], url: .[2], kind: .[3],
+      own_host: (if .[4] == "" then null else .[4] end), expires: (.[5] | tonumber),
+      access: (if .[6] == "" then null else .[6] end), storage: .[7], type: .[8], by: .[9]};'
+
 
 # --- Cloudflare setup / teardown ---
 #
@@ -2435,19 +2453,86 @@ r2_release_prefix() { # r2_release_prefix <id> <prefix>: the EXIT trap's r2 part
   return 0
 }
 
-share_type() { # share_type <path>: the file-type word for a link's source, first match wins; the extension match ignores case
-  if [[ -d $1 ]]; then [[ -f $1/index.html ]] && echo site || echo folder; return 0; fi
-  case "$(basename "$1" | tr '[:upper:]' '[:lower:]')" in
-    *.html|*.htm) echo site ;;
-    *.md|*.markdown) echo markdown ;;
-    *.pdf) echo pdf ;;
-    *.png|*.jpg|*.jpeg|*.gif|*.webp|*.svg|*.heic|*.ico|*.avif) echo image ;;
-    *.mp4|*.mov|*.webm|*.m4v|*.mkv) echo video ;;
-    *.mp3|*.wav|*.m4a|*.aac|*.flac|*.ogg) echo audio ;;
-    *.zip|*.tar|*.gz|*.tgz|*.bz2|*.xz|*.7z|*.rar|*.dmg) echo archive ;;
-    *.txt|*.csv|*.json|*.yaml|*.yml|*.toml|*.xml|*.log|*.sh|*.py|*.js|*.mjs|*.ts|*.go|*.rs|*.rb|*.swift|*.java|*.c|*.h|*.css|*.sql) echo text ;;
-    *) echo other ;;
+share_type() { type_of "$1"; echo "$type_out"; }
+type_of() { # type_of <path>: the file-type word for a link's source into type_out, first match wins; the extension match ignores case; no fork (state types every row)
+  if [[ -d $1 ]]; then   # a published folder's generated listing is not a site of its own
+    local l=""; [[ -f $1/index.html ]] && read -r l <"$1/index.html"
+    if [[ -f $1/index.html && $l != *'<title>index</title>'* ]]; then type_out=site; else type_out=folder; fi
+    return 0
+  fi
+  local nc=0; shopt -q nocasematch && nc=1; shopt -s nocasematch
+  case ${1##*/} in
+    *.html|*.htm) type_out=site ;;
+    *.md|*.markdown) type_out=markdown ;;
+    *.pdf) type_out=pdf ;;
+    *.png|*.jpg|*.jpeg|*.gif|*.webp|*.svg|*.heic|*.ico|*.avif) type_out=image ;;
+    *.mp4|*.mov|*.webm|*.m4v|*.mkv) type_out=video ;;
+    *.mp3|*.wav|*.m4a|*.aac|*.flac|*.ogg) type_out=audio ;;
+    *.zip|*.tar|*.gz|*.tgz|*.bz2|*.xz|*.7z|*.rar|*.dmg) type_out=archive ;;
+    *.txt|*.csv|*.json|*.yaml|*.yml|*.toml|*.xml|*.log|*.sh|*.py|*.js|*.mjs|*.ts|*.go|*.rs|*.rb|*.swift|*.java|*.c|*.h|*.css|*.sql) type_out=text ;;
+    *) type_out=other ;;
   esac
+  [[ $nc == 1 ]] || shopt -u nocasematch
+}
+type_ok() { case ${1:-} in pdf|image|video|audio|folder|site|markdown|archive|text|other) return 0 ;; esac; return 1; }
+optv() { # optv <key> <opts>: the value of a key=value token into optv_out, empty when absent; no fork
+  local rest=" $2"
+  optv_out="" rest="${rest#*" $1="}"
+  [[ $rest == " $2" ]] || optv_out="${rest%% *}"
+}
+
+r2_menu_token() { # state (the menu poll): the bucket is read only with a stored publisher token (the Keychain item or the 600 file); never a command, which may prompt, never the environment
+  [[ ${SHARE_API_TOKEN_OFF:-0} != 1 ]] || return 1
+  [[ -z ${SHARE_R2_TOKEN:-} ]] || return 0   # the test seam stands for a stored token
+  [[ -z "$(cfg r2_token_cmd || true)" && -z "$(cfg api_token_cmd || true)" ]] || return 1
+  api_token_resolve
+  [[ -n $api_token && $api_token_src != CLOUDFLARE_API_TOKEN ]]
+}
+
+list_bucket() { # list_bucket ls|state <local ids>: the bucket's display rows (fields split by \x1f), "#more <n>" first; run in a subshell, so a die becomes cloud_error
+  local id name src date exp opts us=$'\x1f'
+  if [[ $1 == state ]]; then
+    r2_menu_token || die "the menu reads cloud links only with a stored token: $me api-token"
+    r2_read 25 "$2"
+  elif [[ -z ${r2_snap_file:-} ]]; then r2_read; fi   # a member's ls reuses the read its prune made
+  echo "#more ${r2_list_more:-0}"
+  while IFS=$'\t' read -r id name src date exp opts; do
+    case $'\n'"$2" in *$'\n'"$id"$'\n'*) continue ;; esac   # a shadowed id lists its local row once
+    optv type "$opts"; type_out=$optv_out
+    if ! type_ok "$type_out"; then if [[ $name == *.* ]]; then type_of "/dev/null/$name"; else type_out=folder; fi; fi
+    optv by "$opts"
+    printf '%s\n' "$id$us$name$us$src$us$date$us$exp$us$opts${us}cloud$us$type_out$us${optv_out:-?}"
+  done < <(crows)
+  [[ $backend == r2 ]] || return 0   # on the origin every machine record is its own pointer; its index is their truth
+  printf '%s' "${r2_mrows:-}" | tr '\t' "$us" | grep -v '^$' | awk -F"$us" -v OFS="$us" -v now="$(date +%s)" '$4 == 0 || $4 > now {print $1, $2, "", $3, $4, $5, "machine", $6, $7}' || true   # an expired pointer is a prune'"'"'s, not a link
+}
+
+list_rows() { # list_rows ls|state|brief: this profile's display rows into list_out (fields split by \x1f): id name src added expires opts storage type by
+  # sets list_cloud_error and list_cloud_more. Bucket rows are display data: they never reach rows(), the index, a Caddyfile, or a stage path
+  local id name src date exp opts lids="" f me_by us=$'\x1f'
+  list_out="" list_cloud_error="" list_cloud_more=0
+  if [[ $backend != r2 ]]; then
+    me_by="$(r2_by)"
+    while IFS=$'\t' read -r id name src date exp opts; do
+      if has_opt live "$opts"; then type_out=site; else type_of "$pub/$id/$name"; fi
+      optv by "$opts"
+      list_out+="$id$us$name$us$src$us$date$us$exp$us$opts${us}machine$us$type_out$us${optv_out:-$me_by}"$'\n'
+      lids+="$id"$'\n'
+    done < <(rows)
+    [[ $r2on == 1 && $1 != brief ]] || return 0
+  fi
+  [[ $1 != brief ]] || return 0
+  f="$(mktemp "${TMPDIR:-/tmp}/share-list.XXXXXX")"
+  if ( list_bucket "$1" "$lids" ) >"$f" 2>"$f.err"; then
+    list_cloud_more="$(sed -n '1s/^#more //p' "$f")"
+    list_out+="$(sed '1d' "$f")"
+    [[ -z $list_out ]] || list_out+=$'\n'
+  else
+    list_cloud_error="$(awk 'NF {l = $0} END {print l}' "$f.err")"; list_cloud_error="${list_cloud_error#share: }"
+    list_cloud_error="${list_cloud_error:-the bucket could not be read}"
+  fi
+  rm -f "$f" "$f.err"
+  [[ $list_cloud_more =~ ^[0-9]+$ ]] || list_cloud_more=0
 }
 
 r2_token_ok() { # r2_token_ok off|env|soft: a publisher token resolves, never a die; env reads the environment only, so a listing runs no command
@@ -2466,8 +2551,9 @@ r2_pointer_write() { # r2_pointer_write <id> <name> <type> <expires> <opts> <gat
   for w in $5; do case $w in noindex|live) po="${po:+$po }$w" ;; esac; done
   [[ -z $6 ]] || po="${po:+$po }gated"   # a flag, never the rule: every member reads this object
   rec="$(mktemp "$root/.r2rec.XXXXXX")"
-  jq -nc --arg id "$1" --arg name "$2" --arg by "$(r2_by)" --arg added "$7" --argjson exp "$4" --arg opts "$po" --arg type "$3" \
-    '{v: 2, id: $id, storage: "machine", name: $name, by: $by, added: $added, expires: $exp, opts: $opts, type: $type}' >"$rec"
+  jq -nc --arg id "$1" --arg name "$2" --arg by "$(r2_by)" --arg added "$7" --argjson exp "$4" --arg opts "$po" --arg type "$3" --arg oh "$(opt_val host "$5" || true)" \
+    '{v: 2, id: $id, storage: "machine", name: $name, by: $by, added: $added, expires: $exp, opts: $opts, type: $type}
+      + (if $oh == "" then {} else {own_host: $oh} end)' >"$rec"   # own_host: a member lists a --host row at its own name
   r2_call PUT "m/$1" "$rec" -H 'If-None-Match: *' || true
   rm -f "$rec"
 }
@@ -2709,12 +2795,13 @@ r2_record_row() { # r2_record_row <m/ key> <json>: the index.tsv row for a sound
       and (.name | clean) and (.src | clean) and (.opts | clean)
       and (.added | clean)
       and (.expires | type == "number" and . >= 0 and . < 1e11)   # epoch seconds; 1e300 would break bash arithmetic
-      and (.opts | test("(^| )(prefix|by)=") | not)   # the row gains its own prefix= and by=; a record never supplies them
+      and (.opts | test("(^| )(prefix|by|type)=") | not)   # the row gains its own prefix=, by=, and type=; a record never supplies them
       and (.prefix | type == "string" and test("^o/" + $id + "\\.[0-9a-f]{8}/$"))
       and (.by | type == "string" and test("^[a-z0-9.-]+$"))
       and ((.aud // "") | test("^[0-9a-f]{64}$|^$")))
     | [.id, .name, .src, .added, (.expires | floor | tostring),
-       (if .opts == "" then "" else .opts + " " end) + "prefix=" + .prefix + " by=" + .by]
+       (if .opts == "" then "" else .opts + " " end) + "prefix=" + .prefix + " by=" + .by
+         + ((.type // "") as $t | if (["pdf", "image", "video", "audio", "folder", "site", "markdown", "archive", "text", "other"] | index($t)) then " type=" + $t else "" end)]
     | @tsv' <<<"$2" 2>/dev/null || true   # a corrupt or forged record is dropped, never fatal
 }
 
@@ -2753,15 +2840,22 @@ r2_fetch_records() { # r2_fetch_records <snap>: parallel-GET every key in r2_lis
 
 r2_snapshot() { r2_read; index="$r2_snap_file"; }   # an r2 profile: the bucket read is its index, so rows() stays the only reader
 
-r2_read() { # r2_read: every m/ record into this process's own file (r2_snap_file, read through crows), the sweep view, and the machine pointers; never assigns $index
-  local snap k
+r2_read() { # r2_read [<n> <local ids>]: every m/ record into this process's own file (r2_snap_file, read through crows), the sweep view, and the machine pointers; never assigns $index
+  # with <n> (the menu poll): the local ids' keys are skipped and only the newest n others by LastModified are fetched; r2_list_more counts the rest
+  local snap k keep
   mkdir -p "$root"
   snap="$(mktemp "$root/.r2-index.XXXXXX")"
   r2_snap_file="$snap"; trap release_locks EXIT
-  r2_refs="" r2_sweep_block="" r2_machine=""
+  r2_refs="" r2_sweep_block="" r2_machine="" r2_mrows="" r2_list_more=0
   r2_list "m/"
   r2_list_out="$(grep -E '^m/[0-9a-f]{6}$' <<<"$r2_list_out" || true)"   # a key is read, shown, or deleted only in the shape share writes
   r2_mkeys="${r2_list_out//m\//}" r2_mmods="$r2_list_mods"
+  if [[ -n ${1:-} ]]; then
+    keep="$(awk -F'\t' 'NR == FNR {if ($0 != "") own["m/" $0]; next} $1 ~ /^m\/[0-9a-f]+$/ && length($1) == 8 && !($1 in own) {print $2 "\t" $1}' \
+      <(printf '%s\n' "${2:-}") <(printf '%s\n' "$r2_list_mods") | LC_ALL=C sort -r | cut -f2)"
+    r2_list_out="$(head -n "$1" <<<"$keep")"
+    r2_list_more=$(( $(grep -c . <<<"$keep" || true) - $(grep -c . <<<"$r2_list_out" || true) ))
+  fi
   if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then
     while IFS= read -r k; do
       [[ -n $k ]] || continue
@@ -2782,6 +2876,16 @@ r2_take() { # r2_take <snap> <m/ key> <json>: one record into the cloud rows, th
   r2_record_row "$2" "$3" >>"$1"; r2_record_raw "$2" "$3"
   e="$(jq -r --arg id "${2#m/}" 'select(.v == 2 and .storage == "machine" and .id == $id and (.expires | type == "number" and . >= 0 and . < 1e11)) | .expires | floor' <<<"$3" 2>/dev/null)" || return 0
   [[ -z $e ]] || r2_machine+="${2#m/}"$'\t'"$e"$'\n'
+  # the v:2 display reader: every field checked before shell arithmetic or a URL sees it; a record that fails is skipped like a forged row
+  r2_mrows+="$(jq -r --arg id "${2#m/}" '
+    def clean: type == "string" and (explode | all(. >= 32 and . != 127));
+    select(type == "object" and .v == 2 and .storage == "machine" and .id == $id
+      and (.expires | tostring | test("^[0-9]{1,11}$")) and (.added | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))
+      and (.name | clean and length > 0) and (.by | clean and test("^[a-z0-9.-]+$"))
+      and (.opts | type == "string" and (split(" ") | all(. == "" or . == "noindex" or . == "live" or . == "gated")))
+      and ((.type // "") as $t | ["pdf", "image", "video", "audio", "folder", "site", "markdown", "archive", "text", "other"] | index($t))
+      and ((.own_host // "") | type == "string" and test("^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\\.[a-z][a-z]+$")))
+    | [.id, .name, .added, (.expires | tostring), (.opts + (if (.own_host // "") == "" then "" else " host=" + .own_host end)), .type, .by] | @tsv' <<<"$3" 2>/dev/null)"$'\n' || true
   return 0
 }
 
@@ -2970,26 +3074,19 @@ cmd_status_r2() { # read-only: the Worker's health and version, then the listing
 }
 
 cmd_state_r2() { # the Share Bar snapshot for an r2 profile: schema 1 plus "backend"; SHARE_STATE_BRIEF=1 (profiles) skips the share list and its m/ reads
-  local state_val="not_setup" ready="false" id name src date exp opts
+  local state_val="not_setup" ready="false"
   if [[ -n $host_name ]]; then
     state_val="serving"   # nothing runs here; the Worker serves while the account does
     r2_healthz 2; [[ $hz_code == 200 ]] && ready="true"
   fi
-  [[ -z $host_name || ${SHARE_STATE_BRIEF:-0} == 1 ]] || r2_snapshot
-  {
-    if [[ -z $host_name || ${SHARE_STATE_BRIEF:-0} == 1 ]]; then :
-    else
-      while IFS=$'\t' read -r id name src date exp opts; do
-        share_url "$id" "$name" "$opts"
-        printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$share_url_out" "${exp:-0}" "$(opt_val access_rule "$opts" || true)"
-      done < <(rows)
-    fi
-  } | jq -nR --arg state "$state_val" --argjson ready "$ready" --arg host "$host_name" --argjson access_pending "$(pending_count)" '
-    def row: split("\t") | {id: .[0], name: .[1], url: .[2], kind: "snapshot", own_host: null,
-      expires: (.[3] | tonumber), access: (if .[4] == "" then null else .[4] end)};
+  list_out="" list_cloud_error="" list_cloud_more=0
+  [[ -z $host_name || ${SHARE_STATE_BRIEF:-0} == 1 ]] || list_rows state
+  state_lines | jq -nR --arg state "$state_val" --argjson ready "$ready" --arg host "$host_name" --argjson access_pending "$(pending_count)" \
+    --arg cerr "$list_cloud_error" --argjson cmore "$list_cloud_more" "$state_jq_row"'
     {schema: 1, state: $state, ready: $ready, mode: "named", host: (if $host == "" then null else $host end), hosts: "",
      serves_here: false, service: false, access_pending: $access_pending, backend: "r2",
-     shares: [inputs | select(length > 0) | row]}'
+     shares: [inputs | select(length > 0) | row], r2: true}
+    + (if $cerr == "" then {} else {cloud_error: $cerr} end) + (if $cmore > 0 then {cloud_more: $cmore} else {} end)'
 }
 
 r2_own_get() { # r2_own_get <id>: the "<id>\t<prefix>\t<source>" line for one of this install's own adds
@@ -3109,7 +3206,7 @@ r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "
       [[ -n $arg3 ]] && { urldec "$arg3"; want="$urldec_out"; }   # the continuation token arrives url-encoded, as S3 serves it
       while IFS= read -r k; do
         [[ $k == "$key"* ]] && [[ -z $want || $k > $want ]] && all+="$k"$'\n'
-      done < <(cd "$d" && find . -type f ! -name '.*' ! -path './.*' ! -name 'r2-calls.log' | sed 's|^\./||' | LC_ALL=C sort)
+      done < <({ cd "$d" && find . -type f ! -name '.*' ! -path './.*' ! -name 'r2-calls.log' | sed 's|^\./||'; [[ -z ${SHARE_R2_DRY_LIST_EXTRA:-} ]] || echo "$SHARE_R2_DRY_LIST_EXTRA"; } | LC_ALL=C sort)   # EXTRA: a key no file holds (m/../share.json)
       cf_body='<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>dry</Name><Prefix>'"$key"'</Prefix><MaxKeys>1000</MaxKeys><EncodingType>url</EncodingType>'
       while IFS= read -r k; do
         [[ -n $k ]] || continue

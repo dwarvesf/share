@@ -398,6 +398,13 @@ The app changes anything only by running share's normal verbs (`add`, `rm`, `ref
 | `shares[].expires` | epoch seconds; `0` means never |
 | `shares[].url` | exactly what `share ls` prints for that row |
 | `shares[].access` | the `--access` rule of a gated share (`group:...`, `email:...`, `domain:...`), else `null` |
+| `shares[].storage` | `machine` (served by the tenant's origin through its tunnel) or `cloud` (served from the bucket) |
+| `shares[].type` | the file type: `pdf`, `image`, `video`, `audio`, `folder`, `site`, `markdown`, `archive`, `text`, or `other` |
+| `shares[].by` | the machine that published the share |
+| `r2` | `true` when the profile reads a bucket (an origin with R2 on, or an r2 profile), else `false` |
+| `storage_default` | an origin with R2 on only: `local` or `cloud`, the storage of an `add` with neither `--local` nor `--cloud` |
+| `cloud_error` | why the bucket's rows are missing (the menu reads them only with a stored token); the local rows still list |
+| `cloud_more` | how many more bucket rows exist past the newest 25 that `state` reads; about, since it counts orphan pointers too |
 | `access_pending` | count of Access apps waiting for deletion (`access-pending` lines) |
 | `skipped` | count of malformed index rows; present only when greater than zero |
 | `backend` | `"r2"` on an r2 profile only, absent on a tunnel profile. There `state` is `serving` once set up, `ready` comes from one `/healthz` probe (2 s), `mode` is `named`, `hosts` is `""`, `serves_here` and `service` are `false`, every share is a `snapshot`, and `skipped` is never set. Share Bar shows neither Start nor Stop for it |

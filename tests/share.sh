@@ -435,7 +435,7 @@ echo data >"$WORK/$hash_name"
 hash_out=$(bash "$SH" add "$WORK/$hash_name" 2>/dev/null)
 hash_url=$(head -1 <<<"$hash_out")
 hash_id=$(cut -d/ -f4 <<<"$hash_url")
-ls_url=$(bash "$SH" ls | grep -B1 "id=$hash_id" | head -1)
+ls_url=$(bash "$SH" ls | grep -B1 "id=$hash_id" | head -1 | grep -o 'https://.*')
 check "share ls prints the same link share add did" "$hash_url" "$ls_url"
 check "the hash+accent link serves 200" "200" "$(wait_code 200 "$hash_url")"
 bash "$SH" rm "$hash_id" >/dev/null
@@ -1065,7 +1065,7 @@ check "own-host row's kind is snapshot" "snapshot" "$(jq -r --arg id "$host_id" 
 
 for id in "$snap_id" "$live_id" "$host_id"; do
   state_url=$(jq -r --arg id "$id" '.shares[] | select(.id==$id) | .url' "$WORK/state-serving.json")
-  ls_url=$(grep -B1 "id=$id" <<<"$ls_out" | head -1)
+  ls_url=$(grep -B1 "id=$id" <<<"$ls_out" | head -1 | grep -o 'https://.*')
   check "state url == share ls url for $id" "$ls_url" "$state_url"
 done
 
@@ -1792,6 +1792,7 @@ if [[ -s $main_bin ]]; then
     env "${envs[@]}" SHARE_TEST_IDS=c0a014 SHARE_HOST_DRY=1 bash "$bin" add "$WORK/wt/one.md" --host hh.example.test >"$out/add-host.out" 2>"$out/add-host.err"
     env "${envs[@]}" bash "$bin" ls >"$out/ls.out" 2>"$out/ls.err"
     env "${envs[@]}" bash "$bin" state >"$out/state.out" 2>"$out/state.err"
+    env "${envs[@]}" bash "$bin" profiles --json >"$out/profiles.out" 2>"$out/profiles.err"
     env "${envs[@]}" bash "$bin" service install >"$out/svc.out" 2>"$out/svc.err"
     env "${envs[@]}" bash "$bin" stop >/dev/null 2>&1
     for f in .config/share/config share/index.tsv share/Caddyfile share/host-calls.log share/quick.url; do
@@ -1807,7 +1808,17 @@ if [[ -s $main_bin ]]; then
   }
   compat_run "$main_bin" main
   compat_run "$SH" new
-  check "row 1: every artifact byte-identical" "" "$(diff -r "$WORK/compat-main" "$WORK/compat-new" 2>&1)"
+  check "row 1: ls tags each link (machine or live), its type, and by=" "$(grep -c . "$WORK/compat-new/index.tsv") 1" \
+    "$(grep -cE '^(machine|live) +[a-z]+ +by=[a-z0-9.-]+  https://' "$WORK/compat-new/ls.out") $(grep -cE '^live +site +by=' "$WORK/compat-new/ls.out")"
+  check "row 1: state rows gain storage, type, by; the top gains r2: false" "machine false" \
+    "$(jq -r '([.shares[] | select(.type and .by) | .storage] | unique | join(" ")) + " " + (.r2 | tostring)' "$WORK/compat-new/state.out")"
+  for c in main new; do   # the listing additions are the one allowed difference
+    sed -i.bak -E 's/^(machine|live|cloud) +[a-z]+ +by=[a-z0-9.-]+  (https:)/\2/' "$WORK/compat-$c/ls.out"
+    jq -S 'del(.r2, .storage_default, .cloud_error, .cloud_more) | .shares |= map(del(.storage, .type, .by))' "$WORK/compat-$c/state.out" >"$WORK/compat-$c/state.tmp" && mv -f "$WORK/compat-$c/state.tmp" "$WORK/compat-$c/state.out"
+    jq -S '.profiles |= map(if .state then .state |= (del(.r2, .storage_default, .cloud_error, .cloud_more) | .shares |= map(del(.storage, .type, .by))) else . end)' "$WORK/compat-$c/profiles.out" >"$WORK/compat-$c/p.tmp" && mv -f "$WORK/compat-$c/p.tmp" "$WORK/compat-$c/profiles.out"
+    rm -f "$WORK/compat-$c/ls.out.bak"
+  done
+  check "row 1: every artifact byte-identical but the listing additions" "" "$(diff -r "$WORK/compat-main" "$WORK/compat-new" 2>&1)"
 else
   echo "  SKIP  origin/main not fetched; byte-identity row skipped"
 fi
@@ -1968,7 +1979,7 @@ check "rows() yields only the good record" "abc001" "$(cut -f1 <<<"$snap_rows")"
 check "the row carries prefix and by" "1" "$(grep -c 'prefix=o/abc001.deadbeef/ by=mini' <<<"$snap_rows")"
 check "the row keeps its opts" "1" "$(grep -c 'noindex prefix=' <<<"$snap_rows")"
 out=$(r2d ls 2>&1)
-check "ls shows the snapshot row with by=" "1" "$(grep -c 'by=mini' <<<"$out")"
+check "ls shows the snapshot row with by=" "1" "$(grep -c '^    id=.*by=mini' <<<"$out")"
 check "ls prints the link" "1" "$(grep -c 'https://r2x.example.test/abc001/' <<<"$out")"
 out=$(SHARE_TEST_IDS="abc001 eee001" r2d r2-id 2>&1)
 check "rand_id skips an id with a record" "eee001" "$out"
@@ -2032,7 +2043,7 @@ out=$(SHARE_TEST_IDS=add002 r2a add --ttl 7d "$WORK/note.txt" 2>/dev/null); rc=$
 check "row 5: a file add links the file" "0 https://r2x.example.test/add002/note.txt" "$rc $(head -1 <<<"$out")"
 check "row 5: a file add's expiry is seven days out" "1" "$(jq --argjson now "$(date +%s)" '.expires > $now + 604000 and .expires <= $now + 604800' "$DRYA/m/add002" | grep -c true)"
 out=$(r2a ls 2>&1)
-check "row 5: ls lists both adds" "2" "$(grep -c '^https://r2x.example.test/add00[12]/' <<<"$out")"
+check "row 5: ls lists both adds" "2" "$(grep -c ' https://r2x.example.test/add00[12]/' <<<"$out")"
 # If-None-Match: a record that lands while the add waits at its publish wins; the add deletes only its own prefix
 : >"$rlog"; rm -f "$DRYA/.resume"
 (SHARE_TEST_IDS=add003 SHARE_R2_DRY_PAUSE="PUT m/add003" r2a add "$WORK/wt/one.md" >"$WORK/add3.out" 2>"$WORK/add3.err"; echo $? >"$WORK/add3.rc") &
@@ -3252,6 +3263,108 @@ check "row 30: the fold again converges to row 14's end state" "0 $row14end" "$r
 vfresh; out=$(SHARE_R2_DRY_HEALTHZ=down tvsetup 2>&1); rc=$?
 check "row 30: with no alias the step-15 die names --no-r2" "1 1 0" "$rc $(grep -c 'roll back with: share --profile ten setup ten.example.test --no-r2$' <<<"$out") $(grep -c 'alias rollback' <<<"$out")"
 rm -rf "$T5H/.config/share/profiles/f" "$T5H/share/profiles/f"
+
+echo "=== tenant: one shared list in ls, state, profiles --json (rows 15, 16, 17, 28) ==="
+L6H="$WORK/list-home"; DRYL="$WORK/list-bucket"; LMH="$WORK/list-member"
+lroot="$L6H/share/profiles/lst"; llog="$lroot/r2-calls.log"; lconf="$L6H/.config/share/profiles/lst/config"
+mkdir -p "$L6H/.config/share/profiles/lst" "$L6H/.config/share/profiles/off" "$DRYL/m" "$LMH/.config/share/profiles/lst"
+printf 'hostname=lst.example.test\ntunnel_id=tid-lst\ntunnel_name=share-lst-example-test\nhosts=not-this-host\nport=%s\nbucket=ok-bucket\nr2_endpoint=https://acct.example.r2.cloudflarestorage.com\nstorage_default=local\n' $((base + 60)) >"$lconf"
+printf 'hostname=off6.example.test\ntunnel_id=tid-off6\ntunnel_name=share-off6-example-test\nhosts=not-this-host\nport=%s\n' $((base + 62)) >"$L6H/.config/share/profiles/off/config"
+printf 'backend=r2\nhostname=lst.example.test\nzone=example.test\nbucket=ok-bucket\nport=r2\nr2_endpoint=https://acct.example.r2.cloudflarestorage.com\nr2_key_id=keyid42\n' >"$LMH/.config/share/profiles/lst/config"
+printf '{"v":1,"host":"lst.example.test"}\n' >"$DRYL/share.json"
+tl() { # tl <verb...>: the origin of lst.example.test (R2 on) on its own dry bucket; TLP=off picks the R2-off profile
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS \
+    HOME="$L6H" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$DRYL" SHARE_R2_TOKEN="${TL_TOK-drytoken}" \
+    SHARE_ACCESS_DRY=1 SHARE_ACCESS_POLL=0 CLOUDFLARE_API_TOKEN="${TL_CF-faketoken}" bash "$SH" --profile "${TLP:-lst}" "$@"
+}
+tml() { # tml <verb...>: a member of the same tenant
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS \
+    HOME="$LMH" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$DRYL" SHARE_R2_TOKEN=drytoken CLOUDFLARE_API_TOKEN=faketoken bash "$SH" --profile lst "$@"
+}
+lforge() { printf '%s\n' "$2" >"$DRYL/m/$1"; }
+me_by="$(uname -n | cut -d. -f1 | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9.-')"; me_by="${me_by:-unknown}"
+lport=$((base + 65))
+mkdir -p "$WORK/l6"; printf '%%PDF-1.4\n' >"$WORK/l6/Report.PDF"; printf 'g\n' >"$WORK/l6/g.txt"
+SHARE_TEST_IDS=1a0001 tl add "$WORK/l6/Report.PDF" >/dev/null 2>&1
+SHARE_TEST_IDS=1a0002 tl add "$lport" >/dev/null 2>&1
+SHARE_TEST_IDS=1a0003 tl add --access email:a@example.test "$WORK/l6/g.txt" >/dev/null 2>&1
+lforge 1b0001 '{"v":1,"id":"1b0001","name":"pic.png","src":"/o/pic.png","added":"2026-10-01","expires":0,"opts":"","prefix":"o/1b0001.0000001b/","by":"other-mac","type":"image"}'
+lforge 1b0002 "{\"v\":1,\"id\":\"1b0002\",\"name\":\"p.pdf\",\"src\":\"/o/p.pdf\",\"added\":\"2026-10-01\",\"expires\":0,\"opts\":\"access=00000000-0000-4000-8000-0000001b0002 access_rule=email:a@example.test\",\"prefix\":\"o/1b0002.0000001b/\",\"by\":\"other-mac\",\"type\":\"pdf\",\"aud\":\"$(printf x | shasum -a 256 | cut -c1-64)\"}"
+lforge 1b0003 '{"v":1,"id":"1b0003","name":"guide","src":"/o/guide","added":"2026-10-01","expires":0,"opts":"","prefix":"o/1b0003.0000001b/","by":"other-mac"}'
+check "row 15 fixture: three local rows with pointers, three cloud records" "3 6" "$(grep -c . "$lroot/index.tsv") $(find "$DRYL/m" -type f | grep -c .)"
+out=$(tl ls 2>&1); rc=$?
+check "row 15: origin ls lists six rows with their tags, types, and by=" "0 machine pdf $me_by|live site $me_by|machine text $me_by|cloud image other-mac|cloud pdf other-mac|cloud folder other-mac|" \
+  "$rc $(sed -n -E 's/^(machine|live|cloud) +([a-z]+) +by=([a-z0-9.-]+)  https:.*/\1 \2 \3/p' <<<"$out" | tr '\n' '|')"
+check "row 15: no id twice" "6 6" "$(grep -c '^    id=' <<<"$out") $(grep -o '^    id=[0-9a-f]*' <<<"$out" | sort -u | grep -c .)"
+out=$(tl state 2>&1); rc=$?
+check "row 15: state rows carry storage, type, by; r2 and storage_default on top" "0 6 true local" "$rc $(jq '[.shares[] | select(.storage and .type and .by)] | length' <<<"$out") $(jq -r '"\(.r2) \(.storage_default)"' <<<"$out")"
+check "row 15: guide (a cloud record with no type and no extension) is a folder; the gated cloud row keeps its rule" "folder email:a@example.test" \
+  "$(jq -r '[(.shares[] | select(.id == "1b0003") | .type), (.shares[] | select(.id == "1b0002") | .access)] | join(" ")' <<<"$out")"
+cp "$DRYL/m/1a0001" "$WORK/l6/ptr"; jq -c '.v = 1 | del(.storage) | .prefix = "o/1a0001.0000001a/" | .opts = ""' "$WORK/l6/ptr" >"$DRYL/m/1a0001"
+check "row 15: a shadowed id lists its local row once" "1 machine" "$(tl ls 2>/dev/null | grep -c '^    id=1a0001 ') $(tl state 2>/dev/null | jq -r '[.shares[] | select(.id == "1a0001") | .storage] | join(" ")')"
+cp "$WORK/l6/ptr" "$DRYL/m/1a0001"
+# a member's list: every bucket record, the origin's machine links from their pointers
+out=$(tml ls 2>&1); rc=$?
+check "row 15 (member): ls lists the same six rows" "0 cloud folder other-mac|cloud image other-mac|cloud pdf other-mac|live site $me_by|machine pdf $me_by|machine text $me_by|" \
+  "$rc $(sed -n -E 's/^(machine|live|cloud) +([a-z]+) +by=([a-z0-9.-]+)  https:.*/\1 \2 \3/p' <<<"$out" | LC_ALL=C sort | tr '\n' '|')"
+out=$(tml state 2>&1); rc=$?
+check "row 15 (member): state shows the gated pointer as gated, the live one as live" "0 gated live machine true" \
+  "$rc $(jq -r '[(.shares[] | select(.id == "1a0003") | .access), (.shares[] | select(.id == "1a0002") | .kind), (.shares[] | select(.id == "1a0001") | .storage), (.r2 | tostring)] | join(" ")' <<<"$out")"
+# row 16: the type table on local rows; the extension match ignores case
+for f in a.pdf b.PNG c.mp4 d.mp3 e.md f.zip a.tar.gz g.json h.html i.weird noext; do printf 'x\n' >"$WORK/l6/$f"; done
+mkdir -p "$WORK/l6/plain" "$WORK/l6/site"; printf 'x\n' >"$WORK/l6/plain/x.txt"; printf '<p>\n' >"$WORK/l6/site/index.html"
+n=0; for f in a.pdf b.PNG c.mp4 d.mp3 e.md f.zip a.tar.gz g.json h.html i.weird noext plain site Report.PDF; do
+  n=$((n + 1)); SHARE_TEST_IDS="$(printf '2c%04d' "$n")" TLP=off tl add "$WORK/l6/$f" >/dev/null 2>&1
+done
+check "row 16: one type per table row, case ignored" "pdf image video audio markdown archive archive text site other other folder site pdf" \
+  "$(TLP=off tl state 2>/dev/null | jq -r '[.shares | sort_by(.id)[] | .type] | join(" ")')"
+check "row 16: an R2-off profile reads no bucket and says r2: false" "false 0" "$(TLP=off tl state 2>/dev/null | jq -r .r2) $([[ -e $L6H/share/profiles/off/r2-calls.log ]] && echo 1 || echo 0)"
+# row 17: the menu never loses machine links to an R2 problem, and never runs a token command
+out=$(SHARE_R2_DRY_LIST=500 tl state 2>/dev/null); rc=$?
+check "row 17: a failing listing: local rows plus cloud_error, exit 0" "0 3 1" "$rc $(jq '.shares | length' <<<"$out") $(jq -r '.cloud_error // ""' <<<"$out" | grep -c 'HTTP 500')"
+printf 'api_token_cmd=touch %s; echo tok\n' "$WORK/l6/sentinel" >>"$lconf"
+out=$(TL_TOK="" TL_CF="" tl state 2>/dev/null); rc=$?
+check "row 17: an api_token_cmd source: no command run, cloud_error names api-token" "0 0 3 1" \
+  "$rc $([[ -e $WORK/l6/sentinel ]] && echo 1 || echo 0) $(jq '.shares | length' <<<"$out") $(jq -r '.cloud_error // ""' <<<"$out" | grep -c 'the menu reads cloud links only with a stored token: share --profile lst api-token')"
+grep -v '^api_token_cmd=' "$lconf" >"$WORK/l6/c" && cat "$WORK/l6/c" >"$lconf"
+out=$(TL_TOK="" TL_CF=faketoken tl state 2>/dev/null); rc=$?
+check "row 17: an environment token: cloud_error, no bucket read" "0 1" "$rc $(jq -r '.cloud_error // ""' <<<"$out" | grep -c 'stored token')"
+mkdir -p "$LMH/.config/share/profiles/tun"
+printf 'hostname=tun.example.test\ntunnel_id=tid-tun\ntunnel_name=share-tun\nhosts=nobody\nport=%s\n' $((base + 66)) >"$LMH/.config/share/profiles/tun/config"
+out=$(tml profiles --json 2>/dev/null); rc=$?
+check "row 17: profiles --json: the member entry lists its rows, the tunnel entry says r2: false" "0 6 cloud machine false" \
+  "$rc $(jq '.profiles[] | select(.name == "lst") | .state.shares | length' <<<"$out") $(jq -r '[.profiles[] | select(.name == "lst") | .state.shares[].storage] | unique | join(" ")' <<<"$out") $(jq -r '.profiles[] | select(.name == "tun") | .state.r2' <<<"$out")"
+# row 28: forged records stay display data on the origin and on a member; nothing reaches the Caddyfile, the index, or arithmetic
+lforge 1f0001 '{"v":1,"id":"1f0001","name":"evil","src":"x:22","added":"2026-10-01","expires":0,"opts":"live host=x.test","prefix":"o/1f0001.0000001f/","by":"evil"}'
+lforge 1f0002 "{\"v\":2,\"id\":\"1f0002\",\"storage\":\"machine\",\"name\":\"evil\",\"src\":\"x:22\",\"by\":\"evil\",\"added\":\"2026-10-01\",\"expires\":\"a[\$(touch $WORK/l6/S)]\",\"opts\":\"live\",\"type\":\"site\"}"
+lforge 1f0003 '{"v":2,"id":"1f0003","storage":"machine","name":"a\tb","by":"evil","added":"2026-10-01","expires":0,"opts":"","type":"text"}'
+export SHARE_R2_DRY_LIST_EXTRA="m/../share.json"
+: >"$llog"
+for v in ls state "profiles --json"; do
+  # shellcheck disable=SC2086 # the verb may be two words
+  out=$(tl $v 2>&1); check "row 28 (origin): $v exits 0 and shows no forged pointer" "0" "$(grep -c '1f0002\|1f0003' <<<"$out")"
+done
+SHARE_TEST_IDS=1a0009 tl add "$WORK/l6/g.txt" >/dev/null 2>&1
+lforge 0e0001 '{"v":1,"id":"0e0001","name":"old.txt","src":"/o/old.txt","added":"2026-01-01","expires":1000,"opts":"","prefix":"o/0e0001.0000000e/","by":"other-mac"}'
+SHARE_TEST_IDS=0e0002 tl add "$WORK/l6/g.txt" >/dev/null 2>&1
+awk -F'\t' -v OFS='\t' '$1 == "0e0002" {$5 = 1000} {print}' "$lroot/index.tsv" >"$WORK/l6/i" && cat "$WORK/l6/i" >"$lroot/index.tsv"
+: >"$llog"; out=$(tl prune 2>&1); rc=$?
+check "row 28: one prune expires the cloud row, then the local one" "0 1" "$rc $(awk '/^DELETE m\/0e0001$/ && !a {a = NR} /^DELETE m\/0e0002$/ && !b {b = NR} END {print (a && b && a < b) ? 1 : 0}' "$llog")"
+check "row 28: the Caddyfile and index.tsv hold exactly the local rows" "0 0 1 1 1a0001 1a0002 1a0003 1a0009" \
+  "$(grep -c 'x\.test\|1f000\|x:22\|0e000\|1b000' "$lroot/Caddyfile") $(grep -c '1f000\|1b000\|0e000' "$lroot/index.tsv") $(grep -c 'handle_path /1a0002/\*' "$lroot/Caddyfile") $([[ -d $lroot/pub/1a0009 ]] && echo 1 || echo 0) $(cut -f1 "$lroot/index.tsv" | sort | tr '\n' ' ' | sed 's/ $//')"
+check "row 28: the odd key is skipped and share.json survives" "0 0 1" "$(grep -c 'm/\.\./share.json' "$llog") $(grep -c '^DELETE share.json' "$llog") $([[ -f $DRYL/share.json ]] && echo 1 || echo 0)"
+for v in "rm 1f0002" "hits 1f0002" "refresh 1f0001" "refresh 1f0002" "refresh 1f0003"; do
+  # shellcheck disable=SC2086 # the verb and id are two words
+  out=$(tl $v 2>&1); rc=$?
+  check "row 28: $v of a forged id dies" "1" "$rc"
+done
+for v in ls state "profiles --json"; do
+  # shellcheck disable=SC2086 # the verb may be two words
+  out=$(tml $v 2>&1); rc=$?
+  check "row 28 (member): $v exits 0; the forged pointers are skipped; the forged cloud record is display text" "0 0" "$rc $(grep -c '1f0002\|1f0003' <<<"$out")"
+done
+check "row 28: no forged field reached the shell" "0" "$([[ -e $WORK/l6/S ]] && echo 1 || echo 0)"
+unset SHARE_R2_DRY_LIST_EXTRA
 
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then
