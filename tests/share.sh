@@ -3199,6 +3199,7 @@ afresh() { # vfresh, then the bucket is the alias's: its marker, its Worker on i
     jq -nc --arg id "0c000$i" --arg u "$u" --arg a "$a" --arg n "$n" '{v: 1, id: $id, name: "g.txt", src: "/m/g.txt", added: "2026-10-01", expires: 0,
       opts: "access=\($u) access_rule=email:a@example.test", prefix: "o/\($id).\($n)/", by: "files-host", aud: $a}' >"$DRYV/m/0c000$i"
     jq -nc --arg id "0c000$i" --arg u "$u" --arg a "$a" --arg n "$n" '{id: $u, aud: $a, name: "share \($id) f.example.test \($n)", type: "self_hosted",
+      self_hosted_domains: ["f.example.test/\($id)"],
       destinations: [{type: "public", uri: "f.example.test/\($id)"}, {type: "public", uri: "f.example.test/\($id)/*"}], app_launcher_visible: false,
       session_duration: "24h", policies: [{name: "share \($id)", decision: "allow", include: [{email: {email: "a@example.test"}}], precedence: 1}]}' >"$vroot/.access-dry/$u.json"
   done

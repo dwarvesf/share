@@ -2024,9 +2024,14 @@ cf_dry() { # the SHARE_ACCESS_DRY answers: fixtures and knobs in, one log line p
         cf_code=201 cf_body="{\"success\":true,\"result\":$(cat "$d/$uuid.json")}"
         dry_log "POST app"
       fi ;;
-    "PUT "*/access/apps/*)   # the full read-back with its destinations changed, as a real PUT replaces every field
+    "PUT "*/access/apps/*)   # the full read-back with its destinations changed, as a real PUT replaces every field; a self_hosted_domains entry no longer among the new destinations answers 400, as the real API does on a shrinking PUT
       uuid="${2##*/}"; dry_log "PUT app $uuid"
-      if [[ -f $d/$uuid.json ]]; then jq -c . <<<"$3" >"$d/$uuid.json"; cf_body="{\"success\":true,\"result\":$3}"
+      if [[ -f $d/$uuid.json ]]; then
+        if jq -e '((.self_hosted_domains // []) - [.destinations[]?.uri]) != []' <<<"$3" >/dev/null 2>&1; then
+          cf_code=400 cf_err=12130 cf_body='{"success":false,"errors":[{"code":12130,"message":"access.api.error.invalid_request: self_hosted_domains is inconsistent with destinations"}]}'
+        else
+          jq -c . <<<"$3" >"$d/$uuid.json"; cf_body="{\"success\":true,\"result\":$3}"
+        fi
       else cf_code=404 cf_body='{"success":false,"errors":[{"code":12103}]}' cf_err=12103; fi ;;
     "GET "*/access/apps/*)
       uuid="${2##*/}"; dry_log "GET app $uuid"
@@ -3851,7 +3856,10 @@ alias_dests() { # alias_dests add|undo|drop: each fold app gains <host>/<id>{,/*
       drop) want="$(jq -c --arg u "$alias/$id" 'map(select(.uri != $u and .uri != $u + "/*"))' <<<"$have")" ;;
     esac
     [[ $want != "$have" ]] || continue
-    body="$(jq -c --argjson d "$want" '.result | .destinations = $d' <<<"$cf_body")"
+    # del(.self_hosted_domains, .domain): these legacy mirrors of an app's original single destination
+    # are not kept in sync by a later PUT. Echoing one back stale, now naming a destination this PUT
+    # removes (drop's own case), answers 400; dropping them lets the API recompute them from destinations.
+    body="$(jq -c --argjson d "$want" '.result | .destinations = $d | del(.self_hosted_domains, .domain)' <<<"$cf_body")"
     cf_try PUT "/accounts/$acct/access/apps/$uuid" "$body"
     [[ $cf_code == 200 && "$(jq -r '.result.aud // empty' <<<"$cf_body")" == "$aud" ]] || return 1
     alias_moved+="$id $aud"$'\n'
