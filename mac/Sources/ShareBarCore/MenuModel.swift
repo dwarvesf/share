@@ -74,7 +74,14 @@ public struct Row: Sendable, Equatable {
     public let canRefresh: Bool
     public let canCopy: Bool
     public let removeText: String
-    /// What VoiceOver reads for the row: name, status, and the login gate when present.
+    /// The file-type marker (`NSMenuItem.image`); `doc`/`file` on a row with no `type`.
+    public let typeGlyph: RowGlyph
+    /// The storage badge; nil on a row with no `storage` (an older CLI), which shows none.
+    public let storageGlyph: RowGlyph?
+    /// The link-type marker (`snapshot` or `live server`).
+    public let linkGlyph: RowGlyph
+    /// What VoiceOver reads for the row: name, status, the type/storage/link words, and
+    /// the login gate when present.
     public let accessibilityTitle: String
     /// The composite key the hits cache uses.
     public var key: String { "\(profile)|\(id)" }
@@ -88,9 +95,14 @@ public struct Row: Sendable, Equatable {
         access = share.access
         canRefresh = share.kind == "snapshot"
         canCopy = !(url.contains("<pending>") || url.contains("<no-hostname>"))
-        accessibilityTitle = access == nil
-            ? "\(title), \(trailing)"
-            : "\(title), \(trailing), login required"
+        typeGlyph = RowGlyphs.type(share.type)
+        storageGlyph = RowGlyphs.storage(share.storage)
+        linkGlyph = RowGlyphs.link(share.kind)
+        var voice = "\(title), \(trailing), \(typeGlyph.word)"
+        if let storageGlyph { voice += ", \(storageGlyph.word)" }
+        voice += ", \(linkGlyph.word)"
+        if access != nil { voice += ", \(RowGlyphs.lock.word)" }
+        accessibilityTitle = voice
         if let ownHost = share.ownHost {
             removeText = access == nil
                 ? "Remove \(share.name)? This also deletes the DNS record for \(ownHost)."
@@ -128,6 +140,9 @@ public struct Section: Sendable, Equatable {
     public let showStop: Bool
     public let showSetUp: Bool
     public let accessPending: Int
+    /// The `cloud_error` reason `state` reported, when the bucket listing failed but local
+    /// rows still printed; the section shows it as a disabled line.
+    public let cloudError: String?
     /// `share` for the default profile, `share --profile <name>` otherwise; the command
     /// the `more` and `access_pending` hint lines name (`<cmd> ls`, `<cmd> prune`).
     public let command: String
@@ -148,10 +163,14 @@ public struct Section: Sendable, Equatable {
             showStart = false
             showStop = false
             showSetUp = false
+            cloudError = nil
         } else {
             let allRows = (entry.state?.shares ?? []).map { Row(share: $0, profile: entry.name, now: now) }
             rows = Array(allRows.prefix(rowCap))
-            more = max(0, allRows.count - rowCap)
+            // `cloud_more` counts rows `state` never fetched; they exist but are not
+            // shown, so they ride the same "N more" hint as capped local rows.
+            more = max(0, allRows.count - rowCap) + (entry.state?.cloudMore ?? 0)
+            cloudError = entry.state?.cloudError
             // An r2 profile serves from Cloudflare; the CLI refuses start and stop there.
             let runsHere = entry.state?.backend != "r2"
             showStart = runsHere && entry.state?.state != "serving" && entry.state?.servesHere == true

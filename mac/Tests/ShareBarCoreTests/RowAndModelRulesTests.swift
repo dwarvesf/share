@@ -135,7 +135,7 @@ final class RowAndModelRulesTests: XCTestCase {
     func testGatedRowGetsTheGateTextAndMarker() {
         let gated = rowFor(makeShare(name: "ops-report.pdf", access: "group:dwarves-ops"))
         XCTAssertEqual(gated.access, "group:dwarves-ops")
-        XCTAssertEqual(gated.accessibilityTitle, "ops-report.pdf, never, login required")
+        XCTAssertEqual(gated.accessibilityTitle, "ops-report.pdf, never, file, snapshot, login required")
         XCTAssertEqual(gated.removeText, "Remove ops-report.pdf? The copy goes to the Trash and its login gate is deleted.")
 
         let gatedOwnHost = rowFor(makeShare(name: "docs", ownHost: "docs.example.com", access: "email:a@x.io"))
@@ -148,7 +148,35 @@ final class RowAndModelRulesTests: XCTestCase {
     func testPublicRowHasNoGateText() {
         let row = rowFor(makeShare(name: "notes.txt"))
         XCTAssertNil(row.access)
-        XCTAssertEqual(row.accessibilityTitle, "notes.txt, never")
+        XCTAssertEqual(row.accessibilityTitle, "notes.txt, never, file, snapshot")
+    }
+
+    // MARK: - row glyphs
+
+    func testAGatedCloudPdfReadsItsTypeStorageLinkAndGate() {
+        let row = rowFor(makeShare(
+            name: "ops-report.pdf", access: "group:dwarves-ops", storage: "cloud", type: "pdf"
+        ))
+        XCTAssertEqual(row.typeGlyph, RowGlyph(symbol: "doc.richtext", word: "PDF"))
+        XCTAssertEqual(row.storageGlyph, RowGlyph(symbol: "cloud", word: "in the cloud"))
+        XCTAssertEqual(row.linkGlyph, RowGlyph(symbol: "doc.on.doc", word: "snapshot"))
+        XCTAssertEqual(row.accessibilityTitle, "ops-report.pdf, never, PDF, in the cloud, snapshot, login required")
+    }
+
+    func testALiveMachineRowReadsSiteOnThisTenantsMachineLiveServer() {
+        let row = rowFor(makeShare(
+            name: "localhost:3000", kind: "live", storage: "machine", type: "site"
+        ))
+        XCTAssertEqual(row.trailing, "live")
+        XCTAssertEqual(row.typeGlyph.symbol, "globe")
+        XCTAssertEqual(row.accessibilityTitle, "localhost:3000, live, site, on this tenant's machine, live server")
+    }
+
+    func testAnOlderCLIRowHasNoStorageBadge() {
+        let row = rowFor(makeShare(name: "notes.txt"))
+        XCTAssertNil(row.storageGlyph)
+        XCTAssertEqual(row.typeGlyph, RowGlyph(symbol: "doc", word: "file"))
+        XCTAssertEqual(row.accessibilityTitle, "notes.txt, never, file, snapshot")
     }
 
     // MARK: - per-profile section rules
@@ -285,6 +313,35 @@ final class RowAndModelRulesTests: XCTestCase {
 
         XCTAssertEqual(model.sections[0].accessPending, 2)
         XCTAssertEqual(model.sections[0].command, "share --profile a")
+    }
+
+    // MARK: - cloud_error and cloud_more
+
+    func testCloudErrorLandsOnTheSection() {
+        let profiles = makeProfiles([
+            makeEntry(name: "a", state: makeSnapshot(
+                state: "serving",
+                cloudError: "the menu reads cloud links only with a stored token: share --profile a api-token"
+            )),
+        ])
+        let model = MenuModel(profiles: profiles, failure: nil, now: Date())
+
+        XCTAssertEqual(model.sections[0].cloudError, "the menu reads cloud links only with a stored token: share --profile a api-token")
+        XCTAssertTrue(model.sections[0].health == .ok, "a cloud_error section still lists its local rows")
+    }
+
+    func testCloudMoreRidesTheMoreLine() {
+        let shares = (1...12).map { makeShare(id: "id\($0)", name: "file\($0).txt") }
+        let profiles = makeProfiles([
+            makeEntry(name: "a", state: makeSnapshot(state: "serving", shares: shares, cloudMore: 3)),
+            makeEntry(name: "b", state: makeSnapshot(state: "serving")),
+        ])
+        let model = MenuModel(profiles: profiles, failure: nil, now: Date())
+
+        XCTAssertEqual(model.sections[0].rows.count, 10)
+        XCTAssertEqual(model.sections[0].more, 5, "2 over the cap plus 3 unfetched cloud rows")
+        XCTAssertNil(model.sections[1].cloudError)
+        XCTAssertEqual(model.sections[1].more, 0)
     }
 
     // MARK: - helpers
