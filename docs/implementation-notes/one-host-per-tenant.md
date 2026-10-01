@@ -222,4 +222,13 @@ Build rules taken from it:
 - The spool and the stage go through the EXIT trap. Caddy reloads only when the profile is serving; a stopped or `not_setup` profile renders at its next start.
 - `refresh` of a row whose `by=` is another machine and whose `src` starts with `<by>:` dies naming that machine.
 - `setup --token-stdin` reads one line into the process's own `CLOUDFLARE_API_TOKEN` before any branch runs, so it works for the tunnel setup migrate calls and for `--r2`. An empty line dies before any call. The test drives `--r2` because the suite has no dry seam for the tunnel setup's API path.
+||||||| d246452
+
+### TASK-8 (Share Bar tenant rows)
+
+- Every new field decodes optional, so a pre-tenant CLI's `state` still renders: a missing `type` maps to `doc`/`file`, a missing `storage` shows no badge, and the `Storage` row hides when `r2` is absent or false.
+- `RowGlyphs` in ShareBarCore holds the spec's symbol/word table as plain strings; `StatusItemController` resolves names with `NSImage(systemSymbolName:)` and drops any that fail. The lock moved out of `item.image` (now the type symbol) into the trailing attachment group: storage, link, lock.
+- `state`'s `cloud_more` count rides the section's existing `more` line; `cloud_error` renders as one disabled line after the rows.
+- The publish dialog's `Storage` row has three shapes the `sync` pass switches between: a picker (`On <hosts>` / `In the cloud`, preselected from `storage_default`) only when `r2 && serves_here`; a disabled `In the cloud` label on an r2 member; hidden otherwise. Only the picker adds `--cloud`/`--local` to the argv. A profile switch reloads the selection from the new profile's `storage_default`, since the picker is per-tenant.
+- Not covered by tests: the visual layout of the attachment column and the dialog row switching (AppKit-only, manual).
 

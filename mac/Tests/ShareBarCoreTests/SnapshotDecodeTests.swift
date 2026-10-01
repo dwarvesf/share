@@ -110,6 +110,66 @@ final class SnapshotDecodeTests: XCTestCase {
         XCTAssertEqual(snapshot.shares.count, 1)
     }
 
+    func testDecodesTheTenantFields() throws {
+        let snapshot = try loadFixtureTenantProfiles()
+
+        let origin = try XCTUnwrap(snapshot.profiles.first { $0.name == "dfoundation" }?.state)
+        XCTAssertEqual(origin.r2, true)
+        XCTAssertEqual(origin.storageDefault, "local")
+        XCTAssertEqual(origin.cloudMore, 3)
+        XCTAssertNil(origin.cloudError)
+
+        let cloudRow = origin.shares[0]
+        XCTAssertEqual(cloudRow.storage, "cloud")
+        XCTAssertEqual(cloudRow.type, "site")
+        XCTAssertEqual(cloudRow.by, "han-air")
+        XCTAssertNil(cloudRow.access)
+
+        let gatedMachineRow = origin.shares[1]
+        XCTAssertEqual(gatedMachineRow.storage, "machine")
+        XCTAssertEqual(gatedMachineRow.type, "pdf")
+        XCTAssertEqual(gatedMachineRow.by, "mac-mini")
+        XCTAssertEqual(gatedMachineRow.access, "group:dwarves-ops")
+
+        let liveRow = origin.shares[2]
+        XCTAssertEqual(liveRow.storage, "machine")
+        XCTAssertEqual(liveRow.kind, "live")
+
+        let member = try XCTUnwrap(snapshot.profiles.first { $0.name == "files" }?.state)
+        XCTAssertEqual(member.backend, "r2")
+        XCTAssertEqual(member.r2, true)
+        XCTAssertEqual(member.cloudError, "the menu reads cloud links only with a stored token: share --profile files api-token")
+    }
+
+    func testAbsentTenantFieldsDecodeAsNil() throws {
+        let snapshot = try loadFixtureProfiles()
+        let state = try XCTUnwrap(snapshot.profiles[1].state)
+        XCTAssertNil(state.r2)
+        XCTAssertNil(state.storageDefault)
+        XCTAssertNil(state.cloudError)
+        XCTAssertNil(state.cloudMore)
+        XCTAssertNil(state.shares[0].storage)
+        XCTAssertNil(state.shares[0].type)
+        XCTAssertNil(state.shares[0].by)
+
+        // The tenant fixture's third profile carries no new keys either, so one decode
+        // run proves both fixture shapes keep working.
+        let legacy = try XCTUnwrap(try loadFixtureTenantProfiles().profiles.first { $0.name == "personal" }?.state)
+        XCTAssertNil(legacy.r2)
+        XCTAssertNil(legacy.shares[0].storage)
+        XCTAssertNil(legacy.shares[0].type)
+        XCTAssertNil(legacy.shares[0].by)
+    }
+
+    func testAShareWithAnUnknownTypeStillDecodes() throws {
+        let share = try JSONDecoder().decode(
+            Share.self,
+            from: Data(#"{"id":"a1","name":"n","url":"u","kind":"snapshot","own_host":null,"expires":0,"type":"spreadsheet","storage":"cloud","by":"mini"}"#.utf8)
+        )
+        XCTAssertEqual(share.type, "spreadsheet", "the raw value survives decode")
+        XCTAssertEqual(RowGlyphs.type(share.type), RowGlyph(symbol: "doc", word: "file"), "the row maps it to doc")
+    }
+
     func testFixtureBuildsAWorkingMenuModel() throws {
         // Not a MenuModel-rules test (see MenuModelHeaderTests / SectionTests for those);
         // just confirms the decoded fixture flows end to end into a model.
