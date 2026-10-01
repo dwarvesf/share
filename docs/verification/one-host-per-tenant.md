@@ -119,4 +119,4 @@ Negative controls on copies of tree `a2cd324` (commit 19926b1), the full suite e
 
 The copies carry no `.git`, so the two `v0.5.1 CLI` checks that run `git show` fail in every copy run; the worktree run above is 0 FAIL.
 
-Dry trace for the first control: the patched setup logs `API POST /zones/zone-dry/workers/routes` before the first `PUT m/0a000`, so the order check finds the route POST's first line above the pointer PUTs and stops at that pattern; the rerun then finds the early route under the id `early`, which no route carries, and POSTs a second one.
+Dry trace for the first control: the patched setup logs `API POST /zones/zone-dry/workers/routes` before the first `PUT m/0a000`, so the order check finds the route POST's first line above the pointer PUTs and stops at that pattern; the rerun POSTs a second route because the patched line runs on every setup.
