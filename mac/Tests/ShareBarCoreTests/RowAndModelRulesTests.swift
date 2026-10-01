@@ -344,6 +344,18 @@ final class RowAndModelRulesTests: XCTestCase {
         XCTAssertEqual(model.sections[1].more, 0)
     }
 
+    func testCloudMoreMarksTheSectionForTheAboutWording() {
+        let shares = (1...30).map { makeShare(id: "id\($0)", name: "file\($0).txt") }
+        let profiles = makeProfiles([
+            makeEntry(name: "a", state: makeSnapshot(state: "serving", cloudMore: 3)),
+            makeEntry(name: "b", state: makeSnapshot(state: "serving", shares: shares)),
+        ])
+        let model = MenuModel(profiles: profiles, failure: nil, now: Date())
+
+        XCTAssertTrue(model.sections[0].cloudMore, "a cloud_more count needs the \"about\" wording")
+        XCTAssertFalse(model.sections[1].cloudMore, "a locally-capped more count is exact, no \"about\"")
+    }
+
     // MARK: - helpers
 
     private func rowFor(_ share: Share, now: Date = Date()) -> Row {

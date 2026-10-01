@@ -153,9 +153,9 @@ final class PublishFormTests: XCTestCase {
 
     // MARK: - storage field
 
-    private func origin(r2: Bool, storageDefault: String? = nil, servesHere: Bool = true, name: String = "dfoundation") -> ProfileEntry {
+    private func origin(r2: Bool, storageDefault: String? = nil, servesHere: Bool = true, name: String = "dfoundation", hosts: String = "Mac-mini") -> ProfileEntry {
         makeEntry(name: name, state: makeSnapshot(
-            state: "serving", hosts: "Mac-mini", servesHere: servesHere, r2: r2, storageDefault: storageDefault
+            state: "serving", hosts: hosts, servesHere: servesHere, r2: r2, storageDefault: storageDefault
         ))
     }
 
@@ -182,6 +182,24 @@ final class PublishFormTests: XCTestCase {
             PublishChoice.args(profile: "dfoundation", rule: nil, path: "/tmp/a", storage: form.storageFlag),
             ["--profile", "dfoundation", "add", "--local", "/tmp/a"]
         )
+    }
+
+    func testPickerNamesTheCurrentMachineWhenHostsListsMoreThanOne() {
+        PublishForm.currentMachineName = { "air" }
+        defer { PublishForm.currentMachineName = PublishForm.defaultCurrentMachineName }
+
+        let snapshot = makeProfiles([origin(r2: true, storageDefault: "cloud", hosts: "mini air")])
+        let form = PublishForm(profiles: snapshot, lastProfile: nil, lastRules: [:])
+        XCTAssertEqual(form.storageField, .picker(machine: "air"), "picks this Mac out of a multi-host hosts= value")
+    }
+
+    func testPickerFallsBackToTheFirstHostWhenThisMachineIsNotInHosts() {
+        PublishForm.currentMachineName = { "neither-of-these" }
+        defer { PublishForm.currentMachineName = PublishForm.defaultCurrentMachineName }
+
+        let snapshot = makeProfiles([origin(r2: true, storageDefault: "cloud", hosts: "mini air")])
+        let form = PublishForm(profiles: snapshot, lastProfile: nil, lastRules: [:])
+        XCTAssertEqual(form.storageField, .picker(machine: "mini"), "falls back to the first host, never the whole list")
     }
 
     func testAMemberProfileShowsADisabledCloudLabelAndNoFlag() {

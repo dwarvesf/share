@@ -248,7 +248,8 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         }
 
         if section.more > 0 {
-            let moreItem = NSMenuItem(title: "\(section.more) more (\(section.command) ls)", action: nil, keyEquivalent: "")
+            let prefix = section.cloudMore ? "about " : ""
+            let moreItem = NSMenuItem(title: "\(prefix)\(section.more) more (\(section.command) ls)", action: nil, keyEquivalent: "")
             moreItem.isEnabled = false
             menu.addItem(moreItem)
         }

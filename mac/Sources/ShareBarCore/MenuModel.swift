@@ -136,6 +136,10 @@ public struct Section: Sendable, Equatable {
     public let health: Health
     public let rows: [Row]
     public let more: Int
+    /// True when `more` includes `cloud_more` (orphan pointers and unreadable records the
+    /// origin could not confirm): the menu line hedges with "about" rather than claiming
+    /// an exact count.
+    public let cloudMore: Bool
     public let showStart: Bool
     public let showStop: Bool
     public let showSetUp: Bool
@@ -160,6 +164,7 @@ public struct Section: Sendable, Equatable {
         if health == .error {
             rows = []
             more = 0
+            cloudMore = false
             showStart = false
             showStop = false
             showSetUp = false
@@ -170,6 +175,7 @@ public struct Section: Sendable, Equatable {
             // `cloud_more` counts rows `state` never fetched; they exist but are not
             // shown, so they ride the same "N more" hint as capped local rows.
             more = max(0, allRows.count - rowCap) + (entry.state?.cloudMore ?? 0)
+            cloudMore = (entry.state?.cloudMore ?? 0) > 0
             cloudError = entry.state?.cloudError
             // An r2 profile serves from Cloudflare; the CLI refuses start and stop there.
             let runsHere = entry.state?.backend != "r2"

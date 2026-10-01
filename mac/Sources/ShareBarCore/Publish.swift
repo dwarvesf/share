@@ -35,7 +35,8 @@ public enum StorageField: Sendable, Equatable {
     /// An r2 member profile publishes cloud links only: a disabled `In the cloud` label.
     case member
     /// An origin with R2 on (the tunnel runs here): an `On <machine>` / `In the cloud`
-    /// popup, `machine` being the state `hosts` line.
+    /// popup, `machine` being this Mac's name out of the state `hosts` line (or its first
+    /// entry when this Mac is not named there).
     case picker(machine: String)
 }
 
@@ -83,6 +84,14 @@ public struct PublishForm: Sendable, Equatable {
     /// The `Storage` popup's selection; read through `storageField`/`storageFlag`, which
     /// decide whether the choice applies at all.
     public private(set) var storage: PublishStorage
+
+    /// This Mac's name, as the `hosts=` config key would spell it (the CLI's `this_host`:
+    /// `uname -n` before the first dot). Overridable in tests.
+    public static let defaultCurrentMachineName: () -> String = {
+        ProcessInfo.processInfo.hostName.split(separator: ".", maxSplits: 1).first.map(String.init)
+            ?? ProcessInfo.processInfo.hostName
+    }
+    public static var currentMachineName: () -> String = defaultCurrentMachineName
 
     private let profiles: ProfilesSnapshot
     private let lastRules: [String: String]
@@ -132,7 +141,11 @@ public struct PublishForm: Sendable, Equatable {
         guard let state = profiles.profiles.first(where: { $0.name == profile })?.state else { return .none }
         if state.backend == "r2" { return .member }
         if state.r2 == true && state.servesHere {
-            return .picker(machine: state.hosts.isEmpty ? "this machine" : state.hosts)
+            guard !state.hosts.isEmpty else { return .picker(machine: "this machine") }
+            let names = state.hosts.split(separator: " ").map(String.init)
+            let mine = PublishForm.currentMachineName()
+            let machine = names.contains(mine) ? mine : (names.first ?? state.hosts)
+            return .picker(machine: machine)
         }
         return .none
     }
