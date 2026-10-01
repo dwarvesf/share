@@ -2991,6 +2991,28 @@ check "expiry: sixty days out says nothing" "0 0" "$rc $(grep -c 'the publisher 
 out=$(SHARE_R2_DRY_ROLE=deny SHARE_R2_DRY_EXPIRES="2026-01-01T00:00:00Z" tm api-token --check 2>&1); rc=$?
 check "expiry: a member token already expired says so" "0 1" "$rc $(grep -c 'the publisher token expired on 2026-01-01' <<<"$out")"
 
+echo "=== tenant: the Worker is up while the origin is off (row 29) ==="
+# the dry Worker answers 503 with this CLI's pair and X-Share-Tunnel: 0; r2_healthz reads the headers, never the status alone
+rm -rf "$DRYA"; mkdir -p "$DRYA/.cf"; rm -f "$r2root/r2-own"
+printf '{"hostname":"r2x.example.test","service":"share-r2x-example-test"}\n' >"$DRYA/.cf/domain.json"
+gteam team.cloudflareaccess.com
+for mode in tunnel-down 503-bare; do
+  out=$(SHARE_R2_DRY_HEALTHZ=$mode r2a state 2>/dev/null); rc=$?
+  check "row 29 ($mode): state" "$([[ $mode == tunnel-down ]] && echo '0 true' || echo '0 false')" "$rc $(jq -r .ready <<<"$out")"
+  greset; printf 'pass\npass\npass\n' >"$gfix"
+  out=$(SHARE_R2_DRY_HEALTHZ=$mode SHARE_TEST_IDS=ab2901 r2g add --access email:A@x.io "$WORK/g.txt" 2>&1); rc=$?
+  if [[ $mode == tunnel-down ]]; then
+    check "row 29 (tunnel-down): a member's gated add publishes" "0 https://r2x.example.test/ab2901/g.txt 1" "$rc $(grep '^https://' <<<"$out") $(jq -r .v "$DRYA/m/ab2901" 2>/dev/null)"
+  else
+    check "row 29 (503-bare): the gated add fails before any write" "1 1 0" "$rc $(grep -c 'healthz answered 503; nothing was published' <<<"$out") $(grep -c '^PUT' "$rlog")"
+  fi
+  s_fresh; echo dwarves.cloudflareaccess.com >"$DRYS/.cf/team"; out=$(r2s 2>&1)
+  rm -f "$jconf"; mkdir -p "${jlog%/*}"; : >"$jlog"
+  out=$(r2j SHARE_R2_DRY_HEALTHZ=$mode SHARE_R2_WAIT=1 2>&1); rc=$?
+  check "row 29 ($mode): a member joins" "$([[ $mode == tunnel-down ]] && echo '0 1' || echo '1 0')" "$rc $([[ -f $jconf ]] && echo 1 || echo 0)"
+done
+rm -f "$jconf" "$s2conf"
+
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then
   wout="$(node "$(dirname "$SH")/../tests/worker.mjs" 2>&1)"; wrc=$?

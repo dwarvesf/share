@@ -2146,17 +2146,18 @@ access_open_url() { # the platform opener, backgrounded; skipped over ssh or wit
 # port=r2 sentinel: an older share dies on that port at load, so it can never
 # write pub/ or an Access app against an r2 profile.
 
-WORKER_VERSION=2            # bump on every Worker source change; deploys refuse a downgrade without --force
-WORKER_SHA=fdae03ca85c7     # first 12 hex of the emitted source's sha256; the suite fails when it drifts
+WORKER_VERSION=3            # bump on every Worker source change; deploys refuse a downgrade without --force
+WORKER_SHA=ed4784bd9005     # first 12 hex of the emitted source's sha256; the suite fails when it drifts
 WORKER_COMPAT_DATE=2026-09-30   # moves only with a WORKER_VERSION bump
-WORKER_RECORD_V=1           # the record schema this source understands; a newer record answers 404
+WORKER_RECORD_V=2           # the record schema this source understands: v:1 cloud records, v:2 machine pointers; a newer record answers 404
 worker_meta() { printf '%s\n' "$WORKER_VERSION" "$WORKER_SHA" "$WORKER_COMPAT_DATE" "$WORKER_RECORD_V"; }   # one line, four fields, for the deploy and sweep paths
 
 worker_js() { # worker_js <path>: the Worker source to $1; never a heredoc inside $( ) (macOS /bin/bash 3.2)
   cat >"$1" <<'SHARE_WORKER_JS'
 // share Worker: serves R2-backed snapshots on one hostname, a gated record only
-// inside a valid Cloudflare Access session for that record's app.
-const RECV = 1;
+// inside a valid Cloudflare Access session for that record's app. With PASS set (a tenant
+// with R2 on) it runs as a route in front of the tenant's tunnel: a cloud record is served
+// from R2, a machine pointer or a miss passes through to the origin, and an alias host 301s.
 const TYPES = {
   html: "text/html", css: "text/css", js: "text/javascript", mjs: "text/javascript",
   json: "application/json", txt: "text/plain", md: "text/markdown", csv: "text/csv",
@@ -2229,31 +2230,73 @@ const hex = async (s) => {
   return [...d].map((b) => b.toString(16).padStart(2, "0")).join("");
 };
 
+const passed = new WeakSet();   // answers from the origin: no hit counted, headers already set
+const OFFLINE = "the machine serving this link is offline; try again later";
+
+async function pass(request) {   // the route is skipped for a same-host fetch, so this reaches the tunnel (spike TASK-1a)
+  let r;
+  try { r = await fetch(request); } catch { r = null; }
+  if (r && r.status === 101) { passed.add(r); return r; }   // a WebSocket upgrade goes back untouched
+  // an edge error carries no cf-cache-status; the origin's own answers do (spike TASK-1a(e))
+  const down = !r || r.status === 502 || r.status === 530 || (r.status >= 520 && r.status <= 527) ||
+    (r.status === 503 && !r.headers.has("cf-cache-status"));
+  const out = down
+    ? new Response(OFFLINE, { status: 503, headers: { "Retry-After": "60", "Content-Type": "text/plain; charset=utf-8" } })
+    : new Response(r.body, r);   // rewrapped: a fetch answer's headers are immutable
+  out.headers.set("Cache-Control", "no-store");
+  out.headers.set("X-Robots-Tag", "noindex, nofollow");
+  passed.add(out);
+  return out;
+}
+
+const capped = (p, ms) => {   // a bucket read that hangs counts as a failed one
+  let t;
+  return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error("slow")), ms); })]).finally(() => clearTimeout(t));
+};
+
 async function handle(request, env) {
   const u = new URL(request.url);
+  const tail = request.url.slice(request.url.indexOf(u.hostname) + u.hostname.length).replace(/^:\d+/, "");
+  const getish = request.method === "GET" || request.method === "HEAD";
+  const aliases = (env.ALIASES || "").split(",").map((a) => a.trim()).filter(Boolean);
+  if (aliases.includes(u.hostname)) {
+    if (!getish) return new Response(null, { status: 405 });
+    return new Response(null, { status: 301, headers: { Location: "https://" + env.HOST + tail.split("#")[0] } });
+  }
   if (u.hostname !== env.HOST) return new Response(null, { status: 404 });
-  if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405 });
-  const raw = request.url.slice(request.url.indexOf(u.hostname) + u.hostname.length).replace(/^:\d+/, "").split(/[?#]/)[0] || "/";
+  if (!env.PASS && !getish) return new Response(null, { status: 405 });
+  const raw = tail.split(/[?#]/)[0] || "/";
   if (/%2f|%5c|%2e|%0[0-9a-f]|%1[0-9a-f]/i.test(raw) || raw.includes("//")) {
     return new Response(null, { status: 400 });
   }
   if (raw === "/healthz") {
-    return new Response("ok", {
-      status: 200,
-      headers: {
-        "X-Share-Worker": (env.VERSION || "") + " " + (env.SHA || ""),
-        "X-Share-Gate": env.TEAM ? "1" : "0",
-      },
-    });
+    if (!getish) return new Response(null, { status: 405 });
+    const headers = {
+      "X-Share-Worker": (env.VERSION || "") + " " + (env.SHA || ""),
+      "X-Share-Gate": env.TEAM ? "1" : "0",
+    };
+    if (!env.PASS) return new Response("ok", { status: 200, headers });
+    let up = false;   // the tunnel leg: the origin's own /healthz, through the same skipped route
+    try {
+      const r = await fetch("https://" + env.HOST + "/healthz", { signal: AbortSignal.timeout(3000) });
+      up = r.status === 200 && (await r.text()).trim() === "ok";
+    } catch { up = false; }
+    headers["X-Share-Tunnel"] = up ? "1" : "0";
+    return new Response(up ? "ok" : "tunnel down", { status: up ? 200 : 503, headers });
   }
   const segs = u.pathname.split("/");
   const id = segs[1];
-  if (!/^[0-9a-f]{6}$/.test(id)) return new Response(null, { status: 404 });
-  const mo = await env.BUCKET.get("m/" + id);
-  if (mo === null) return new Response(null, { status: 404 });
+  if (!/^[0-9a-f]{6}$/.test(id)) return env.PASS ? pass(request) : new Response(null, { status: 404 });
+  let mo;
+  try { mo = await capped(env.BUCKET.get("m/" + id), 2000); } catch { mo = null; }
+  if (mo === null) return env.PASS ? pass(request) : new Response(null, { status: 404 });
   let rec;
   try { rec = await mo.json(); } catch { return new Response(null, { status: 404 }); }
-  if (!rec || rec.v > RECV || rec.id !== id || typeof rec.prefix !== "string" ||
+  if (rec && typeof rec === "object" && rec.v === 2 && rec.storage === "machine") {
+    return env.PASS ? pass(request) : new Response(null, { status: 404 });
+  }
+  // a cloud record is v:1 with no storage key; any other shape answers 404 and never reaches the origin
+  if (!rec || typeof rec !== "object" || rec.v !== 1 || "storage" in rec || rec.id !== id || typeof rec.prefix !== "string" ||
     !new RegExp("^o/" + id + "\\.[0-9a-f]{8}/$").test(rec.prefix) ||
     (rec.expires > 0 && Date.now() / 1000 > rec.expires)) {
     return new Response(null, { status: 404 });
@@ -2263,6 +2306,7 @@ async function handle(request, env) {
     try { ok = await gatedOk(request, env, rec); } catch { ok = false; }
     if (!ok) return new Response(null, { status: 404 });
   }
+  if (!getish) return new Response(null, { status: 405 });
   const rest = segs.slice(2);
   if (rest.length === 0) return new Response(null, { status: 308, headers: { Location: u.origin + "/" + id + "/" } });
   const cond = { range: request.headers, onlyIf: request.headers };
@@ -2313,6 +2357,7 @@ export default {
     let resp;
     try { resp = await handle(request, env); }
     catch { resp = new Response(null, { status: 404 }); }
+    if (passed.has(resp)) return resp;
     resp.headers.set("Cache-Control", "no-store");
     resp.headers.set("X-Robots-Tag", "noindex, nofollow");
     if (resp.status < 400 && url.pathname !== "/healthz" &&
@@ -3129,27 +3174,36 @@ r2_api_dry() { # the account API under SHARE_R2_DRY: state files in $SHARE_R2_DR
   cf_err="$(jq -r '.errors[0].code // empty' <<<"$cf_body" 2>/dev/null || true)"
 }
 
-r2_healthz() { # r2_healthz [secs]: hz_code (200 only for a "200 ok" body), hz_pair (X-Share-Worker), hz_gate (X-Share-Gate: 1 when TEAM is set) from https://<host>/healthz
-  hz_code=000 hz_pair="" hz_gate=0
-  if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then
-    local d="${SHARE_R2_DRY_DIR:-$root/r2-dry}/.cf"
-    printf 'HEALTHZ\n' >>"$root/r2-calls.log"
-    [[ ${SHARE_R2_DRY_HEALTHZ:-} != down && -f $d/domain.json && -f $d/script.json ]] || return 0
-    hz_code=200
-    hz_pair="$(jq -r '[(.bindings[] | select(.name == "VERSION") | .text), (.bindings[] | select(.name == "SHA") | .text)] | join(" ")' "$d/script.json")"
-    hz_gate="$(jq -r 'if any(.bindings[]; .name == "TEAM" and (.text // "") != "") then 1 else 0 end' "$d/script.json")"
-    return 0
-  fi
+r2_healthz() { # r2_healthz [secs]: hz_code (200 only for a "200 ok" body), hz_pair (X-Share-Worker), hz_gate (X-Share-Gate: 1 when TEAM is set), hz_tunnel (X-Share-Tunnel) from https://<host>/healthz
+  # a tenant Worker answers 503 with its pair and X-Share-Tunnel: 0 while the origin is off: the Worker is up, so hz_code is 200 and hz_tunnel 0
+  hz_code=000 hz_pair="" hz_gate=0 hz_tunnel=""
   local h b
   h="$(mktemp "${TMPDIR:-/tmp}/share-hz.XXXXXX")"
-  # DNS over HTTPS first, as live_check does: a new name's NXDOMAIN from before its record existed sits in the local cache
-  b="$(curl -sS --max-time "${1:-5}" --doh-url https://1.1.1.1/dns-query -D "$h" "https://$host_name/healthz" 2>/dev/null)" ||
-    b="$(curl -sS --max-time "${1:-5}" -D "$h" "https://$host_name/healthz" 2>/dev/null)" || true
-  hz_code="$(awk 'NR == 1 {print $2}' "$h")"; hz_code="${hz_code:-000}"
-  [[ $hz_code != 200 || $b == ok ]] || hz_code=000
+  if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then   # the dry Worker's answer as a header file and a body, read by the same lines below
+    local d="${SHARE_R2_DRY_DIR:-$root/r2-dry}/.cf" pair gate
+    printf 'HEALTHZ\n' >>"$root/r2-calls.log"
+    if [[ ${SHARE_R2_DRY_HEALTHZ:-} != down && -f $d/domain.json && -f $d/script.json ]]; then
+      pair="$(jq -r '[(.bindings[] | select(.name == "VERSION") | .text), (.bindings[] | select(.name == "SHA") | .text)] | join(" ")' "$d/script.json")"
+      gate="$(jq -r 'if any(.bindings[]; .name == "TEAM" and (.text // "") != "") then 1 else 0 end' "$d/script.json")"
+      case ${SHARE_R2_DRY_HEALTHZ:-} in
+        tunnel-down) printf 'HTTP/2 503 \r\nx-share-worker: %s\r\nx-share-gate: %s\r\nx-share-tunnel: 0\r\n\r\n' "$pair" "$gate" >"$h"; b="tunnel down" ;;
+        503-bare) printf 'HTTP/2 503 \r\n\r\n' >"$h"; b="" ;;
+        *) printf 'HTTP/2 200 \r\nx-share-worker: %s\r\nx-share-gate: %s\r\n\r\n' "$pair" "$gate" >"$h"; b="ok" ;;
+      esac
+    fi
+  else
+    # DNS over HTTPS first, as live_check does: a new name's NXDOMAIN from before its record existed sits in the local cache
+    b="$(curl -sS --max-time "${1:-5}" --doh-url https://1.1.1.1/dns-query -D "$h" "https://$host_name/healthz" 2>/dev/null)" ||
+      b="$(curl -sS --max-time "${1:-5}" -D "$h" "https://$host_name/healthz" 2>/dev/null)" || true
+  fi
+  hz_code="$(awk 'NR == 1 {sub(/\r$/, ""); print $2}' "$h")"; hz_code="${hz_code:-000}"
   hz_pair="$(awk 'tolower($1) == "x-share-worker:" {sub(/\r$/, ""); print $2 " " $3; exit}' "$h")"
   [[ "$(awk 'tolower($1) == "x-share-gate:" {sub(/\r$/, ""); print $2; exit}' "$h")" == 1 ]] && hz_gate=1
+  hz_tunnel="$(awk 'tolower($1) == "x-share-tunnel:" {sub(/\r$/, ""); print $2; exit}' "$h")"
   rm -f "$h"
+  if [[ $hz_code == 503 && $hz_tunnel == 0 && $hz_pair =~ ^[0-9]+\ [0-9a-f]{12}$ ]]; then hz_code=200   # read from the headers, never the status alone
+  elif [[ $hz_code == 200 && ${b:-} != ok ]]; then hz_code=000; fi
+  return 0
 }
 
 r2_wait_healthz() { # r2_wait_healthz admin|join: three 200s in a row within SHARE_R2_WAIT; admin also needs this CLI's pair; a new name waits for its certificate

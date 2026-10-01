@@ -1,7 +1,8 @@
 // tests/worker.mjs: unit-drive the share Worker emitted from bin/share against
 // in-memory bindings. Prints ok/FAIL lines like tests/share.sh; exit 1 on any FAIL.
 // Rows covered: 17 (serving shapes), 18 (path/record/Host refusals), 19 (hits),
-// 28 (the gated-record JWT check), plus the WORKER_SHA/WORKER_VERSION self-checks
+// 28 (the gated-record JWT check), the tenant rows 7 to 10 (PASS, ALIASES, the pass-through, the two-leg
+// /healthz, against a stubbed origin fetch whose answers hold immutable headers), plus the WORKER_SHA/WORKER_VERSION self-checks
 // and `node --check` on the emitted source.
 // Integration mode, `node tests/worker.mjs --dir <dry bucket> --host <host> <path>...`:
 // the same Worker over a BUCKET loaded from a SHARE_R2_DRY_DIR, one "<code> <path>" line per path.
@@ -305,6 +306,173 @@ const gated = async (worker, env, headers = {}, path = `/${ID}/f.txt`) =>
   const w4 = await loadWorker(), e4 = envOf(new Bucket());
   e4.BUCKET.put("m/" + ID, JSON.stringify(rec({ aud: "short" }))); e4.BUCKET.put(`o/${ID}.${NONCE}/f.txt`, "s");
   check("r28 malformed record aud", 404, await gated(w4, e4, await good()));
+}
+
+// --- tenant rows 7 to 10: PASS (a route in front of the tunnel), ALIASES, the two-leg /healthz ---
+// the stub stands in for the origin: it records every fetch and answers from a fixture whose headers are immutable, as a real fetch answer's are
+const frozen = (resp) => {
+  const h = resp.headers;
+  const ro = new Proxy(h, { get(t, k) {
+    if (k === "set" || k === "append" || k === "delete") return () => { throw new TypeError("immutable headers"); };
+    const v = Reflect.get(t, k); return typeof v === "function" ? v.bind(t) : v;
+  } });
+  Object.defineProperty(resp, "headers", { value: ro });
+  return resp;
+};
+let seen = [], answer = () => frozen(new Response("from origin", { status: 200, headers: { "cf-cache-status": "DYNAMIC" } }));
+const stubOrigin = () => {
+  globalThis.fetch = async (req, init = {}) => {
+    const r = typeof req === "string" ? new Request(req, init) : req;
+    seen.push({ url: r.url, method: r.method, body: ["GET", "HEAD"].includes(r.method) ? "" : await r.clone().text(), upgrade: r.headers.get("upgrade") || "", signal: !!init.signal });
+    return answer(r, init);
+  };
+};
+const tenantEnv = (bucket, over = {}) => envOf(bucket, { HOST: "s.test", PASS: "1", ALIASES: "", ...over });
+const tget = async (worker, env, path, opts = {}, host = "s.test") => call(worker, env, `https://${host}${path}`, opts);
+const nsni = (r) => `${r.headers.get("cache-control")}|${r.headers.get("x-robots-tag")}`;
+const MID = "b1c2d3";
+stubOrigin();
+{
+  const worker = await loadWorker();
+  const b = new Bucket(), env = tenantEnv(b);
+  putRec(b); b.put(`o/${ID}.${NONCE}/f.txt`, "cloud bytes");
+  b.put("m/" + MID, JSON.stringify({ v: 2, id: MID, storage: "machine", name: "f.txt", by: "mac-mini", added: "2026-10-01", expires: 0, opts: "", type: "text" }));
+  seen = [];
+  let r = await tget(worker, env, `/${ID}/f.txt`);
+  check("r7 a cloud record serves R2 bytes, no pass-through", "200 cloud bytes 0", `${r.status} ${await bodyOf(r)} ${seen.length}`);
+  check("r7 the cloud answer carries no-store and noindex", "no-store|noindex, nofollow", nsni(r));
+  const through = async (label, path) => {
+    seen = [];
+    const resp = await tget(worker, env, path);
+    check(`r7 ${label} passes through`, `200 from origin 1 https://s.test${path}`, `${resp.status} ${await bodyOf(resp)} ${seen.length} ${(seen[0] || {}).url}`);
+    check(`r7 ${label}: no-store and noindex on the rewrapped answer`, "no-store|noindex, nofollow", nsni(resp));
+  };
+  await through("a machine record", `/${MID}/f.txt`);
+  await through("no record", "/c0ffee/f.txt");
+  await through("a non-hex first segment", "/assets/app.js");
+  await through("the root", "/");
+  const thrower = new Bucket(); thrower.get = async () => { throw new Error("R2 down"); };
+  const et = tenantEnv(thrower);
+  seen = [];
+  r = await tget(worker, et, `/${ID}/f.txt`);
+  check("r7 the bucket throws: passes through", "200 1", `${r.status} ${seen.length}`);
+  const expired = new Bucket(), ee = tenantEnv(expired);
+  expired.put("m/" + ID, JSON.stringify(rec({ expires: 1 }))); expired.put(`o/${ID}.${NONCE}/f.txt`, "stale");
+  seen = [];
+  r = await tget(worker, ee, `/${ID}/f.txt`);
+  check("r7 an expired cloud record is 404, never passed through", "404 0", `${r.status} ${seen.length}`);
+  const other = new Bucket(), eo = tenantEnv(other);
+  other.put("m/" + ID, JSON.stringify(rec({ prefix: `o/ffffff.${NONCE}/` }))); other.put(`o/ffffff.${NONCE}/f.txt`, "theirs");
+  seen = [];
+  r = await tget(worker, eo, `/${ID}/f.txt`);
+  check("r7 a prefix naming another id is 404, never passed through", "404 0", `${r.status} ${seen.length}`);
+  for (const [label, body] of [["not JSON", "{"], ["v:3", JSON.stringify(rec({ v: 3 }))], ["v:2 cloud storage", JSON.stringify(rec({ v: 2, storage: "cloud" }))],
+    ["v:1 with a storage key", JSON.stringify(rec({ storage: "machine" }))]]) {
+    const ob = new Bucket(), oe = tenantEnv(ob); ob.put("m/" + ID, body); ob.put(`o/${ID}.${NONCE}/f.txt`, "x");
+    seen = [];
+    r = await tget(worker, oe, `/${ID}/f.txt`);
+    check(`r7 ${label} is 404, never passed through`, "404 0", `${r.status} ${seen.length}`);
+  }
+  r = await tget(worker, env, `/${ID}/f.txt`, { method: "POST", body: "x" });
+  check("r7 a cloud record refuses other methods", 405, r.status);
+  seen = [];
+  for (const p of [`/x/..%2F${MID}/f.txt`, `//${MID}/f.txt`, `/%2F${MID}/f.txt`, `/${MID}/a%2Ehtml`]) {
+    r = await tget(worker, env, p);
+    check(`r7 ${p} is 400 in front of the tunnel`, 400, r.status);
+  }
+  check("r7 no encoded path reached the origin", 0, seen.length);
+}
+
+// --- row 8: what the pass-through hands back ---
+{
+  const worker = await loadWorker();
+  const b = new Bucket(), env = tenantEnv(b);
+  b.put("m/" + MID, JSON.stringify({ v: 2, id: MID, storage: "machine", name: "f.txt", by: "mac-mini", added: "2026-10-01", expires: 0, opts: "live", type: "site" }));
+  const via = async (status, headers, body = "origin says") => {
+    answer = () => frozen(new Response(status === 204 ? null : body, { status, headers }));
+    seen = [];
+    return tget(worker, env, `/${MID}/f.txt`);
+  };
+  let r = await via(200, { "cf-cache-status": "DYNAMIC", "x-origin": "1" }, "hello");
+  check("r8 200 with a body goes back unchanged", "200 hello 1", `${r.status} ${await bodyOf(r)} ${r.headers.get("x-origin")}`);
+  r = await via(404, { "cf-cache-status": "DYNAMIC" }, "nope");
+  check("r8 the origin's 404 goes back unchanged", "404 nope", `${r.status} ${await bodyOf(r)}`);
+  r = await via(503, { "cf-cache-status": "DYNAMIC" }, "caddy 503");
+  check("r8 the origin's own 503 (cf-cache-status) goes back unchanged", "503 caddy 503", `${r.status} ${await bodyOf(r)}`);
+  const offline = async (label, resp) => {
+    check(`r8 ${label}: the 503 offline page`, "503 60 the machine serving this link is offline; try again later",
+      `${resp.status} ${resp.headers.get("retry-after")} ${await bodyOf(resp)}`);
+    check(`r8 ${label}: no-store and noindex`, "no-store|noindex, nofollow", nsni(resp));
+  };
+  await offline("530", await via(530, {}, "error code: 1033"));
+  await offline("502", await via(502, { server: "cloudflare" }, "<title>502</title>"));
+  await offline("an edge 503 (no cf-cache-status)", await via(503, {}, "edge"));
+  await offline("522", await via(522, {}, "timeout"));
+  answer = () => { throw new Error("connect failed"); };
+  seen = [];
+  await offline("a thrown fetch", await tget(worker, env, `/${MID}/f.txt`));
+  answer = () => frozen(new Response("posted", { status: 200, headers: { "cf-cache-status": "DYNAMIC" } }));
+  seen = [];
+  r = await tget(worker, env, `/${MID}/api`, { method: "POST", body: "payload-123" });
+  check("r8 a POST is forwarded with its method and body", "200 POST payload-123", `${r.status} ${(seen[0] || {}).method} ${(seen[0] || {}).body}`);
+  const ws = { status: 101, webSocket: {}, headers: new Headers({ upgrade: "websocket" }) };
+  answer = () => ws;
+  seen = [];
+  r = await worker.fetch(new Request(`https://s.test/${MID}/ws`, { headers: { upgrade: "websocket" } }), env, ctxOf());
+  check("r8 the upgrade is forwarded and its 101 returned untouched", "true websocket", `${r === ws} ${(seen[0] || {}).upgrade}`);
+  check("r8 no Analytics Engine data point for any pass-through", 0, env.HITS.points.length);
+}
+
+// --- row 9: aliases and a PASS-less Worker ---
+{
+  const worker = await loadWorker();
+  const b = new Bucket(), env = tenantEnv(b, { ALIASES: "f.test" });
+  seen = [];
+  let r = await tget(worker, env, "/ba6377/g/?a=1", {}, "f.test");
+  check("r9 GET on the alias 301s to the same path and query on HOST", "301 https://s.test/ba6377/g/?a=1", `${r.status} ${r.headers.get("location")}`);
+  r = await tget(worker, env, "/ba6377/g/?a=1", { method: "HEAD" }, "f.test");
+  check("r9 HEAD on the alias 301s", 301, r.status);
+  r = await tget(worker, env, "/ba6377/g/", { method: "POST", body: "x" }, "f.test");
+  check("r9 POST on the alias is 405", 405, r.status);
+  r = await tget(worker, env, "/healthz", {}, "f.test");
+  check("r9 /healthz on the alias 301s", "301 https://s.test/healthz", `${r.status} ${r.headers.get("location")}`);
+  r = await tget(worker, env, "/ba6377/g/", {}, "x.test");
+  check("r9 another Host is 404", 404, r.status);
+  check("r9 no alias answer reached the origin", 0, seen.length);
+  check("r9 the alias 301 carries no-store and noindex", "no-store|noindex, nofollow", nsni(await tget(worker, env, "/a", {}, "f.test")));
+  const np = tenantEnv(new Bucket(), { PASS: "" });
+  seen = [];
+  r = await tget(worker, np, "/c0ffee/f.txt");
+  check("r9 PASS empty: a miss is 404 with no fetch call", "404 0", `${r.status} ${seen.length}`);
+  np.BUCKET.put("m/" + MID, JSON.stringify({ v: 2, id: MID, storage: "machine", name: "f.txt", by: "m", added: "2026-10-01", expires: 0, opts: "", type: "text" }));
+  r = await tget(worker, np, `/${MID}/f.txt`);
+  check("r9 PASS empty: a machine pointer is 404 with no fetch call", "404 0", `${r.status} ${seen.length}`);
+}
+
+// --- row 10: the two-leg /healthz ---
+{
+  const worker = await loadWorker();
+  const env = tenantEnv(new Bucket());
+  const hz = async () => { seen = []; const r = await tget(worker, env, "/healthz"); return r; };
+  answer = () => frozen(new Response("ok", { status: 200 }));
+  let r = await hz();
+  check("r10 origin up: 200 ok, X-Share-Tunnel 1, the pair", "200 ok 1 1 abc123def456 1",
+    `${r.status} ${await bodyOf(r)} ${r.headers.get("x-share-tunnel")} ${r.headers.get("x-share-worker")} ${r.headers.get("x-share-gate")}`);
+  check("r10 the probe fetched HOST's /healthz with a timeout signal", "https://s.test/healthz true", `${(seen[0] || {}).url} ${(seen[0] || {}).signal}`);
+  check("r10 no-store and noindex", "no-store|noindex, nofollow", nsni(r));
+  answer = () => frozen(new Response("error code: 1033", { status: 530 }));
+  r = await hz();
+  check("r10 origin 530: 503 tunnel down, X-Share-Tunnel 0, the pair", "503 tunnel down 0 1 abc123def456",
+    `${r.status} ${await bodyOf(r)} ${r.headers.get("x-share-tunnel")} ${r.headers.get("x-share-worker")}`);
+  answer = (req, init) => new Promise((_, rej) => init.signal.addEventListener("abort", () => rej(new Error("aborted"))));
+  const t0 = Date.now(), keep = setTimeout(() => {}, 6000);   // node unrefs AbortSignal.timeout's timer; this keeps the loop alive meanwhile
+  r = await hz();
+  clearTimeout(keep);
+  check("r10 origin hangs: 503 X-Share-Tunnel 0 after the 3 s cap", "503 0 true", `${r.status} ${r.headers.get("x-share-tunnel")} ${Date.now() - t0 < 5000}`);
+  const np = tenantEnv(new Bucket(), { PASS: "" });
+  seen = [];
+  r = await tget(worker, np, "/healthz");
+  check("r10 PASS empty: SPEC-007's answer, no probe", "200 ok null 0", `${r.status} ${await bodyOf(r)} ${r.headers.get("x-share-tunnel")} ${seen.length}`);
 }
 
 console.log(fails ? `${fails} FAILED` : "PASS");
