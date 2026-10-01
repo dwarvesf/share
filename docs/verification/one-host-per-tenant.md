@@ -203,3 +203,51 @@ Dry trace for the first control: `cmd_import`'s own id argument comes from the s
 ## Rollback
 
 Batch 4 changes only `bin/share`, `tests/share.sh`, and docs on the PR branch; no release, tap bump, or Cloudflare object exists for it. Rolling it back is reverting commit f0dc1ac on the branch.
+
+# Batch 5
+
+Batch 5 is the `kit:battery` review fix pass on this PR (five findings plus two items raised from the live rehearsal), commits a045013..2a0fb65. Each finding carries its own commit with a failing test shown red before the fix, then green after; the fast per-finding reruns below are scratch slices of the real `tests/share.sh` (same fixtures and helper functions, the unrelated middle of the file cut out) used purely to get a faster red/green loop during the fix; no scratch file was committed.
+
+## Findings and their red/green
+
+| # | Finding | Fix | Red (before) | Green (after) |
+|---|---|---|---|---|
+| 1 | migrate handed the target no `--tunnel-name`; a source on the default name collided, the target reused the source's own tunnel, and `migrate_retire` then deleted it out from under the new origin | always pass a deterministic `--tunnel-name` distinct from the source's own (`-m` suffix); `migrate_retire` also refuses the tunnel/DNS deletes if the target's own tunnel id is ever reported equal to this machine's | row 19m: target's tunnel_id equals the source's | row 19m: target's tunnel_id never equals the source's; rows 19/20/21/31 unaffected |
+| 2 | `tests/share.sh` printed the same "PASS"/"N FAILED" summary whether the run finished or crashed partway | a `reached_end` flag set only at the true end; the EXIT trap reports ABORTED and exits 2 when it is missing; the summary prints the total check count | isolated trap test: a truncated run exits 0 with no ABORTED text | isolated trap test, then the embedded self-test: a truncated run exits 2 and prints ABORTED |
+| 3 | `cmd_setup`'s old_host guard only fires when old_host is set; import into a not_setup profile then `setup <other-host>` served its gated rows ungated | refuse when old_host is empty and the profile holds an `access=` row; migrate's own switch (`--token-stdin`) is exempt, since it never renames the hostname | setup on a not_setup profile with a gated row: no refusal, dies on the live Cloudflare call instead (with the nocurl stub, before any call assertion fails) | refused before any Cloudflare call, naming the gated row |
+| 4 | the Worker's `pass()` treated any 502 as the whole machine offline, same as Cloudflare's 520-527 edge codes | drop the explicit 502 check; only 530, 520-527, and a 503 with no `cf-cache-status` mean offline | `node tests/worker.mjs`: a dead-port 502 rewritten to the 503 offline page | the 502 passes through unchanged, with or without `cf-cache-status` |
+| 5 | implementation notes claimed the migrate preflight reads `tunnel_name` from the API by `tunnel_id` when the config key is missing; the code never did | `cmd_migrate` now reads it back from the API when the local key is absent, and dies naming the manual fix if neither is known; note corrected to say where this runs | row 31b: rollback line printed `--tunnel-name  --force` (empty) | row 31b: names the tunnel read back by id, never empty |
+| 6 | `alias_dests drop` answered HTTP 400 live (3/3 rehearsals), the same PUT shape that worked for `add` two calls earlier | the PUT body drops the legacy `self_hosted_domains`/`domain` mirror fields so the API recomputes them from the new `destinations`, instead of echoing back a stale value that no longer names a surviving destination once drop removes it | row 14 ("the fold exits 0") against a genuinely reverted `alias_dests`, cf_dry extended to reject the same self_hosted_domains/destinations inconsistency a real PUT does, fixture carrying a realistic `self_hosted_domains`: fold dies, destinations keep the alias's own entries. Confirmed again with an isolated jq trace of the exact body construction (same expressions, no harness): pre-fix body retains `self_hosted_domains` naming a URI absent from the new `destinations` | row 14/30 (40+ checks) all pass end to end; the same isolated jq trace shows the stripped body consistent |
+| 7 | `tests/e2e-tenant.sh` had five script bugs found across three live rehearsals (a cold R2 token, a split TCP read in the echo origin, a missing-file check, two Access-app lookups assuming a folded app renames to the tenant), plus L8's `etag_before` reading through A's own profile right after `--no-r2` removed its `bucket=` | applied the run1→run3 fix patch; L8 now reads the pointer's ETag by a direct S3 HEAD on the bucket name, independent of A's profile config | (live-only; no dry seam exercises the R2/Access live path) | `bash -n tests/e2e-tenant.sh` and shellcheck clean; the lead reruns R1/L8 live |
+
+## Green run
+
+```
+Command: SHARE_TEST_PORT_BASE=32787 gtimeout 900 bash tests/share.sh
+Exit:    0
+Checks:  1238 checks, PASS
+Tail:    ok    a run truncated before the end exits 2
+         ok    a run truncated before the end reports ABORTED
+         ok    no real launchd or systemd share job appeared during the run
+         ok    no real Keychain share item changed during the run
+```
+
+A first run of the same tree, same command, showed one failing line unrelated to any of the seven items above (`row 6: pub/<id> absent while a PROBE fail was logged`, a `sleep 0.05` filesystem-polling race against a background watcher, pre-existing and untouched by this batch): the same intermittent-under-load pattern Batch 4 already recorded for a different line. The rerun above is clean.
+
+```
+Command: node tests/worker.mjs
+Exit:    0
+Verdict: PASS
+```
+
+```
+Command: swift test --package-path mac
+Exit:    0
+Verdict: Executed 176 tests, with 0 failures (0 unexpected)
+```
+
+`shellcheck bin/share install.sh tests/share.sh tests/e2e.sh tests/e2e-r2.sh tests/e2e-tenant.sh demo/render.sh mac/*.sh` and `/bin/bash -n bin/share tests/share.sh tests/e2e-tenant.sh` are clean on the same tree.
+
+## Rollback
+
+Batch 5 changes `bin/share`, `tests/share.sh`, `tests/worker.mjs`, `tests/e2e-tenant.sh`, and `docs/implementation-notes/one-host-per-tenant.md` on the PR branch; no release, tap bump, or Cloudflare object exists for it. Rolling it back is reverting commits a045013..2a0fb65 on the branch.
