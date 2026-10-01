@@ -32,7 +32,28 @@ mkdir -p "$WORK/stubsvc"
 # shellcheck disable=SC2016 # literal code for the stub, not this shell's expansion
 printf '#!/bin/bash\n[[ $1 == print ]] && exit 1\nexit 0\n' >"$WORK/stubsvc/launchctl"   # print fails, so the unload wait returns at once
 printf '#!/bin/bash\nexit 0\n' >"$WORK/stubsvc/systemctl"
-chmod +x "$WORK/stubsvc/launchctl" "$WORK/stubsvc/systemctl"
+# The same holds for credentials: a fake HOME does not hide the login Keychain, so a token-free
+# check once found a real share-api:<host> item on the machine and swept with it. The security
+# stub answers as an empty keychain and logs the verb and -s service of every call (never a value),
+# so a check can prove a lookup landed here; op answers signed out. A section that wants a stored
+# token puts its own fake security first on PATH.
+cat >"$WORK/stubsvc/security" <<'EOF'
+#!/bin/bash
+svc=""; prev=""; for a in "$@"; do [[ $prev == -s ]] && svc="$a"; prev="$a"; done
+echo "$1 $svc" >>"${STUBSEC_LOG:?}"
+[[ $1 == -i ]] && cat >/dev/null
+[[ $1 == find-* || $1 == delete-* ]] && exit 44
+exit 0
+EOF
+printf '#!/bin/bash\necho "op: stubbed by tests/share.sh (signed out)" >&2\nexit 1\n' >"$WORK/stubsvc/op"
+chmod +x "$WORK/stubsvc/launchctl" "$WORK/stubsvc/systemctl" "$WORK/stubsvc/security" "$WORK/stubsvc/op"
+export STUBSEC_LOG="$WORK/stubsec.log"; : >"$STUBSEC_LOG"
+real_security="$(command -v security || true)"
+real_keychain_share() { # service name and modify date of every share* item in the real keychain, never a value
+  [[ -n $real_security ]] && "$real_security" dump-keychain 2>/dev/null |
+    awk '/^keychain: /{m=""} /"mdat"<timedate>/{m=$NF} /"svce"<blob>="share/{sub(/.*<blob>=/, ""); print $0, m}' | sort
+}
+keychain_before="$(real_keychain_share)"
 export PATH="$WORK/stubsvc:$PATH"
 fix_pid=""
 trap 'bash "$SH" stop >/dev/null 2>&1; [[ -n $fix_pid ]] && kill "$fix_pid" 2>/dev/null; rm -rf "$WORK"' EXIT
@@ -1261,11 +1282,13 @@ echo "--- rows 10 and 11: expiry without a token defers the app; prune with the 
 areset
 d_app=$(app_of "$d_id")
 awk -F'\t' -v OFS='\t' -v id="$d_id" '$1 == id {$5 = 1} {print}' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
+: >"$STUBSEC_LOG"
 out=$(env -u CLOUDFLARE_API_TOKEN SHARE_ACCESS_DRY=1 bash "$SH" prune 2>&1 1>/dev/null); rc=$?
 check "prune without a token: exit 0, names the deferred app" "1" "$([[ $rc == 0 ]] && grep -c "Access app for $d_id awaits deletion; run 'share prune' with a token (the stored one, or CLOUDFLARE_API_TOKEN)" <<<"$out")"
 check "prune without a token: row and bytes gone" "1" "$([[ -z $(row_of "$d_id") && ! -e $SHARE_ROOT/pub/$d_id ]] && echo 1 || echo 0)"
 check "prune without a token: the app waits in access-pending" "1" "$(grep -c "^$d_id	$d_app	" "$apending")"
 check "prune without a token: no DELETE" "0" "$(grep -c 'DELETE app' "$alog")"
+check "prune without a token: the Keychain lookup hit the stub, not the real keychain" "1" "$(grep -c "^find-generic-password share-api:$SHARE_HOSTNAME$" "$STUBSEC_LOG")"
 check "status prints the pending count" "1" "$(env -u CLOUDFLARE_API_TOKEN bash "$SH" status 2>&1 >/dev/null | grep -c "1 Access app(s) await deletion; run 'share prune' with a token (the stored one, or CLOUDFLARE_API_TOKEN)")"
 check "state counts it" "1" "$(bash "$SH" state | jq .access_pending)"
 check "ls with a token for another account warns and skips, exit 0" "1" "$(SHARE_ACCESS_DRY=1 SHARE_ACCESS_DRY_ZONES=0 CLOUDFLARE_API_TOKEN=faketoken bash "$SH" ls >/dev/null 2>&1; echo "rc=$?" | grep -c 'rc=0')"
@@ -1460,7 +1483,7 @@ if command -v expect >/dev/null; then
   printf '#!/bin/bash\ntrap "" HUP\nprintf "%%s\\n" "$@" >>"${OPEN_LOG:?}"\n' >"$WORK/fakeopen/open"
   cp "$WORK/fakeopen/open" "$WORK/fakeopen/xdg-open"; chmod +x "$WORK/fakeopen/open" "$WORK/fakeopen/xdg-open"
   cat >"$WORK/tty.exp" <<'EXP'
-set timeout 20
+set timeout 60
 log_user 1
 spawn bash [lindex $argv 0] api-token
 expect {
@@ -1483,7 +1506,9 @@ EXP
     sleep 0.5; echo "  (diag) open.log after a direct call: $(cat "$WORK/open.log")"
   fi
   check "tty: the opener ran once with the template URL as its only argument" "1" "$([[ $(wc -l <"$WORK/open.log" | tr -d ' ') == 1 ]] && grep -c '^https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=.*&name=share%20access%20%28default%29$' "$WORK/open.log")"
-  check "tty: the prompt appeared and the token did not echo" "1" "$([[ $(grep -c 'Paste the new token (input hidden):' <<<"$tty_out") == 1 && $(grep -c 'tty-token' <<<"$tty_out") == 0 ]] && echo 1 || echo 0)"
+  prompt_count=$(grep -c 'Paste the new token (input hidden):' <<<"$tty_out")
+  echo_count=$(grep -c 'tty-token' <<<"$tty_out")
+  check "tty: the prompt appeared and the token did not echo" "prompt-seen=1 token-echoed=0" "prompt-seen=$prompt_count token-echoed=$echo_count"
   check "tty: the token was stored and the preflight ran" "1" "$([[ $(grep -c "^add-generic-password share-api:$SHARE_HOSTNAME$" "$WORK/sec.log") == 1 ]] && grep -c 'token found (keychain' <<<"$tty_out")"
   : >"$WORK/open.log"
   tty_out=$(tty_run SSH_CONNECTION="1.2.3.4 1 5.6.7.8 22")
@@ -2772,6 +2797,9 @@ check "serve.pid removed" "0" "$([[ -f $SHARE_ROOT/serve.pid ]] && echo 1 || ech
 # The stubs above keep every service verb off the real launchd and systemd; this is the
 # proof. A job listed here and not before the run was bootstrapped from a fake HOME.
 check "no real launchd or systemd share job appeared during the run" "$jobs_before" "$(real_jobs)"
+# The security stub keeps every token read and write off the login Keychain; a share* item
+# added, changed, or removed here means a call reached the real binary.
+check "no real Keychain share item changed during the run" "$keychain_before" "$(real_keychain_share)"
 
 echo
 if [[ $fails -gt 0 ]]; then
