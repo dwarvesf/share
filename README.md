@@ -41,6 +41,7 @@ share profiles                                                       # default a
 | **Menu bar app** | Share Bar shows what's shared and lets you drag a file onto the icon to publish it |
 | **Profiles** | `share --profile work ...` runs a second setup (another account or hostname) beside the first, on its own port and service |
 | **Private links** | `--access email:a@x,b@y`, `domain:example.com`, or `group:<rule group>` puts a Cloudflare Access login (one-time PIN) on one link; the other links stay public. See [Private links](#private-links) |
+| **One hostname per tenant** | local by default; the admin can turn R2 on at the origin (`setup <host> --r2 --bucket <name>`) and each link picks local or cloud (`add --cloud`). See [One hostname per tenant](#one-hostname-per-tenant) |
 | **Links with the machine off** | `setup <host> --backend r2 --bucket <name>`: snapshots live in a private R2 bucket, a Worker serves them, and a whole team publishes to one hostname. See [R2 backend](#r2-backend-links-that-stay-up-while-the-machine-is-off) |
 
 On the default tunnel backend, links are live only while the machine is awake; visitors get Cloudflare 530 when it sleeps. `https://<hostname>/healthz` answers `ok` while share is serving; the site root 404s by design.
@@ -91,6 +92,9 @@ share stop | start          # take all links down / bring them back
 share teardown [--yes]      # remove tunnel, service, and config; the shares on disk stay
 share --profile <name> ...  # any command against another setup (or SHARE_PROFILE=<name>); share profiles lists them
 share setup <host> --backend r2 --bucket <name>   # serve from a private R2 bucket through a Worker (see below)
+share setup <host> --r2 --bucket <name>   # on a tunnel profile's origin: R2 on, per-link storage (--alias <old-host> folds an old r2 hostname in; --no-r2 rolls back)
+share add --cloud|--local <file|dir>   # R2 on: this link in the bucket, or on this machine
+share migrate --to <ssh-target>        # move a tenant's origin (R2 off) to another machine, links kept
 ```
 
 A share from a private GitHub repo prints a warning; the content is public to anyone with the link.
@@ -150,6 +154,27 @@ One add holds at most 500 files (`SHARE_R2_MAX_FILES`), each at most 300 MiB. A 
 
 `share --profile df teardown` on an r2 profile is local: it forgets this install's token and config, and the bucket, the Worker, and every share stay for the other publishers. `CLOUDFLARE_API_TOKEN=<admin token> share --profile df teardown --yes --purge` deletes every share (gated ones with their Access apps), the Worker, its domain, and the bucket once it is empty, for everyone. Detail: [docs/how-it-works.md](docs/how-it-works.md#r2-backend).
 
+## One hostname per tenant
+
+A tenant is one hostname with one shared list. By default every link is served from the origin machine's disk through its tunnel, exactly as above. The tenant admin can turn R2 on at the origin; after that each link picks local or cloud, and a teammate can publish from another machine.
+
+```sh
+CLOUDFLARE_API_TOKEN=<admin token> share setup s.example.com --r2 --bucket share-s     # on the origin, once
+share add ./report.pdf              # the tenant default (local unless --storage-default cloud)
+share add --cloud ./report.pdf      # in the bucket: answers while the origin is off
+share add --local ./notes           # on the origin's disk
+```
+
+| | R2 off (default) | R2 on |
+|---|---|---|
+| Hostname | one | the same one; storage is a badge on the row |
+| Link while the origin is off | Cloudflare 530 | cloud links serve; machine links answer a 503 offline page |
+| Who publishes | the origin | the origin (local or cloud), members (cloud only) |
+| Live dev servers, `--host` | yes | yes, on the origin |
+| Rollback | none needed | `setup <host> --no-r2` deletes the route; the tunnel serves alone again |
+
+`setup <host> --r2 --bucket <name> --alias <old-host>` folds a former r2 hostname into the tenant: the old name answers 301 to the same path and each gated link keeps its Access app. `share migrate --to <ssh-target>` moves an R2-off tenant to another always-on machine with every link kept, and prints the rollback line if a step fails. Share Bar shows one section per tenant, and each row carries a storage badge, a file-type icon, the link type, and a lock for gated links. Admin steps, tokens, and rollbacks: [docs/setup.md](docs/setup.md#4h-one-hostname-per-tenant-r2-on-the-origin-the-alias-fold-moving-the-origin); the model: [docs/how-it-works.md](docs/how-it-works.md#tenants-one-hostname-local-or-cloud) and [ADR-0008](docs/decisions/ADR-0008-one-host-per-tenant.md).
+
 ## Menu bar app
 
 ```sh
@@ -180,7 +205,7 @@ CLI call and action.
 
 ## Docs
 
-- [docs/setup.md](docs/setup.md): API token setup (no browser), the R2 backend and teammate onboarding, moving machines, troubleshooting
+- [docs/setup.md](docs/setup.md): API token setup (no browser), the R2 backend and teammate onboarding, a tenant's R2 and alias fold, moving machines, troubleshooting
 - [docs/how-it-works.md](docs/how-it-works.md): architecture, config keys, security model, the R2 data model and Worker, testing
 
 ## License

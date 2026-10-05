@@ -1147,6 +1147,26 @@ sed 's/own_host/XXX/g' "$doc" >"$WORK/how-it-works.missing-field"
 check "negative control: doc missing own_host fails the check" "1" "$(doc_covers_fields "$WORK/how-it-works.missing-field"; echo $?)"
 check "the real doc (restored by never touching it) still passes" "0" "$(doc_covers_fields "$doc"; echo $?)"
 
+echo "=== tenant docs: every command, flag, and state key the tenant docs name is in docs/how-it-works.md and in bin/share ==="
+# Verbs, flags, config keys, and state keys that docs/how-it-works.md documents for the one-host-per-tenant model.
+# A term the doc names must be a real thing in bin/share; a term bin/share lost must fail here, not in a reader's shell.
+tenant_terms=(migrate import --r2 --no-r2 --alias --storage-default --cloud --local --token-stdin --remote-profile --remote-bin --max-bytes --tunnel-name
+  bucket= r2_endpoint= storage_default= aliases= cloud_error cloud_more index.migrated migrated/)
+tenant_state_keys=('shares[].storage' 'shares[].type' 'shares[].by' '`r2`' '`storage_default`' '`cloud_error`' '`cloud_more`')
+tenant_covers() { # tenant_covers <doc> <bin>: 0 iff every term is in both files, and every state key is in the doc
+  local t
+  for t in "${tenant_terms[@]}"; do grep -qF -- "$t" "$1" && grep -qF -- "$t" "$2" || return 1; done
+  for t in "${tenant_state_keys[@]}"; do grep -qF -- "$t" "$1" || return 1; done
+  return 0
+}
+check "every tenant command, flag, and state key in the docs is in bin/share" "0" "$(tenant_covers "$doc" "$SH"; echo $?)"
+sed 's/--storage-default/--XXX-default/g' "$doc" >"$WORK/how-it-works.missing-flag"
+check "negative control: a doc missing --storage-default fails the tenant check" "1" "$(tenant_covers "$WORK/how-it-works.missing-flag" "$SH"; echo $?)"
+sed 's/--remote-bin/--XXX-bin/g' "$SH" >"$WORK/share.missing-flag"
+check "negative control: a bin/share without --remote-bin fails the tenant check" "1" "$(tenant_covers "$doc" "$WORK/share.missing-flag"; echo $?)"
+sed 's/shares\[\]\.storage/shares[].XXX/g' "$doc" >"$WORK/how-it-works.missing-key"
+check "negative control: a doc missing the storage state key fails the tenant check" "1" "$(tenant_covers "$WORK/how-it-works.missing-key" "$SH"; echo $?)"
+
 echo "=== access: a login gate per link (SHARE_ACCESS_DRY=1, every Cloudflare call answered from fixtures) ==="
 alog="$SHARE_ROOT/access-calls.log"
 adry="$SHARE_ROOT/.access-dry"

@@ -220,6 +220,8 @@ For an external monitor (vps-mon or any uptime checker), watch `https://<hostnam
 
 ## 4g. R2 backend: a teammate joins
 
+A teammate can publish to a tenant only when its R2 is on (section 4h); with R2 off the origin is the only publisher. On a tenant with R2 on, the join line below uses the tenant's own hostname, and the teammate publishes cloud links only.
+
 Every publisher gets their own token, scoped to the share bucket, with an expiry. Never hand out an account-wide R2 token: it reaches every bucket on the account. `share api-token` refuses one.
 
 1. **The admin creates the teammate's token** in the Cloudflare dashboard as a custom API token, with an expiry (TTL):
@@ -265,11 +267,54 @@ The token lives where `share api-token` puts it for any profile: `api_token_cmd`
 
 When a teammate leaves, delete their token in the dashboard. Their shares keep serving until they expire or someone runs `share rm <id>`; any publisher can remove any share. Only the install that added a share can `refresh` it, so a leaver's shares can be removed and added again, not refreshed.
 
+## 4h. One hostname per tenant: R2 on the origin, the alias fold, moving the origin
+
+A tenant is one hostname. A tunnel profile (sections 1 to 3) serves every link from the origin machine's disk, and that is all a tenant needs. R2 is optional: the admin turns it on at the origin, and from then on each link picks local or cloud. A teammate can publish to a tenant from another machine only when its R2 is on; with R2 off the origin is the only publisher.
+
+| You want | Run | Where |
+|---|---|---|
+| Links that answer while the origin is off, and publishing from other machines | `setup <host> --r2 --bucket <name>` | the origin, with the admin token |
+| Cloud as the default for plain `add` | `setup <host> --r2 --bucket <name> --storage-default cloud` | the origin |
+| Fold an older r2 hostname into the tenant | `setup <host> --r2 --bucket <name> --alias <old-host>` | the origin |
+| Back to a plain tunnel (no alias set) | `setup <host> --no-r2` | the origin |
+| Move the tenant to another always-on machine (R2 off) | `migrate --to <ssh-target>` | the current origin |
+
+**Enable R2.** On the origin, with the admin token from 4f plus Workers Routes: Edit on the zone (the route on `<host>/*`), and Access: Apps and Policies: Edit when an alias folds gated links:
+
+```sh
+CLOUDFLARE_API_TOKEN=<admin token> share --profile <p> setup s.example.com --r2 --bucket share-s [--storage-default local|cloud]
+```
+
+It refuses to run off the origin, on quick mode, or when a route on `<host>/*` names another Worker, and every refusal comes before the first write. The tunnel and its DNS record stay as they are, so `setup s.example.com --no-r2` (which deletes the route) is the whole rollback. The origin keeps its tunnel config and gains `bucket=`, `r2_endpoint=`, and `storage_default=`.
+
+Then store a publisher token on the origin so local adds can write their pointer records: mint a token scoped to the share bucket as in 4g, plus Zone: Read, plus the Access scopes for gated adds, and store it with `share --profile <p> api-token` from a login session on that machine. Until a token is stored, a local `add` fails closed with a message naming R2; that is the cost of one namespace across both storages. `api-token --check` reports it.
+
+**Add a link.**
+
+```sh
+share --profile <p> add ./report.pdf            # storage_default decides
+share --profile <p> add --cloud ./report.pdf    # in the bucket: answers with the origin off
+share --profile <p> add --local ./notes         # on this machine
+share --profile <p> add 3000                    # live dev server: always local
+```
+
+On a member, `add` publishes to the bucket; `--local`, ports, and `--host` are refused. `share ls` marks each row `cloud`, `machine`, or `live` with its type and `by=<machine>`.
+
+**Fold an old r2 hostname.** `--alias f.example.com` moves a former r2 hostname into the tenant. The old hostname answers 301 to the same path on the tenant, the bucket is adopted in place, and each gated link keeps its Access app and AUD. If a step fails after the marker moved, the die prints the alias rollback list (rebind the old domain to its Worker, restore the marker host and app destinations, delete the pointer records, then `--no-r2`); `--no-r2` alone refuses while an alias is set. Rerunning the same command converges.
+
+**Move the origin.** `migrate` moves a tenant with R2 off to another machine you can ssh to. On the old origin, while it is online:
+
+```sh
+CLOUDFLARE_API_TOKEN=<token with Tunnel Edit, DNS Edit, Zone Read> share migrate --to user@new-origin [--remote-profile default] [--yes]
+```
+
+It copies every snapshot link with its id, name, dates, expiry, and gate, switches the hostname to a new tunnel on the new machine, checks every link through the public hostname, and only then moves the old rows aside (`~/share/index.migrated` and `~/share/migrated/<id>`; nothing is deleted). Expect up to about a minute of 530 during the switch. Live links and `--host` links do not move: `migrate` lists live ones, refuses while a `--host` row exists, and refuses a tenant with R2 on. If the switch or the verify fails, it prints the rollback line, `share setup <host> --tunnel-name <old tunnel> --force`, to run on the old machine.
+
 ## 5. Serve from a different machine
 
 Only machines listed in `hosts` serve. Two machines on one tunnel would split requests between two different `~/share` folders, so links would fail at random.
 
-To move serving: install share on the new machine, run `share setup <same hostname>` there (it reuses the tunnel and stores the token locally), then run `share service uninstall` on the old machine. Shares do not move with it; add them again on the new machine.
+To move serving with its links, use `share migrate --to <ssh-target>` on the old machine (section 4h): it copies every snapshot link, switches the hostname to a new tunnel, verifies, and moves the old rows aside. To move without the links: install share on the new machine, run `share setup <same hostname>` there (it reuses the tunnel and stores the token locally), then run `share service uninstall` on the old machine; shares do not move that way, so add them again on the new machine.
 
 ## 6. Teardown
 
