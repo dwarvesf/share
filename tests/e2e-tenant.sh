@@ -573,7 +573,7 @@ fi
 api "/accounts/$acct/workers/domains" -X PUT -H 'Content-Type: application/json' \
   --data "{\"hostname\":\"$alias_host\",\"service\":\"share-${alias_host//./-}\",\"zone_id\":\"$zone\",\"environment\":\"production\",\"override_existing_origin\":true}" >/dev/null
 echo "  2. rebound $alias_host to share-${alias_host//./-}"
-marker_etag="$(r2call_admin GET share.json | awk -F= '/^etag=/ {print $2}')"
+marker_etag="$(r2call_admin GET share.json | awk '/^code=/ {for (i = 1; i <= NF; i++) if ($i ~ /^etag=/) print substr($i, 6)}')"   # r2-call prints one line: code=<n> etag=<etag>
 printf '{"v":1,"host":"%s"}\n' "$alias_host" >"$WORK/marker.json"
 HOME="$A2" CLOUDFLARE_API_TOKEN="$admin" SHARE_R2_TOKEN="$admin" "$share" r2-call PUT share.json "$WORK/marker.json" -H "If-Match: \"$marker_etag\"" >/dev/null
 echo "  3. restored share.json host to $alias_host in bucket $bucket2"
@@ -585,7 +585,7 @@ echo "  5. deleted every v:2 machine record"
 out="$(admin_as "$A2" setup "$tenant" --no-r2 2>&1)"; rc=$?
 indent <<<"$out"
 echo "  6. $share setup $tenant --no-r2 exited $rc"
-check "R1 rollback: the alias serves itself again" 200 "$(code "https://$alias_host/")"
+check "R1 rollback: the alias serves itself again (its own /healthz answers, no 301)" 200 "$(code "https://$alias_host/healthz")"
 check "R1 rollback: the tenant is a plain tunnel (no route)" 0 "$(api "/zones/$zone/workers/routes" | jq --arg p "$tenant/*" '[.result[]? | select(.pattern == $p)] | length')"
 
 echo "--- R1 the fold again ---"
