@@ -574,6 +574,7 @@ cmd_add() {
   [[ $r2on == 0 ]] || lock_release "add-$id"
   share_url "$id" "$name" "$opts"
   url="$share_url_out"
+  [[ -z $access ]] || access_link_check "$url" || access_link_die "$id" "$url"   # Access answers at the edge, so a stopped origin does not matter here
   echo "$url"
   if [[ ${SHARE_CLIPBOARD:-1} == 1 ]] && command -v pbcopy >/dev/null; then
     printf '%s' "$url" | pbcopy && echo "  (link copied)"
@@ -912,7 +913,10 @@ migrate_retire() { # migrate_retire <target_tid> <id>...: index.migrated and mig
   svc_uninstall
   cmd_stop >/dev/null 2>&1 || true
   local tid; tid="$(cfg tunnel_id)"
-  if [[ -n $target_tid && $target_tid == "$tid" ]]; then
+  if [[ -z $target_tid ]]; then   # without the new origin's own tunnel id there is no proof the two tunnels differ
+    echo "dns:        left alone; could not read $migrate_target's tunnel id, so deleting the DNS record or this tunnel might take down the new origin"
+    echo "tunnel:     not deleted, for the same reason; once $migrate_target is confirmed on its own tunnel, run '$me teardown --yes' here to remove this tunnel"
+  elif [[ $target_tid == "$tid" ]]; then
     echo "dns:        left alone; $migrate_target's tunnel id matches this machine's, deleting it would take down the new origin"
     echo "tunnel:     not deleted, for the same reason; clean it up by hand once $migrate_target is confirmed on its own tunnel"
   else
@@ -2319,6 +2323,33 @@ access_gate() { # access_gate <id> <aud> [fqdn]: every gated URL must pass three
   done
 }
 
+access_link_check() { # access_link_check <url>: after publish, the link itself must answer the Access challenge (302 or 403) within SHARE_ACCESS_POST_WAIT seconds (default 30); 1 when it still answers anything else at the timeout
+  local wait="${SHARE_ACCESS_POST_WAIT:-30}" poll="${SHARE_ACCESS_POST_POLL:-2}" start now code n=0
+  start="$(date +%s)"
+  while :; do
+    n=$((n + 1))
+    if [[ ${SHARE_ACCESS_DRY:-0} == 1 ]]; then   # the fixture's next line, the last one repeating; no fixture is a 302
+      code="$(sed -n "${n}p" "$root/access-link-fixture" 2>/dev/null || true)"
+      [[ -n $code ]] || code="$(tail -1 "$root/access-link-fixture" 2>/dev/null || true)"
+      code="${code:-302}"
+      echo "$code" >>"$root/access-link-checks"
+    else
+      code="$(curl -s -o /dev/null --max-time 10 --doh-url https://1.1.1.1/dns-query -w '%{http_code}' "$1" 2>/dev/null)" ||
+        code="$(curl -s -o /dev/null --max-time 10 -w '%{http_code}' "$1" 2>/dev/null)" || code=000
+    fi
+    code="${code%% *}"
+    [[ $code == 302 || $code == 403 ]] && return 0
+    access_link_code="$code"
+    now="$(date +%s)"
+    [[ $((now - start)) -lt $wait ]] || return 1
+    sleep "$poll"
+  done
+}
+access_link_code=""
+access_link_die() { # access_link_die <id> <url>: the published link answered no Access challenge in time; it stays published, the message names the way out
+  die "the gated link $1 answered HTTP ${access_link_code:-000} instead of the Access login after ${SHARE_ACCESS_POST_WAIT:-30}s: at some Cloudflare edges it may be readable without the login. Unpublish it now with '$me rm $1', or check $2 yourself and rerun"
+}
+
 access_sweep() { # every pending line: a live owner is skipped, a finished add's stale line dropped, the rest claimed under the lock
   # (orphaned bytes trashed first), then each app deleted with no lock held. A line that is not done stays claimed by
   # this process; once it exits, the next sweep sees a dead owner and retries.
@@ -3039,6 +3070,7 @@ cmd_add_r2() { # cmd_add_r2 <secs> <noindex> <target> [rule]: stage, upload to a
   r2_link_base="$stage_out"; share_url "$id" "$name" "$opts"; r2_link_base=""
   rm -rf "$stage_out"; stage_out=""
   url="$share_url_out"
+  [[ -z $gated ]] || access_link_check "$url" || access_link_die "$id" "$url"
   echo "$url"
   if [[ ${SHARE_CLIPBOARD:-1} == 1 ]] && command -v pbcopy >/dev/null; then
     printf '%s' "$url" | pbcopy && echo "  (link copied)"
@@ -3588,6 +3620,16 @@ r2_api() { # r2_api METHOD PATH [JSON]: cf_try, or the dry account under SHARE_R
   cf_try "$@"
 }
 
+r2_api_retry() { # r2_api_retry METHOD PATH [JSON]: r2_api again on a Cloudflare 5xx, 3 tries in all, SHARE_CF_RETRY_SLEEP seconds (default 2) doubling between them; the last answer stays in cf_code
+  local try=1 nap="${SHARE_CF_RETRY_SLEEP:-2}"
+  while :; do
+    r2_api "$@"
+    [[ $cf_code == 5?? && $try -lt 3 ]] || return 0
+    echo "share: Cloudflare answered HTTP $cf_code to $1 $2; retrying in ${nap}s (try $try of 3)" >&2
+    sleep "$nap"; nap=$((nap * 2)); try=$((try + 1))
+  done
+}
+
 r2_api_dry() { # the account API under SHARE_R2_DRY: state files in $SHARE_R2_DRY_DIR/.cf, one "API METHOD path" line per call
   local d="${SHARE_R2_DRY_DIR:-$root/r2-dry}/.cf" p=$2 n deny='{"success":false,"errors":[{"code":10000}]}'
   mkdir -p "$d" "$root"
@@ -3595,7 +3637,14 @@ r2_api_dry() { # the account API under SHARE_R2_DRY: state files in $SHARE_R2_DR
   cf_code=200 cf_err="" cf_body='{"success":true,"result":[]}'
   # SHARE_R2_DRY_FAIL="API <METHOD> <path glob>": that call answers 500 and changes nothing; a die-injection seam
   # shellcheck disable=SC2053 # the seam is a glob on purpose
-  if [[ -n ${SHARE_R2_DRY_FAIL:-} && "API $1 $p" == $SHARE_R2_DRY_FAIL ]]; then cf_code=500 cf_err=10013 cf_body='{"success":false,"errors":[{"code":10013}]}'; return 0; fi
+  # SHARE_R2_DRY_FAIL_TIMES=<n> limits the failure to the first n matching calls, so a retry can succeed
+  if [[ -n ${SHARE_R2_DRY_FAIL:-} && "API $1 $p" == $SHARE_R2_DRY_FAIL ]]; then
+    n="$(cat "$d/fail.count" 2>/dev/null || echo 0)"
+    if [[ -z ${SHARE_R2_DRY_FAIL_TIMES:-} || $n -lt $SHARE_R2_DRY_FAIL_TIMES ]]; then
+      echo $((n + 1)) >"$d/fail.count"
+      cf_code=500 cf_err=10013 cf_body='{"success":false,"errors":[{"code":10013}]}'; return 0
+    fi
+  fi
   case "$1 $p" in
     "GET /user/tokens/verify") cf_body="$(jq -nc --arg e "${SHARE_R2_DRY_EXPIRES:-}" '{success: true, result: ({id: "dry-token-id", status: "active"} + (if $e == "" then {} else {expires_on: $e} end))}')" ;;
     "GET /zones?name="*)
@@ -4129,8 +4178,8 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alia
 
   # step 14: the alias's custom domain moves to this Worker in place (the plain PUT refuses a bound name)
   if [[ -n $alias && $alias_svc != "$worker" ]]; then
-    r2_api PUT "/accounts/$acct/workers/domains" "{\"hostname\":\"$alias\",\"service\":\"$worker\",\"zone_id\":\"$zone_id\",\"environment\":\"production\",\"override_existing_origin\":true}"
-    [[ $cf_code == 200 ]] || tenant_die "binding $alias to $worker answered HTTP $cf_code; ${alias_svc:-no Worker} still serves it"
+    r2_api_retry PUT "/accounts/$acct/workers/domains" "{\"hostname\":\"$alias\",\"service\":\"$worker\",\"zone_id\":\"$zone_id\",\"environment\":\"production\",\"override_existing_origin\":true}"
+    [[ $cf_code == 200 ]] || tenant_die "binding $alias to $worker answered HTTP $cf_code (after up to 3 tries); ${alias_svc:-no Worker} still serves it"
     echo "alias:      $alias -> $worker (answers 301 to $host_name)"
   fi
 
@@ -4336,8 +4385,8 @@ cmd_setup_r2() { # cmd_setup_r2 <force> <bucket> <tname> <login> <service> <quic
   [[ $cf_code == 200 && "$(jq -r '"\(.result.enabled),\(.result.previews_enabled)"' <<<"$cf_body")" == false,false ]] ||
     die "$worker's workers.dev route still reads on; no custom domain exists yet, nothing is exposed; rerun setup"
   if [[ $ours == 0 ]]; then
-    r2_api PUT "/accounts/$acct/workers/domains" "{\"hostname\":\"$host_name\",\"service\":\"$worker\",\"zone_id\":\"$zone_id\",\"environment\":\"production\"$([[ $force == 1 ]] && echo ',"override_existing_dns_record":true')}"
-    [[ $cf_code == 200 ]] || die "adding $host_name as $worker's custom domain answered HTTP $cf_code"
+    r2_api_retry PUT "/accounts/$acct/workers/domains" "{\"hostname\":\"$host_name\",\"service\":\"$worker\",\"zone_id\":\"$zone_id\",\"environment\":\"production\"$([[ $force == 1 ]] && echo ',"override_existing_dns_record":true')}"
+    [[ $cf_code == 200 ]] || die "adding $host_name as $worker's custom domain answered HTTP $cf_code (after up to 3 tries)"
   fi
 
   r2_wait_healthz admin

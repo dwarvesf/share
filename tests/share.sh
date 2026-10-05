@@ -13,6 +13,7 @@ base=${SHARE_TEST_PORT_BASE:-18787}
 (( base > 55526 )) && { echo "SHARE_TEST_PORT_BASE=$base clamped to 55526 so base+10009 stays a valid port" >&2; base=55526; }
 export SHARE_ROOT="$WORK/root" SHARE_CONFIG_DIR="$WORK/config" SHARE_PORT=$base
 export SHARE_TUNNEL=0 SHARE_CLIPBOARD=0 SHARE_HOSTNAME=s.example.test
+export SHARE_CF_RETRY_SLEEP=0   # a Cloudflare 5xx retry never sleeps in the suite
 # A label no machine has, so an installed share service is never started or stopped by the test.
 export SHARE_SERVICE_LABEL="share-selftest-$$"
 h="$(uname -n)"; export SHARE_HOSTS="${h%%.*}"
@@ -1276,6 +1277,27 @@ jq -nc '[range(0; 120) | {id: ("g" + tostring), name: ("group" + tostring)}] + [
 p_url=$(acc add "$WORK/gated.txt" --access group:dwarves-ops 2>/dev/null | head -1); p_id=$(cut -d/ -f4 <<<"$p_url")
 check "paged group: found on page 2, two GET groups logged" "2" "$(grep -c 'GET groups' "$alog")"
 check "paged group: include carries its id" '[{"group":{"id":"cccccccc-2222-4333-8444-555555555555"}}]' "$(jq -c '.policies[0].include' "$adry/$(app_of "$p_id").json")"
+
+echo "--- the published gated link must answer the Access challenge before it is printed ---"
+areset; rm -f "$SHARE_ROOT/access-link-checks"
+printf '200\n200\n302\n' >"$SHARE_ROOT/access-link-fixture"
+out=$(SHARE_ACCESS_POST_WAIT=5 SHARE_ACCESS_POST_POLL=0 acc add "$WORK/gated.txt" --access email:a@x.io 2>"$WORK/lc.err"); rc=$?
+check "link check: two 200s then a 302: the link is printed after three probes" "0 1 3" "$rc $(grep -c '^https://' <<<"$out") $(wc -l <"$SHARE_ROOT/access-link-checks" | tr -d ' ')"
+acc rm "$(cut -d/ -f4 <<<"$out")" >/dev/null 2>&1 || true
+areset; rm -f "$SHARE_ROOT/access-link-checks"; printf '403\n' >"$SHARE_ROOT/access-link-fixture"
+out=$(SHARE_ACCESS_POST_WAIT=5 SHARE_ACCESS_POST_POLL=0 acc add "$WORK/gated.txt" --access email:a@x.io 2>"$WORK/lc.err"); rc=$?
+check "link check: a 403 counts as the challenge" "0 1 1" "$rc $(grep -c '^https://' <<<"$out") $(wc -l <"$SHARE_ROOT/access-link-checks" | tr -d ' ')"
+acc rm "$(cut -d/ -f4 <<<"$out")" >/dev/null 2>&1 || true
+areset; rm -f "$SHARE_ROOT/access-link-checks"; printf '200\n' >"$SHARE_ROOT/access-link-fixture"
+rows_lc="$(wc -l <"$SHARE_ROOT/index.tsv" | tr -d ' ')"
+out=$(SHARE_ACCESS_POST_WAIT=0 SHARE_ACCESS_POST_POLL=0 acc add "$WORK/gated.txt" --access email:a@x.io 2>"$WORK/lc.err"); rc=$?
+check "link check: still 200 at the timeout: exit 1, no link on stdout" "1 0" "$rc $(grep -c '^https://' <<<"$out")"
+check "link check: the warning names the status, the edge risk, and the rm command" "1 1 1" \
+  "$(grep -c 'answered HTTP 200 instead of the Access login' "$WORK/lc.err") $(grep -c 'readable without the login' "$WORK/lc.err") $(grep -c "Unpublish it now with 'share rm [0-9a-f]\{6\}'" "$WORK/lc.err")"
+check "link check: the link stays published for the rm the message names" "$((rows_lc + 1))" "$(wc -l <"$SHARE_ROOT/index.tsv" | tr -d ' ')"
+rm -f "$SHARE_ROOT/access-link-fixture" "$SHARE_ROOT/access-link-checks"
+acc rm "$(tail -1 "$SHARE_ROOT/index.tsv" | cut -f1)" >/dev/null 2>&1 || true
+areset
 
 echo "--- rows 6 and 7: the bytes go public only after the gate is observed ---"
 areset
@@ -2679,6 +2701,14 @@ writes() { grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$slog" || true; }
 objs() { (cd "$DRYS" && find . -type f ! -path './.cf/*' | LC_ALL=C sort | xargs -I{} sh -c 'printf "%s " "{}"; cat "{}"'); }
 bind() { jq -r --arg n "$1" '.bindings[] | select(.name == $n) | .text' "$DRYS/.cf/script.json"; }
 
+echo "--- the custom-domain add retries a Cloudflare 5xx, three tries in all ---"
+s_fresh; echo dwarves.cloudflareaccess.com >"$DRYS/.cf/team"
+out=$(SHARE_R2_DRY_FAIL="API PUT /accounts/*/workers/domains" SHARE_R2_DRY_FAIL_TIMES=2 r2s 2>&1); rc=$?
+check "custom domain: two 500s then success: setup exits 0 after three PUTs" "0 3 2" "$rc $(grep -c '^API PUT .*/workers/domains$' "$slog") $(grep -c 'retrying in' <<<"$out")"
+s_fresh; echo dwarves.cloudflareaccess.com >"$DRYS/.cf/team"
+out=$(SHARE_R2_DRY_FAIL="API PUT /accounts/*/workers/domains" r2s 2>&1); rc=$?
+check "custom domain: a persistent 500 fails loud after three PUTs" "1 3 1" "$rc $(grep -c '^API PUT .*/workers/domains$' "$slog") $(grep -c "custom domain answered HTTP 500 (after up to 3 tries)" <<<"$out")"
+
 s_fresh
 out=$(S_TOKEN="" r2s 2>&1); rc=$?
 check "no token: exit 1" "1" "$rc"
@@ -3315,6 +3345,16 @@ check "row 30: after the list, the alias's own Worker serves its cloud records a
   "$(jq -r .service "$DRYV/.cf/domain.json") $(jq -r '[(.bindings[] | select(.name == "HOST") | .text), (.bindings[] | select(.name == "BUCKET") | .bucket_name)] | join(" ")' "$DRYV/.cf/script-share-f-example-test.json") $(jq -r .host "$DRYV/share.json") $(jq -r .v "$DRYV/m/0c0001") $(grep -c f.example.test/0c0001 "$vroot/.access-dry/$fu1.json")"
 : >"$vlog"; out=$(afold 2>&1); rc=$?
 check "row 30: the fold again converges to row 14's end state" "0 $row14end" "$rc $(aend)"
+# the alias domain PUT: two 500s then success converges; a persistent 500 dies after three tries with the alias rollback list
+afresh; : >"$vlog"
+out=$(SHARE_R2_DRY_FAIL="API PUT /accounts/*/workers/domains" SHARE_R2_DRY_FAIL_TIMES=2 afold 2>&1); rc=$?
+check "alias domain: two 500s then success: the fold exits 0 after three PUTs" "0 3" "$rc $(grep -c '^API PUT .*/workers/domains$' "$vlog")"
+afresh; : >"$vlog"
+out=$(SHARE_R2_DRY_FAIL="API PUT /accounts/*/workers/domains" afold 2>&1); rc=$?
+check "alias domain: a persistent 500 fails loud after three PUTs and prints the rollback list" "1 3 1 1" \
+  "$rc $(grep -c '^API PUT .*/workers/domains$' "$vlog") $(grep -c 'answered HTTP 500 (after up to 3 tries)' <<<"$out") $(grep -c '^alias rollback for f.example.test' <<<"$out")"
+afresh; out=$(afold 2>&1); rc=$?
+check "alias domain: the fold converges again after the retries" "0 $row14end" "$rc $(aend)"
 # no local rows and no machine pointers: the list's pointer pipeline ends in a grep that finds nothing, which under set -e silently killed the refusal before it printed anything
 mkdir -p "$WORK/row30-aside"; mv -f "$vroot/index.tsv" "$WORK/row30-aside/index.tsv"
 for ptr in "$DRYV"/m/0a000?; do [[ -f $ptr ]] && mv -f "$ptr" "$WORK/row30-aside/"; done
@@ -3587,6 +3627,7 @@ cat > "$MW/mssh" <<EOF
 printf '%s\n' "\$*" >> "$MW/mssh.log"
 joined=""
 for a in "\$@"; do joined="\$joined \$a"; done
+case "\$joined" in *" migrate-tunnel-id"*) [ -z "\${MIG_EMPTY_TID:-}" ] || exit 0 ;; esac
 sh=sh; command -v fish >/dev/null 2>&1 && sh=fish
 exec env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS -u SHARE_TUNNEL \\
   HOME="\$MIG_B_HOME" PATH="$MW/remotebin:\$PATH" CURL_LOG="\$MIG_CURL_LOG" "\$sh" -c "\$joined"
@@ -3629,6 +3670,7 @@ mig_fixture "$AH"
 mkdir -p "$BH/.config/share"; printf 'hosts=nobody\nport=19561\n' > "$BH/.config/share/config"
 : > "$MW/clog19"; : > "$MW/mssh.log"
 out=$(mig_a "$AH" "$BH" "$MW/clog19" migrate --to m19-target --remote-bin "$MW/remotebin" --yes 2>&1); rc=$?
+[[ $rc == 0 ]] || sed 's/^/    migrate: /' <<<"$out"   # a failing run shows its own output in the log
 check "row 19: migrate exits 0" "0" "$rc"
 check "row 19: B's index holds the three snapshots with A's ids and names" "1a0001 1a0002 $GATEDID" "$(cut -f1 "$BH/share/index.tsv" | sort | tr '\n' ' ' | sed 's/ $//')"
 check "row 19: B's gated row keeps access= and access_rule=" "1" "$(awk -F'\t' -v id="$GATEDID" '$1==id' "$BH/share/index.tsv" | grep -c "access=$GID access_rule=email:a@x.test")"
@@ -3641,6 +3683,17 @@ check "row 19: A's rows moved to index.migrated, A's live row stays in index.tsv
 check "row 19: A's live row is untouched in its own index" "9b0001" "$(cut -f1 "$AH/share/index.tsv")"
 check "row 19: A's trees moved aside to migrated/, not pub/" "0 1" "$([[ -e $AH/share/pub/1a0001 ]] && echo 1 || echo 0) $([[ -d $AH/share/migrated/1a0001 ]] && echo 1 || echo 0)"
 check "row 19: A's teardown path ran and logged no DELETE of an Access app" "0" "$(grep -c 'DELETE.*access/apps' "$MW/clog19")"
+
+echo "--- row 19e: a target tunnel id that cannot be read refuses the DNS and tunnel delete ---"
+AHE="$MW/A19e"; BHE="$MW/B19e"; rm -rf "$AHE" "$BHE"; mkdir -p "$AHE" "$BHE"
+mig_fixture "$AHE"
+mkdir -p "$BHE/.config/share"; printf 'hosts=nobody\nport=19569\n' > "$BHE/.config/share/config"
+: > "$MW/clog19e"
+out=$(MIG_EMPTY_TID=1 mig_a "$AHE" "$BHE" "$MW/clog19e" migrate --to m19e-target --remote-bin "$MW/remotebin" --yes 2>&1); rc=$?
+check "row 19e: migrate still exits 0 and moves the rows aside" "0 1" "$rc $([[ -f $AHE/share/index.migrated ]] && echo 1 || echo 0)"
+check "row 19e: no DNS record or tunnel is deleted" "0 0" "$(grep -c 'DELETE.*dns_records' "$MW/clog19e") $(grep -c 'DELETE.*cfd_tunnel' "$MW/clog19e")"
+check "row 19e: the output names the refusal and the teardown command" "1 1 1" \
+  "$(grep -c "could not read m19e-target's tunnel id" <<<"$out") $(grep -c '^tunnel:     not deleted' <<<"$out") $(grep -c "teardown --yes" <<<"$out")"
 
 echo "--- row 19m: a source on the default tunnel name must not hand the target the same tunnel (DEC-010) ---"
 AHD="$MW/A19m"; BHD="$MW/B19m"; rm -rf "$AHD" "$BHD"; mkdir -p "$AHD" "$BHD"
