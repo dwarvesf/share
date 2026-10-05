@@ -1,0 +1,118 @@
+=== before: nothing named for this run exists ===
+  ok    no DNS record for share-e2e-84ccc9.d.foundation
+  ok    no tunnel for share-e2e-84ccc9.d.foundation
+  ok    no DNS record for share-e2e-3abe33.d.foundation
+  ok    no tunnel for share-e2e-3abe33.d.foundation
+=== L0 origin A: tunnel setup; a snapshot, a folder, a gated snapshot, a live server ===
+  | auth:       API token (active)
+  | zone:       d.foundation
+  | tunnel:     created share-share-e2e-84ccc9-d-foundation
+  | route:      share-e2e-84ccc9.d.foundation -> 127.0.0.1:20423
+  | dns:        created CNAME share-e2e-84ccc9.d.foundation
+  | token:      stored in keychain (service share-tunnel.mga:share-e2e-84ccc9.d.foundation)
+  | service:    runs at login (foundation.d.share.mga)
+  | ready:      https://share-e2e-84ccc9.d.foundation/ is live. Next: share --profile mga add <file|dir>
+  ok    A setup exits 0
+  | A's tunnel 9bf68be8...
+  | share: checking the API token for profile mga (zone d.foundation)
+  |   ok       token found (CLOUDFLARE_API_TOKEN)
+  |   ok       Zone: Read                                                     GET /zones?name=d.foundation -> 1 zone
+  |   ok       Access: Organizations, Identity Providers, and Groups Read     GET /accounts/<acct>/access/organizations -> 200
+  |   ok       Access: Apps and Policies Edit                                 POST /accounts/<acct>/access/apps {} -> 400 (12130, nothing created)
+  | share: waiting up to 900s for Cloudflare Access to enforce on share-e2e-84ccc9.d.foundation/8c22f0 (a new app can take minutes; Ctrl-C is safe: nothing is published, the next add or prune removes the app)
+  ok    the snapshot link answers from A
+  ok    the folder link answers from A
+  ok    the live link answers from A
+  ok    the gated link 302s to Access with kid == aud
+=== M0 a remote-setup failure after the switch, then the printed rollback ===
+  | auth:       API token (active)
+  | preflight:  ok (local-b, not_setup)
+  | copy:       1bed74 -> local-b (imported 1bed74)
+  | copy:       269bea -> local-b (imported 269bea)
+  | copy:       8c22f0 -> local-b (imported 8c22f0)
+  | not moved:  live link 17a5c2 (port 20463); after the move run 'share --profile mga add 20463' on the new origin
+  | share: migrate: the switch on local-b failed; this machine may still be serving, or the DNS record may already point at the new tunnel. Rollback if share-e2e-84ccc9.d.foundation is down: share --profile mga setup share-e2e-84ccc9.d.foundation --tunnel-name share-share-e2e-84ccc9-d-foundation --force
+  ok    M0: migrate exits 1 on the injected failure
+  ok    M0: the printed rollback names A's own tunnel name
+  ok    M0: the switch moved the DNS record off A's tunnel
+  ok    M0: A kept its rows and its trees (nothing moved aside)
+  | running the printed rollback: share --profile mga setup share-e2e-84ccc9.d.foundation --tunnel-name share-share-e2e-84ccc9-d-foundation --force
+  | auth:       API token (active)
+  | zone:       d.foundation
+  | tunnel:     reusing share-share-e2e-84ccc9-d-foundation
+  | route:      share-e2e-84ccc9.d.foundation -> 127.0.0.1:20423
+  | dns:        replaced CNAME share-e2e-84ccc9.d.foundation (--force)
+  | token:      stored in keychain (service share-tunnel.mga:share-e2e-84ccc9.d.foundation)
+  | service:    runs at login (foundation.d.share.mga)
+  | ready:      https://share-e2e-84ccc9.d.foundation/ is live. Next: share --profile mga add <file|dir>
+  ok    M0: the printed rollback exits 0
+  ok    M0: the DNS record points at A's own tunnel again
+  ok    M0 after the rollback: the snapshot link answers at the same URL
+  ok    M0 after the rollback: the folder link answers at the same URL
+  ok    M0 after the rollback: the gated link keeps its 302 and AUD
+=== M1 migrate again: B already holds the copies; the switch, the verify, the retire ===
+  | auth:       API token (active)
+  | preflight:  ok (local-b, serving)
+  | copy:       1bed74 already on local-b, skipping
+  | copy:       269bea already on local-b, skipping
+  | copy:       8c22f0 already on local-b, skipping
+  | not moved:  live link 17a5c2 (port 20463); after the move run 'share --profile mga add 20463' on the new origin
+  | switch:     local-b is the new origin for share-e2e-84ccc9.d.foundation
+  | verify:     every moved link answers from local-b
+  | dns:        share-e2e-84ccc9.d.foundation no longer points at this tunnel, left alone
+  | tunnel:     deleted
+  | retire:     share-e2e-84ccc9.d.foundation no longer serves from this machine; moved rows in index.migrated, trees in migrated/
+  ok    M1: migrate exits 0
+  ok    M1: a rerun skips the copies B already holds
+  ok    M1: the live link is reported as not moved
+  ok    M1: the snapshot link answers at the same URL
+  ok    M1: the folder link answers at the same URL
+  ok    M1: the gated link keeps its 302 and AUD
+  ok    M1: the DNS record points at B's own tunnel, not A's
+  ok    M1: A's tunnel is deleted
+  ok    M1: A's rows moved aside, its trees under migrated/
+  | measured gap on https://share-e2e-84ccc9.d.foundation/1bed74/one.txt: 0 probes (every 0.5 s) answered other than 200, spanning 0 s of 37 probes; codes: 
+  | B's profile on this machine: serving null
+  ok    M1 cleanup: the tenant's DNS and tunnels are gone after B's teardown
+=== M2 a second throwaway name moved from air to this machine over ssh ===
+  ok    M2: the snapshot link answers from the stand-in before the move
+  | AIR setup: auth:       API token (active)
+  | AIR setup: zone:       d.foundation
+  | AIR setup: tunnel:     created share-share-e2e-3abe33-d-foundation
+  | AIR setup: route:      share-e2e-3abe33.d.foundation -> 127.0.0.1:20483
+  | AIR setup: dns:        created CNAME share-e2e-3abe33.d.foundation
+  | AIR setup: token:      stored in keychain (service share-tunnel.mga:share-e2e-3abe33.d.foundation)
+  | AIR setup: service:    runs at login (foundation.d.share.mga)
+  | AIR setup: ready:      https://share-e2e-3abe33.d.foundation/ is live. Next: share --profile mga add <file|dir>
+  | LINK1 https://share-e2e-3abe33.d.foundation/3b45a3/one.txt
+  | LINK2 https://share-e2e-3abe33.d.foundation/83a818/folder/
+  | LINK4 https://share-e2e-3abe33.d.foundation/3e7ae2/
+  | LINK3 https://share-e2e-3abe33.d.foundation/a6f9af/gated.txt
+  | READY
+  | AIR migrate: auth:       API token (active)
+  | AIR migrate: preflight:  ok (mini-tieubao, not_setup)
+  | AIR migrate: copy:       3b45a3 -> mini-tieubao (imported 3b45a3)
+  | AIR migrate: copy:       83a818 -> mini-tieubao (imported 83a818)
+  | AIR migrate: copy:       a6f9af -> mini-tieubao (imported a6f9af)
+  | AIR migrate: not moved:  live link 3e7ae2 (port 20503); after the move run 'share --profile mga add 20503' on the new origin
+  | AIR migrate: switch:     mini-tieubao is the new origin for share-e2e-3abe33.d.foundation
+  | AIR migrate: verify:     every moved link answers from mini-tieubao
+  | AIR migrate: dns:        share-e2e-3abe33.d.foundation no longer points at this tunnel, left alone
+  | AIR migrate: tunnel:     deleted
+  | AIR migrate: retire:     share-e2e-3abe33.d.foundation no longer serves from this machine; moved rows in index.migrated, trees in migrated/
+  | MIGRATE-RC 0
+  ok    M2: the stand-in's script exits 0
+  ok    M2: migrate exits 0 on the stand-in
+  ok    M2: the live link is reported as not moved
+  ok    M2: the snapshot link answers from this machine at the same URL
+  ok    M2: the folder link answers at the same URL
+  ok    M2: the gated link keeps its 302 and AUD
+  ok    M2: the DNS record points at a tunnel of this machine's profile
+  ok    M2: only one tunnel remains for the name (the stand-in's is deleted)
+  | measured gap on https://share-e2e-3abe33.d.foundation/3b45a3/one.txt: 0 probes answered other than 200, spanning 0 s; codes: 
+  ok    M2 cleanup: the name's DNS is gone after B's teardown
+
+38/38 checks passed
+PASS
+tests/e2e-migrate.sh: line 151: 34136 Terminated: 15          python3 -m http.server "$LPORT" --bind 127.0.0.1 --directory "$WORK/live" > /dev/null 2>&1
+cleanup: nothing left for this run's names

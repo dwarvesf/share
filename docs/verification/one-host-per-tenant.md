@@ -346,3 +346,33 @@ The CI lint job failed on every push since the tenant work began, and the test j
 | test (ubuntu, macos) | the migrate rows run `setup` on the target, which dies with `missing: caddy cloudflared` on a runner with no cloudflared; every dev machine has one | the suite appends stand-in `caddy` and `cloudflared` last on PATH, so a real binary still wins. Reproduced locally with a PATH that hides cloudflared and fish: red before, `1256 checks, PASS` after |
 
 The macOS runner also showed one `tty: the prompt appeared and the token did not echo` failure on 1440259 that did not recur; it is the known flaky row.
+
+# Batch 8
+
+Batch 8 is TASK-9b: `tests/e2e-migrate.sh` and the live rehearsal R2 of the personal move, on throwaway names. Final result: 38/38, run log `docs/verification/e2e-migrate-20261005T093825Z.log`. The second machine was the real Air, driven from the Mini with `mini-run --host air`, migrating over real ssh to the Mini.
+
+| Leg | What it ran | Result |
+|---|---|---|
+| M0 | origin A (a snapshot, a folder, a gated snapshot, a live server), `migrate` to B on the same machine with a remote `setup` that does the real switch and then reports failure; the printed rollback run on A | exit 1 with the rollback line naming A's own tunnel; the DNS record moved to B's tunnel; the printed rollback exits 0 and the record points at A's own tunnel again; every link answers, the gated one with `kid == aud` |
+| M1 | the same name migrated again, B already holding the copies | exit 0; the copies are skipped; the live link is reported as not moved; every snapshot link answers at the same URL, the gated one keeps its 302 and AUD; the DNS record points at B's tunnel; A's tunnel is deleted; A's rows are in `index.migrated` and its trees under `migrated/` |
+| M2 | a second throwaway name set up on the Air, five links published, `migrate --to` the Mini over ssh | the same assertions as M1, from the real Air to the Mini |
+
+Measured gap: probes every 0.5 s through DoH on a snapshot link logged no non-200 answer across the switch on either run (37 probes in M1; the M2 gap logger likewise). The spec expected up to about a minute of 530; the DNS record flips and the new tunnel connects inside a probe interval at this scale, so the number to plan with is "under a few seconds", not a minute.
+
+## Findings the rehearsal forced
+
+| # | Finding | Fix | Red | Green |
+|---|---|---|---|---|
+| 1 | `migrate` archived only `<name>`, but a bare-file snapshot keeps its generated `index.html` beside the file at the id root. The receiver counted one file where the sender's manifest counted two and refused the share as a truncated copy: every single-file link would have failed the personal move (9ae6350) | the archive is the whole `pub/<id>` tree; `import` checks that `<name>` is in it | the suite fixture gains the generated `index.html` it lacked: 17 FAIL in rows 19 to 31 | 1256 checks, PASS |
+| 2 | after a failed switch the target profile is serving this hostname, so the rerun's preflight died with `port for this profile is already in use`; the printed rollback led to a dead end (see the commit after 9ae6350) | the preflight accepts a target already serving the same hostname | new row 19s: got `1 1` | 1257 checks, PASS |
+| 3 | script bugs in `tests/e2e-migrate.sh` itself: profile names must be lowercase; the Air-side run needs the real `HOME` for ssh while share keeps a throwaway one; a new name needs a moment to resolve | script edits | runs 1 to 5 | run 6, 38/38 |
+
+Both product bugs live only on the real-account path: no fixture in the suite had a generated index beside a bare file or a target that was already serving.
+
+## Cleanup proof
+
+Snapshots of every Cloudflare resource class (Workers, domains, routes, DNS, tunnels, buckets, Access apps, minted tokens) and of `launchctl` and LaunchAgents on the Mini were identical before and after the runs. On the Air, the count of `foundation.d.share` launchd jobs and the LaunchAgents listing were the same before and after (its real `s.han.ws` service was never touched: the legs used profiles `mga` and `mgb` under throwaway HOMEs). The script's own sweep printed `cleanup: nothing left for this run's names` on every run. One leftover surfaced: the M2 target's data root under the real HOME (`~/share/profiles/mgb`), because the script's cleanup only looked for the profile config. The script now moves that root aside too.
+
+## Rollback
+
+Batch 8 adds `tests/e2e-migrate.sh` and changes `bin/share` (`migrate_tar`, the import root check, the migrate preflight) and `tests/share.sh`. No release, tap bump, or standing Cloudflare object exists for it.

@@ -153,8 +153,8 @@ cleanup() {
       HOME="$home" CLOUDFLARE_API_TOKEN="$admin" SHARE_PORT=1 bash "$share" --profile "$prof" teardown --yes >/dev/null 2>&1 || true
     done
   done
-  if [[ -n $air_ssh && -d $HOME/.config/share/profiles/mgb ]]; then   # the M2 target profile lives under the real HOME
-    CLOUDFLARE_API_TOKEN="$admin" bash "$share" --profile mgb teardown --yes >/dev/null 2>&1 || true
+  if [[ -n $air_ssh ]]; then   # the M2 target profile lives under the real HOME: its config and its root
+    [[ ! -d $HOME/.config/share/profiles/mgb ]] || CLOUDFLARE_API_TOKEN="$admin" bash "$share" --profile mgb teardown --yes >/dev/null 2>&1 || true
     [[ ! -d $HOME/share/profiles/mgb ]] || mv -f "$HOME/share/profiles/mgb" "$WORK/mgb-root" 2>/dev/null || true
   fi
   leftovers
@@ -276,11 +276,15 @@ if [[ -n $air_ssh ]]; then
 set -uo pipefail
 host="$1" port="$2" lport="$3" target="$4" rbin="$5" rule="$6"
 export CLOUDFLARE_API_TOKEN; CLOUDFLARE_API_TOKEN="$(cat ./airtok)"
+REAL_HOME="$HOME"
 H="$PWD/h"; mkdir -p "$H" "$PWD/bin" "$PWD/kc" "$PWD/src/folder" "$PWD/live"
 cp ./airsec "$PWD/bin/security"; chmod +x "$PWD/bin/security"
 chmod +x ./share
 export PATH="$PWD/bin:$PATH" SHARE_E2E_KC_STORE="$PWD/kc" SHARE_CLIPBOARD=0
 unset SHARE_CONFIG_DIR SHARE_ROOT SHARE_PROFILE XDG_CONFIG_HOME SHARE_HOSTNAME SHARE_BACKEND
+# this script runs under a throwaway HOME so share's config stays isolated, but ssh must still see the real one (its Host aliases and keys)
+printf '#!/bin/bash\nexport HOME="%s"\nexec ssh "$@"\n' "$REAL_HOME" >"$PWD/sshreal"; chmod +x "$PWD/sshreal"
+export SHARE_MIGRATE_SSH="$PWD/sshreal -o BatchMode=yes $target"
 a() { env HOME="$H" SHARE_PORT="$port" bash ./share --profile mga "$@"; }
 trap 'a teardown --yes >/dev/null 2>&1 || true; kill %1 2>/dev/null || true' EXIT
 a setup "$host" 2>&1 | sed 's/^/AIR setup: /' || exit 3
@@ -305,6 +309,7 @@ AIR
   al1="$(sed -n 's/^LINK1 //p' "$WORK/air.out")"; al2="$(sed -n 's/^LINK2 //p' "$WORK/air.out")"; al3="$(sed -n 's/^LINK3 //p' "$WORK/air.out")";
   if [[ -n $al1 ]]; then
     ag_aud=""; [[ -z $al3 ]] || ag_aud="$(api "/accounts/$acct/access/apps?per_page=100" | jq -r --arg s "share $(cut -d/ -f4 <<<"$al3") $air_host " '[.result[]? | select(.name | startswith($s))] | first | .aud // empty')"
+    for _ in $(seq 1 30); do [[ "$(fetch "$al1")" == "snapshot one" ]] && break; sleep 2; done   # a new name can take a moment to resolve through DoH
     check "M2: the snapshot link answers from the stand-in before the move" "snapshot one" "$(fetch "$al1")"
     ( while kill -0 "$air_pid" 2>/dev/null; do printf '%s %s\n' "$(date +%s)" "$(code "$al1")" >>"$WORK/gap2.log"; sleep 0.5; done ) & gap2_pid=$!; PIDS+=("$gap2_pid")
   fi
