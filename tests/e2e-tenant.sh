@@ -299,11 +299,20 @@ while True:
     threading.Thread(target=handle, args=(c,), daemon=True).start()
 PY
 cat >"$WORK/wsclient.py" <<'PY'
-import socket, ssl, base64, os, sys
+import socket, ssl, base64, os, sys, json, time, urllib.request
 host, path, msg = sys.argv[1], sys.argv[2], sys.argv[3]
 key = base64.b64encode(os.urandom(16)).decode()
 ctx = ssl.create_default_context()
-raw = socket.create_connection((host, 443), timeout=15)
+def doh_a(name):  # the rest of this script resolves through DoH: the local resolver caches NXDOMAIN for a name this run just created
+    for _ in range(10):
+        try:
+            req = urllib.request.Request("https://1.1.1.1/dns-query?name=%s&type=A" % name, headers={"accept": "application/dns-json"})
+            ans = [a["data"] for a in json.load(urllib.request.urlopen(req, timeout=10)).get("Answer", []) if a.get("type") == 1]
+            if ans: return ans[0]
+        except Exception: pass
+        time.sleep(2)
+    return name
+raw = socket.create_connection((doh_a(host), 443), timeout=15)
 s = ctx.wrap_socket(raw, server_hostname=host)
 req = ("GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
        "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n") % (path, host, key)
@@ -568,12 +577,14 @@ marker_etag="$(r2call_admin GET share.json | awk -F= '/^etag=/ {print $2}')"
 printf '{"v":1,"host":"%s"}\n' "$alias_host" >"$WORK/marker.json"
 HOME="$A2" CLOUDFLARE_API_TOKEN="$admin" SHARE_R2_TOKEN="$admin" "$share" r2-call PUT share.json "$WORK/marker.json" -H "If-Match: \"$marker_etag\"" >/dev/null
 echo "  3. restored share.json host to $alias_host in bucket $bucket2"
+grep -v '^aliases=' "$A2/.config/share/config" >|"$WORK/a2-config.tmp" && command cp "$WORK/a2-config.tmp" "$A2/.config/share/config"
+echo "  4. removed the aliases= line from A2's config"
 ptrs="$(admin_as "$A2" r2-list "m/" 2>/dev/null)"
 grep -o '^m/[0-9a-f]\{6\}' <<<"$ptrs" | cut -d/ -f2 | while IFS= read -r pid; do r2call_admin DELETE "m/$pid" >/dev/null; done
-echo "  4. deleted every v:2 machine record"
+echo "  5. deleted every v:2 machine record"
 out="$(admin_as "$A2" setup "$tenant" --no-r2 2>&1)"; rc=$?
 indent <<<"$out"
-echo "  5. $share setup $tenant --no-r2 exited $rc"
+echo "  6. $share setup $tenant --no-r2 exited $rc"
 check "R1 rollback: the alias serves itself again" 200 "$(code "https://$alias_host/")"
 check "R1 rollback: the tenant is a plain tunnel (no route)" 0 "$(api "/zones/$zone/workers/routes" | jq --arg p "$tenant/*" '[.result[]? | select(.pattern == $p)] | length')"
 
@@ -586,7 +597,8 @@ check "R1 after the second fold: alias 301s to the tenant again" 1 "$([[ $aliaso
 
 echo
 echo "=== R1 cleanup ==="
-admin_as "$A2" r2-delete-prefix "" >/dev/null 2>&1
+r2call_admin_prefix() { HOME="$A2" CLOUDFLARE_API_TOKEN="$admin" SHARE_R2_TOKEN="$admin" "$share" r2-delete-prefix "$@"; }   # A2 holds no stored publisher token, so the admin env token needs the same seam r2call_admin uses
+r2call_admin_prefix "" >/dev/null 2>&1
 api "/accounts/$acct/r2/buckets/$bucket2" -X DELETE -o /dev/null
 api "/accounts/$acct/workers/scripts/share-${alias_host//./-}" -X DELETE -o /dev/null
 admin_as "$A2" setup "$tenant" --no-r2 >/dev/null 2>&1 || true
