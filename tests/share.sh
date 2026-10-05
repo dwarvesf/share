@@ -3464,7 +3464,7 @@ iman="$(bash -c 'source <(sed -n "/^import_manifest() {/,/^}/p" "$1"); import_ma
 out=$(imp 3c0001 1893456000 air 2026-09-01 "$(b64 doc)" "$(b64 /Users/x/doc)" "$(b64 'noindex access=00000000-0000-4000-8000-0000003c0001 access_rule=email:a@example.test')" "$iman" <"$WORK/imp/good.tar" 2>&1); rc=$?
 check "row 18: a regular tree is published with the original dates, by=, and src <by>:<src>" "0 imported 3c0001|3c0001	doc	air:/Users/x/doc	2026-09-01	1893456000	noindex access=00000000-0000-4000-8000-0000003c0001 access_rule=email:a@example.test by=air" \
   "$rc $out|$(cat "$iroot/index.tsv")"
-check "row 18: the tree is byte for byte the source; no Access app was created" "1 0" "$(diff -r "$WORK/imp/src/doc" "$iroot/pub/3c0001/doc" >/dev/null && echo 1 || echo 0) $(cat "$iroot/access-calls.log" 2>/dev/null | grep -c POST)"
+check "row 18: the tree is byte for byte the source; no Access app was created" "1 0" "$(diff -r "$WORK/imp/src/doc" "$iroot/pub/3c0001/doc" >/dev/null && echo 1 || echo 0) $(grep -c POST < <(cat "$iroot/access-calls.log" 2>/dev/null))"
 check "row 18: no spool or stage left" "0" "$(find "$iroot" -maxdepth 1 \( -name '.import.*' -o -name '.stage.*' \) | grep -c .)"
 mktar "$WORK/imp/sym.tar" d:./doc/ f:./doc/a.txt l:./doc/l:/var/empty/target
 inone "a symlink" 3c0002 "$WORK/imp/sym.tar" doc

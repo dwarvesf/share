@@ -751,7 +751,7 @@ b64dec() { # b64dec <b64>: the bytes into b64_out; 1 on a non-base64 string. A d
 }
 import_manifest() { # import_manifest <dir>: "<file count>:<sha256 of each file's sha256 and path, sorted>"; migrate sends the same digest of pub/<id>
   local n sum
-  n="$(cd "$1" && find . -type f | grep -c . || true)"
+  n="$( (cd "$1" && find . -type f) | grep -c . || true)"
   sum="$(cd "$1" && find . -type f -print | LC_ALL=C sort | while IFS= read -r f; do shasum -a 256 "$f"; done | shasum -a 256 | cut -d' ' -f1)"
   echo "$n:$sum"
 }
@@ -1684,7 +1684,7 @@ write_config() { # write_config <tunnel_id> <tunnel_name>; keeps a token_cmd and
     [[ -n $zone_name ]] && echo "zone=$zone_name"
     [[ -n $keep ]] && echo "token_cmd=$keep"
     [[ -n $keep_api ]] && echo "api_token_cmd=$keep_api"
-    [[ -f $config ]] && grep -E '^(bucket|r2_endpoint|storage_default|aliases)=' "$config" || true   # an origin with R2 on stays on through a tunnel rerun
+    if [[ -f $config ]]; then grep -E '^(bucket|r2_endpoint|storage_default|aliases)=' "$config" || true; fi   # an origin with R2 on stays on through a tunnel rerun
   } >"$config.tmp"
   mv -f "$config.tmp" "$config"
 }
