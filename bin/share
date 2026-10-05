@@ -3889,7 +3889,7 @@ alias_wait_301() { # alias_wait_301: https://<alias>/healthz answers 301 to http
 alias_rollback() { # alias_rollback: the alias rollback list on stderr, in the order R1 rehearses it (the app destinations come back before the rebind)
   local apps="" ptrs cl uuid id
   while read -r uuid id; do [[ -n $uuid ]] && apps+="${apps:+, }$uuid ($id)"; done <<<"${fold_apps:-}"
-  ptrs="$({ rows | cut -f1; cut -f1 <<<"${r2_machine:-}"; } | grep -E '^[0-9a-f]{6}$' | sort -u | sed 's|^|m/|' | tr '\n' ' ')"
+  ptrs="$({ rows | cut -f1; cut -f1 <<<"${r2_machine:-}"; } | { grep -E '^[0-9a-f]{6}$' || true; } | sort -u | sed 's|^|m/|' | tr '\n' ' ')"   # no local rows and no pointers is a valid state: a grep with no match must not end the run under set -e before the list prints
   cl="$(crows | cut -f1 | tr '\n' ' ')"
   {
     echo "alias rollback for $alias, in this order, each with the tenant admin token:"

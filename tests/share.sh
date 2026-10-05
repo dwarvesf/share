@@ -3294,6 +3294,14 @@ check "row 30: after the list, the alias's own Worker serves its cloud records a
   "$(jq -r .service "$DRYV/.cf/domain.json") $(jq -r '[(.bindings[] | select(.name == "HOST") | .text), (.bindings[] | select(.name == "BUCKET") | .bucket_name)] | join(" ")' "$DRYV/.cf/script-share-f-example-test.json") $(jq -r .host "$DRYV/share.json") $(jq -r .v "$DRYV/m/0c0001") $(grep -c f.example.test/0c0001 "$vroot/.access-dry/$fu1.json")"
 : >"$vlog"; out=$(afold 2>&1); rc=$?
 check "row 30: the fold again converges to row 14's end state" "0 $row14end" "$rc $(aend)"
+# no local rows and no machine pointers: the list's pointer pipeline ends in a grep that finds nothing, which under set -e silently killed the refusal before it printed anything
+mkdir -p "$WORK/row30-aside"; mv -f "$vroot/index.tsv" "$WORK/row30-aside/index.tsv"
+for ptr in "$DRYV"/m/0a000?; do [[ -f $ptr ]] && mv -f "$ptr" "$WORK/row30-aside/"; done
+: >"$vlog"; out=$(tv setup ten.example.test --no-r2 2>&1); rc=$?
+check "row 30: with no local rows and no pointers, --no-r2 still refuses and prints the list" "1 1 1 1" \
+  "$rc $(grep -c 'redirects here; run the alias rollback above first' <<<"$out") $(grep -c '^alias rollback for f.example.test' <<<"$out") $(grep -c '^  5\. DELETE every v:2 machine record: none$' <<<"$out")"
+mv -f "$WORK/row30-aside/index.tsv" "$vroot/index.tsv"
+for ptr in "$WORK/row30-aside"/0a000?; do [[ -f $ptr ]] && mv -f "$ptr" "$DRYV/m/"; done
 # without an alias the step-15 die names --no-r2
 vfresh; out=$(SHARE_R2_DRY_HEALTHZ=down tvsetup 2>&1); rc=$?
 check "row 30: with no alias the step-15 die names --no-r2" "1 1 0" "$rc $(grep -c 'roll back with: share --profile ten setup ten.example.test --no-r2$' <<<"$out") $(grep -c 'alias rollback' <<<"$out")"
