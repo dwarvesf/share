@@ -3621,9 +3621,9 @@ exec bash "$SH" "\$@"
 EOF
 chmod +x "$MW/remotebin/share"
 
-# the remote setup needs caddy and cloudflared on PATH; a runner without one (CI has no cloudflared) finds these stand-ins last, so a real binary always wins
-mkdir -p "$MW/nostub"
-for stub in caddy cloudflared; do printf '#!/bin/bash\nexit 0\n' >"$MW/nostub/$stub"; chmod +x "$MW/nostub/$stub"; done
+# the remote setup checks for caddy and cloudflared on a PATH it builds from --remote-bin plus the system directories, so a runner
+# with no cloudflared (CI) needs stand-ins in the remote bin itself; the stubs exit 0, the suite never serves through them
+for stub in caddy cloudflared; do printf '#!/bin/bash\nexit 0\n' >"$MW/remotebin/$stub"; chmod +x "$MW/remotebin/$stub"; done
 : > "$MW/mssh.log"
 cat > "$MW/mssh" <<EOF
 #!/bin/bash
@@ -3633,14 +3633,14 @@ for a in "\$@"; do joined="\$joined \$a"; done
 case "\$joined" in *" migrate-tunnel-id"*) [ -z "\${MIG_EMPTY_TID:-}" ] || exit 0 ;; esac
 sh=sh; command -v fish >/dev/null 2>&1 && sh=fish
 exec env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS -u SHARE_TUNNEL \\
-  HOME="\$MIG_B_HOME" PATH="$MW/remotebin:\$PATH:$MW/nostub" CURL_LOG="\$MIG_CURL_LOG" "\$sh" -c "\$joined"
+  HOME="\$MIG_B_HOME" PATH="$MW/remotebin:\$PATH" CURL_LOG="\$MIG_CURL_LOG" "\$sh" -c "\$joined"
 EOF
 chmod +x "$MW/mssh"
 
 mig_a() { # mig_a <HOME> <B_HOME> <curl.log> <verb...>: share against the given A HOME, wired to migrate to B_HOME
   local ahome=$1 bhome=$2 clog=$3; shift 3
   env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS -u SHARE_TUNNEL \
-    HOME="$ahome" PATH="$MW/stubsvc:$MW/remotebin:$PATH:$MW/nostub" CURL_LOG="$clog" CLOUDFLARE_API_TOKEN=migtoken \
+    HOME="$ahome" PATH="$MW/stubsvc:$MW/remotebin:$PATH" CURL_LOG="$clog" CLOUDFLARE_API_TOKEN=migtoken \
     MIG_B_HOME="$bhome" MIG_CURL_LOG="$clog" SHARE_MIGRATE_SSH="$MW/mssh" \
     bash "$SH" "$@"
 }
@@ -3705,7 +3705,7 @@ DEFAULT_TUN="share-${MHOST//./-}"
 sed -i.bak "s/^tunnel_name=.*/tunnel_name=$DEFAULT_TUN/" "$AHD/.config/share/config"
 mkdir -p "$BHD/.config/share"; printf 'hosts=nobody\nport=19567\n' > "$BHD/.config/share/config"
 MWDEF="$MW/remotebin-defaultname"; mkdir -p "$MWDEF"
-cp "$MW/remotebin/security" "$MWDEF/security"; cp "$MW/remotebin/share" "$MWDEF/share"
+cp "$MW/remotebin/security" "$MWDEF/security"; cp "$MW/remotebin/share" "$MWDEF/share"; cp "$MW/remotebin/caddy" "$MW/remotebin/cloudflared" "$MWDEF/"
 chmod +x "$MWDEF/security" "$MWDEF/share"
 cat > "$MWDEF/curl" <<CURLEOF
 #!/bin/bash
@@ -3781,7 +3781,7 @@ mig_fixture "$AH"
 mkdir -p "$BH/.config/share"; printf 'hosts=nobody\nport=19563\n' > "$BH/.config/share/config"
 : > "$MW/clog21"; : > "$MW/mssh.log"
 FAIL_SECOND="$MW/fail-second-remotebin"; mkdir -p "$FAIL_SECOND"
-cp "$MW/remotebin/curl" "$FAIL_SECOND/curl"; cp "$MW/remotebin/security" "$FAIL_SECOND/security"
+cp "$MW/remotebin/curl" "$FAIL_SECOND/curl"; cp "$MW/remotebin/security" "$FAIL_SECOND/security"; cp "$MW/remotebin/caddy" "$MW/remotebin/cloudflared" "$FAIL_SECOND/"
 chmod +x "$FAIL_SECOND/curl" "$FAIL_SECOND/security"
 cat > "$FAIL_SECOND/share" <<EOF
 #!/bin/bash
@@ -3811,7 +3811,7 @@ mig_fixture "$AH"
 mkdir -p "$BH/.config/share"; printf 'hosts=nobody\nport=19565\n' > "$BH/.config/share/config"
 : > "$MW/clog31"
 FAIL_SETUP="$MW/fail-setup-remotebin"; mkdir -p "$FAIL_SETUP"
-cp "$MW/remotebin/curl" "$FAIL_SETUP/curl"; cp "$MW/remotebin/security" "$FAIL_SETUP/security"
+cp "$MW/remotebin/curl" "$FAIL_SETUP/curl"; cp "$MW/remotebin/security" "$FAIL_SETUP/security"; cp "$MW/remotebin/caddy" "$MW/remotebin/cloudflared" "$FAIL_SETUP/"
 chmod +x "$FAIL_SETUP/curl" "$FAIL_SETUP/security"
 cat > "$FAIL_SETUP/share" <<EOF
 #!/bin/bash
