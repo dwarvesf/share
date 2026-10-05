@@ -813,7 +813,7 @@ cmd_import() { # cmd_import --probe | <args> (iusage): one share moved here by m
   tar -x "${xflags[@]}" -C "$stage" -f "$import_spool" 2>/dev/null || die "import: extracting $id failed; nothing was published"
   rm -f "$import_spool"; import_spool=""
   [[ -z "$(find "$stage" ! -type f ! -type d)" && -z "$(find "$stage" -type f -links +1)" ]] || die "import: $id extracted something besides plain files and directories; nothing was published"
-  [[ "$(find "$stage" -mindepth 1 -maxdepth 1 | sed 's|.*/||')" == "$name" ]] || die "import: the archive of $id does not hold exactly $name at its root; nothing was published"
+  [[ -e $stage/$name ]] || die "import: the archive of $id does not hold $name at its root; nothing was published"
   if [[ -n $man ]]; then
     got="$(import_manifest "$stage")"
     [[ $got == "$man" ]] || die "import: $id arrived as $got, not $man (a truncated copy?); nothing was published"
@@ -889,9 +889,9 @@ cmd_migrate_nonce() { # a throwaway probe file only the target holds; the sender
 }
 
 migrate_row_bytes() { find "$pub/$1" -type f -exec wc -c {} \; 2>/dev/null | awk '{s+=$1} END{print s+0}'; }   # portable: no stat flag differs GNU/BSD
-migrate_tar() { # migrate_tar <id> <name>: the archive bytes on stdout; bsdtar (macOS) must drop AppleDouble members or the target's dotfile check refuses them
-  if tar --version 2>/dev/null | grep -q 'GNU tar'; then tar -C "$pub/$1" -cf - -- "$2"
-  else COPYFILE_DISABLE=1 tar -C "$pub/$1" -cf - --no-mac-metadata --no-xattrs -- "$2"; fi
+migrate_tar() { # migrate_tar <id>: the whole pub/<id> tree on stdout (a bare file's generated index.html sits beside it at the id root, so the tree is more than <name>); bsdtar (macOS) must drop AppleDouble members or the target's dotfile check refuses them
+  if tar --version 2>/dev/null | grep -q 'GNU tar'; then tar -C "$pub/$1" -cf - -- .
+  else COPYFILE_DISABLE=1 tar -C "$pub/$1" -cf - --no-mac-metadata --no-xattrs -- .; fi
 }
 
 migrate_retire() { # migrate_retire <target_tid> <id>...: index.migrated and migrated/ (nothing deleted), then the teardown path with no Access-app delete and no DNS delete unless it still points here; target_tid is the new origin's own tunnel id, so a collision with this machine's refuses the tunnel and DNS deletes (DEC-010: the new origin always gets its own tunnel, never this one)
@@ -1022,7 +1022,7 @@ cmd_migrate() {
     # a plain redirect, never a pipe: migrate_remote_run's own mr_out/mr_code would be lost in a pipeline's trailing subshell.
     # "cmd || rc=$?", never a bare statement: a nonzero exit here is this loop's to report, not set -e's to abort on
     tarfile="$(mktemp "$root/.migrate-tar.XXXXXX")"
-    migrate_tar "$id" "$name" >"$tarfile"
+    migrate_tar "$id" >"$tarfile"
     rc=0
     migrate_remote_run "$rbin" "$maxbytes" "$rprofile" import "$id" "$exp" "$by" "$added" \
       "$(b64enc "$name")" "$(b64enc "$srcbare")" "$(b64enc "$sendopts")" "$man" <"$tarfile" || rc=$?

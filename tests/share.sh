@@ -3650,6 +3650,7 @@ mig_fixture() { # mig_fixture <AHOME>: a snapshot, a folder, a gated snapshot, a
   local a=$1
   mkdir -p "$a/.config/share" "$a/share/pub/1a0001" "$a/share/pub/1a0002/doc" "$a/share/pub/$GATEDID"
   printf 'one\n' > "$a/share/pub/1a0001/one.txt"
+  printf '<!doctype html><title>index</title>\n' > "$a/share/pub/1a0001/index.html"   # a bare file's generated listing sits at the id root, beside the file, not inside it
   printf 'x\n' > "$a/share/pub/1a0002/doc/a.txt"
   printf 'y\n' > "$a/share/pub/1a0002/doc/sub.txt"
   printf 'secret\n' > "$a/share/pub/$GATEDID/g.txt"
