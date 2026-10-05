@@ -3633,6 +3633,7 @@ printf '%s\n' "\$*" >> "$MW/mssh.log"
 joined=""
 for a in "\$@"; do joined="\$joined \$a"; done
 case "\$joined" in *" migrate-tunnel-id"*) [ -z "\${MIG_EMPTY_TID:-}" ] || exit 0 ;; esac
+case "\$joined" in *" migrate-probe"*) [ -z "\${MIG_PROBE_SERVING:-}" ] || { printf 'serving\t$MHOST\t0\t0\t1\t1\n'; exit 0; } ;; esac
 sh=sh; command -v fish >/dev/null 2>&1 && sh=fish
 exec env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS -u SHARE_TUNNEL \\
   HOME="\$MIG_B_HOME" PATH="$MW/remotebin:\$PATH" CURL_LOG="\$MIG_CURL_LOG" "\$sh" -c "\$joined"
@@ -3700,6 +3701,14 @@ check "row 19e: migrate still exits 0 and moves the rows aside" "0 1" "$rc $([[ 
 check "row 19e: no DNS record or tunnel is deleted" "0 0" "$(grep -c 'DELETE.*dns_records' "$MW/clog19e") $(grep -c 'DELETE.*cfd_tunnel' "$MW/clog19e")"
 check "row 19e: the output names the refusal and the teardown command" "1 1 1" \
   "$(grep -c "could not read m19e-target's tunnel id" <<<"$out") $(grep -c '^tunnel:     not deleted' <<<"$out") $(grep -c "teardown --yes" <<<"$out")"
+
+echo "--- row 19s: a target already serving this hostname (an earlier switch failed) holds its own ports and is not refused for them ---"
+AHS="$MW/A19s"; BHS="$MW/B19s"; rm -rf "$AHS" "$BHS"; mkdir -p "$AHS" "$BHS"
+mig_fixture "$AHS"
+mkdir -p "$BHS/.config/share"; printf 'hosts=nobody\nport=19570\n' > "$BHS/.config/share/config"
+: > "$MW/clog19s"
+out=$(MIG_PROBE_SERVING=1 mig_a "$AHS" "$BHS" "$MW/clog19s" migrate --to m19s-target --remote-bin "$MW/remotebin" --yes 2>&1); rc=$?
+check "row 19s: a serving target for the same hostname passes the preflight" "0 0" "$rc $(grep -c "port for this profile is already in use" <<<"$out")"
 
 echo "--- row 19m: a source on the default tunnel name must not hand the target the same tunnel (DEC-010) ---"
 AHD="$MW/A19m"; BHD="$MW/B19m"; rm -rf "$AHD" "$BHD"; mkdir -p "$AHD" "$BHD"

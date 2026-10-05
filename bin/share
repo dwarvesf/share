@@ -995,7 +995,7 @@ cmd_migrate() {
     stopped|serving) [[ $rhost == "$host_name" ]] || die "migrate: $to's profile is already set up for $rhost, not $host_name; pick another --remote-profile" ;;
     *) die "migrate: unexpected state '$rstate' on $to" ;;
   esac
-  [[ $rpfree == 1 ]] || die "migrate: $to's port for this profile is already in use"
+  [[ $rpfree == 1 || $rstate == serving ]] || die "migrate: $to's port for this profile is already in use"   # a profile already serving this hostname (an earlier switch that failed) holds its own ports
   [[ $rkok == 1 ]] || die "migrate: $to cannot write and read back a Keychain item for share"
   [[ $rlok == 1 ]] || die "migrate: launchctl print gui/<uid> on $to did not answer; share's login service needs a GUI session there"
 
