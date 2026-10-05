@@ -3112,7 +3112,8 @@ for mode in tunnel-down 503-bare; do
   fi
   s_fresh; echo dwarves.cloudflareaccess.com >"$DRYS/.cf/team"; out=$(r2s 2>&1)
   rm -f "$jconf"; mkdir -p "${jlog%/*}"; : >"$jlog"
-  out=$(r2j SHARE_R2_DRY_HEALTHZ=$mode SHARE_R2_WAIT=1 2>&1); rc=$?
+  # the wait counts whole seconds, so a 1 s window can close mid-loop on a slow runner; the passing mode gets room, the failing one stays short
+  out=$(r2j SHARE_R2_DRY_HEALTHZ=$mode SHARE_R2_WAIT="$([[ $mode == tunnel-down ]] && echo 8 || echo 1)" 2>&1); rc=$?
   check "row 29 ($mode): a member joins" "$([[ $mode == tunnel-down ]] && echo '0 1' || echo '1 0')" "$rc $([[ -f $jconf ]] && echo 1 || echo 0)"
 done
 rm -f "$jconf" "$s2conf"
