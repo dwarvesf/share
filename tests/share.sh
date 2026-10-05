@@ -1554,12 +1554,13 @@ if command -v expect >/dev/null; then
   # the pty closes the moment share exits and HUPs the backgrounded opener; the stub must still land its line
   printf '#!/bin/bash\ntrap "" HUP\nprintf "%%s\\n" "$@" >>"${OPEN_LOG:?}"\n' >"$WORK/fakeopen/open"
   cp "$WORK/fakeopen/open" "$WORK/fakeopen/xdg-open"; chmod +x "$WORK/fakeopen/open" "$WORK/fakeopen/xdg-open"
+  # the sleep before send: read -s turns echo off after the prompt is written, and typing at once can race it and echo the token
   cat >"$WORK/tty.exp" <<'EXP'
 set timeout 60
 log_user 1
 spawn bash [lindex $argv 0] api-token
 expect {
-  "Paste the new token (input hidden): " { send "tty-token\r" }
+  "Paste the new token (input hidden): " { sleep 0.3; send "tty-token\r" }
   timeout { puts "NO-PROMPT"; exit 2 }
 }
 expect eof
