@@ -3621,6 +3621,9 @@ exec bash "$SH" "\$@"
 EOF
 chmod +x "$MW/remotebin/share"
 
+# the remote setup needs caddy and cloudflared on PATH; a runner without one (CI has no cloudflared) finds these stand-ins last, so a real binary always wins
+mkdir -p "$MW/nostub"
+for stub in caddy cloudflared; do printf '#!/bin/bash\nexit 0\n' >"$MW/nostub/$stub"; chmod +x "$MW/nostub/$stub"; done
 : > "$MW/mssh.log"
 cat > "$MW/mssh" <<EOF
 #!/bin/bash
@@ -3630,14 +3633,14 @@ for a in "\$@"; do joined="\$joined \$a"; done
 case "\$joined" in *" migrate-tunnel-id"*) [ -z "\${MIG_EMPTY_TID:-}" ] || exit 0 ;; esac
 sh=sh; command -v fish >/dev/null 2>&1 && sh=fish
 exec env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS -u SHARE_TUNNEL \\
-  HOME="\$MIG_B_HOME" PATH="$MW/remotebin:\$PATH" CURL_LOG="\$MIG_CURL_LOG" "\$sh" -c "\$joined"
+  HOME="\$MIG_B_HOME" PATH="$MW/remotebin:\$PATH:$MW/nostub" CURL_LOG="\$MIG_CURL_LOG" "\$sh" -c "\$joined"
 EOF
 chmod +x "$MW/mssh"
 
 mig_a() { # mig_a <HOME> <B_HOME> <curl.log> <verb...>: share against the given A HOME, wired to migrate to B_HOME
   local ahome=$1 bhome=$2 clog=$3; shift 3
   env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS -u SHARE_TUNNEL \
-    HOME="$ahome" PATH="$MW/stubsvc:$MW/remotebin:$PATH" CURL_LOG="$clog" CLOUDFLARE_API_TOKEN=migtoken \
+    HOME="$ahome" PATH="$MW/stubsvc:$MW/remotebin:$PATH:$MW/nostub" CURL_LOG="$clog" CLOUDFLARE_API_TOKEN=migtoken \
     MIG_B_HOME="$bhome" MIG_CURL_LOG="$clog" SHARE_MIGRATE_SSH="$MW/mssh" \
     bash "$SH" "$@"
 }
@@ -3670,7 +3673,7 @@ mig_fixture "$AH"
 mkdir -p "$BH/.config/share"; printf 'hosts=nobody\nport=19561\n' > "$BH/.config/share/config"
 : > "$MW/clog19"; : > "$MW/mssh.log"
 out=$(mig_a "$AH" "$BH" "$MW/clog19" migrate --to m19-target --remote-bin "$MW/remotebin" --yes 2>&1); rc=$?
-[[ $rc == 0 ]] || sed 's/^/    migrate: /' <<<"$out"   # a failing run shows its own output in the log
+[[ $rc == 0 ]] || while IFS= read -r line; do echo "    migrate: $line"; done <<<"$out"   # a failing run shows its own output in the log
 check "row 19: migrate exits 0" "0" "$rc"
 check "row 19: B's index holds the three snapshots with A's ids and names" "1a0001 1a0002 $GATEDID" "$(cut -f1 "$BH/share/index.tsv" | sort | tr '\n' ' ' | sed 's/ $//')"
 check "row 19: B's gated row keeps access= and access_rule=" "1" "$(awk -F'\t' -v id="$GATEDID" '$1==id' "$BH/share/index.tsv" | grep -c "access=$GID access_rule=email:a@x.test")"

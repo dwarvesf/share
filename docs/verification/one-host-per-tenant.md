@@ -323,3 +323,26 @@ One gap is open: the `write_config` row-1 control above. Closing it needs a name
 ## Rollback
 
 Batch 6 changes `bin/share` (one line in `alias_rollback`), `tests/share.sh`, `tests/e2e-tenant.sh`, README, `docs/how-it-works.md`, `docs/setup.md`, ADR-0008, the spec (DEC-013, the 502 rows, Worker version 4), the implementation notes, and this record, on the PR branch. No release, tap bump, or standing Cloudflare object exists for it. Rolling it back is reverting commits e6b2a13..dac8541 and the docs commit that follows.
+
+# Batch 7
+
+Batch 7 is the lead's three safety decisions and the CI fix, on top of Batch 6.
+
+| # | Change | Red (unfixed 476f4f8, new tests) | Green |
+|---|---|---|---|
+| 1 | `migrate_retire` refuses the DNS and tunnel delete when `migrate-tunnel-id` returns nothing, and names `teardown --yes` for later | row 19e: `no DNS record or tunnel is deleted` got `0 2`; the refusal text absent | row 19e passes: migrate exits 0, rows moved aside, no DELETE of a DNS record or tunnel |
+| 2 | the custom-domain add (standalone r2 setup and the alias bind) retries a Cloudflare 5xx, three tries with doubling backoff, and dies loud after (`after up to 3 tries`); the dry seam gains `SHARE_R2_DRY_FAIL_TIMES` | four checks: two 500s then success got `1 1`, a persistent 500 got one PUT, not three | both paths succeed after two stubbed 500s (three PUTs) and die after three on a persistent 500; the alias die still prints the rollback list |
+| 3 | `add --access` polls the published link until it answers 302 or 403 (`SHARE_ACCESS_POST_WAIT`, 30 s) before printing it; a link still answering anything else exits 1 with the status, the edge risk, and `share rm <id>`; the link stays published | four checks: the link printed with no probes, a 200 never failed the add | `200,200,302` prints after three probes; `403` counts; a persistent `200` exits 1 with no link on stdout, and the warning names the rm command |
+
+Red run: `1256` checks, 11 FAIL (the 10 above plus one cascade from leftover gated rows, fixed in the test). Green runs on the final tree: `1256 checks, PASS`, one earlier run showed a single row 29 timing failure (`SHARE_R2_WAIT=1` join under load) that did not repeat. `node tests/worker.mjs`: PASS. Live: `tests/e2e-tenant.sh` on 1a76f2e (the first commit with the real link check against Cloudflare), 73/73, log `docs/verification/e2e-tenant-20261005T062235Z.log`; the before and after snapshots of every resource class are identical.
+
+## CI
+
+The CI lint job failed on every push since the tenant work began, and the test jobs have failed since the migrate rows landed. Three causes, all fixed:
+
+| Job | Cause | Fix |
+|---|---|---|
+| lint | CI's shellcheck reports SC2015 twice in `bin/share` and SC2002 once in `tests/share.sh`; the local shellcheck 0.11 is quieter | restructured the three lines, same behavior; a later SC2001 in a new debug line fixed too |
+| test (ubuntu, macos) | the migrate rows run `setup` on the target, which dies with `missing: caddy cloudflared` on a runner with no cloudflared; every dev machine has one | the suite appends stand-in `caddy` and `cloudflared` last on PATH, so a real binary still wins. Reproduced locally with a PATH that hides cloudflared and fish: red before, `1256 checks, PASS` after |
+
+The macOS runner also showed one `tty: the prompt appeared and the token did not echo` failure on 1440259 that did not recur; it is the known flaky row.
