@@ -1152,6 +1152,7 @@ echo "=== tenant docs: every command, flag, and state key the tenant docs name i
 # A term the doc names must be a real thing in bin/share; a term bin/share lost must fail here, not in a reader's shell.
 tenant_terms=(migrate import --r2 --no-r2 --alias --storage-default --cloud --local --token-stdin --remote-profile --remote-bin --max-bytes --tunnel-name
   bucket= r2_endpoint= storage_default= aliases= cloud_error cloud_more index.migrated migrated/)
+# shellcheck disable=SC2016 # the backticks are literal: the doc names these keys in code spans
 tenant_state_keys=('shares[].storage' 'shares[].type' 'shares[].by' '`r2`' '`storage_default`' '`cloud_error`' '`cloud_more`')
 tenant_covers() { # tenant_covers <doc> <bin>: 0 iff every term is in both files, and every state key is in the doc
   local t

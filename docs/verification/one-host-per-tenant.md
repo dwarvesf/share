@@ -251,3 +251,75 @@ Verdict: Executed 176 tests, with 0 failures (0 unexpected)
 ## Rollback
 
 Batch 5 changes `bin/share`, `tests/share.sh`, `tests/worker.mjs`, `tests/e2e-tenant.sh`, and `docs/implementation-notes/one-host-per-tenant.md` on the PR branch; no release, tap bump, or Cloudflare object exists for it. Rolling it back is reverting commits a045013..2a0fb65 on the branch.
+
+# Batch 6
+
+Batch 6 is the live rerun of `tests/e2e-tenant.sh` on the fix-pass head (1440259), the fixes that rerun forced, the TASK-10 docs, and the negative controls the earlier batches had not covered. Final live result: 73/73, run log `docs/verification/e2e-tenant-20261005T042854Z.log`. TASK-9b (`tests/e2e-migrate.sh`, rehearsal R2) is not run here: it needs one command from Han on the Air.
+
+## Live e2e: five runs, one green
+
+Every run used the PR worktree's `bin/share` (`SHARE_BIN`), zone `d.foundation`, an admin token from `op://Toolkit/cf-api-token/credential`, run-scoped 2h publisher tokens minted through `op://Toolkit/cf-tokens-admin/credential`, and `SHARE_E2E_ACCESS_RULE=group:dwarves-ops`. Hostnames were `share-e2e-<6 hex>` pairs chosen per run. The earlier logs are not committed (two of them print the account and zone ids in a rollback line).
+
+| Run | Head | Result | What failed | Cause and action |
+|---|---|---|---|---|
+| 1 | 1440259 | 69/73 | L3 WebSocket echo; R1 rollback x2; R1 "alias bucket gone" | R1's fold passed for the first time (alias 301, folded gated link 302 with `kid == aud`, second fold), so the live 400 is fixed. The rest: the WebSocket client used the local resolver, which answered "No route to host" for a name made seconds earlier (script bug, now DoH). `setup --no-r2` exited 1 with no output (a real bug in `alias_rollback`, below). The cleanup deleted the alias bucket with an admin env token on a profile with no stored publisher token (script bug) |
+| 2 | f6a6f41 | 71/73 | R1 rollback x2 | the script parsed `r2-call`'s `code=<n> etag=<etag>` line as `etag=` alone, so the marker host restore went out with an empty `If-Match` and the marker kept its `aliases` (script bug) |
+| 3 | dac8541 | 70/72 | R1 standalone origin and gated link | Cloudflare answered HTTP 500 adding the Worker custom domain for the alias host; the gated R1 legs did not run. Transient; the die names the call |
+| 4 | dac8541 | 72/73 | L1 "gated local link 302s to Access with kid == aud": got 200 | the first fetch after `add` returned reached an edge that did not yet enforce the app. Not reproduced in run 5; see the note below |
+| 5 | dac8541 | 73/73 PASS | none | R1 (fold, rollback, second fold, cleanup) green end to end |
+
+R1 passes: the fold exits 0; `https://<alias>/healthz` answers 301 to the tenant; the folded gated link 302s on the tenant with `kid == aud`; the rollback list runs in its printed order and `--no-r2` leaves a plain tunnel (no route); the second fold converges and the alias 301s again; the cleanup deletes the bucket, the Worker, and the tenant DNS.
+
+Gate note from run 4: share's own check passed three rounds of `kid == aud` before the link was published, and a fetch through DoH one second later still answered 200 once. Access enforcement is per edge and eventual (ADR-0006 measured seconds to minutes). The e2e keeps the strict check, because "no ungated window after `add` returns" is the guarantee the leg tests. A lead decision, outside SPEC-008: whether `add --access` should probe through a second resolver before it publishes.
+
+## Cleanup proof, from outside the run
+
+A snapshot script listed every resource class the e2e touches, before and after each run, from the Cloudflare API and `launchctl`. Names and truncated ids only. The baseline and every later snapshot were identical (`diff` empty) after runs 1, 2, 3, 4, and 5.
+
+| Class | Baseline (and after every run) |
+|---|---|
+| Workers named `share-*` | `share-f-d-foundation` |
+| Worker custom domains, routes, DNS records matching `share-e2e*` | none |
+| Tunnels named `share-*` (not deleted) | `share-s-d-foundation` |
+| R2 buckets named `share-*` | `share-dfoundation` |
+| Access apps named `share ...` | `s.d.foundation`, `f.d.foundation` (the two live Dwarves apps) |
+| Minted user tokens (`a-origin`, `b-member`, `d-fresh`, `c-admin`) | none |
+| launchd labels and LaunchAgents plists matching `share` | `foundation.d.share.dfoundation`, the Share Bar app job |
+
+The script's own `leftovers` sweep printed `cleanup: nothing left for this run's names` on all five runs. No process named `echo.py` or `share-e2e` remained. Nothing the run did not create was touched: the two live Access apps, `share-f-d-foundation`, `share-s-d-foundation`, and `share-dfoundation` are in the baseline and in every later snapshot.
+
+## Findings the rerun forced
+
+| # | Finding | Fix | Red | Green |
+|---|---|---|---|---|
+| 1 | `alias_rollback` assigned `ptrs` from a pipeline ending in `grep`; with no local rows and no machine records the grep matches nothing, and under `set -e` the run died with exit 1 and no output, so `--no-r2` and every `tenant_die` printed nothing for a tenant with an alias and no local rows (e6b2a13) | `{ grep ... \|\| true; }` in the pipeline | the new row 30 check, run against the unfixed `bin/share` in a clone: `row 30: with no local rows and no pointers, --no-r2 still refuses and prints the list: expected '1 1 1 1', got '1 0 0 0'`, 1 FAIL of 1243 | the same check on the fixed tree: 1243 checks, PASS |
+| 2 | five `tests/e2e-tenant.sh` script bugs (743b229, dac8541): DoH for the WebSocket client; the R1 rollback removes `aliases=` from the profile config (step 4 of the printed list); the marker ETag parsed from `code=<n> etag=<etag>`; the alias liveness check reads `/healthz` (a standalone r2 Worker answers 404 at the site root by design); the cleanup's delete-prefix uses the `SHARE_R2_TOKEN` seam | script edits | runs 1 and 2 | run 5, 73/73 |
+
+## Negative controls
+
+The spec lists 20. Batches 1 to 5 recorded a red run for 14 of them (the expired-record, `PASS`-empty, pointer-order, pointer-failure, route-order, alias-destination, symlink, `api_token_cmd`, `rows()`-merge, SPEC-007 `--force`, sweep, member-`rm`, healthz-status, and `--no-r2`-rollback controls). Batch 6 adds 5 and records one whose spec form is not reachable, with a substitute. Each patch went into a `git clone --local` of dac8541 in a scratch directory and the suite (or `node tests/worker.mjs` for a Worker patch) ran there, one run at a time with its own `SHARE_TEST_PORT_BASE`. The green run for every row is the unpatched clone of the same commit.
+
+| Green (unpatched dac8541) | Result |
+|---|---|
+| `SHARE_TEST_PORT_BASE=41100 gtimeout 900 bash tests/share.sh` | exit 0, 1243 checks, PASS |
+| `node tests/worker.mjs` | exit 0, PASS |
+
+| Spec control | Patch | Runner | Red |
+|---|---|---|---|
+| the Worker serves R2 for a `storage:"machine"` record (row 7), tested in the inverse form | the machine-pointer branch in `worker_js` made unreachable (`&& false`), so a pointer no longer passes through | `node tests/worker.mjs` | `r7 a machine record passes through` (got 404, no fetch) and the r8 pass-through rows (13 FAIL, plus `WORKER_SHA` drift, which any Worker edit trips) |
+| drop the encoded-separator check before the pass-through (SPEC-007 row 18 on the v3 source) | the `%2f \|%5c \|%2e \|low escape \|//` test replaced with `if (false)` | `node tests/worker.mjs` | `r18` for `..%2F`, `%2f`, `..%5C`, `%2E`, `//`, and a low escape (all 404, expected 400), and `r7 /x/..%2Fb1c2d3/f.txt is 400 in front of the tunnel` (12 FAIL plus `WORKER_SHA`) |
+| take a member's `add --local` as cloud (row 3) | the member `--local` die replaced with `storage=cloud` | suite | `row 3: member add --local f is refused` (got `0 0`), 1 FAIL |
+| run the full teardown (with Access deletes) on the old origin before moving rows aside (row 19) | `cmd_rm` of every moved id at the top of `migrate_retire` | suite | `row 19` migrate exits 0, B's trees equal A's, the rows move to `index.migrated`, the live row stays, migrate still exits 0; `row 21` rerun skips the moved id (9 FAIL, one of them the harness's idler check after the abort) |
+| omit `--tunnel-name` from the printed migrate rollback (row 31) | `--tunnel-name $old_tunnel_name` dropped from the switch-failure rollback line | suite | `row 20: a remote-setup failure ... printing the rollback with A's own tunnel-name` and `row 31b` (3 FAIL, one the idler check) |
+| write `bucket=` into a plain tunnel config at setup (row 1) | `echo "bucket=leak"` added to `write_config` | suite | no red: 1243 checks, PASS. Not reachable: row 1's compat run does a quick setup only, and no suite row runs a named tunnel `setup` through `write_config`. The live e2e covers it (L1 setup, L7 `--no-r2`) |
+| replacement for the row above: `--no-r2` keeps `bucket=` (row 13) | `tenant_config` stops dropping `bucket=` | suite | `rerun: the config is the same`, `row 13: the config is the one before setup --r2`, `row 13: the next add writes no pointer` (3 FAIL) |
+
+One gap is open: the `write_config` row-1 control above. Closing it needs a named-setup fixture with a Cloudflare stub, which no suite row has; it is the one place where only the live e2e proves "a tenant with R2 off writes no `bucket=`".
+
+## Docs check (TASK-10)
+
+`tests/share.sh` now checks that every verb, flag, config key, and state key the tenant docs name is in `docs/how-it-works.md` and in `bin/share` (the four generic state keys are checked in the doc only, since `storage`, `type`, `by`, and `r2` are too common to grep in the source; rows 15 and 1 pin them in `state` output). It has three negative controls inside the suite: a doc missing `--storage-default`, a `bin/share` missing `--remote-bin`, and a doc missing the `storage` state key each fail the check. All pass in the green run above.
+
+## Rollback
+
+Batch 6 changes `bin/share` (one line in `alias_rollback`), `tests/share.sh`, `tests/e2e-tenant.sh`, README, `docs/how-it-works.md`, `docs/setup.md`, ADR-0008, the spec (DEC-013, the 502 rows, Worker version 4), the implementation notes, and this record, on the PR branch. No release, tap bump, or standing Cloudflare object exists for it. Rolling it back is reverting commits e6b2a13..dac8541 and the docs commit that follows.

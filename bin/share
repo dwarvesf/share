@@ -26,6 +26,8 @@
 #   share teardown [--yes]    delete the tunnel, DNS record, service, and stored token
 #   share import ...          used by migrate over ssh
 #   share migrate --to <ssh-target>   move this tenant's origin to another machine (snapshots only, R2 off)
+#   share setup <hostname> --r2 --bucket <name> [--storage-default local|cloud] [--alias <old-host>]   on the origin: R2 on, per-link storage
+#   share setup <hostname> --no-r2   on the origin: R2 off again (refuses while an alias is set)
 #   share setup <hostname> --backend r2 --bucket <name>   an R2 profile: a private bucket and a Worker
 #      serve links while this machine is off; teardown --yes --purge (admin token) deletes it all
 #
