@@ -364,7 +364,7 @@ Measured gap: probes every 0.5 s through DoH on a snapshot link logged no non-20
 | # | Finding | Fix | Red | Green |
 |---|---|---|---|---|
 | 1 | `migrate` archived only `<name>`, but a bare-file snapshot keeps its generated `index.html` beside the file at the id root. The receiver counted one file where the sender's manifest counted two and refused the share as a truncated copy: every single-file link would have failed the personal move (9ae6350) | the archive is the whole `pub/<id>` tree; `import` checks that `<name>` is in it | the suite fixture gains the generated `index.html` it lacked: 17 FAIL in rows 19 to 31 | 1256 checks, PASS |
-| 2 | after a failed switch the target profile is serving this hostname, so the rerun's preflight died with `port for this profile is already in use`; the printed rollback led to a dead end (see the commit after 9ae6350) | the preflight accepts a target already serving the same hostname | new row 19s: got `1 1` | 1257 checks, PASS |
+| 2 | after a failed switch the target profile is serving this hostname, so the rerun's preflight died with `port for this profile is already in use`; the printed rollback led to a dead end (f37e816) | the preflight accepts a target already serving the same hostname | new row 19s: got `1 1` | 1257 checks, PASS |
 | 3 | script bugs in `tests/e2e-migrate.sh` itself: profile names must be lowercase; the Air-side run needs the real `HOME` for ssh while share keeps a throwaway one; a new name needs a moment to resolve | script edits | runs 1 to 5 | run 6, 38/38 |
 
 Both product bugs live only on the real-account path: no fixture in the suite had a generated index beside a bare file or a target that was already serving.
