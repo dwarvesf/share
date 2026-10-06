@@ -4144,6 +4144,7 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alia
       [[ -n $gid ]] || continue
       access_gate "$gid" "$gaud" || { alias_dests undo || true; die "Cloudflare Access did not enforce on $host_name/$gid within ${access_wait}s; the added destinations were removed; the route is not attached; rerun the same setup (or DELETE the v:2 pointers written so far)"; }
     done <<<"$alias_moved"
+    held_access_id=""   # every folded app enforced, so nothing waits in access-pending
     echo "access:     $(grep -c . <<<"$fold_apps") gated link(s) also gated at $host_name"
   fi
 
