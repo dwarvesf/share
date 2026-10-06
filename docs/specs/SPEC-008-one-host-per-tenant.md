@@ -394,7 +394,7 @@ A tunnel profile with no `bucket=` (every R2-off tenant) keeps every file, outpu
 - [x] TASK-9a: `tests/e2e-tenant.sh` (L1 to L10) and rehearsal R1, with its run log. Depends on TASK-2a to TASK-6. AC: L1 to L10, R1, every cleanup assertion.
 - [x] TASK-9b: `tests/e2e-migrate.sh` and rehearsal R2 (the one-machine leg, then the Air to the Mini on a throwaway name), with its run log. Depends on TASK-7b. AC: R2 and its cleanup assertions.
 - [x] TASK-10: README, how-it-works, setup (onboarding), ADR-0008, the verification record with the negative controls. Depends on TASK-9a, TASK-9b. AC: each negative control has a red and a green run; each `docs/how-it-works.md` command, flag, and state key named in this spec is found by a `tests/share.sh` grep against `bin/share`. Done except the R2 rehearsal evidence, which lands with TASK-9b; one control (`bucket=` in a plain tunnel config) is not reachable in its spec form, see the verification record, Batch 6.
-- [ ] TASK-11a: STOP for Han, then the Dwarves migration D1 to D5. Before D3 the lead posts the R1 log and the exact D3 command and waits for Han's explicit go; no loop may run D3 on its own. Each check is recorded in the verification record. Depends on TASK-10 and a release. AC: the Dwarves items of `## After state`. D6 runs seven days later, after a second go.
+- [x] TASK-11a: STOP for Han, then the Dwarves migration D1 to D5. Before D3 the lead posts the R1 log and the exact D3 command and waits for Han's explicit go; no loop may run D3 on its own. Each check is recorded in the verification record. Depends on TASK-10 and a release. AC: the Dwarves items of `## After state`. D6 runs seven days later, after a second go.
 - [ ] TASK-11b: STOP for Han, then the personal move P1 to P3. Before P2 the lead posts the R2 log and the exact P2 command and waits for Han's explicit go; no loop may run P2 on its own (P2 deletes `air-share` at its step 5). Depends on TASK-10 and a release; independent of TASK-11a. AC: the personal items of `## After state`.
 
 ## Test plan
@@ -526,10 +526,10 @@ Then by hand: `tests/e2e-tenant.sh` (L1 to L10, R1) and `tests/e2e-migrate.sh` (
 
 ## After state
 
-- [ ] `https://f.d.foundation/ba6377/support-ticket-guide/` answers 301 to the same path on `s.d.foundation`, which keeps its Access gate.
-- [ ] `share --profile dfoundation ls` on the Mini lists `a68960` (`machine`) and `ba6377` (`cloud`) in one list; the `files` profile is gone.
-- [ ] `share --profile dfoundation add ./x` publishes from the Mini's disk; `add --cloud ./x` publishes to the bucket; both at `https://s.d.foundation/<id>/...`.
-- [ ] With the Mini's `dfoundation` service stopped, the cloud link answers and the machine link answers the 503 offline page.
+- [x] `https://f.d.foundation/ba6377/support-ticket-guide/` answers 301 to the same path on `s.d.foundation`, which keeps its Access gate.
+- [x] `share --profile dfoundation ls` on the Mini lists `a68960` (`machine`) and `ba6377` (`cloud`) in one list; the `files` profile is gone.
+- [x] `share --profile dfoundation add ./x` publishes from the Mini's disk; `add --cloud ./x` publishes to the bucket; both at `https://s.d.foundation/<id>/...`.
+- [x] With the Mini's `dfoundation` service stopped, the cloud link answers and the machine link answers the 503 offline page.
 - [ ] `s.han.ws` serves from the Mini; every Air snapshot link answers at its old URL; no Worker or bucket exists for `han.ws` share.
 - [ ] Share Bar on the Mini shows two sections, each row with its type icon, storage badge, and link-type marker, and the lock on gated rows.
 

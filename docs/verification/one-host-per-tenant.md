@@ -376,3 +376,23 @@ Snapshots of every Cloudflare resource class (Workers, domains, routes, DNS, tun
 ## Rollback
 
 Batch 8 adds `tests/e2e-migrate.sh` and changes `bin/share` (`migrate_tar`, the import root check, the migrate preflight) and `tests/share.sh`. No release, tap bump, or standing Cloudflare object exists for it.
+
+
+## Batch 9: live go-live, Dwarves tenant (2026-10-06)
+
+Han typed the go in the operator session. Snapshots: `tests/prod-snapshot.sh` before D1 and before D3, kept outside git. The pre-D1 and pre-D3 snapshots differ only in `share 0.8.0` vs `share 0.9.0`.
+
+| Step | Action | Check | Result |
+|---|---|---|---|
+| D1 | merge #45 (a625255), `bin/release --yes` v0.9.0, notarized Share Bar 0.9.0, tap PRs homebrew-tools #28 and #29 merged, `brew upgrade share` on the Mini | `brew list --versions share`; status and live links unchanged | `share 0.9.0`; healthz 200 on both hosts; a68960 and ba6377 302 |
+| D3 | `setup s.d.foundation --r2 --bucket share-dfoundation --alias f.d.foundation` (rc 0) | f.d.foundation/ba6377 301 to s.d.foundation, which 302s to Access with the snapshot AUD; a68960 302; `ls` lists a68960 machine and ba6377 cloud | pass |
+| D2 | minted the origin publisher token (180 days, expires 2027-04-04), stored in the Keychain from the Orca GUI session; removed the profile's `api_token_cmd` line that pointed at the admin token (config backed up first) | `api-token --check` | token found in the keychain, all lines ok, rc 0 |
+| D4 | `share --profile files teardown --yes` | `share profiles` | default and dfoundation only |
+| D5 | the user-probe roster line for f.d.foundation/healthz now probes s.d.foundation/healthz (host config, backed up) | roster lines | both lines on s.d.foundation |
+| post | ungated local and cloud add; gated local and cloud add with group:dwarves-ops; rm all | 200 no-store; 302 to Access with per-app kid; 404 after rm | pass |
+| post | `stop` then `start` with one machine and one cloud link | while stopped: machine 503, cloud 200; after start: machine 200, a68960 302, healthz 200 | pass |
+| P1/P2 | not run | `mini-run --host air` | ssh to the Air timed out twice (tailnet shows the Air active via relay, port 22 unreachable) |
+
+Finding: `setup --alias` prints "nothing was published; the Access app of ba6377 waits in access-pending" at exit after a successful fold. `access_gate` sets `held_access_id` and the fold path never clears it, so the EXIT trap prints a false notice. `access-pending` stayed empty, so nothing is at risk. Not yet fixed.
+
+Open: P1 and P2 (the Air must be reachable), the Share Bar After-state box (GUI, not checked), and D6 (delete Worker share-f-d-foundation after seven days, a second go). The old `files` publisher token is revoked at D6.
