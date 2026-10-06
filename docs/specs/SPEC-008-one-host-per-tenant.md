@@ -395,7 +395,7 @@ A tunnel profile with no `bucket=` (every R2-off tenant) keeps every file, outpu
 - [x] TASK-9b: `tests/e2e-migrate.sh` and rehearsal R2 (the one-machine leg, then the Air to the Mini on a throwaway name), with its run log. Depends on TASK-7b. AC: R2 and its cleanup assertions.
 - [x] TASK-10: README, how-it-works, setup (onboarding), ADR-0008, the verification record with the negative controls. Depends on TASK-9a, TASK-9b. AC: each negative control has a red and a green run; each `docs/how-it-works.md` command, flag, and state key named in this spec is found by a `tests/share.sh` grep against `bin/share`. Done except the R2 rehearsal evidence, which lands with TASK-9b; one control (`bucket=` in a plain tunnel config) is not reachable in its spec form, see the verification record, Batch 6.
 - [x] TASK-11a: STOP for Han, then the Dwarves migration D1 to D5. Before D3 the lead posts the R1 log and the exact D3 command and waits for Han's explicit go; no loop may run D3 on its own. Each check is recorded in the verification record. Depends on TASK-10 and a release. AC: the Dwarves items of `## After state`. D6 runs seven days later, after a second go.
-- [ ] TASK-11b: STOP for Han, then the personal move P1 to P3. Before P2 the lead posts the R2 log and the exact P2 command and waits for Han's explicit go; no loop may run P2 on its own (P2 deletes `air-share` at its step 5). Depends on TASK-10 and a release; independent of TASK-11a. AC: the personal items of `## After state`.
+- [x] TASK-11b: STOP for Han, then the personal move P1 to P3. Before P2 the lead posts the R2 log and the exact P2 command and waits for Han's explicit go; no loop may run P2 on its own (P2 deletes `air-share` at its step 5). Depends on TASK-10 and a release; independent of TASK-11a. AC: the personal items of `## After state`.
 
 ## Test plan
 
@@ -530,7 +530,7 @@ Then by hand: `tests/e2e-tenant.sh` (L1 to L10, R1) and `tests/e2e-migrate.sh` (
 - [x] `share --profile dfoundation ls` on the Mini lists `a68960` (`machine`) and `ba6377` (`cloud`) in one list; the `files` profile is gone.
 - [x] `share --profile dfoundation add ./x` publishes from the Mini's disk; `add --cloud ./x` publishes to the bucket; both at `https://s.d.foundation/<id>/...`.
 - [x] With the Mini's `dfoundation` service stopped, the cloud link answers and the machine link answers the 503 offline page.
-- [ ] `s.han.ws` serves from the Mini; every Air snapshot link answers at its old URL; no Worker or bucket exists for `han.ws` share.
+- [x] `s.han.ws` serves from the Mini; every Air snapshot link answers at its old URL; no Worker or bucket exists for `han.ws` share.
 - [ ] Share Bar on the Mini shows two sections, each row with its type icon, storage badge, and link-type marker, and the lock on gated rows.
 
 ## Acceptance Criteria (global)
@@ -566,6 +566,7 @@ Moving a tunnel tenant's local shares into its bucket (a `--cloud` re-add covers
 - DEC-011: bucket rows are display data only; the origin's index, Caddyfile, and stage paths never read a record another publisher could write.
 - DEC-012 (lead, build batch 3): a member's `hits` keeps SPEC-007's rule of one account call and no bucket read, so it never refuses a machine row. It must not print a bare 0 for a link it cannot count: when the count is 0 and the id is not one of this install's own cloud adds (`r2-own`), it prints the count and then `this machine counts cloud links only; if <id> is a machine link, its stats are on the tenant's origin: <me> hits <id> there`. This replaces the round-2 build rule that a member refuses a machine row.
 - DEC-013 (lead, review fix pass): the Worker passes a 502 through unchanged instead of answering the offline page. TASK-1a(e) measured that a pass-through cannot tell a dead live port (Caddy answers 502 for the closed port, and Cloudflare swaps it for its own page) from Caddy itself being down: both arrive as the same 502. The offline page said "the machine serving this link is offline" for a machine that was up with one dead dev server. Cloudflare's signals for an unreachable origin (530, 520 to 527) still map to the offline page. The cost: with cloudflared up and Caddy itself dead, a visitor sees Cloudflare's 502 page, not the offline page. `WORKER_VERSION` is 4 for it.
+- DEC-014 (lead, on Han's go, 2026-10-07): P2 reached its end state by direct setup instead of `migrate`. The Air origin held no shares and an empty index, so `migrate` had nothing to carry, and its preflight refused because an ssh session on the Mini cannot write the login Keychain. The Mini ran `share setup s.han.ws --tunnel-name air-share-m --force` from a GUI session (the name `migrate` itself would pick), then the Air ran `share teardown --yes`, which left the DNS record alone (it pointed at the new tunnel) and deleted the `air-share` tunnel. A future move of a non-empty origin still needs `migrate` and a Keychain path that works over ssh.
 - Round 1 (seven fresh-context reviewers, 2026-10-01): eleven criticals, all folded. Warnings that do not change the design went to `docs/implementation-notes/one-host-per-tenant.md` for the builder.
 
 | Change | Why (reviewer) |
