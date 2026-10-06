@@ -391,8 +391,9 @@ Han typed the go in the operator session. Snapshots: `tests/prod-snapshot.sh` be
 | D5 | the user-probe roster line for f.d.foundation/healthz now probes s.d.foundation/healthz (host config, backed up) | roster lines | both lines on s.d.foundation |
 | post | ungated local and cloud add; gated local and cloud add with group:dwarves-ops; rm all | 200 no-store; 302 to Access with per-app kid; 404 after rm | pass |
 | post | `stop` then `start` with one machine and one cloud link | while stopped: machine 503, cloud 200; after start: machine 200, a68960 302, healthz 200 | pass |
-| P1/P2 | not run | `mini-run --host air` | ssh to the Air timed out twice (tailnet shows the Air active via relay, port 22 unreachable) |
+| P1 (2026-10-07) | Air `brew upgrade share` 0.5.2 to 0.9.0; Mini `share import --probe` | probe output; Air state | `share-import 1`; the Air served s.han.ws with no shares and an empty index |
+| P2 (2026-10-07) | `migrate` refused at preflight (`mini-tieubao cannot write and read back a Keychain item`), nothing changed; then DEC-014: Mini `setup s.han.ws --tunnel-name air-share-m --force`, Air `teardown --yes` | s.han.ws/healthz via DoH; Mini `share profiles`; ungated add/rm round trip; post snapshot | healthz 200 three times; `default serving s.han.ws`; add 200, 404 after rm; DNS CNAME points at `air-share-m`, the `air-share` tunnel is gone |
 
-Finding: `setup --alias` prints "nothing was published; the Access app of ba6377 waits in access-pending" at exit after a successful fold. `access_gate` sets `held_access_id` and the fold path never clears it, so the EXIT trap prints a false notice. `access-pending` stayed empty, so nothing is at risk. Not yet fixed.
+Finding (fixed in #47): `setup --alias` prints "nothing was published; the Access app of ba6377 waits in access-pending" at exit after a successful fold. `access_gate` sets `held_access_id` and the fold path never clears it, so the EXIT trap prints a false notice. `access-pending` stayed empty, so nothing is at risk. Fixed in #47, ships with the next release.
 
-Open: P1 and P2 (the Air must be reachable), the Share Bar After-state box (GUI, not checked), and D6 (delete Worker share-f-d-foundation after seven days, a second go). The old `files` publisher token is revoked at D6.
+Open: the Share Bar After-state box (GUI, not checked), and D6, due on or after 2026-10-13 (delete Worker share-f-d-foundation after seven days, a second go). The old `files` publisher token is revoked at D6.
