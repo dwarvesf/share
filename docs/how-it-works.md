@@ -350,6 +350,114 @@ pseudonymizes visitors, it does not anonymize them. `share hits <id>` checks the
 over the profile's dataset for that id. It needs a token with Account Analytics: Read,
 which reads every dataset on the account.
 
+## Tenants: one hostname, local or cloud
+
+A tenant is one hostname with one shared list. Its origin is the one machine in the tunnel profile's `hosts`; every link is served from that machine's disk through its tunnel unless the admin turns R2 on. The mechanism and its trade-offs: [ADR-0008](decisions/ADR-0008-one-host-per-tenant.md).
+
+```
+ visitor  https://s.example.com/<id>/<name>        https://f.example.com/<path>  (alias)
+                       |                                        | 301 to the tenant host
+                       v                                        v
+ Cloudflare edge: TLS; an Access app on <host>/<id> and <host>/<id>/* per gated link
+                       |
+        R2 off         |         R2 on
+   CNAME to the tunnel |   Worker share-<host-with-dashes> on route <host>/*
+                       |     GET m/<id> from the bucket
+                       |       cloud record (v:1)           -> R2 bytes
+                       |       machine pointer (v:2), none  -> fetch(request): the route is
+                       |         or an R2 error                skipped, the request goes on
+                       v                                       to the origin
+   tunnel --> cloudflared on the origin --> caddy --> pub/<id> or a live port
+```
+
+| Tenant state | Origin | Other machines |
+|---|---|---|
+| R2 off (default) | publishes everything locally, today's code paths and files | none; `setup --quick` stays available |
+| R2 on | publishes local or cloud per link; keeps the tunnel and gains `bucket=`, `r2_endpoint=`, `storage_default=` (and `aliases=` after a fold) in its config | members: an r2 profile joined with a bucket-scoped publisher token; they publish cloud links only |
+
+### Per-link storage
+
+| `add` form | R2 off | R2 on, `storage_default=local` | R2 on, `storage_default=cloud` |
+|---|---|---|---|
+| `add <file\|dir>` | local | local | cloud |
+| `add --cloud <file\|dir>` | refused, naming the admin command | cloud | cloud |
+| `add --local <file\|dir>` | local | local | local |
+| `add <port>`, `--host` | local | local | local |
+
+`--cloud` with a port, `--host`, or `--local` is refused. A member's `--local` and `add <port>` die with `<host> serves local links from its origin`. `rm`, `refresh`, and `hits` dispatch on the row's storage; a member's `rm` or `refresh` of a machine row dies before any call, because only the origin serves it.
+
+### Enabling and leaving R2
+
+`CLOUDFLARE_API_TOKEN=<admin> share setup <host> --r2 --bucket <name> [--storage-default local|cloud] [--alias <old-host>]` runs on the origin only. Every read and refusal comes before the first write, and a rerun after a die converges. The order matters: the Worker is deployed with subdomain and previews off, pointer records are written for every local row, the config keys are written, the marker moves, the route is attached, and live checks (`/healthz` three times with this CLI's version pair, a probe file through the tunnel leg) pass last.
+
+With `--alias <old-host>` the tenant Worker takes the alias's custom domain and answers 301 to the same path on the tenant host. Each gated cloud link's Access app gains the tenant destinations first (the PUT keeps the AUD), passes the gate probe, and drops the alias destinations last. A folded app keeps its name `share <id> <alias> <nonce>`, so `rm` and expiry still delete it.
+
+`share setup <host> --no-r2` is the rollback for a tenant without an alias: the route goes, then the four config keys. The tunnel serves the hostname alone again; pointers, cloud records, the bucket, and the Worker stay. It refuses while an alias is set, because an alias whose 301 lands on a plain tunnel turns every folded cloud link into a 404. Every die after the marker moved prints the alias rollback list instead.
+
+### Pointer records
+
+With R2 on, a local add on the origin writes `m/<id>` as `{"v":2,"id","storage":"machine","name","by","added","expires","opts","type"}` after the stage is built and before the file is published (before the Access app for a gated add). The write carries `If-None-Match: *`, so one namespace spans both storages and a cloud add can never take an id the origin holds. `opts` keeps only `noindex`, `live`, and `gated`, never the rule. A failed pointer write dies before anything is served: a local add fails closed while R2 is on.
+
+`rm` and `prune` of a local row delete its pointer when a token resolves. The origin's interactive `ls` and `prune` reconcile: a pointer with no local row and a `LastModified` over 10 minutes old is deleted (an add that died), and a local row with no pointer gets one. A local row whose id already holds a cloud record prints `<id> is shadowed by a cloud link; rm one of them` and nothing is deleted.
+
+Cloud records stay `v:1` (with an optional `type`), so a v0.8.0 CLI and Worker keep reading every cloud link. A machine pointer is `v:2` and `WORKER_RECORD_V` is 2; an older Worker answers 404 for it.
+
+### One shared list and its fields
+
+`ls`, `state`, and `profiles --json` read one row set per profile: the local index on an origin with R2 off, the local index plus every cloud record on an origin with R2 on, and every bucket record on a member. A record read from the bucket is display data only: it never enters `rows()`, the index, the Caddyfile, a stage path, `refresh`, or shell arithmetic, and every field is checked before it is shown. A bucket read that fails leaves the local rows and adds `cloud_error`.
+
+`state` and `profiles --json` read the bucket only with a token from the Keychain item or the mode-600 file (never an `api_token_cmd`, which may prompt during a poll) and fetch the newest 25 records; `cloud_more` counts the rest. `share ls` prints one tag before each link (`cloud`, `machine`, or `live`), then the type and `by=<machine>`.
+
+| `type` | First match wins |
+|---|---|
+| `site` | a live link; a folder with `index.html` at its root; a single `.html` or `.htm` file |
+| `folder` | any other folder |
+| `markdown`, `pdf` | `.md` `.markdown`; `.pdf` |
+| `image`, `video`, `audio` | `.png .jpg .jpeg .gif .webp .svg .heic .ico .avif`; `.mp4 .mov .webm .m4v .mkv`; `.mp3 .wav .m4a .aac .flac .ogg` |
+| `archive`, `text` | `.zip .tar .gz .tgz .bz2 .xz .7z .rar .dmg`; common text and source extensions |
+| `other` | anything else |
+
+The extension match ignores case. Local rows are typed at read time; new cloud records and pointers store `type`; a `v:1` record without it is typed by its name.
+
+### The Worker on a tenant
+
+Bindings are SPEC-007's set plus `PASS="1"` (pass misses to the origin) and `ALIASES` (comma list). Checks run in this order:
+
+| Request | Answer |
+|---|---|
+| Host in `ALIASES` | GET or HEAD: 301 to the tenant host, same path and query; other methods 405 |
+| Host not exactly `HOST` | 404 |
+| raw path holds `%2F`, `%5C`, `%2E`, a low escape, or `//` | 400, in front of the tunnel leg too |
+| `/healthz` | the Worker's own answer; with `PASS`, also a 3 s probe of the origin's `/healthz`: `200` and `X-Share-Tunnel: 1`, else `503` and `X-Share-Tunnel: 0` |
+| `v:1` record, no `storage` | SPEC-007's checks, then R2 bytes |
+| `v:2` machine pointer, no record, or `BUCKET.get` throwing or over 2 s | `PASS` set: pass through; else 404 |
+| any other record shape | 404, never passed through |
+
+A pass-through goes back with its status and body unchanged and `no-store` and `noindex` set. Only a failed fetch, 530, 520 to 527, or a 503 without `cf-cache-status` (the origin's own answers carry it, edge errors do not) becomes the 503 offline page with `Retry-After: 60`. A 502 is the origin's own answer, such as a dead live port, and passes through. A 101 WebSocket answer goes back untouched.
+
+Callers read the cloud leg from the `/healthz` headers, never the status alone: a `503` with a valid `X-Share-Worker` pair and `X-Share-Tunnel: 0` means the Worker is up and the origin is down, so a member's join, a gated member add, and an r2 `state` keep working while the origin is off.
+
+### Moving an origin: `migrate` and `import`
+
+`share migrate --to <ssh-target> [--remote-profile <name>] [--remote-bin <path>] [--max-bytes <n>] [--yes]` runs on the current origin while it is online, with `CLOUDFLARE_API_TOKEN` in the environment. It moves a tenant with R2 off and refuses one with `bucket=`.
+
+```
+ old origin                                         new origin, over ssh
+ 1 preflight: named tunnel profile, this host       import --probe; the profile is not_setup or set
+   in hosts, no --host row, the token resolves      up for the same hostname; Keychain round trip
+ 2 per snapshot row: tar | ssh -------------------> import <id> ...  validates, stages, publishes
+ 3 the switch, token on ssh stdin ----------------> setup <host> --tunnel-name <old>-m --force
+                                                      --token-stdin  (a new tunnel, CNAME repointed)
+ 4 verify through https://<host>/: a probe file only the new origin holds answers 200 three times,
+   then every moved link answers 200 and every gated one 302 with kid == its app's AUD
+ 5 retire: rows to index.migrated, pub/<id> to migrated/<id> (nothing deleted), then the
+   teardown path with no Access delete and no DNS delete unless it still points here
+```
+
+`import` is the receiving verb and validates every field and every tar member (no `..`, absolute path, symlink, or hardlink) before it publishes. Live rows are listed as not moved and a `--host` row blocks the move. The new origin always gets its own tunnel: a name the old machine already holds would reuse its tunnel id, and the retire step would then delete the new origin's only tunnel (`migrate_retire` also refuses that delete if the ids ever match). A failure in the switch prints the rollback, `setup <host> --tunnel-name <old name> --force` on the old machine; a tunnel name missing from the config is read back from the API by id. `SHARE_MIGRATE_SSH` replaces the ssh command with a local one so the suite runs both sides on one machine.
+
+Files `migrate` adds on the old origin: `index.migrated` and `migrated/<id>`. A moved row's `src` becomes `<by>:<src>`, and `refresh` of such a row dies with `re-add it from a source on this machine`.
+
 ## `share state`
 
 The menu bar app never reads share's files. It runs `share profiles --json`, a read-only
@@ -398,6 +506,13 @@ The app changes anything only by running share's normal verbs (`add`, `rm`, `ref
 | `shares[].expires` | epoch seconds; `0` means never |
 | `shares[].url` | exactly what `share ls` prints for that row |
 | `shares[].access` | the `--access` rule of a gated share (`group:...`, `email:...`, `domain:...`), else `null` |
+| `shares[].storage` | `machine` (served by the tenant's origin through its tunnel) or `cloud` (served from the bucket) |
+| `shares[].type` | the file type: `pdf`, `image`, `video`, `audio`, `folder`, `site`, `markdown`, `archive`, `text`, or `other` |
+| `shares[].by` | the machine that published the share |
+| `r2` | `true` when the profile reads a bucket (an origin with R2 on, or an r2 profile), else `false` |
+| `storage_default` | an origin with R2 on only: `local` or `cloud`, the storage of an `add` with neither `--local` nor `--cloud` |
+| `cloud_error` | why the bucket's rows are missing (the menu reads them only with a stored token); the local rows still list |
+| `cloud_more` | how many more bucket rows exist past the newest 25 that `state` reads; about, since it counts orphan pointers too |
 | `access_pending` | count of Access apps waiting for deletion (`access-pending` lines) |
 | `skipped` | count of malformed index rows; present only when greater than zero |
 | `backend` | `"r2"` on an r2 profile only, absent on a tunnel profile. There `state` is `serving` once set up, `ready` comes from one `/healthz` probe (2 s), `mode` is `named`, `hosts` is `""`, `serves_here` and `service` are `false`, every share is a `snapshot`, and `skipped` is never set. Share Bar shows neither Start nor Stop for it |

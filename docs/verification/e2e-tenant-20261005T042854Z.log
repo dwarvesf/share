@@ -1,0 +1,190 @@
+=== before: nothing named for this run exists ===
+  ok    no Worker for share-e2e-95cdb6.d.foundation
+  ok    no Worker for share-e2e-61fdd2.d.foundation
+  ok    no DNS record for share-e2e-95cdb6.d.foundation
+  ok    no DNS record for share-e2e-61fdd2.d.foundation
+=== L1 origin A: tunnel setup; a local file, a gated local file, a live server ===
+  | auth:       API token (active)
+  | zone:       d.foundation
+  | tunnel:     created share-share-e2e-95cdb6-d-foundation
+  | route:      share-e2e-95cdb6.d.foundation -> 127.0.0.1:8797
+  | dns:        created CNAME share-e2e-95cdb6.d.foundation
+  | token:      stored in keychain (service share-tunnel:share-e2e-95cdb6.d.foundation)
+  | service:    runs at login (foundation.d.share)
+  | ready:      https://share-e2e-95cdb6.d.foundation/ is live. Next: share add <file|dir>
+  ok    A setup exits 0
+  | minted token a-origin (id 1ae828ec..., expires 2026-10-05T06:29:16Z)
+  ok    machine link answers
+  ok    dotfile not served
+  ok    live link answers (plain HTTP through the tunnel)
+  | share: checking the API token for profile default (zone d.foundation)
+  |   ok       token found (api_token_cmd)
+  |   ok       Zone: Read                                                     GET /zones?name=d.foundation -> 1 zone
+  |   ok       Access: Organizations, Identity Providers, and Groups Read     GET /accounts/<acct>/access/organizations -> 200
+  |   ok       Access: Apps and Policies Edit                                 POST /accounts/<acct>/access/apps {} -> 400 (12130, nothing created)
+  | share: waiting up to 900s for Cloudflare Access to enforce on share-e2e-95cdb6.d.foundation/80e57b (a new app can take minutes; Ctrl-C is safe: nothing is published, the next add or prune removes the app)
+  ok    gated add printed a link
+  ok    no 200 on the gated link during the wait
+  ok    gated local link 302s to Access with kid == aud
+=== L2 setup --r2 on A ===
+  | deploying as admin
+  | worker:     share-share-e2e-95cdb6-d-foundation 4 2209e2a60db0 deployed (passes misses to the tunnel)
+  | pointers:   3 written
+  | route:      share-e2e-95cdb6.d.foundation/* -> share-share-e2e-95cdb6-d-foundation
+  | ready:      R2 is on for https://share-e2e-95cdb6.d.foundation/ (bucket share-e2e-8f3cb6, storage default local). Store this origin's publisher token: share api-token
+  ok    setup --r2 exits 0
+  | token lists bucket share-e2e-8f3cb6 after 0s
+  ok    /healthz carries X-Share-Tunnel: 1
+  ok    /healthz carries this CLI's pair
+  ok    pointer m/3d7925 exists after setup --r2
+  ok    pointer m/58fd8c exists after setup --r2
+  ok    workers.dev does not answer 200
+=== L3 through the Worker ===
+  ok    machine link unchanged through the Worker
+  ok    gated link still 302s unauthenticated
+  | service-token fetch (SPEC-007 TASK-1(l)) not exercised: no SHARE_E2E_ACCESS_SERVICE_TOKEN_ID/SECRET input
+  ok    live link answers a POST
+  ok    live link answers a WebSocket echo
+=== L4 A add --cloud; member B joins and adds ===
+  ok    A's cloud link answers
+  ok    A's cloud link carries no-store
+  | minted token b-member (id ba27aa9e..., expires 2026-10-05T06:31:02Z)
+  | token lists bucket share-e2e-8f3cb6 after 2s
+  | joining as publisher
+  | public-route check skipped (publisher token)
+  | ready:      https://share-e2e-95cdb6.d.foundation/ serves from bucket share-e2e-8f3cb6. Store your publisher token: share api-token; then: share add <file|dir>
+  ok    B join exits 0
+  ok    B join says joining as publisher
+  ok    B's cloud link answers
+  | A ls: 10 line(s); B ls: 10 line(s)
+  ok    A's ls shows B's cloud row (TASK-6 merged list)
+  ok    B's ls shows A's rows (TASK-6 merged list)
+=== L5 stop A's tunnel ===
+  ok    cloud link still answers while the tunnel is down
+  ok    machine link answers the 503 offline page
+  ok    live link answers the 503 offline page
+  ok    /healthz answers X-Share-Tunnel: 0 with the tunnel down
+  | minted token d-fresh (id 167fa5db..., expires 2026-10-05T06:31:34Z)
+  | token lists bucket share-e2e-8f3cb6 after 2s
+  | joining as publisher
+  | public-route check skipped (publisher token)
+  | ready:      https://share-e2e-95cdb6.d.foundation/ serves from bucket share-e2e-8f3cb6. Store your publisher token: share api-token; then: share add <file|dir>
+  ok    fresh member D joins during the outage
+  | share: checking the API token for profile default (zone d.foundation)
+  |   ok       token found (api_token_cmd)
+  |   ok       Zone: Read                                                     GET /zones?name=d.foundation -> 1 zone
+  |   ok       Access: Organizations, Identity Providers, and Groups Read     GET /accounts/<acct>/access/organizations -> 200
+  |   ok       Access: Apps and Policies Edit                                 POST /accounts/<acct>/access/apps {} -> 400 (12130, nothing created)
+  | share: waiting up to 900s for Cloudflare Access to enforce on share-e2e-95cdb6.d.foundation/e813a8 (a new app can take minutes; Ctrl-C is safe: nothing is published, the next add or prune removes the app)
+  ok    D's gated cloud add succeeds during the outage
+  ok    B's state reads ready: true during the outage
+  ok    machine link back after start
+  ok    live link back after start
+=== L6 encoded paths (a machine id and a cloud id) ===
+  ok    /x/..%2F3d7925/doc/ answers 400
+  ok    /%2F3d7925/doc/ answers 400
+  ok    //3d7925/doc/ answers 400
+  ok    /x/..%2F04bcd3/doc/ answers 400
+  ok    /%2F04bcd3/doc/ answers 400
+  ok    //04bcd3/doc/ answers 400
+=== L7 --no-r2 ===
+  | route:      share-e2e-95cdb6.d.foundation/* removed
+  | ready:      R2 is off for https://share-e2e-95cdb6.d.foundation/: the tunnel serves it alone. The bucket, its records, and Worker share-share-e2e-95cdb6-d-foundation stay
+  ok    --no-r2 exits 0
+  ok    the route is gone
+  ok    machine link serves straight from the tunnel (no X-Share-Worker)
+  ok    cloud link 404s at Caddy (no route left to the Worker)
+=== L8 setup --r2 again ===
+  | deploying as admin
+  | worker:     share-share-e2e-95cdb6-d-foundation 4 2209e2a60db0 already deployed
+  | pointers:   0 written
+  | route:      share-e2e-95cdb6.d.foundation/* -> share-share-e2e-95cdb6-d-foundation
+  | ready:      R2 is on for https://share-e2e-95cdb6.d.foundation/ (bucket share-e2e-8f3cb6, storage default local). Store this origin's publisher token: share api-token
+  ok    rerun --r2 exits 0
+  ok    no new pointer PUT for an existing id (etag unchanged)
+  ok    cloud link answers again
+=== L9 B's local teardown; A rm of each link ===
+  ok    B's config is gone
+  ok    the bucket is unaffected by B's local teardown
+  ok    A's ls is empty
+  ok    machine link gone
+  ok    cloud link gone
+  ok    gated app gone
+=== L10 admin purge and A teardown ===
+  | dns:     deleted share-e2e-95cdb6.d.foundation
+  | tunnel:  deleted
+  | token:   removed
+  | service: removed
+  | config:  moved to the Trash
+  ok    A teardown exits 0
+  ok    tunnel DNS gone
+  ok    bucket gone
+  ok    Worker gone
+
+=== R1 Dwarves alias-fold rehearsal on throwaway names ===
+  | deploying as admin
+  | worker:     share-share-e2e-61fdd2-d-foundation 4 2209e2a60db0 deployed
+  | ready:      https://share-e2e-61fdd2.d.foundation/ serves from bucket share-e2e-9bf46a. Next: share add <file|dir>
+  ok    R1: C's standalone r2 origin on the alias exits 0
+  | minted token c-admin (id 44a78c71..., expires 2026-10-05T06:34:11Z)
+  | token lists bucket share-e2e-9bf46a after 2s
+  | share: checking the API token for profile default (zone d.foundation)
+  |   ok       token found (api_token_cmd)
+  |   ok       Zone: Read                                                     GET /zones?name=d.foundation -> 1 zone
+  |   ok       Access: Organizations, Identity Providers, and Groups Read     GET /accounts/<acct>/access/organizations -> 200
+  |   ok       Access: Apps and Policies Edit                                 POST /accounts/<acct>/access/apps {} -> 400 (12130, nothing created)
+  | share: waiting up to 900s for Cloudflare Access to enforce on share-e2e-61fdd2.d.foundation/9dc4fd (a new app can take minutes; Ctrl-C is safe: nothing is published, the next add or prune removes the app)
+  ok    R1: C's gated cloud link printed
+  | auth:       API token (active)
+  | zone:       d.foundation
+  | tunnel:     created share-share-e2e-95cdb6-d-foundation
+  | route:      share-e2e-95cdb6.d.foundation -> 127.0.0.1:8798
+  | dns:        created CNAME share-e2e-95cdb6.d.foundation
+  | token:      stored in keychain (service share-tunnel:share-e2e-95cdb6.d.foundation)
+  | service:    runs at login (foundation.d.share)
+  | ready:      https://share-e2e-95cdb6.d.foundation/ is live. Next: share add <file|dir>
+  ok    R1: A2's plain tunnel on the tenant exits 0
+  | deploying as admin
+  | worker:     share-share-e2e-95cdb6-d-foundation 4 2209e2a60db0 deployed (passes misses to the tunnel)
+  | pointers:   0 written
+  | share: waiting up to 900s for Cloudflare Access to enforce on share-e2e-95cdb6.d.foundation/9dc4fd (a new app can take minutes; Ctrl-C is safe: nothing is published, the next add or prune removes the app)
+  | access:     1 gated link(s) also gated at share-e2e-95cdb6.d.foundation
+  | route:      share-e2e-95cdb6.d.foundation/* -> share-share-e2e-95cdb6-d-foundation
+  | alias:      share-e2e-61fdd2.d.foundation -> share-share-e2e-95cdb6-d-foundation (answers 301 to share-e2e-95cdb6.d.foundation)
+  | ready:      R2 is on for https://share-e2e-95cdb6.d.foundation/ (bucket share-e2e-9bf46a, storage default local, share-e2e-61fdd2.d.foundation redirects here). Store this origin's publisher token: share api-token
+  | share: nothing was published; the Access app of 9dc4fd waits in access-pending, the next share add --access or share prune with a token removes it
+  ok    R1: the fold (setup --r2 --alias) exits 0
+  ok    R1 after fold: alias 301s to the tenant
+  ok    R1 after fold: the folded gated link 302s on the tenant with kid == aud
+--- R1 rollback (### Dwarves order, the admin token) ---
+  1. restored share-e2e-61fdd2.d.foundation destinations on app 8976d556-1c6a-4f7d-808c-c7989b6429a5
+  2. rebound share-e2e-61fdd2.d.foundation to share-share-e2e-61fdd2-d-foundation
+  3. restored share.json host to share-e2e-61fdd2.d.foundation in bucket share-e2e-9bf46a
+  4. removed the aliases= line from A2's config
+  5. deleted every v:2 machine record
+  | route:      share-e2e-95cdb6.d.foundation/* removed
+  | ready:      R2 is off for https://share-e2e-95cdb6.d.foundation/: the tunnel serves it alone. The bucket, its records, and Worker share-share-e2e-95cdb6-d-foundation stay
+  6. /Users/tieubao/workspace/dwarvesf/share/.claude/worktrees/one-host-per-tenant/bin/share setup share-e2e-95cdb6.d.foundation --no-r2 exited 0
+  ok    R1 rollback: the alias serves itself again (its own /healthz answers, no 301)
+  ok    R1 rollback: the tenant is a plain tunnel (no route)
+--- R1 the fold again ---
+  | deploying as admin
+  | worker:     share-share-e2e-95cdb6-d-foundation 4 2209e2a60db0 already deployed
+  | pointers:   0 written
+  | access:     1 gated link(s) also gated at share-e2e-95cdb6.d.foundation
+  | route:      share-e2e-95cdb6.d.foundation/* -> share-share-e2e-95cdb6-d-foundation
+  | alias:      share-e2e-61fdd2.d.foundation -> share-share-e2e-95cdb6-d-foundation (answers 301 to share-e2e-95cdb6.d.foundation)
+  | ready:      R2 is on for https://share-e2e-95cdb6.d.foundation/ (bucket share-e2e-9bf46a, storage default local, share-e2e-61fdd2.d.foundation redirects here). Store this origin's publisher token: share api-token
+  ok    R1: the second fold exits 0
+  ok    R1 after the second fold: alias 301s to the tenant again
+
+=== R1 cleanup ===
+  ok    R1: tenant tunnel DNS gone
+  ok    R1: alias bucket gone
+  ok    R1: alias Worker gone
+
+73/73 checks passed
+PASS
+tests/e2e-tenant.sh: line 103: 47694 Terminated: 15          python3 "$WORK/echo.py" "$1"
+tests/e2e-tenant.sh: line 103: 47694 Terminated: 15          python3 "$WORK/echo.py" "$1"
+cleanup: nothing left for this run's names

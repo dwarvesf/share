@@ -10,13 +10,19 @@ public struct Share: Decodable, Sendable, Equatable {
     public let expires: Int // epoch seconds; 0 means never
     /// The `--access` rule on a gated share; nil means public.
     public let access: String?
+    /// `machine` or `cloud`; nil on a CLI that predates per-link storage.
+    public let storage: String?
+    /// The file type (`pdf`, `image`, `folder`, ...); nil on an older CLI.
+    public let type: String?
+    /// The machine that published the link; nil on an older CLI.
+    public let by: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, url, kind, expires, access
+        case id, name, url, kind, expires, access, storage, type, by
         case ownHost = "own_host"
     }
 
-    public init(id: String, name: String, url: String, kind: String, ownHost: String?, expires: Int, access: String? = nil) {
+    public init(id: String, name: String, url: String, kind: String, ownHost: String?, expires: Int, access: String? = nil, storage: String? = nil, type: String? = nil, by: String? = nil) {
         self.id = id
         self.name = name
         self.url = url
@@ -24,6 +30,9 @@ public struct Share: Decodable, Sendable, Equatable {
         self.ownHost = ownHost
         self.expires = expires
         self.access = access
+        self.storage = storage
+        self.type = type
+        self.by = by
     }
 }
 
@@ -45,11 +54,24 @@ public struct Snapshot: Decodable, Sendable, Equatable {
     /// `"r2"` on a profile that serves from R2 through a Worker (nothing runs on this Mac,
     /// so start and stop do not apply); nil on a tunnel profile or an older CLI.
     public let backend: String?
+    /// True when the profile reads a bucket; nil on an older CLI.
+    public let r2: Bool?
+    /// `local` or `cloud` on an origin with R2 on; nil elsewhere and on an older CLI.
+    public let storageDefault: String?
+    /// Why cloud rows are missing from `shares` when they are (the reason line `state`
+    /// prints instead of failing); nil when the bucket read worked or there is none.
+    public let cloudError: String?
+    /// Cloud rows `state` did not fetch (it caps its bucket reads at 25); the section
+    /// adds it to the `more` line.
+    public let cloudMore: Int?
 
     enum CodingKeys: String, CodingKey {
-        case schema, state, ready, mode, host, hosts, service, shares, skipped, backend
+        case schema, state, ready, mode, host, hosts, service, shares, skipped, backend, r2
         case servesHere = "serves_here"
         case accessPending = "access_pending"
+        case storageDefault = "storage_default"
+        case cloudError = "cloud_error"
+        case cloudMore = "cloud_more"
     }
 
     public init(
@@ -64,7 +86,11 @@ public struct Snapshot: Decodable, Sendable, Equatable {
         shares: [Share],
         skipped: Int?,
         accessPending: Int? = nil,
-        backend: String? = nil
+        backend: String? = nil,
+        r2: Bool? = nil,
+        storageDefault: String? = nil,
+        cloudError: String? = nil,
+        cloudMore: Int? = nil
     ) {
         self.schema = schema
         self.state = state
@@ -78,6 +104,10 @@ public struct Snapshot: Decodable, Sendable, Equatable {
         self.skipped = skipped
         self.accessPending = accessPending
         self.backend = backend
+        self.r2 = r2
+        self.storageDefault = storageDefault
+        self.cloudError = cloudError
+        self.cloudMore = cloudMore
     }
 }
 

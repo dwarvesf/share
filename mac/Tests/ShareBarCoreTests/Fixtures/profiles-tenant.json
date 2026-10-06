@@ -1,0 +1,100 @@
+{
+  "schema": 1,
+  "profiles": [
+    {
+      "name": "dfoundation",
+      "state": {
+        "schema": 1,
+        "state": "serving",
+        "ready": true,
+        "mode": "named",
+        "host": "s.d.foundation",
+        "hosts": "Mac-mini",
+        "serves_here": true,
+        "service": true,
+        "access_pending": 0,
+        "r2": true,
+        "storage_default": "local",
+        "cloud_more": 3,
+        "shares": [
+          {
+            "id": "ba6377",
+            "name": "support-ticket-guide",
+            "url": "https://s.d.foundation/ba6377/support-ticket-guide/",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 0,
+            "storage": "cloud",
+            "type": "site",
+            "by": "han-air"
+          },
+          {
+            "id": "a68960",
+            "name": "quarterly-report.pdf",
+            "url": "https://s.d.foundation/a68960/quarterly-report.pdf",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 1793087100,
+            "access": "group:dwarves-ops",
+            "storage": "machine",
+            "type": "pdf",
+            "by": "mac-mini"
+          },
+          {
+            "id": "b3100a",
+            "name": "localhost:3000",
+            "url": "https://s.d.foundation/b3100a/",
+            "kind": "live",
+            "own_host": null,
+            "expires": 0,
+            "storage": "machine",
+            "type": "site",
+            "by": "mac-mini"
+          }
+        ]
+      }
+    },
+    {
+      "name": "files",
+      "state": {
+        "schema": 1,
+        "state": "serving",
+        "ready": true,
+        "mode": "named",
+        "host": "s.d.foundation",
+        "hosts": "",
+        "serves_here": false,
+        "service": false,
+        "access_pending": 0,
+        "backend": "r2",
+        "r2": true,
+        "cloud_error": "the menu reads cloud links only with a stored token: share --profile files api-token",
+        "shares": []
+      }
+    },
+    {
+      "name": "personal",
+      "state": {
+        "schema": 1,
+        "state": "serving",
+        "ready": true,
+        "mode": "named",
+        "host": "s.han.ws",
+        "hosts": "hans-air-m4",
+        "serves_here": false,
+        "service": true,
+        "access_pending": 0,
+        "shares": [
+          {
+            "id": "4f9ff2",
+            "name": "notes.txt",
+            "url": "https://s.han.ws/4f9ff2/notes.txt",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 1793087100
+          }
+        ]
+      }
+    }
+  ]
+}
