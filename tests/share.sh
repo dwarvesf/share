@@ -3269,6 +3269,7 @@ row14end="{\"v\":1,\"host\":\"ten.example.test\",\"aliases\":[\"f.example.test\"
 afresh
 out=$(afold 2>&1); rc=$?
 check "row 14: the fold exits 0" "0" "$rc"
+check "row 14: a finished fold prints no stale access-pending notice" "0" "$(grep -c 'nothing was published' <<<"$out")"
 check "row 14: the call order" "1" "$(vord "^GET app $fu1\$" '^API PUT /accounts/acct-dry/workers/scripts/share-ten-example-test$' '^PUT m/0a000' "^PUT app $fu1\$" '^PROBE ' '^CONFIG r2 on$' \
   '^PUT share.json$' '^API POST /zones/zone-dry/workers/routes$' '^API PUT /accounts/acct-dry/workers/domains$' '^HEALTHZ$' '^ALIAS-301 f.example.test$')"
 check "row 14: the alias destinations are dropped last, after the 301" "1" "$([[ $(grep -n "^PUT app $fu1\$" "$vlog" | tail -1 | cut -d: -f1) -gt $(grep -n '^ALIAS-301' "$vlog" | tail -1 | cut -d: -f1) ]] && echo 1 || echo 0)"
