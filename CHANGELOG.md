@@ -1,5 +1,15 @@
 # Changelog
 
+## [v0.9.0] - 2026-10-06
+
+### Features
+
+- spec for one hostname per tenant with optional cloud storage (#45)
+
+### Fixes
+
+- **test:** isolate token-free tests from the host keychain (#44)
+
 ## [v0.8.0] - 2026-10-01
 
 ### Features
@@ -12,6 +22,7 @@
 
 ### Documentation
 
+- changelog for v0.8.0
 - spec for an R2 storage backend per profile (#41)
 
 ## [v0.7.1] - 2026-09-30
