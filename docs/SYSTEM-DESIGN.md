@@ -8,6 +8,7 @@ decided:
   - "The Worker gains one narrow write: delete i/<hash> on redeem."
   - "Cut from v1: member move, edit verb, teardown --cascade, member gated links, member hits."
   - "Spike O1 passed: VPC Service to 127.0.0.1 over a tunnel with no ingress, Free plan, no warp-routing."
+  - "Spike O2 passed for user tokens: mint, one-time secret, expiry extended in place, found by name."
 ---
 
 # share system design
@@ -649,7 +650,7 @@ transitions:
 - Workers VPC is beta. Bites if Cloudflare changes the binding API, its pricing, or loopback routing to a tunnel. Mitigated by shipping members behind `--members` only, with cloud-only members as the fallback. Spike O1 passed live on a Free-plan account (VPC Service to 127.0.0.1 over a tunnel with only the 404 catch-all, no warp-routing, 150 to 350 ms).
 - Every member serves under one origin. Bites if one member's page reads another member's link or cookies through same-origin script. Mitigated by stripping Access headers and cookies before a binding fetch; not by isolation.
 - The bucket token cannot tell members apart. Bites if a member token leaks or a teammate errs: it can write any `u/`, `m/` or `t/` key. Mitigated by making the worst case visible and recoverable: a forged tombstone revokes a link the owner can see and re-add, a forged pointer cannot serve an unlisted or revoked row, a forged record cannot change routing. Worker-mediated writes are the upgrade before anyone outside the team publishes.
-- Open (spike O2): minting member tokens by API is unproven. Neither stored token may list account tokens (403), so a minter token scoped to one R2 bucket, and extending `expires_on` in place, are both untested. Bites at `member add`: without it the admin hand-makes each member token as today. Closes with the O2 spike against the tokens API.
+- Member tokens are user-owned (spike O2): the minter token (API Tokens Read and Write) mints them, the secret comes back once, and `expires_on` extends in place. Bites if the minting user leaves the account: every member token dies with it. Mitigated later by account-owned tokens, once a token with Account API Tokens Write exists (none does today).
 - A member's connector token never expires. Bites if it leaks: another machine can join that tunnel and take a share of the requests. Mitigated by `rotate` (connections dropped first) and the "extra connector" flag in `member ls`.
 - `by` is an unauthenticated `uname -n`, and any publisher may rm any cloud link. Bites if a publisher token leaks or a teammate errs. Mitigated only by ADR-0007's named-teammates rule.
 - The origin's hourly prune still runs with no token. Bites as orphan pointers and expired cloud records that wait for an interactive `ls` or `prune` on the origin. Members run their reconcile unattended; the origin does not.
