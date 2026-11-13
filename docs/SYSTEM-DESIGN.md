@@ -482,7 +482,7 @@ transitions:
   - {from: T2 members on, to: refused (stays T2), event: "teardown, migrate, --no-r2, older CLI --force", tone: gray}
 ```
 
-New in rev B. A member's lifecycle lives in its `u/` record, written in the one order intent, Cloudflare, final. `member rm` works from every state but REMOVED. `rotate` keeps ACTIVE or PAUSED and drops the connectors until the member joins with the new code. OFFLINE is runtime only, never stored. Violet is stored status, gray is runtime.
+New in rev B. A member's lifecycle lives in its `u/` record, written in the one order intent, Cloudflare, final. `member rm` works from every state but REMOVED. `rotate` sends ACTIVE or PAUSED back to INVITED with `prev_status` kept and drops the connectors; the member's join with the new code restores `prev_status`, so a paused member comes back paused. The full table, with every `...ing` intent, is in SPEC-009, section "Member status transitions". OFFLINE is runtime only, never stored. Violet is stored status, gray is runtime.
 
 ```uml
 id: sm-member
@@ -506,7 +506,10 @@ states:
 transitions:
   - {from: none, to: INVITED, event: member add}
   - {from: none, to: ACTIVE, event: member adopt (cloud), via: [[0, 0.5], [1.5, 0.5], [1.5, 1]]}
-  - {from: INVITED, to: ACTIVE, event: "join <code>"}
+  - {from: INVITED, to: ACTIVE, event: "join <code>", guard: no prev_status or prev_status active}
+  - {from: INVITED, to: PAUSED, event: "join <code>", guard: prev_status paused, via: [[1, 0.5], [3, 0.5]]}
+  - {from: ACTIVE, to: INVITED, event: member rotate, guard: prev_status = active, via: [[2, 1.5], [1, 1.5]]}
+  - {from: PAUSED, to: INVITED, event: member rotate, guard: prev_status = paused, via: [[3, 1.7], [1.2, 1.7]]}
   - {from: INVITED, to: EXPIRED, event: invite expires, guard: Worker clock}
   - {from: EXPIRED, to: INVITED, event: member invite}
   - {from: ACTIVE, to: PAUSED, event: member pause}
