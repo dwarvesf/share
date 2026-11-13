@@ -1,0 +1,2187 @@
+<title>share system design</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@87.5,500;87.5,700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* A drafting set: sticky sheet index on the left, a cover, then one bordered sheet per diagram with a title block; figures on a faint drafting grid. */
+:root{
+  --fz:1; --paper:#eef1f4; --sheet:#ffffff; --ink:#17212b; --ink-2:#4e5b69; --rule:#d3dae2; --grid:#edf0f4;
+  --new:#0a6aa1; --new-soft:#e2f0f8; --chg:#9a5700; --chg-soft:#fbefdd; --rm:#8a95a1; --ext-soft:#f1f3f6; --err:#b42318;
+  --display:"Archivo","Arial Narrow","Helvetica Neue",Arial,sans-serif;
+  --body:"IBM Plex Sans","Helvetica Neue",Arial,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  /* Tones (fill, stroke, label ink) for the optional `tone` field; label ink is AA on the fill. */
+  --tn-blue-f:#dbeafe; --tn-blue-s:#2563eb; --tn-blue-i:#1e3a8a; --tn-green-f:#dcfce7; --tn-green-s:#15803d; --tn-green-i:#14532d;
+  --tn-amber-f:#fef3c7; --tn-amber-s:#b45309; --tn-amber-i:#78350f; --tn-rose-f:#ffe4e6; --tn-rose-s:#e11d48; --tn-rose-i:#881337;
+  --tn-violet-f:#ede9fe; --tn-violet-s:#7c3aed; --tn-violet-i:#4c1d95; --tn-gray-f:#e5e7eb; --tn-gray-s:#6b7280; --tn-gray-i:#1f2937;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --paper:#0d1217; --sheet:#141a21; --ink:#e2e8ee; --ink-2:#9aa7b4; --rule:#2a3440; --grid:#19212a;
+    --new:#5db7ea; --new-soft:#10304a; --chg:#e5a24b; --chg-soft:#3a2a13; --rm:#6d7987; --ext-soft:#1a2129; --err:#ff8a80;
+    --tn-blue-f:#172a4d; --tn-blue-s:#6aa0ff; --tn-blue-i:#cfe0ff; --tn-green-f:#123524; --tn-green-s:#4ade80; --tn-green-i:#c9f5d9;
+    --tn-amber-f:#3d2a0c; --tn-amber-s:#f0a93b; --tn-amber-i:#ffe3b0; --tn-rose-f:#43161f; --tn-rose-s:#fb7185; --tn-rose-i:#ffd5db;
+    --tn-violet-f:#2a1f4f; --tn-violet-s:#a78bfa; --tn-violet-i:#e4dcff; --tn-gray-f:#2a313a; --tn-gray-s:#94a3b8; --tn-gray-i:#e2e8f0;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --paper:#0d1217; --sheet:#141a21; --ink:#e2e8ee; --ink-2:#9aa7b4; --rule:#2a3440; --grid:#19212a;
+  --new:#5db7ea; --new-soft:#10304a; --chg:#e5a24b; --chg-soft:#3a2a13; --rm:#6d7987; --ext-soft:#1a2129; --err:#ff8a80;
+  --tn-blue-f:#172a4d; --tn-blue-s:#6aa0ff; --tn-blue-i:#cfe0ff; --tn-green-f:#123524; --tn-green-s:#4ade80; --tn-green-i:#c9f5d9;
+  --tn-amber-f:#3d2a0c; --tn-amber-s:#f0a93b; --tn-amber-i:#ffe3b0; --tn-rose-f:#43161f; --tn-rose-s:#fb7185; --tn-rose-i:#ffd5db;
+  --tn-violet-f:#2a1f4f; --tn-violet-s:#a78bfa; --tn-violet-i:#e4dcff; --tn-gray-f:#2a313a; --tn-gray-s:#94a3b8; --tn-gray-i:#e2e8f0;
+}
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font:400 15px/1.6 var(--body);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.wrap{max-width:1240px;margin:0 auto;padding-block:32px 64px;display:grid;grid-template-columns:220px minmax(0,1fr);gap:32px;align-items:start}
+@media (max-width:900px){.wrap{grid-template-columns:minmax(0,1fr)}.index{position:static!important}}
+code,.mono{font-family:var(--mono);font-size:.9em}
+a{color:var(--new)}
+:focus-visible{outline:2px solid var(--new);outline-offset:2px}
+
+.index{position:sticky;top:calc(env(safe-area-inset-top,0px) + 24px);display:grid;gap:4px;font-size:13px;max-height:calc(100vh - 48px);overflow-y:auto}
+.index .k{font:500 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);padding-block:0 8px}
+.index a{display:grid;grid-template-columns:26px 1fr auto;gap:8px;align-items:baseline;color:var(--ink);text-decoration:none;padding:6px 8px;border-radius:4px}
+.index a:hover,.index a.cur{background:var(--sheet)}
+.index .no{font:500 11px var(--mono);color:var(--ink-2);font-variant-numeric:tabular-nums}
+
+main{display:grid;gap:28px;min-width:0}
+.tag{font:500 10px var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:2px 6px;border-radius:3px;border:1px solid currentColor;white-space:nowrap}
+.tag.new{color:var(--new)} .tag.chg{color:var(--chg)} .tag.rm{color:var(--rm);border-style:dashed} .tag.same{color:var(--ink-2)}
+
+.cover{background:var(--sheet);border:1px solid var(--rule);padding:28px 32px;display:grid;gap:20px;scroll-margin-top:24px}
+.cover .lvl{font:500 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+.cover h1{font:700 44px/1.05 var(--display);font-stretch:87.5%;letter-spacing:-.01em;margin:0;text-wrap:balance}
+.cover .dek{font-size:17px;max-width:64ch;color:var(--ink-2)}
+.cover .dek p{margin:0 0 8px}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));border-top:1px solid var(--rule);margin:0}
+.facts div{padding:14px 16px 14px 0;border-bottom:1px solid var(--rule)}
+.facts dt{font:500 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+.facts dd{margin:4px 0 0}
+.legend{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center;font-size:13px;color:var(--ink-2)}
+.legend span{display:inline-flex;align-items:center;gap:8px}
+.sw{width:30px;height:16px;border-radius:3px;border:1.6px solid var(--ink-2);background:var(--sheet)}
+.sw.new{border-color:var(--new);background:var(--new-soft)} .sw.chg{border-color:var(--chg);background:var(--chg-soft)}
+.sw.rm{border:1.6px dashed var(--rm);background:transparent} .sw.ext{background:var(--ext-soft)}
+.ask{border-left:3px solid var(--new);padding:4px 0 4px 16px}
+.ask h2{font:700 15px var(--display);margin:0 0 6px}
+.ask ol{margin:0;padding-left:20px}
+
+.sheet{background:var(--sheet);border:1px solid var(--rule);scroll-margin-top:24px;min-width:0}
+.sheet.s-rm{border-style:dashed}
+.tb{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:stretch;border-bottom:1px solid var(--rule)}
+.tb .title{padding:18px 24px}
+.tb .lvl{font:500 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+.tb h2{font:700 26px/1.15 var(--display);font-stretch:87.5%;margin:2px 0 0;text-wrap:balance}
+.tb dl{display:grid;grid-template-columns:auto auto;margin:0;border-left:1px solid var(--rule);font-size:12px}
+.tb dl div{padding:8px 14px;border-bottom:1px solid var(--rule);display:grid;gap:2px;align-content:center}
+.tb dl div:nth-child(odd){border-right:1px solid var(--rule)}
+.tb dl div:nth-last-child(-n+2){border-bottom:0}
+.tb dt{font:500 10px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+.tb dd{margin:0;font-variant-numeric:tabular-nums}
+@media (max-width:640px){.tb{grid-template-columns:minmax(0,1fr)}.tb dl{border-left:0;border-top:1px solid var(--rule)}}
+.note{margin:0;padding:16px 24px 0;max-width:calc(78ch + 48px)}
+.note p,.note ul{margin:0 0 8px}
+.note .tablewrap{margin:0 0 8px}
+.err{margin:16px 24px 0;border-left:3px solid var(--err);padding:4px 0 4px 14px;font-family:var(--mono);font-size:13px;white-space:pre-wrap}
+figure{margin:0;padding:16px 24px 0}
+.canvas{overflow-x:auto;border:1px solid var(--rule);background-color:var(--sheet);background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:20px 20px}
+.canvas svg{display:block;width:100%;height:auto;min-width:780px;margin:0 auto}
+figcaption{font-size:13px;color:var(--ink-2);padding-top:8px}
+.review{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px;padding:18px 24px 24px}
+.review h3{font:500 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);margin:0 0 8px}
+.review ul,.review ol{margin:0;padding-left:18px;display:grid;gap:4px;font-size:14px}
+.delta{list-style:none;padding-left:0!important}
+.delta li{display:grid;grid-template-columns:74px 1fr;gap:8px;align-items:baseline}
+.delta .tag{justify-self:start}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th{text-align:left;font:500 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);padding:8px 12px 8px 0;border-bottom:1px solid var(--ink-2)}
+td{padding:10px 12px 10px 0;border-bottom:1px solid var(--rule);vertical-align:top}
+.tablewrap{overflow-x:auto}
+
+/* SVG drawing classes */
+.box{fill:var(--sheet);stroke:var(--ink-2);stroke-width:1.2}
+.box.ext{fill:var(--ext-soft)}
+/* Tone rules sit before the delta rules of the same weight, so new / chg / rm still win. */
+.tone-blue{--tf:var(--tn-blue-f);--ts:var(--tn-blue-s);--ti:var(--tn-blue-i)}
+.tone-green{--tf:var(--tn-green-f);--ts:var(--tn-green-s);--ti:var(--tn-green-i)}
+.tone-amber{--tf:var(--tn-amber-f);--ts:var(--tn-amber-s);--ti:var(--tn-amber-i)}
+.tone-rose{--tf:var(--tn-rose-f);--ts:var(--tn-rose-s);--ti:var(--tn-rose-i)}
+.tone-violet{--tf:var(--tn-violet-f);--ts:var(--tn-violet-s);--ti:var(--tn-violet-i)}
+.tone-gray{--tf:var(--tn-gray-f);--ts:var(--tn-gray-s);--ti:var(--tn-gray-i)}
+.box[class*="tone-"]{fill:var(--tf);stroke:var(--ts);stroke-width:1.6}
+.box.new{fill:var(--new-soft);stroke:var(--new);stroke-width:1.6}
+.box.chg{fill:var(--chg-soft);stroke:var(--chg);stroke-width:1.6}
+.box.rm{fill:var(--sheet);stroke:var(--rm);stroke-dasharray:5 4}
+.frame{fill:none;stroke:var(--rule);stroke-width:1.2}
+.frame[class*="tone-"]{fill:var(--tf);fill-opacity:.4;stroke:var(--ts);stroke-width:1.4}
+[class*="tone-"] .t-lane{fill:var(--ti)}
+.boundary{fill:var(--sheet);fill-opacity:.55;stroke:var(--ink-2);stroke-width:1.3}
+.band{stroke:var(--rule);stroke-dasharray:3 5}
+.t-lane{font:500 calc(10px * var(--fz)) var(--mono);letter-spacing:.08em;fill:var(--ink-2);text-transform:uppercase}
+.t-sys{font:700 calc(15px * var(--fz)) var(--display);fill:var(--ink)}
+.t-name{font:600 calc(13px * var(--fz)) var(--body);fill:var(--ink)}
+.t-case{font:500 calc(12.5px * var(--fz)) var(--body);fill:var(--ink)}
+.t-note{font:400 calc(10.5px * var(--fz)) var(--mono);fill:var(--ink-2)}
+.t-stereo{font:italic 400 calc(10.5px * var(--fz)) var(--body);fill:var(--ink-2)}
+.t-edge{font:400 calc(10.5px * var(--fz)) var(--mono);fill:var(--ink-2);paint-order:stroke;stroke:var(--sheet);stroke-width:4px;stroke-linejoin:round}
+:where([class*="tone-"]) :is(.t-name,.t-note,.t-case,.t-stereo){fill:var(--ti)}
+.t-rm{fill:var(--rm);text-decoration:line-through}
+.t-new{fill:var(--new)} .t-chg{fill:var(--chg)}
+.edge{fill:none;stroke:var(--ink-2);stroke-width:1.3}
+.edge.dash{stroke-dasharray:5 4}
+.hd-fill{fill:var(--ink-2)} .hd-open{fill:none;stroke:var(--ink-2);stroke-width:1.3} .hd-hollow{fill:var(--sheet);stroke:var(--ink-2);stroke-width:1.3}
+.e[class*="tone-"] .edge{stroke:var(--ts);stroke-width:1.6} .e[class*="tone-"] .hd-fill{fill:var(--ts)} .e[class*="tone-"] .hd-open,.e[class*="tone-"] .hd-hollow,.e[class*="tone-"] .crow,.e[class*="tone-"] .crow-o{stroke:var(--ts)} .e[class*="tone-"] .t-edge{fill:var(--ti)}
+.e.new .edge{stroke:var(--new);stroke-width:1.6} .e.new .hd-fill{fill:var(--new)} .e.new .hd-open,.e.new .hd-hollow,.e.new .crow{stroke:var(--new)} .e.new .t-edge{fill:var(--new)}
+.e.chg .edge{stroke:var(--chg);stroke-width:1.6} .e.chg .hd-fill{fill:var(--chg)} .e.chg .hd-open,.e.chg .hd-hollow,.e.chg .crow{stroke:var(--chg)} .e.chg .t-edge{fill:var(--chg)}
+.e.rm .edge{stroke:var(--rm);stroke-dasharray:5 4} .e.rm .hd-fill{fill:var(--rm)} .e.rm .hd-open,.e.rm .crow{stroke:var(--rm)} .e.rm .t-edge{fill:var(--rm);text-decoration:line-through}
+.actor circle,.actor line{fill:var(--sheet);stroke:var(--ink);stroke-width:1.5}
+.actor[class*="tone-"] circle{fill:var(--tf)} .actor[class*="tone-"] circle,.actor[class*="tone-"] line{stroke:var(--ts);stroke-width:1.6}
+.actor.new circle,.actor.new line{stroke:var(--new)} .actor.chg circle,.actor.chg line{stroke:var(--chg)} .actor.rm circle,.actor.rm line{stroke:var(--rm);stroke-dasharray:4 3}
+.life{stroke:var(--ink-2);stroke-dasharray:4 5;stroke-width:1}
+.th{fill:var(--ink)} .th.new{fill:var(--new)} .th.chg{fill:var(--chg)} .th.rm{fill:none;stroke:var(--rm);stroke-dasharray:5 4}
+.t-th{font:600 calc(12.5px * var(--fz)) var(--mono);fill:var(--sheet)} .t-th.t-rm{fill:var(--rm)}
+.t-col{font:400 calc(11.5px * var(--fz)) var(--mono);fill:var(--ink)}
+.t-flag{font:400 calc(10.5px * var(--fz)) var(--mono);fill:var(--ink-2)}
+.t-ops{font:400 calc(11.5px * var(--fz)) var(--mono);fill:var(--ink-2)}
+.row-new{fill:var(--new-soft)} .row-chg{fill:var(--chg-soft)}
+.state{fill:var(--sheet);stroke:var(--ink);stroke-width:1.4}
+.state[class*="tone-"]{fill:var(--tf);stroke:var(--ts);stroke-width:1.6}
+.state.new{fill:var(--new-soft);stroke:var(--new);stroke-width:1.6} .state.chg{fill:var(--chg-soft);stroke:var(--chg);stroke-width:1.6} .state.rm{stroke:var(--rm);stroke-dasharray:5 4}
+.dot{fill:var(--ink)} .ring{fill:none;stroke:var(--ink);stroke-width:1.4}
+.crow{fill:none;stroke:var(--ink-2);stroke-width:1.3}
+.crow-o{fill:var(--sheet);stroke:var(--ink-2);stroke-width:1.3}
+.e.new .crow-o{stroke:var(--new)} .e.chg .crow-o{stroke:var(--chg)}
+.t-num{font:600 calc(10.5px * var(--fz)) var(--mono);fill:var(--ink)}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+</style>
+
+<div class="wrap">
+<nav class="index" aria-label="Sheets" id="idx"></nav>
+<main id="sheets"><noscript><p class="err">This drawing set draws itself with JavaScript.</p></noscript></main>
+</div>
+
+<script type="text/plain" id="uml-cur" data-model="docs/SYSTEM-DESIGN.md">---
+rev: B
+decided:
+  - "Members serve from their own machines behind the one tenant hostname via Workers VPC bindings."
+  - "Removed member's cloud links stay until they expire."
+  - "Workers VPC beta accepted behind --members."
+  - "First live member is a second machine of the owner's."
+  - "The Worker gains one narrow write: delete i/<hash> on redeem."
+  - "Cut from v1: member move, edit verb, teardown --cascade, member gated links, member hits."
+  - "Spike O1 passed: VPC Service to 127.0.0.1 over a tunnel with no ingress, Free plan, no warp-routing."
+---
+
+# share system design
+
+`share` is one bash CLI (`bin/share`, v0.9 line) that publishes a file, folder or local port at `https://<host>/<id>/`. A tenant is one hostname with one origin machine: Caddy serves the origin's links through a named Cloudflare tunnel, and when R2 is on, a tenant Worker on the same hostname serves cloud links from a private R2 bucket and passes everything else to the tunnel. Teammates publish cloud links only, with a bucket-scoped token the admin makes by hand.
+
+Rev A was the backfill of the system as built (`docs/research/2026-11-13-current-state-machines.md`). Rev B is the multi-member design from `docs/briefs/DECISION-BRIEF-multi-member.md` (r2): members serve links from their own machines behind the same hostname, through one Workers VPC binding each, with a member registry in the bucket and tool-minted credentials redeemed once. Nothing in rev B is built.
+
+## Use cases
+
+Rev B adds the machine member (violet, shown as Member) and the admin's member verbs. A member reaches the system only through a code, `join`, its publishing verbs and `leave`; every member verb is the admin's. Blue is the admin, green a cloud-only publisher (today's R5), violet a machine member, gray the visitor.
+
+```uml
+id: use-cases
+type: usecase
+title: Use cases
+level: L1
+system: share tenant (one hostname)
+review:
+  - Should a cloud-only publisher (R5 today) be forced through `member adopt`, or keep working unregistered behind `min_cli`?
+  - "`leave --local` makes no bucket call. Is a member allowed to run it while still ACTIVE, leaving its record for the admin to rm?"
+actors:
+  - {id: admin, name: Admin, kind: human, side: left, tone: blue}
+  - {id: publisher, name: Publisher, kind: human, side: right, tone: green}
+  - {id: member, name: Member, kind: human, side: right, tone: violet}
+  - {id: visitor, name: Visitor, kind: human, side: right, tone: gray}
+  - {id: cloudflare, name: Cloudflare, kind: external, side: right}
+cases:
+  - {id: setup, name: Set up the tenant, actor: admin, with: [cloudflare], at: [1, 3]}
+  - {id: migrate, name: Migrate the origin, actor: admin, with: [cloudflare], at: [1, 4]}
+  - {id: teardown, name: Tear down, actor: admin, with: [cloudflare], at: [1, 5]}
+  - {id: member-add, name: member add, actor: admin, at: [0, 14]}
+  - {id: member-invite, name: member invite, actor: admin, at: [0, 15]}
+  - {id: member-pause, name: member pause, actor: admin, at: [0, 16]}
+  - {id: member-resume, name: member resume, actor: admin, at: [0, 17]}
+  - {id: member-rotate, name: member rotate, actor: admin, at: [0, 18]}
+  - {id: member-rm, name: member rm, actor: admin, at: [0, 19]}
+  - {id: member-purge, name: member purge, actor: admin, at: [0, 20]}
+  - {id: member-adopt, name: member adopt, actor: admin, at: [0, 21]}
+  - {id: member-ls, name: member ls, actor: admin, at: [0, 22]}
+  - {id: member-sync, name: member sync, actor: admin, at: [0, 23]}
+  - {id: join, name: Join with a code, actor: [publisher, member], at: [1, 25]}
+  - {id: leave, name: leave, actor: [publisher, member], at: [1, 26]}
+  - {id: leave-local, name: leave --local, actor: [publisher, member], at: [1, 27]}
+  - {id: add, name: Add a link, actor: [admin, publisher, member], at: [1, 7]}
+  - {id: refresh, name: Refresh a link, actor: [admin, publisher, member], at: [1, 8]}
+  - {id: rm, name: Remove a link, actor: [admin, publisher, member], at: [1, 9]}
+  - {id: ls, name: List links, actor: [admin, publisher, member], at: [1, 10]}
+  - {id: prune, name: Prune expired, actor: [admin, publisher, member], at: [1, 11]}
+  - {id: hits, name: Read hits, actor: [admin, publisher], at: [1, 12]}
+  - {id: open, name: Open a link, actor: visitor, at: [1, 0]}
+  - {id: access, name: Pass the Access gate, extend: open, with: [cloudflare], at: [1, 1]}
+bands:
+  - {name: visiting, rows: [0, 1]}
+  - {name: tenant, rows: [3, 5]}
+  - {name: publishing, rows: [7, 12]}
+  - {name: member admin, rows: [14, 23]}
+  - {name: member side, rows: [25, 27]}
+```
+
+## Components
+
+Rev B adds a member machine (violet lane, bottom left) that runs its own Caddy and cloudflared on a tunnel with no hostname. The Worker reaches it through a Workers VPC Service bound as `M_<8hex>`, so the hostname stays one. Lanes are where a piece runs: blue the origin, amber the Cloudflare edge, gray the Cloudflare account, green a cloud-only publisher, violet a machine member. Admin verbs need only the admin token and the hostname, so they run from any machine.
+
+```uml
+id: components
+type: component
+title: Components (tenant with R2 on)
+level: L2
+review:
+  - Is one VPC Service plus one Worker binding per machine member acceptable, given every member verb redeploys the whole Worker?
+  - The minter token sits beside the admin token in 1Password. Should it live on a different vault or machine?
+lanes:
+  - {id: origin, name: Origin machine (R3), tone: blue}
+  - {id: edge, name: Cloudflare edge, tone: amber}
+  - {id: account, name: Cloudflare account, tone: gray}
+  - {id: pubm, name: Cloud member (R5), tone: green}
+  - {id: member, name: Member machine (machine member), tone: violet}
+nodes:
+  - {id: keychain-o, name: Keychain, note: "tunnel token, publisher token", kind: store, lane: origin, at: [0, 0]}
+  - {id: cli-o, name: share CLI, note: "origin profile; admin verbs from any machine", lane: origin, at: [1, 0]}
+  - {id: index, name: pub/ + index.tsv, note: "bytes and rows", kind: store, lane: origin, at: [0, 1]}
+  - {id: vault, name: 1Password, note: "admin token, minter token", kind: ext, lane: origin, at: [1, 1]}
+  - {id: caddy, name: Caddy, note: "127.0.0.1:<port>, one handle per listed row", lane: origin, at: [0, 3]}
+  - {id: cloudflared, name: cloudflared, note: named tunnel connector, lane: origin, at: [0, 4]}
+  - {id: visitor, name: Visitor, kind: ext, at: [2, 1]}
+  - {id: dns, name: DNS + route, note: "CNAME to tunnel, route <host>/*", lane: edge, at: [2, 2]}
+  - {id: worker, name: Worker share-<host>, note: "v5: PASS, PAUSED, M_<8hex> bindings, /_share/redeem", lane: edge, at: [2, 3]}
+  - {id: tunnel, name: Tunnel share-<host>, note: "ingress rule 0 to 127.0.0.1", lane: edge, at: [2, 4]}
+  - {id: vpc, name: VPC Service, note: "share-<host>-<8hex>: tunnel + 127.0.0.1:<port>", lane: edge, at: [3, 4]}
+  - {id: mtunnel, name: Member tunnel, note: "share-<host>-<8hex>, no hostname, no ingress", lane: edge, at: [3, 6]}
+  - {id: cfapi, name: Cloudflare API, note: "tunnels, DNS, Worker deploy, Access, VPC Services, minted tokens", kind: ext, lane: account, at: [4, 0]}
+  - {id: access, name: Access apps, note: "one per gated link", lane: account, at: [4, 1]}
+  - {id: r2, name: R2 bucket, note: "share.json, m/, o/, u/, i/, t/, lock/admin", kind: store, lane: account, at: [4, 2]}
+  - {id: hits, name: Analytics HITS, kind: store, lane: account, at: [4, 3]}
+  - {id: keychain-p, name: Keychain, note: publisher token, kind: store, lane: pubm, at: [5, 0]}
+  - {id: cli-p, name: share CLI, note: "r2 profile, backend=r2", lane: pubm, at: [5, 1]}
+  - {id: r2own, name: r2-own + access-pending, kind: store, lane: pubm, at: [5, 2]}
+  - {id: caddy-m, name: Caddy, note: "127.0.0.1:<port>, listed rows only", lane: member, at: [0, 6]}
+  - {id: cloudflared-m, name: cloudflared, note: member connector, lane: member, at: [1, 6]}
+  - {id: pub-m, name: pub/ + index.tsv, note: own rows only, kind: store, lane: member, at: [0, 7]}
+  - {id: cli-m, name: share CLI, note: "role=member, hourly reconcile", lane: member, at: [1, 7]}
+  - {id: keychain-m, name: Keychain, note: "publisher + connector token", kind: store, lane: member, at: [1, 8]}
+edges:
+  - {from: cli-o, to: keychain-o, label: reads}
+  - {from: cli-o, to: index, label: rows + bytes}
+  - {from: cli-o, to: caddy, label: Caddyfile + reload, via: [[1.5, 0], [1.5, 3]]}
+  - {from: cli-o, to: cfapi, label: admin token (env)}
+  - {from: cli-o, to: vault, label: op read}
+  - {from: cli-o, to: r2, label: "v:2 pointers", via: [[1.5, 1.5], [4, 1.5]]}
+  - {from: cloudflared, to: caddy, label: proxies}
+  - {from: caddy, to: index, label: file_server}
+  - {from: cloudflared, to: tunnel, label: dials out}
+  - {from: visitor, to: dns, label: "GET /<id>/"}
+  - {from: dns, to: worker}
+  - {from: worker, to: r2, label: "GET m/, o/", via: [[2, 2.5], [4, 2.5]]}
+  - {from: worker, to: tunnel, label: "pass()"}
+  - {from: worker, to: hits, label: cloud hits}
+  - {from: worker, to: access, label: JWT certs, dashed: true, via: [[2.5, 3], [2.5, 1]]}
+  - {from: worker, to: vpc, label: "env.M_<8hex>.fetch()", via: [[2, 3.5], [3, 3.5]]}
+  - {from: vpc, to: mtunnel, label: "127.0.0.1:<port>"}
+  - {from: cloudflared-m, to: mtunnel, label: dials out}
+  - {from: cloudflared-m, to: caddy-m, label: proxies}
+  - {from: caddy-m, to: pub-m, label: listed rows}
+  - {from: cli-m, to: pub-m, label: rows + bytes}
+  - {from: cli-m, to: keychain-m, label: reads}
+  - {from: cli-m, to: r2, label: "v:3 pointers, u/ status, t/", via: [[1.5, 7], [1.5, 5.5], [3.5, 5.5], [3.5, 2]]}
+  - {from: cli-p, to: cfapi, label: Access apps, via: [[4.5, 1], [4.5, 0]]}
+  - {from: cli-p, to: keychain-p, label: reads}
+  - {from: cli-p, to: r2own, label: own adds}
+  - {from: cli-p, to: r2, label: "v:1 + bytes", via: [[4.5, 1], [4.5, 2]]}
+```
+
+## Data
+
+Rev B adds the member registry `u/`, the v:3 pointer that names its origin, the tombstone `t/`, the sealed invite `i/` and the admin lease, all in the bucket. The marker gains `members` and `min_cli`; config gains `members=on` on the origin and `role`, `member_id` on a member (its `mode=` key then names machine or cloud, a third value beside quick). Index rows gain the `revoked` opts token. One key `m/<id>` still holds exactly one of v:1, v:2 or v:3.
+
+```uml
+id: data
+type: erd
+title: Config, rows and bucket records
+level: L3
+review:
+  - "`u/` records are writable by any publisher token. Is reporting drift in `member ls` and repairing it with `member sync` enough, given routing reads only the deploy?"
+  - Should the sealed invite also carry the member's port and mode, or must `join` read them from `u/`?
+tables:
+  - name: config
+    at: [0, 0]
+    cols: [[hostname, PK], [tunnel_id, NULL], [tunnel_name, NULL], [hosts], [port], [zone], [mode, NULL], [backend, NULL], [bucket, NULL], [r2_endpoint, NULL], [storage_default, NULL], [aliases, NULL], [api_token_cmd, NULL], [r2_token_cmd, NULL], [members, NULL], [role, NULL], [member_id, NULL]]
+  - name: index.tsv row
+    at: [1, 0]
+    cols: [[id, PK], [name], [src], [added], [exp], [opts]]
+  - name: "m/<id> pointer v:2"
+    at: [2, 0]
+    cols: [[id, PK], [v = 2], [storage = machine], [name], [by], [added], [expires], [opts], [type], [own_host, NULL]]
+  - name: "m/<id> cloud record v:1"
+    at: [3, 0]
+    cols: [[id, PK], [v = 1], [name], [src], [added], [expires], [opts], [prefix, FK], [by], [type], [aud, NULL], [origin, NULL]]
+  - name: "o/<id>.<nonce8>/ bytes"
+    at: [4, 0]
+    cols: [[prefix, PK], [path], [body]]
+  - name: share.json marker
+    at: [1, 1]
+    cols: [[host, PK], [v = 1], [aliases, NULL], [members, NULL], [min_cli, NULL]]
+  - name: access-pending line
+    at: [2, 1]
+    cols: [[id, FK], [app (uuid or -:nonce)], [owner pid], [owner start], [created]]
+  - name: lock/admin lease
+    at: [3, 1]
+    cols: [[holder], [expires]]
+  - name: r2-own line
+    at: [4, 1]
+    cols: [[id, FK], [prefix], [src]]
+  - name: "u/<member_id> record"
+    at: [0, 2]
+    cols: [[member_id, PK], [name], [mode], [status], [tunnel_id, NULL], [vpc_service_id, NULL], [token_ids], [token_expires], [port, NULL], [joined, NULL], [updated]]
+  - name: "m/<id> pointer v:3"
+    at: [1, 2]
+    cols: [[id, PK], [v = 3], [storage = machine], [origin, FK], [name], [by], [added], [expires], [opts], [type]]
+  - name: "t/<id> tombstone"
+    at: [2, 2]
+    cols: [[id, PK], [origin, FK], [by], [LastModified]]
+  - name: "i/<sha256(code)> invite"
+    at: [0, 3]
+    cols: [[hash, PK], [member_id, FK], [sealed tokens], [expires]]
+rels:
+  - {from: config, to: index.tsv row, cardinality: "1:N"}
+  - {from: index.tsv row, to: "m/<id> pointer v:2", cardinality: "1:0..1", label: R3 only}
+  - {from: config, to: share.json marker, cardinality: "1:1", label: hostname = host}
+  - {from: index.tsv row, to: access-pending line, cardinality: "1:0..1", label: gated add}
+  - {from: "m/<id> pointer v:2", to: "m/<id> cloud record v:1", cardinality: "0..1:0..1", label: same key, one or other}
+  - {from: "m/<id> cloud record v:1", to: "o/<id>.<nonce8>/ bytes", cardinality: "1:1", label: prefix}
+  - {from: "m/<id> cloud record v:1", to: r2-own line, cardinality: "1:0..1", label: this install added}
+  - {from: "u/<member_id> record", to: "m/<id> pointer v:3", cardinality: "1:N", label: origin}
+  - {from: "m/<id> pointer v:3", to: "t/<id> tombstone", cardinality: "0..1:0..1", label: revoked}
+  - {from: "u/<member_id> record", to: "i/<sha256(code)> invite", cardinality: "1:0..1", label: one live code}
+```
+
+## Sequences
+
+A local add on an R2-on origin writes the pointer before any byte is served, so the Worker passes the id to the tunnel from the first request. The row append and the Caddy reload come last, under the index lock.
+
+```uml
+id: seq-add
+type: sequence
+title: add on the origin (tunnel, R2 on)
+level: L3
+participants:
+  - {name: Owner, tone: blue}
+  - {name: share CLI, tone: blue}
+  - Keychain
+  - {name: R2 bucket, tone: violet}
+  - {name: Caddy, tone: blue}
+messages:
+  - {from: Owner, to: share CLI, text: share add report.pdf, kind: call}
+  - {from: share CLI, to: Keychain, text: r2_token_check, kind: call}
+  - {from: Keychain, to: share CLI, text: publisher token, kind: return}
+  - {from: share CLI, to: R2 bucket, text: "rand_id: GET m/<id>, LIST o/<id>.", kind: call}
+  - {from: R2 bucket, to: share CLI, text: "404, empty", kind: return}
+  - {from: share CLI, to: share CLI, text: "stage_copy to .stage.X", kind: call}
+  - {from: share CLI, to: R2 bucket, text: "PUT m/<id> v:2, If-None-Match *", kind: call}
+  - {from: R2 bucket, to: share CLI, text: "200 (412: new id, 5 tries)", kind: return}
+  - {from: share CLI, to: share CLI, text: "stage_publish to pub/<id>", kind: call}
+  - {from: share CLI, to: share CLI, text: "index lock, append row", kind: call}
+  - {from: share CLI, to: Caddy, text: "Caddyfile, reload", kind: call}
+  - {from: share CLI, to: Owner, text: "https://<host>/<id>/", kind: return}
+```
+
+The tenant Worker answers every request on the hostname. A cloud record is served from the bucket and fails closed; a v:2 pointer or a non-id path passes to the one tunnel. Passed answers are never counted as hits.
+
+```uml
+id: seq-visit
+type: sequence
+title: Visitor GET through the tenant Worker
+level: L3
+participants:
+  - {name: Visitor, tone: gray}
+  - {name: Worker, tone: amber}
+  - {name: R2 bucket, tone: violet}
+  - {name: Tunnel, tone: amber}
+  - {name: Caddy (origin), tone: blue}
+messages:
+  - {from: Visitor, to: Worker, text: "GET /<id>/file (route <host>/*)", kind: call}
+  - {from: Worker, to: Worker, text: "alias 301, host, path guards (400)", kind: call}
+  - {from: Worker, to: R2 bucket, text: "get m/<id> (2 s cap)", kind: call}
+  - {from: R2 bucket, to: Worker, text: record or absent, kind: return}
+  - {from: Worker, to: Worker, text: "v:1: valid, not expired, JWT if gated", kind: call}
+  - {from: Worker, to: R2 bucket, text: "v:1: get o/<id>.<nonce>/file", kind: call}
+  - {from: R2 bucket, to: Worker, text: bytes, kind: return}
+  - {from: Worker, to: Visitor, text: "v:1: 200, no-store, hit counted", kind: return}
+  - {from: Worker, to: Tunnel, text: "v:2 or absent: pass() = fetch(request)", kind: call}
+  - {from: Tunnel, to: Caddy (origin), text: "cloudflared to 127.0.0.1:<port>", kind: call}
+  - {from: Caddy (origin), to: Tunnel, text: "pub/<id>/file", kind: return}
+  - {from: Tunnel, to: Worker, text: "200, or 530 when down", kind: return}
+  - {from: Worker, to: Visitor, text: "passed answer, or 503 offline page", kind: return}
+```
+
+`member add` runs under the admin lease and in the one write order: the record says `adding` first, then every Cloudflare object, then the record says `invited`. A die anywhere leaves `adding`, and the rerun on the same name resumes, finding the token by name. Blue is the admin side, gray Cloudflare, violet the bucket.
+
+```uml
+id: seq-member-add
+type: sequence
+title: member add (admin, machine mode)
+level: L3
+review:
+  - "If the token was minted but its secret never sealed (die between steps 4 and 11), the rerun deletes and re-mints it. Is that safe while an older code could still be redeemed?"
+  - Should the lease expiry be fixed (for example 10 minutes) or set per verb?
+participants:
+  - {name: Admin, tone: blue}
+  - {name: share CLI, tone: blue}
+  - {name: R2 bucket, tone: violet}
+  - {name: Cloudflare API, tone: gray}
+  - {name: Worker, tone: amber}
+messages:
+  - {from: Admin, to: share CLI, text: "member add an --machine", kind: call}
+  - {from: share CLI, to: R2 bucket, text: "PUT lock/admin, If-None-Match *", kind: call}
+  - {from: share CLI, to: R2 bucket, text: "PUT u/<id> status=adding, If-None-Match *", kind: call}
+  - {from: share CLI, to: Cloudflare API, text: "minter: token share <host> <member_id>", kind: call}
+  - {from: share CLI, to: Cloudflare API, text: "create tunnel (no ingress), get connector token", kind: call}
+  - {from: share CLI, to: Cloudflare API, text: "create VPC Service (tunnel, 127.0.0.1:<port>)", kind: call}
+  - {from: share CLI, to: Cloudflare API, text: "deploy Worker from registry + M_<8hex>", kind: call}
+  - {from: Cloudflare API, to: share CLI, text: deployed, kind: return}
+  - {from: share CLI, to: Worker, text: "GET /healthz (VERSION SHA pair)", kind: call}
+  - {from: share CLI, to: R2 bucket, text: "PUT i/<sha256(code)> sealed, expires", kind: call}
+  - {from: share CLI, to: R2 bucket, text: "PUT u/<id> status=invited, If-Match", kind: call}
+  - {from: share CLI, to: R2 bucket, text: DELETE lock/admin, kind: call}
+  - {from: share CLI, to: Admin, text: "code, shown once", kind: return}
+```
+
+`join <code>` redeems through the Worker, which checks the expiry on its own clock and deletes the sealed invite: this is the Worker's one write. The record moves to `joining` before anything local exists, so a concurrent admin verb fails the join early.
+
+```uml
+id: seq-join
+type: sequence
+title: join with a code (redeem once)
+level: L3
+review:
+  - "Redeem deletes `i/<hash>` before the member writes `joining`. If the join dies after redeem, the code is spent: is `member invite` the right recovery?"
+  - Is a probe link fetched 3x200 through the Worker enough proof that the VPC binding reaches this machine?
+participants:
+  - {name: Member, tone: violet}
+  - {name: share CLI, tone: violet}
+  - {name: Worker, tone: amber}
+  - {name: R2 bucket, tone: violet}
+  - {name: Caddy + cloudflared, tone: violet}
+messages:
+  - {from: Member, to: share CLI, text: share join <code>, kind: call}
+  - {from: share CLI, to: share CLI, text: "CLI >= min_cli, port free", kind: call}
+  - {from: share CLI, to: Worker, text: "POST /_share/redeem (sha256(code))", kind: call}
+  - {from: Worker, to: R2 bucket, text: "get i/<hash>, expiry by server time", kind: call}
+  - {from: Worker, to: R2 bucket, text: "delete i/<hash>", kind: call}
+  - {from: Worker, to: share CLI, text: sealed bytes, kind: return}
+  - {from: share CLI, to: share CLI, text: "unseal: publisher + connector token", kind: call}
+  - {from: share CLI, to: R2 bucket, text: "PUT u/<id> status=joining, If-Match", kind: call}
+  - {from: share CLI, to: share CLI, text: "config role=member, tokens to Keychain", kind: call}
+  - {from: share CLI, to: Caddy + cloudflared, text: start service, kind: call}
+  - {from: share CLI, to: Worker, text: "probe link, GET 3x200", kind: call}
+  - {from: share CLI, to: R2 bucket, text: "PUT u/<id> status=active, joined", kind: call}
+  - {from: share CLI, to: Member, text: "joined as m-an-3f9a1c2d", kind: return}
+```
+
+`member rm` cuts routing first: the redeploy without `M_<8hex>` makes every machine link of that member 404 at once, before any object is deleted. Each of its v:3 links becomes a tombstone, so the bytes on its machine are never touched from outside. Cloud links stay until they expire.
+
+```uml
+id: seq-member-rm
+type: sequence
+title: member rm (admin)
+level: L3
+review:
+  - The tombstones of a removed member are swept after 30 days by LastModified. Is 30 days right when the machine may never come back?
+  - Should `member rm` refuse while the member is ONLINE and has links, or always proceed?
+participants:
+  - {name: Admin, tone: blue}
+  - {name: share CLI, tone: blue}
+  - {name: R2 bucket, tone: violet}
+  - {name: Cloudflare API, tone: gray}
+messages:
+  - {from: Admin, to: share CLI, text: member rm an, kind: call}
+  - {from: share CLI, to: R2 bucket, text: "PUT lock/admin, If-None-Match *", kind: call}
+  - {from: share CLI, to: R2 bucket, text: "PUT u/<id> status=removing, If-Match", kind: call}
+  - {from: share CLI, to: Cloudflare API, text: "deploy without M_<8hex>, id off PAUSED", kind: call}
+  - {from: share CLI, to: Cloudflare API, text: delete VPC Service, kind: call}
+  - {from: share CLI, to: Cloudflare API, text: "delete connections, then tunnel", kind: call}
+  - {from: share CLI, to: Cloudflare API, text: delete publisher token, kind: call}
+  - {from: share CLI, to: R2 bucket, text: "each v:3 of origin: PUT t/<id>, DELETE m/<id>", kind: call}
+  - {from: share CLI, to: R2 bucket, text: "cloud links: keep until expiry", kind: call}
+  - {from: share CLI, to: R2 bucket, text: "PUT u/<id> status=removed", kind: call}
+  - {from: share CLI, to: R2 bucket, text: DELETE lock/admin, kind: call}
+  - {from: share CLI, to: Admin, text: removed, kind: return}
+```
+
+A member link reaches its machine through the VPC binding, never through the tenant's tunnel. Worker v5 checks expiry on every pointer, answers 503 for a paused member, and 404 when the binding is gone. Spike O1 showed request headers pass through a binding unchanged, so the Worker strips Access headers itself; the Host stays the tenant hostname, streaming works, and the hop adds 150 to 350 ms.
+
+```uml
+id: seq-visit-member
+type: sequence
+title: Visitor GET of a member link
+level: L3
+review:
+  - The offline page stays generic (no member name). Is that enough for a visitor, or should `member ls` be the only place that says which member is down?
+  - Should a paused member's link answer 503 (paused) or 404, given 503 tells a visitor the link exists?
+participants:
+  - {name: Visitor, tone: gray}
+  - {name: Worker, tone: amber}
+  - {name: R2 bucket, tone: violet}
+  - {name: VPC Service, tone: amber}
+  - {name: Member Caddy, tone: violet}
+messages:
+  - {from: Visitor, to: Worker, text: "GET /<id>/file", kind: call}
+  - {from: Worker, to: R2 bucket, text: "get m/<id>", kind: call}
+  - {from: R2 bucket, to: Worker, text: "v:3 {origin: m-an-3f9a1c2d}", kind: return}
+  - {from: Worker, to: Worker, text: "past expires: 404", kind: call}
+  - {from: Worker, to: Worker, text: "origin in PAUSED: 503 paused", kind: call}
+  - {from: Worker, to: Worker, text: "no binding M_3f9a1c2d: 404", kind: call}
+  - {from: Worker, to: Worker, text: "rewrite to http://<HOST><path>, strip Access headers", kind: call}
+  - {from: Worker, to: VPC Service, text: "env.M_3f9a1c2d.fetch()", kind: call}
+  - {from: VPC Service, to: Member Caddy, text: "member tunnel, 127.0.0.1:<port>", kind: call}
+  - {from: Member Caddy, to: VPC Service, text: "handle /<id>/*: listed row only", kind: return}
+  - {from: VPC Service, to: Worker, text: "200, or down", kind: return}
+  - {from: Worker, to: Visitor, text: "200 (hit counted), or generic 503", kind: return}
+```
+
+When the admin removes a member's link, the admin cannot reach the member's disk. It writes a tombstone and deletes the pointer, so the link 404s at once. The owner's next hourly reconcile flags the row revoked, drops its Caddy handle and deletes the tombstone; the bytes wait for the owner's own `rm` or the row's expiry.
+
+```uml
+id: seq-revoke
+type: sequence
+title: Admin rm of a member link, then the owner's reconcile
+level: L3
+review:
+  - A forged tombstone with no matching pointer delete is ignored (the pointer proves the link is wanted). Should the owner's reconcile also alert the admin when it sees one?
+  - Is one hour from revoke to the handle drop acceptable, given the link already 404s at the Worker?
+participants:
+  - {name: Admin, tone: blue}
+  - {name: share CLI (admin), tone: blue}
+  - {name: R2 bucket, tone: violet}
+  - {name: share CLI (owner), tone: violet}
+  - {name: Owner Caddy, tone: violet}
+messages:
+  - {from: Admin, to: share CLI (admin), text: "share rm <id>", kind: call}
+  - {from: share CLI (admin), to: R2 bucket, text: "GET m/<id>: v:3, other origin", kind: call}
+  - {from: share CLI (admin), to: R2 bucket, text: "PUT t/<id>, If-None-Match *", kind: call}
+  - {from: share CLI (admin), to: R2 bucket, text: "DELETE m/<id>, GET proves 404", kind: call}
+  - {from: share CLI (admin), to: Admin, text: "revoked; bytes stay on the owner", kind: return}
+  - {from: share CLI (owner), to: R2 bucket, text: "hourly reconcile: LIST m/, t/", kind: call}
+  - {from: R2 bucket, to: share CLI (owner), text: "t/<id> present, m/<id> absent", kind: return}
+  - {from: share CLI (owner), to: share CLI (owner), text: flag row revoked, kind: call}
+  - {from: share CLI (owner), to: Owner Caddy, text: "drop handle, reload", kind: call}
+  - {from: share CLI (owner), to: R2 bucket, text: "DELETE t/<id>", kind: call}
+  - {from: share CLI (owner), to: share CLI (owner), text: "ls: removed by <who>", kind: call}
+```
+
+## State machines
+
+A profile is exactly one role, derived from its config at load. R4 lasts only for the admin setup run; its saved config is the same shape as R5. R6 is not a flag, only an R2-shaped config with an empty index and `index.migrated`. Rev B adds R7: a member profile, written only by `join <code>` and removed by `leave` or `leave --local`.
+
+```uml
+id: sm-profile
+type: state
+title: Profile role (R0 to R7)
+level: L4
+review:
+  - Is a member profile its own role R7, or an R5 profile plus `member_id`? Every `r2on` site (28) needs a member behavior either way.
+states:
+  - {name: R1 quick, at: [1, 0]}
+  - {name: R0 none, initial: true, at: [1, 1]}
+  - {name: R2 origin R2 off, at: [2, 1]}
+  - {name: R3 origin R2 on, at: [3, 1]}
+  - {name: R6 migrated away, final: true, at: [2, 2]}
+  - {name: R4 r2 admin, at: [0, 3]}
+  - {name: R5 r2 publisher, at: [1, 3]}
+  - {name: R7 member, at: [0, 0], tone: violet}
+transitions:
+  - {from: R0 none, to: R1 quick, event: setup --quick}
+  - {from: R1 quick, to: R0 none, event: teardown}
+  - {from: R0 none, to: R2 origin R2 off, event: "setup <host>"}
+  - {from: R2 origin R2 off, to: R0 none, event: teardown}
+  - {from: R2 origin R2 off, to: R3 origin R2 on, event: setup --r2 --bucket B}
+  - {from: R3 origin R2 on, to: R2 origin R2 off, event: setup --no-r2, guard: no alias}
+  - {from: R3 origin R2 on, to: R0 none, event: teardown, guard: tenant objects stay}
+  - {from: R2 origin R2 off, to: R6 migrated away, event: migrate --to T, guard: no --host rows}
+  - {from: R0 none, to: R4 r2 admin, event: setup --backend r2, guard: settings 200/404, via: [[1, 1.5], [0, 1.5]]}
+  - {from: R0 none, to: R5 r2 publisher, event: setup --backend r2, guard: settings 401/403 (join)}
+  - {from: R4 r2 admin, to: R5 r2 publisher, event: config written}
+  - {from: R5 r2 publisher, to: R0 none, event: teardown, guard: bucket and Worker stay}
+  - {from: R0 none, to: R7 member, event: "join <code>", tone: violet, via: [[1, 0.5], [0, 0.5]]}
+  - {from: R7 member, to: R0 none, event: "leave, leave --local", tone: violet, via: [[0, 0.5], [1, 0.5]]}
+```
+
+New in rev B. The tenant is a state of its own: T2 turns members on. While any member record exists, every verb that could drop a binding is refused, because the deploy is the only routing table. T0 and T1 are today's R2 and R3 origin.
+
+```uml
+id: sm-tenant
+type: state
+title: Tenant (T0 to T2)
+level: L4
+caption: "The filled dot is the start. Gray holds the refusals: the tenant stays T2."
+review:
+  - T1 to T2 asks the owner to confirm every publisher runs `min_cli`. Should the CLI check the publishers it can see instead of asking?
+  - Is refusing `teardown` while member records exist right, given `teardown --cascade` is cut from v1?
+states:
+  - {name: T0 tunnel R2 off, initial: true, at: [0, 0]}
+  - {name: T1 R2 on, at: [1, 0]}
+  - {name: T2 members on, at: [2, 0], tone: violet}
+  - {name: refused (stays T2), at: [2, 1], tone: gray}
+transitions:
+  - {from: T0 tunnel R2 off, to: T1 R2 on, event: setup --r2}
+  - {from: T1 R2 on, to: T0 tunnel R2 off, event: setup --no-r2}
+  - {from: T1 R2 on, to: T2 members on, event: setup --r2 --members, guard: "scopes probed, VPC answers, min_cli confirmed"}
+  - {from: T2 members on, to: T1 R2 on, event: setup --no-members, guard: every record REMOVED}
+  - {from: T2 members on, to: refused (stays T2), event: "teardown, migrate, --no-r2, older CLI --force", tone: gray}
+```
+
+New in rev B. A member's lifecycle lives in its `u/` record, written in the one order intent, Cloudflare, final. `member rm` works from every state but REMOVED. `rotate` keeps ACTIVE or PAUSED and drops the connectors until the member joins with the new code. OFFLINE is runtime only, never stored. Violet is stored status, gray is runtime.
+
+```uml
+id: sm-member
+type: state
+title: Member lifecycle
+level: L4
+review:
+  - "LEFT keeps the record until `member rm`. Should `leave` go straight to REMOVED when the member's own links are all gone?"
+  - Is EXPIRED worth a stored status, or only a read of INVITED plus the invite's expiry?
+states:
+  - {name: none, initial: true, at: [0, 1], tone: gray}
+  - {name: EXPIRED, at: [1, 0], tone: violet}
+  - {name: INVITED, at: [1, 1], tone: violet}
+  - {name: OFFLINE (runtime), at: [2, 0], tone: gray}
+  - {name: ACTIVE, at: [2, 1], tone: violet}
+  - {name: PAUSED, at: [3, 1], tone: violet}
+  - {name: LEFT, at: [2, 2], tone: violet}
+  - {name: REMOVING, at: [2, 4], tone: violet}
+  - {name: REMOVED, at: [2, 5], tone: violet}
+  - {name: purged, final: true, at: [3, 5], tone: gray}
+transitions:
+  - {from: none, to: INVITED, event: member add}
+  - {from: none, to: ACTIVE, event: member adopt (cloud), via: [[0, 0.5], [1.5, 0.5], [1.5, 1]]}
+  - {from: INVITED, to: ACTIVE, event: "join <code>"}
+  - {from: INVITED, to: EXPIRED, event: invite expires, guard: Worker clock}
+  - {from: EXPIRED, to: INVITED, event: member invite}
+  - {from: ACTIVE, to: PAUSED, event: member pause}
+  - {from: PAUSED, to: ACTIVE, event: member resume}
+  - {from: ACTIVE, to: OFFLINE (runtime), event: machine down, tone: gray}
+  - {from: OFFLINE (runtime), to: ACTIVE, event: machine up, tone: gray}
+  - {from: ACTIVE, to: LEFT, event: leave}
+  - {from: INVITED, to: REMOVING, event: member rm, via: [[1, 4]]}
+  - {from: EXPIRED, to: REMOVING, event: member rm, via: [[0.5, 0], [0.5, 4.2]]}
+  - {from: ACTIVE, to: REMOVING, event: member rm, via: [[2.5, 1], [2.5, 4]]}
+  - {from: PAUSED, to: REMOVING, event: member rm, via: [[3, 4]]}
+  - {from: LEFT, to: REMOVING, event: member rm}
+  - {from: REMOVING, to: REMOVED, event: "status=removed"}
+  - {from: REMOVED, to: purged, event: member purge, guard: id kept in u/purged}
+```
+
+A machine link is reachable once its bytes sit under `pub/`, before its row exists, because Caddy serves the whole tree. The pointer exists only on an R2-on origin. Rev B: Caddy serves listed rows only, so PUBLISHED unlisted is no longer reachable; a member writes a v:3 pointer; the Worker enforces expiry; and a link removed by someone else becomes REVOKED, never deleted from outside.
+
+```uml
+id: sm-machine-link
+type: state
+title: Machine link lifecycle
+level: L4
+review:
+  - REVOKED bytes wait for the owner's `rm` or the row's expiry. Is a row with no expiry allowed to sit REVOKED forever?
+  - Should a PAUSED link count toward its row's expiry clock, or pause it too?
+states:
+  - {name: STAGED, initial: true, at: [0, 0]}
+  - {name: POINTER, at: [1, 0]}
+  - {name: REAPED, final: true, at: [2, 0]}
+  - {name: PUBLISHED unlisted, at: [1, 1]}
+  - {name: LISTED, at: [1, 2]}
+  - {name: EXPIRED, at: [2, 2]}
+  - {name: PAUSED (503), at: [0, 2], tone: gray}
+  - {name: MIGRATED, final: true, at: [0, 3]}
+  - {name: REVOKED, at: [1, 3], tone: rose}
+  - {name: TRASHED, final: true, at: [2, 3]}
+transitions:
+  - {from: STAGED, to: POINTER, event: "PUT m/<id> v:2", guard: "R3 v:2, member v:3"}
+  - {from: STAGED, to: PUBLISHED unlisted, event: stage_publish, guard: R2 off}
+  - {from: POINTER, to: PUBLISHED unlisted, event: stage_publish}
+  - {from: POINTER, to: REAPED, event: die, guard: own reconcile after 10 min}
+  - {from: PUBLISHED unlisted, to: LISTED, event: row appended}
+  - {from: LISTED, to: EXPIRED, event: exp passes, guard: Worker 404}
+  - {from: EXPIRED, to: TRASHED, event: prune}
+  - {from: LISTED, to: TRASHED, event: rm, via: [[1.5, 2], [1.5, 3]]}
+  - {from: LISTED, to: MIGRATED, event: migrate --to T, via: [[1, 2.5], [0, 2.5]]}
+  - {from: LISTED, to: PAUSED (503), event: member paused, tone: gray}
+  - {from: PAUSED (503), to: LISTED, event: resume, tone: gray}
+  - {from: LISTED, to: REVOKED, event: "rm by admin, or member rm", guard: "t/<id> + pointer deleted", tone: rose}
+  - {from: REVOKED, to: TRASHED, event: "owner rm or row expiry", tone: rose}
+```
+
+A cloud link is published by one conditional PUT of its record. Bytes go to a fresh prefix first; a die before the record leaves a prefix that the trap or the 24 h orphan sweep removes.
+
+```uml
+id: sm-cloud-link
+type: state
+title: Cloud link lifecycle
+level: L4
+states:
+  - {name: STAGED, initial: true, at: [0, 0]}
+  - {name: UPLOADED, at: [1, 0]}
+  - {name: PUBLISHED, at: [3, 0]}
+  - {name: EXPIRED, at: [4, 0]}
+  - {name: APP PENDING, at: [1, 1]}
+  - {name: ENFORCED, at: [2, 1]}
+  - {name: DELETED, final: true, at: [4, 1]}
+  - {name: SWEPT, final: true, at: [1, 2]}
+transitions:
+  - {from: STAGED, to: UPLOADED, event: "PUT o/<id>.<nonce>/*"}
+  - {from: UPLOADED, to: PUBLISHED, event: "PUT m/<id> v:1", guard: ungated}
+  - {from: UPLOADED, to: APP PENDING, event: access_create, guard: gated}
+  - {from: APP PENDING, to: ENFORCED, event: gate 3 rounds}
+  - {from: ENFORCED, to: PUBLISHED, event: "PUT m/<id> v:1 with aud"}
+  - {from: UPLOADED, to: SWEPT, event: "die or 412", guard: trap or 24 h sweep, via: [[1, 0.5], [0.5, 0.5], [0.5, 2]]}
+  - {from: APP PENDING, to: SWEPT, event: gate fails}
+  - {from: PUBLISHED, to: EXPIRED, event: expires passes (Worker 404)}
+  - {from: EXPIRED, to: DELETED, event: publisher ls or prune}
+  - {from: PUBLISHED, to: DELETED, event: rm (any publisher)}
+```
+
+The reconcile now runs on every install, origin and member, and acts on its own origin's pointers only; on a member it runs unattended in the hourly loop with the Keychain token. Two rules change: an orphan test now needs "own pointer", and tombstones `t/<id>` feed a new revoke branch. Drawn as decisions: amber boxes are tests, the other boxes are the action taken for one id.
+
+```uml
+id: sm-reconcile
+type: state
+title: Reconcile decision (every install, own origin)
+level: L4
+caption: "Decision drawn as states. Amber boxes are tests, rose deletes, green writes, violet revokes, gray changes nothing; one pass per id."
+review:
+  - "An own pointer with a tombstone deletes the tombstone and reports it. Is the pointer enough proof that the link is wanted?"
+  - "An id reissued after a removal (other record plus a tombstone) revokes the row. Can a forged tombstone plus a forged v:1 record revoke a live link this way?"
+states:
+  - {name: read m/ and index, initial: true, at: [2, 0], tone: amber}
+  - {name: skip (prune owns it), at: [4, 0], tone: gray}
+  - {name: no local row, at: [0, 1], tone: amber}
+  - {name: unexpired row, at: [3, 1], tone: amber}
+  - {name: skip revoked row, at: [5, 1], tone: gray}
+  - {name: delete orphan pointer, at: [0, 2], tone: rose}
+  - {name: skip (add may be writing), at: [1, 2], tone: gray}
+  - {name: keep, at: [2, 2], tone: gray}
+  - {name: report shadowed, at: [3, 2], tone: gray}
+  - {name: write missing pointer, at: [4, 2], tone: green}
+  - {name: ignore other origin, at: [0, 3], tone: gray}
+  - {name: delete stale tombstone, at: [2, 3], tone: rose}
+  - {name: flag row revoked, at: [4, 3], tone: violet}
+transitions:
+  - {from: read m/ and index, to: no local row, event: "own pointer, no row", via: [[2, 0.5], [0, 0.5]]}
+  - {from: read m/ and index, to: unexpired row, event: row exists, via: [[2, 0.5], [3, 0.5]]}
+  - {from: read m/ and index, to: skip (prune owns it), event: row expired}
+  - {from: read m/ and index, to: skip revoked row, event: row revoked, via: [[2, 0.5], [5, 0.5]]}
+  - {from: read m/ and index, to: ignore other origin, event: "other origin's pointer", via: [[2, 0.5], [-0.5, 0.5], [-0.5, 3]]}
+  - {from: no local row, to: delete orphan pointer, event: older than 10 min, guard: no pending line, no add lock}
+  - {from: no local row, to: skip (add may be writing), event: younger than 10 min}
+  - {from: unexpired row, to: keep, event: "own pointer, no t/", via: [[2.5, 1], [2.5, 2]]}
+  - {from: unexpired row, to: delete stale tombstone, event: "own pointer + t/", via: [[2.5, 1], [2.5, 3]]}
+  - {from: unexpired row, to: write missing pointer, event: key absent, guard: t/ absent, via: [[4, 1]]}
+  - {from: unexpired row, to: flag row revoked, event: "key absent + t/", via: [[3.5, 1], [3.5, 2.5], [4, 2.5]]}
+  - {from: unexpired row, to: report shadowed, event: "v:1, corrupt or v>2", guard: t/ absent}
+  - {from: report shadowed, to: flag row revoked, event: "t/ present: id reissued", via: [[3, 3]]}
+  - {from: write missing pointer, to: report shadowed, event: 412}
+```
+
+## Cross-cutting concepts
+
+- One origin per tenant becomes one origin per pointer. A v:2 pointer is the tenant origin's; a v:3 pointer names its member origin. Every reconcile acts on its own origin's pointers only.
+- The deploy is authoritative; the registry is a journal. Routing lives in the Worker deploy (one `M_<8hex>` binding per machine member, the `PAUSED` var). Every deploy body is rebuilt from the registry plus the marker, so no path drops a binding. Admin status flows deploy to record only; `member ls` reports drift and `member sync` repairs it.
+- One write order for every member status change: record intent (`status=<verb>ing`, If-Match), then the Cloudflare change, then the record final. A die leaves an `...ing` status that the rerun resumes.
+- Every admin verb takes the admin lease `lock/admin` (`If-None-Match: *`, holder and expiry inside; a stale lease is taken over with `If-Match`). Two admin shells cannot lose a binding.
+- Tombstones never delete bytes. Removing someone else's link writes `t/<id>` and deletes the pointer; only the owner's own `rm` or the row's expiry deletes bytes.
+- Caddy serves listed rows only: one `handle /<id>/*` per live, non-revoked row, on the origin and on members. Unlisted or revoked bytes are unreachable.
+- Conditional writes in R2 (`If-None-Match: *`, `If-Match`) stay the only cross-machine concurrency control. Local symlink locks (`index`, `host`, `add-<id>`) hold within one profile on one machine.
+- Publishing is the record PUT. Bytes always go to a fresh prefix `o/<id>.<nonce8>/`; nothing overwrites bytes in place, and a refresh swaps the record with `If-Match`.
+- Refuse before the first write. Every multi-step setup checks all guards first, and a rerun converges, skipping each step already in place.
+- The Worker fails closed for cloud ids (any doubt is 404), enforces `expires` on every pointer, and passes v:2 pointers and non-id paths to the origin unchanged.
+- The admin token and the minter token live in 1Password and the environment only, never stored by share. Member tokens are minted by the tool, sealed into a one-time invite, and kept in the member's Keychain.
+
+## Risks and technical debt
+
+- Workers VPC is beta. Bites if Cloudflare changes the binding API, its pricing, or loopback routing to a tunnel. Mitigated by shipping members behind `--members` only, with cloud-only members as the fallback. Spike O1 passed live on a Free-plan account (VPC Service to 127.0.0.1 over a tunnel with only the 404 catch-all, no warp-routing, 150 to 350 ms).
+- Every member serves under one origin. Bites if one member's page reads another member's link or cookies through same-origin script. Mitigated by stripping Access headers and cookies before a binding fetch; not by isolation.
+- The bucket token cannot tell members apart. Bites if a member token leaks or a teammate errs: it can write any `u/`, `m/` or `t/` key. Mitigated by making the worst case visible and recoverable: a forged tombstone revokes a link the owner can see and re-add, a forged pointer cannot serve an unlisted or revoked row, a forged record cannot change routing. Worker-mediated writes are the upgrade before anyone outside the team publishes.
+- Open (spike O2): minting member tokens by API is unproven. Neither stored token may list account tokens (403), so a minter token scoped to one R2 bucket, and extending `expires_on` in place, are both untested. Bites at `member add`: without it the admin hand-makes each member token as today. Closes with the O2 spike against the tokens API.
+- A member's connector token never expires. Bites if it leaks: another machine can join that tunnel and take a share of the requests. Mitigated by `rotate` (connections dropped first) and the "extra connector" flag in `member ls`.
+- `by` is an unauthenticated `uname -n`, and any publisher may rm any cloud link. Bites if a publisher token leaks or a teammate errs. Mitigated only by ADR-0007's named-teammates rule.
+- The origin's hourly prune still runs with no token. Bites as orphan pointers and expired cloud records that wait for an interactive `ls` or `prune` on the origin. Members run their reconcile unattended; the origin does not.
+- A record of an unknown version blocks the orphan sweep of every CLI that cannot read it. Bites on the first new record version. Mitigated in the groundwork: records with `storage:"machine"` of any version no longer block the sweep, and `min_cli` names the floor.
+- `teardown` on an R2-on origin removes the tunnel and DNS but leaves the route, Worker, pointers and marker. Bites as a half-torn tenant; refused on T2 while member records exist.</script>
+<script type="text/plain" id="uml-base" data-ref="53c3851">---
+rev: A
+---
+
+# share system design
+
+`share` is one bash CLI (`bin/share`, v0.9 line) that publishes a file, folder or local port at `https://<host>/<id>/`. A tenant is one hostname with one origin machine: Caddy serves the origin's links through a named Cloudflare tunnel, and when R2 is on, a tenant Worker on the same hostname serves cloud links from a private R2 bucket and passes everything else to the tunnel. Teammates publish cloud links only, with a bucket-scoped token the admin makes by hand.
+
+This revision is the backfill: the system as built, read from `docs/research/2026-11-13-current-state-machines.md` (line cites into `bin/share` at 4564c5c). Nothing here is new.
+
+## Use cases
+
+Three human actors and Cloudflare. Blue is the tenant admin (owner of the origin machine and the admin token), green is a publisher member (a cloud-only R5 profile on a teammate's machine), gray is the visitor. Publishing verbs are shared by both; tenant verbs need the admin token.
+
+```uml
+id: use-cases
+type: usecase
+title: Use cases
+level: L1
+system: share tenant (one hostname)
+actors:
+  - {id: admin, name: Admin, kind: human, side: left, tone: blue}
+  - {id: publisher, name: Publisher, kind: human, side: left, tone: green}
+  - {id: visitor, name: Visitor, kind: human, side: right, tone: gray}
+  - {id: cloudflare, name: Cloudflare, kind: external, side: right}
+cases:
+  - {id: setup, name: Set up the tenant, actor: admin, with: [cloudflare], at: [0, 0]}
+  - {id: migrate, name: Migrate the origin, actor: admin, with: [cloudflare], at: [0, 1]}
+  - {id: teardown, name: Tear down, actor: admin, with: [cloudflare], at: [0, 2]}
+  - {id: join, name: Join as publisher, actor: publisher, at: [0, 4]}
+  - {id: add, name: Add a link, actor: [admin, publisher], at: [0, 5]}
+  - {id: refresh, name: Refresh a link, actor: [admin, publisher], at: [0, 6]}
+  - {id: rm, name: Remove a link, actor: [admin, publisher], at: [0, 7]}
+  - {id: ls, name: List links, actor: [admin, publisher], at: [0, 8]}
+  - {id: prune, name: Prune expired, actor: [admin, publisher], at: [0, 9]}
+  - {id: hits, name: Read hits, actor: [admin, publisher], at: [0, 10]}
+  - {id: open, name: Open a link, actor: visitor, at: [1, 12]}
+  - {id: access, name: Pass the Access gate, extend: open, with: [cloudflare], at: [1, 13]}
+bands:
+  - {name: tenant, rows: [0, 2]}
+  - {name: publishing, rows: [4, 10]}
+  - {name: visiting, rows: [12, 13]}
+```
+
+## Components
+
+One machine runs the tenant: its CLI, Caddy and cloudflared. Lanes are where a piece runs: blue the origin machine, amber the Cloudflare edge, violet the Cloudflare account services, green a publisher's machine. The Worker reads the bucket for cloud links and passes the rest to the one tunnel.
+
+```uml
+id: components
+type: component
+title: Components (tenant with R2 on)
+level: L2
+lanes:
+  - {id: origin, name: Origin machine (R3), tone: blue}
+  - {id: edge, name: Cloudflare edge, tone: amber}
+  - {id: account, name: Cloudflare account, tone: violet}
+  - {id: pubm, name: Publisher machine (R5), tone: green}
+nodes:
+  - {id: keychain-o, name: Keychain, note: "tunnel token, publisher token", kind: store, lane: origin, at: [0, 0]}
+  - {id: cli-o, name: share CLI, note: "origin profile, bash", lane: origin, at: [1, 0]}
+  - {id: index, name: pub/ + index.tsv, note: "bytes and rows", kind: store, lane: origin, at: [0, 1]}
+  - {id: caddy, name: Caddy, note: "127.0.0.1:<port>, serves all of pub/", lane: origin, at: [0, 3]}
+  - {id: cloudflared, name: cloudflared, note: named tunnel connector, lane: origin, at: [0, 4]}
+  - {id: visitor, name: Visitor, kind: ext, at: [2, 1]}
+  - {id: dns, name: DNS + route, note: "CNAME to tunnel, route <host>/*", lane: edge, at: [2, 2]}
+  - {id: worker, name: Worker share-<host>, note: "v4, PASS=1, BUCKET HITS TEAM SALT", lane: edge, at: [2, 3]}
+  - {id: tunnel, name: Tunnel share-<host>, note: "ingress rule 0 to 127.0.0.1", lane: edge, at: [2, 4]}
+  - {id: cfapi, name: Cloudflare API, note: "tunnel, DNS, Worker deploy, Access", kind: ext, lane: account, at: [3, 0]}
+  - {id: access, name: Access apps, note: "one per gated link", lane: account, at: [3, 3]}
+  - {id: r2, name: R2 bucket, note: "share.json, m/<id>, o/<id>.<nonce>/", kind: store, lane: account, at: [3, 2]}
+  - {id: hits, name: Analytics HITS, kind: store, lane: account, at: [3, 4]}
+  - {id: cli-p, name: share CLI, note: "r2 profile, backend=r2", lane: pubm, at: [4, 1]}
+  - {id: keychain-p, name: Keychain, note: publisher token, kind: store, lane: pubm, at: [4, 0]}
+  - {id: r2own, name: r2-own + access-pending, kind: store, lane: pubm, at: [4, 2]}
+edges:
+  - {from: cli-o, to: keychain-o, label: reads}
+  - {from: cli-o, to: index, label: rows + bytes}
+  - {from: cli-o, to: caddy, label: Caddyfile + reload}
+  - {from: cli-o, to: cfapi, label: admin token (env)}
+  - {from: cli-o, to: r2, label: "v:2 pointers", via: [[1.5, 1.5], [3, 1.5]]}
+  - {from: cloudflared, to: caddy, label: proxies}
+  - {from: caddy, to: index, label: file_server}
+  - {from: cloudflared, to: tunnel, label: dials out}
+  - {from: visitor, to: dns, label: "GET /<id>/"}
+  - {from: dns, to: worker}
+  - {from: worker, to: r2, label: "GET m/, o/", via: [[2, 2.5], [3, 2.5]]}
+  - {from: worker, to: tunnel, label: "pass()"}
+  - {from: worker, to: hits, label: cloud hits}
+  - {from: worker, to: access, label: JWT certs, dashed: true}
+  - {from: cli-p, to: cfapi, label: Access apps, via: [[3.5, 1], [3.5, 0]]}
+  - {from: cli-p, to: keychain-p, label: reads}
+  - {from: cli-p, to: r2own, label: own adds}
+  - {from: cli-p, to: r2, label: "v:1 + bytes", via: [[3.5, 1], [3.5, 2]]}
+```
+
+## Data
+
+Everything persisted, one table per shape. The config file and `index.tsv` live per profile per machine; the marker, records, pointers and bytes live in the bucket. A cloud record and a machine pointer share the key `m/<id>`, so one id is either cloud or machine. Admin versus publisher is recorded nowhere.
+
+```uml
+id: data
+type: erd
+title: Config, rows and bucket records
+level: L3
+tables:
+  - name: config
+    at: [0, 0]
+    cols: [[hostname, PK], [tunnel_id, NULL], [tunnel_name, NULL], [hosts], [port], [zone], [mode, NULL], [backend, NULL], [bucket, NULL], [r2_endpoint, NULL], [storage_default, NULL], [aliases, NULL], [api_token_cmd, NULL], [r2_token_cmd, NULL]]
+  - name: index.tsv row
+    at: [1, 0]
+    cols: [[id, PK], [name], [src], [added], [exp], [opts]]
+  - name: "m/<id> pointer v:2"
+    at: [2, 0]
+    cols: [[id, PK], [v = 2], [storage = machine], [name], [by], [added], [expires], [opts], [type], [own_host, NULL]]
+  - name: share.json marker
+    at: [1, 1]
+    cols: [[host, PK], [v = 1], [aliases, NULL]]
+  - name: access-pending line
+    at: [2, 1]
+    cols: [[id, FK], [app (uuid or -:nonce)], [owner pid], [owner start], [created]]
+  - name: "m/<id> cloud record v:1"
+    at: [3, 0]
+    cols: [[id, PK], [v = 1], [name], [src], [added], [expires], [opts], [prefix, FK], [by], [type], [aud, NULL]]
+  - name: "o/<id>.<nonce8>/ bytes"
+    at: [4, 0]
+    cols: [[prefix, PK], [path], [body]]
+  - name: r2-own line
+    at: [4, 1]
+    cols: [[id, FK], [prefix], [src]]
+rels:
+  - {from: config, to: index.tsv row, cardinality: "1:N"}
+  - {from: index.tsv row, to: "m/<id> pointer v:2", cardinality: "1:0..1", label: R3 only}
+  - {from: config, to: share.json marker, cardinality: "1:1", label: hostname = host}
+  - {from: index.tsv row, to: access-pending line, cardinality: "1:0..1", label: gated add}
+  - {from: "m/<id> pointer v:2", to: "m/<id> cloud record v:1", cardinality: "0..1:0..1", label: same key, one or other}
+  - {from: "m/<id> cloud record v:1", to: "o/<id>.<nonce8>/ bytes", cardinality: "1:1", label: prefix}
+  - {from: "m/<id> cloud record v:1", to: r2-own line, cardinality: "1:0..1", label: this install added}
+```
+
+## Sequences
+
+A local add on an R2-on origin writes the pointer before any byte is served, so the Worker passes the id to the tunnel from the first request. The row append and the Caddy reload come last, under the index lock.
+
+```uml
+id: seq-add
+type: sequence
+title: add on the origin (tunnel, R2 on)
+level: L3
+participants:
+  - {name: Owner, tone: blue}
+  - {name: share CLI, tone: blue}
+  - Keychain
+  - {name: R2 bucket, tone: violet}
+  - {name: Caddy, tone: blue}
+messages:
+  - {from: Owner, to: share CLI, text: share add report.pdf, kind: call}
+  - {from: share CLI, to: Keychain, text: r2_token_check, kind: call}
+  - {from: Keychain, to: share CLI, text: publisher token, kind: return}
+  - {from: share CLI, to: R2 bucket, text: "rand_id: GET m/<id>, LIST o/<id>.", kind: call}
+  - {from: R2 bucket, to: share CLI, text: "404, empty", kind: return}
+  - {from: share CLI, to: share CLI, text: "stage_copy to .stage.X", kind: call}
+  - {from: share CLI, to: R2 bucket, text: "PUT m/<id> v:2, If-None-Match *", kind: call}
+  - {from: R2 bucket, to: share CLI, text: "200 (412: new id, 5 tries)", kind: return}
+  - {from: share CLI, to: share CLI, text: "stage_publish to pub/<id>", kind: call}
+  - {from: share CLI, to: share CLI, text: "index lock, append row", kind: call}
+  - {from: share CLI, to: Caddy, text: "Caddyfile, reload", kind: call}
+  - {from: share CLI, to: Owner, text: "https://<host>/<id>/", kind: return}
+```
+
+The tenant Worker answers every request on the hostname. A cloud record is served from the bucket and fails closed; a v:2 pointer or a non-id path passes to the one tunnel. Passed answers are never counted as hits.
+
+```uml
+id: seq-visit
+type: sequence
+title: Visitor GET through the tenant Worker
+level: L3
+participants:
+  - {name: Visitor, tone: gray}
+  - {name: Worker, tone: amber}
+  - {name: R2 bucket, tone: violet}
+  - {name: Tunnel, tone: amber}
+  - {name: Caddy (origin), tone: blue}
+messages:
+  - {from: Visitor, to: Worker, text: "GET /<id>/file (route <host>/*)", kind: call}
+  - {from: Worker, to: Worker, text: "alias 301, host, path guards (400)", kind: call}
+  - {from: Worker, to: R2 bucket, text: "get m/<id> (2 s cap)", kind: call}
+  - {from: R2 bucket, to: Worker, text: record or absent, kind: return}
+  - {from: Worker, to: Worker, text: "v:1: valid, not expired, JWT if gated", kind: call}
+  - {from: Worker, to: R2 bucket, text: "v:1: get o/<id>.<nonce>/file", kind: call}
+  - {from: R2 bucket, to: Worker, text: bytes, kind: return}
+  - {from: Worker, to: Visitor, text: "v:1: 200, no-store, hit counted", kind: return}
+  - {from: Worker, to: Tunnel, text: "v:2 or absent: pass() = fetch(request)", kind: call}
+  - {from: Tunnel, to: Caddy (origin), text: "cloudflared to 127.0.0.1:<port>", kind: call}
+  - {from: Caddy (origin), to: Tunnel, text: "pub/<id>/file", kind: return}
+  - {from: Tunnel, to: Worker, text: "200, or 530 when down", kind: return}
+  - {from: Worker, to: Visitor, text: "passed answer, or 503 offline page", kind: return}
+```
+
+## State machines
+
+A profile is exactly one role, derived from its config at load. R4 lasts only for the admin setup run; its saved config is the same shape as R5. R6 is not a flag, only an R2-shaped config with an empty index and `index.migrated`.
+
+```uml
+id: sm-profile
+type: state
+title: Profile role (R0 to R6)
+level: L4
+states:
+  - {name: R1 quick, at: [1, 0]}
+  - {name: R0 none, initial: true, at: [1, 1]}
+  - {name: R2 origin R2 off, at: [2, 1]}
+  - {name: R3 origin R2 on, at: [3, 1]}
+  - {name: R6 migrated away, final: true, at: [2, 2]}
+  - {name: R4 r2 admin, at: [0, 3]}
+  - {name: R5 r2 publisher, at: [1, 3]}
+transitions:
+  - {from: R0 none, to: R1 quick, event: setup --quick}
+  - {from: R1 quick, to: R0 none, event: teardown}
+  - {from: R0 none, to: R2 origin R2 off, event: "setup <host>"}
+  - {from: R2 origin R2 off, to: R0 none, event: teardown}
+  - {from: R2 origin R2 off, to: R3 origin R2 on, event: setup --r2 --bucket B}
+  - {from: R3 origin R2 on, to: R2 origin R2 off, event: setup --no-r2, guard: no alias}
+  - {from: R3 origin R2 on, to: R0 none, event: teardown, guard: tenant objects stay}
+  - {from: R2 origin R2 off, to: R6 migrated away, event: migrate --to T, guard: no --host rows}
+  - {from: R0 none, to: R4 r2 admin, event: setup --backend r2, guard: settings 200/404, via: [[1, 1.5], [0, 1.5]]}
+  - {from: R0 none, to: R5 r2 publisher, event: setup --backend r2, guard: settings 401/403 (join)}
+  - {from: R4 r2 admin, to: R5 r2 publisher, event: config written}
+  - {from: R5 r2 publisher, to: R0 none, event: teardown, guard: bucket and Worker stay}
+```
+
+A machine link is reachable once its bytes sit under `pub/`, before its row exists, because Caddy serves the whole tree. The pointer exists only on an R2-on origin.
+
+```uml
+id: sm-machine-link
+type: state
+title: Machine link lifecycle
+level: L4
+states:
+  - {name: STAGED, initial: true, at: [0, 0]}
+  - {name: POINTER, at: [1, 0]}
+  - {name: REAPED, final: true, at: [2, 0]}
+  - {name: PUBLISHED unlisted, at: [1, 1]}
+  - {name: LISTED, at: [1, 2]}
+  - {name: EXPIRED, at: [2, 2]}
+  - {name: MIGRATED, final: true, at: [0, 3]}
+  - {name: TRASHED, final: true, at: [2, 3]}
+transitions:
+  - {from: STAGED, to: POINTER, event: "PUT m/<id> v:2", guard: R3}
+  - {from: STAGED, to: PUBLISHED unlisted, event: stage_publish, guard: R2 off}
+  - {from: POINTER, to: PUBLISHED unlisted, event: stage_publish}
+  - {from: POINTER, to: REAPED, event: die, guard: reconcile after 10 min}
+  - {from: PUBLISHED unlisted, to: LISTED, event: row appended}
+  - {from: LISTED, to: EXPIRED, event: exp passes}
+  - {from: EXPIRED, to: TRASHED, event: prune}
+  - {from: LISTED, to: TRASHED, event: rm}
+  - {from: LISTED, to: MIGRATED, event: migrate --to T}
+```
+
+A cloud link is published by one conditional PUT of its record. Bytes go to a fresh prefix first; a die before the record leaves a prefix that the trap or the 24 h orphan sweep removes.
+
+```uml
+id: sm-cloud-link
+type: state
+title: Cloud link lifecycle
+level: L4
+states:
+  - {name: STAGED, initial: true, at: [0, 0]}
+  - {name: UPLOADED, at: [1, 0]}
+  - {name: PUBLISHED, at: [3, 0]}
+  - {name: EXPIRED, at: [4, 0]}
+  - {name: APP PENDING, at: [1, 1]}
+  - {name: ENFORCED, at: [2, 1]}
+  - {name: DELETED, final: true, at: [4, 1]}
+  - {name: SWEPT, final: true, at: [1, 2]}
+transitions:
+  - {from: STAGED, to: UPLOADED, event: "PUT o/<id>.<nonce>/*"}
+  - {from: UPLOADED, to: PUBLISHED, event: "PUT m/<id> v:1", guard: ungated}
+  - {from: UPLOADED, to: APP PENDING, event: access_create, guard: gated}
+  - {from: APP PENDING, to: ENFORCED, event: gate 3 rounds}
+  - {from: ENFORCED, to: PUBLISHED, event: "PUT m/<id> v:1 with aud"}
+  - {from: UPLOADED, to: SWEPT, event: "die or 412", guard: trap or 24 h sweep, via: [[1, 0.5], [0.5, 0.5], [0.5, 2]]}
+  - {from: APP PENDING, to: SWEPT, event: gate fails}
+  - {from: PUBLISHED, to: EXPIRED, event: expires passes (Worker 404)}
+  - {from: EXPIRED, to: DELETED, event: publisher ls or prune}
+  - {from: PUBLISHED, to: DELETED, event: rm (any publisher)}
+```
+
+The origin's reconcile runs inside an interactive `ls` or `prune` with a token, never in the hourly loop. It assumes one origin per tenant: every valid v:2 pointer is this machine's. Drawn as decisions: amber boxes are tests, the other boxes are the action taken for one id.
+
+```uml
+id: sm-reconcile
+type: state
+title: Origin reconcile decision
+level: L4
+caption: "Decision drawn as states. Amber boxes are tests, rose deletes, green writes, gray changes nothing; one pass per id."
+states:
+  - {name: read m/ and index, initial: true, at: [1, 0], tone: amber}
+  - {name: skip (prune owns it), at: [3, 0], tone: gray}
+  - {name: no local row, at: [0, 1], tone: amber}
+  - {name: unexpired row, at: [2, 1], tone: amber}
+  - {name: delete orphan pointer, at: [0, 2], tone: rose}
+  - {name: skip (add may be writing), at: [1, 2], tone: gray}
+  - {name: keep, at: [2, 2], tone: gray}
+  - {name: write missing pointer, at: [3, 2], tone: green}
+  - {name: report shadowed, at: [2, 3], tone: gray}
+transitions:
+  - {from: read m/ and index, to: no local row, event: "v:2 pointer, no row", via: [[1, 0.5], [0, 0.5]]}
+  - {from: read m/ and index, to: unexpired row, event: row exists, via: [[1, 0.5], [2, 0.5]]}
+  - {from: read m/ and index, to: skip (prune owns it), event: row expired}
+  - {from: no local row, to: delete orphan pointer, event: older than 10 min, guard: no pending line, no add lock}
+  - {from: no local row, to: skip (add may be writing), event: younger than 10 min}
+  - {from: unexpired row, to: keep, event: valid v:2}
+  - {from: unexpired row, to: write missing pointer, event: key absent}
+  - {from: unexpired row, to: report shadowed, event: "v:1, corrupt or v>2", via: [[1.5, 1], [1.5, 3]]}
+  - {from: write missing pointer, to: report shadowed, event: 412}
+```
+
+## Cross-cutting concepts
+
+- One origin per tenant. Every v:2 pointer is the origin's own, and its reconcile reaps any pointer with no local row after 10 minutes.
+- Conditional writes in R2 (`If-None-Match: *`, `If-Match`) are the only cross-machine concurrency control. Local symlink locks (`index`, `host`, `add-<id>`) hold within one profile on one machine.
+- Publishing is the record PUT. Bytes always go to a fresh prefix `o/<id>.<nonce8>/`; nothing overwrites bytes in place, and a refresh swaps the record with `If-Match`.
+- Refuse before the first write. Every multi-step setup checks all guards first, and a rerun converges, skipping each step already in place.
+- The Worker fails closed for cloud ids (any doubt is 404) and passes v:2 pointers and non-id paths to the origin unchanged.
+- The admin token lives in the environment only and is never stored; a publisher token is bucket-scoped and lives in the Keychain.
+
+## Risks and technical debt
+
+- Caddy serves the whole `pub/` tree. Bites when an add dies between `stage_publish` and the row append: the bytes stay reachable with no row, and no sweep removes them. No mitigation.
+- `by` is an unauthenticated `uname -n`, and any publisher may rm any cloud link. Bites if a publisher token leaks or a teammate errs. Mitigated only by ADR-0007's named-teammates rule.
+- The hourly prune runs with no token. Bites as orphan pointers and expired cloud records that wait for someone's interactive `ls` or `prune`. Machine-link expiry is enforced only by the origin's prune, never by the Worker.
+- One origin machine holds the tunnel token and is the only place the Worker redeploys from. Bites when that machine is lost: links go offline and the admin cannot redeploy from elsewhere.
+- A record of an unknown version blocks the orphan sweep of every CLI that cannot read it. Bites on the first new record version. `WORKER_RECORD_V` is dead code.
+- `teardown` on an R2-on origin removes the tunnel and DNS but leaves the route, Worker, pointers and marker. Bites as a half-torn tenant; cleaned only by hand or `--purge` from an r2 admin profile.</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js" integrity="sha384-+pxiN6T7yvpryuJmE1gM9PX7yQit15auDb+ZwwvJOd/4be2Cie5/IuVXgQb/S9du" crossorigin="anonymous"></script>
+<script>
+// system-design: parse a SYSTEM-DESIGN.md model and diff two of them. Pure functions, no DOM.
+// The build inlines this file into template.html; test.mjs requires it in node.
+
+var UML_TYPES = ['usecase', 'class', 'erd', 'sequence', 'state', 'component'];
+
+var idn = function (e) { return typeof e === 'string' ? e : (e.id || e.name); };
+var arrowKey = function (extra) {
+  return function (e) { return e.id || (e.from + ' → ' + e.to + (e[extra] ? ' ' + e[extra] : '')); };
+};
+
+// Per type: [field, kind label, identity fn]. Identity is id, else name, else from/to.
+var UML_COLL = {
+  usecase: [['actors', 'actor', idn], ['cases', 'case', idn]],
+  class: [['classes', 'class', idn], ['relations', 'relation', arrowKey('kind')]],
+  erd: [['tables', 'table', idn], ['rels', 'rel', arrowKey('label')]],
+  sequence: [['participants', 'participant', idn], ['messages', 'message', function (e) { return e.from + '|' + e.to + '|' + e.text; }]],
+  state: [['states', 'state', idn], ['transitions', 'transition', arrowKey('event')]],
+  component: [['nodes', 'node', idn], ['edges', 'edge', arrowKey('label')]]
+};
+
+// Rows inside an element that get their own +/-/~ marks.
+var rowName = function (r) { return Array.isArray(r) ? String(r[0]) : String(r).split(/[:(\s]/)[0]; };
+var UML_ROWS = { table: [['cols', 'col']], class: [['attrs', 'attr'], ['ops', 'op']] };
+
+// Layout hints place an element on its sheet and tone colors it; neither is a design change, so the delta skips them.
+var LAYOUT_KEYS = { at: 1, via: 1, route: 1, side: 1, lane: 1, tone: 1 };
+function bare(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return v;
+  var o = {}, ks = Object.keys(v).filter(function (k) { return !LAYOUT_KEYS[k]; });
+  ks.forEach(function (k) { o[k] = v[k]; });
+  // A participant given as {name: X, tone: ...} is the same participant as the string X.
+  return ks.length === 1 && ks[0] === 'name' && typeof o.name === 'string' ? o.name : o;
+}
+
+function canon(v) {
+  if (Array.isArray(v)) return '[' + v.map(canon).join(',') + ']';
+  if (v && typeof v === 'object') return '{' + Object.keys(v).sort().map(function (k) { return JSON.stringify(k) + ':' + canon(v[k]); }).join(',') + '}';
+  return JSON.stringify(v === undefined ? null : v);
+}
+
+var PROSE_SECTIONS = /^##\s+(Cross-cutting concepts|Risks and technical debt)\s*$/i;
+
+// Split prose on "## " headings: named sections (or every heading when all) go to model.sections,
+// the rest returns as the diagram note.
+function takeSections(text, model, all) {
+  return text.split(/^(?=## )/m).filter(function (seg) {
+    var hm = /^##\s+(.+)$/m.exec(seg);
+    if (!/^## /.test(seg) || !(all || PROSE_SECTIONS.test(seg.split('\n')[0]))) return !all;
+    model.sections.push({ title: hm[1].trim(), body: seg.slice(seg.indexOf('\n') + 1).trim() });
+    return false;
+  }).join('');
+}
+
+function parseModel(md, load) {
+  var model = { title: '', intro: '', rev: '', decided: [], diagrams: [], sections: [], errors: [] };
+  // Optional front matter: rev (review round letter) and decided (decisions so far), drawn on the cover.
+  var fm = /^---[ \t]*\n([\s\S]*?)\n---[ \t]*\n/.exec(md);
+  if (fm) {
+    md = md.slice(fm[0].length);
+    try {
+      var top = load(fm[1]) || {};
+      if (top.rev != null) model.rev = String(top.rev);
+      if (top.decided != null) model.decided = (Array.isArray(top.decided) ? top.decided : [top.decided]).map(String);
+    } catch (e) { model.errors.push('front matter: YAML: ' + e.message); }
+  }
+  var h = /^#\s+(.+)$/m.exec(md), last = 0;
+  if (h) {
+    model.title = h[1].trim();
+    // The prose between the title and the first heading or block is the cover's intro, not a diagram note.
+    var rest = md.slice(h.index + h[0].length), stop = rest.search(/^(## |```uml)/m);
+    if (stop < 0) stop = rest.length;
+    model.intro = rest.slice(0, stop).trim();
+    last = h.index + h[0].length + stop;
+  }
+  var re = /^```uml[^\n]*\n([\s\S]*?)^```[ \t]*$/gm, m, n = 0, seen = {};
+  while ((m = re.exec(md))) {
+    n++;
+    var note = takeSections(md.slice(last, m.index), model, false);
+    last = re.lastIndex;
+    var spec;
+    try { spec = load(m[1]); } catch (e) { model.errors.push('block ' + n + ': YAML: ' + e.message); continue; }
+    if (!spec || typeof spec !== 'object') { model.errors.push('block ' + n + ': not a YAML mapping'); continue; }
+    if (!spec.id) { model.errors.push('block ' + n + ': missing id'); continue; }
+    if (UML_TYPES.indexOf(spec.type) < 0) { model.errors.push(spec.id + ': unknown type ' + spec.type); continue; }
+    if (seen[spec.id]) { model.errors.push(spec.id + ': duplicate id'); continue; }
+    seen[spec.id] = 1;
+    model.diagrams.push({ id: spec.id, type: spec.type, title: spec.title || spec.id, level: spec.level || '', note: note, review: [].concat(spec.review || []).map(String), caption: spec.caption ? String(spec.caption) : "", spec: spec });
+  }
+  takeSections(md.slice(last), model, true);
+  return model;
+}
+
+// Merge two lists by identity. Current order wins; a removed item sits after
+// its nearest surviving predecessor from the base list.
+function mergeList(baseArr, curArr, keyFn, norm) {
+  norm = norm || bare;
+  baseArr = baseArr || []; curArr = curArr || [];
+  var bk = baseArr.map(keyFn), ck = curArr.map(keyFn), bmap = {}, cset = {};
+  bk.forEach(function (k, i) { bmap[k] = baseArr[i]; });
+  ck.forEach(function (k) { cset[k] = 1; });
+  var out = curArr.map(function (el, i) {
+    var k = ck[i], b = bmap[k];
+    return { key: k, el: el, base: b, st: b === undefined ? 'new' : (canon(norm(b)) === canon(norm(el)) ? '' : 'changed') };
+  });
+  bk.forEach(function (k, i) {
+    if (cset[k]) return;
+    var at = 0;
+    for (var j = i - 1; j >= 0; j--) {
+      var p = out.findIndex(function (o) { return o.key === bk[j]; });
+      if (p >= 0) { at = p + 1; break; }
+    }
+    out.splice(at, 0, { key: k, el: baseArr[i], base: baseArr[i], st: 'removed' });
+  });
+  return out;
+}
+
+function rowDetail(kind, item) {
+  var specs = UML_ROWS[kind];
+  if (!specs || item.st !== 'changed') return [];
+  var d = [];
+  specs.forEach(function (s) {
+    var rows = mergeList(item.base[s[0]], item.el[s[0]], rowName);
+    rows.filter(function (r) { return r.st === 'removed'; }).forEach(function (r) { d.push('-' + s[1] + ' ' + r.key); });
+    rows.filter(function (r) { return r.st === 'new'; }).forEach(function (r) { d.push('+' + s[1] + ' ' + r.key); });
+    rows.filter(function (r) { return r.st === 'changed'; }).forEach(function (r) { d.push('~' + s[1] + ' ' + r.key); });
+  });
+  Object.keys(Object.assign({}, item.base, item.el)).forEach(function (f) {
+    if (LAYOUT_KEYS[f] || specs.some(function (s) { return s[0] === f; })) return;
+    if (canon(item.base[f]) !== canon(item.el[f])) d.push('~' + f);
+  });
+  return d;
+}
+
+function fieldDetail(item) {
+  if (item.st !== 'changed') return [];
+  return Object.keys(Object.assign({}, item.base, item.el)).filter(function (f) {
+    return !LAYOUT_KEYS[f] && canon(item.base[f]) !== canon(item.el[f]);
+  }).map(function (f) { return '~' + f; });
+}
+
+// One diagram's collections merged against its base version (null = all new).
+function mergeDiagram(baseD, curD, noBase) {
+  var spec = (curD || baseD).spec, merged = {};
+  UML_COLL[spec.type].forEach(function (c) {
+    var b = baseD ? baseD.spec[c[0]] : [], cur = curD ? curD.spec[c[0]] : [];
+    if (noBase) b = cur;
+    var keyFn = function (e, i) { return c[2](e, i); };
+    var items = c[0] === 'messages' ? mergeMessages(b, cur, keyFn) : mergeList(b, cur, keyFn);
+    if (!curD) items.forEach(function (it) { it.st = 'removed'; });
+    items.forEach(function (it) {
+      it.kind = c[1];
+      it.detail = UML_ROWS[c[1]] ? rowDetail(c[1], it) : fieldDetail(it);
+      var rs = UML_ROWS[c[1]];
+      if (rs) {
+        it.rows = {};
+        rs.forEach(function (s) {
+          it.rows[s[0]] = it.st === 'changed' ? mergeList(it.base[s[0]], it.el[s[0]], rowName)
+            : (it.el[s[0]] || []).map(function (r) { return { key: rowName(r), el: r, st: '' }; });
+        });
+      }
+    });
+    merged[c[0]] = items;
+  });
+  return merged;
+}
+
+// A message is keyed by from|to|text plus an occurrence counter, so an insert
+// does not re-key the messages after it. A repeat of the same triple gets #2, #3.
+function mergeMessages(b, cur, keyFn) {
+  var keyed = function (arr) {
+    var seen = {};
+    return (arr || []).map(function (e) {
+      var k = keyFn(e), n = seen[k] = (seen[k] || 0) + 1;
+      return { k: n > 1 ? k + ' #' + n : k, e: e };
+    });
+  };
+  var out = mergeList(keyed(b), keyed(cur), function (x) { return x.k; }, function (x) { return { k: x.k, e: bare(x.e) }; });
+  out.forEach(function (o) { o.el = o.el.e; o.base = o.base && o.base.e; });
+  return out;
+}
+
+function diffModels(base, cur) {
+  var list = [], sheets = [], bmap = {}, cset = {};
+  (base ? base.diagrams : []).forEach(function (d) { bmap[d.id] = d; });
+  cur.diagrams.forEach(function (d) { cset[d.id] = 1; });
+  cur.diagrams.forEach(function (d) {
+    var b = bmap[d.id];
+    if (base && !b) {
+      sheets.push({ d: d, st: 'new', merged: mergeDiagram(null, d) });
+      list.push({ diagram: d.id, title: d.title, st: 'new', kind: 'diagram', key: d.type, detail: [] });
+      return;
+    }
+    var merged = mergeDiagram(b, d, !base), st = '';
+    if (b && (b.type !== d.type || b.title !== d.title || b.level !== d.level)) {
+      st = 'changed';
+      list.push({ diagram: d.id, title: d.title, st: 'changed', kind: 'diagram', key: d.type, detail: ['~title/level/type'] });
+    }
+    UML_COLL[d.type].forEach(function (c) {
+      merged[c[0]].forEach(function (it) {
+        if (!it.st) return;
+        st = 'changed';
+        list.push({ diagram: d.id, title: d.title, st: it.st, kind: it.kind, key: it.key, name: it.el && typeof it.el === 'object' ? it.el.name : undefined, detail: it.detail });
+      });
+    });
+    sheets.push({ d: d, st: st, merged: merged });
+  });
+  (base ? base.diagrams : []).forEach(function (b) {
+    if (cset[b.id]) return;
+    sheets.push({ d: b, st: 'removed', merged: mergeDiagram(b, null) });
+    list.push({ diagram: b.id, title: b.title, st: 'removed', kind: 'diagram', key: b.type, detail: [] });
+  });
+  return { list: list, sheets: sheets };
+}
+
+function deltaLines(delta) {
+  return delta.list.map(function (x) {
+    return x.st + ' ' + x.diagram + ' ' + x.kind + ' ' + x.key + (x.detail.length ? ': ' + x.detail.join(', ') : '');
+  });
+}
+
+if (typeof module !== 'undefined') module.exports = { parseModel: parseModel, diffModels: diffModels, deltaLines: deltaLines, mergeList: mergeList };
+</script>
+<script>
+// system-design layout: grid placement, orthogonal routing, edge label placement. Pure functions, no DOM.
+// The build inlines this file into template.html; test.mjs requires it in node.
+// A diagram is a grid of cells. A hinted node sits at its `at: [col, row]`; the rest are placed
+// deterministically (layered by edge direction, or one column per lane). Edges run orthogonally
+// through the gutters between cells, so no edge crosses a box.
+
+const isCell = a => Array.isArray(a) && a.length === 2 && a.every(n => Number.isInteger(n) && n >= 0);
+
+// Longest-path rank along edge direction; back edges of cycles (found by DFS in input order) are ignored.
+function rankNodes(ids, edges) {
+  const out = {}, rank = {}, state = {}, back = {};
+  ids.forEach(id => { out[id] = []; rank[id] = 0; });
+  edges.forEach(e => { if (e.v in out && e.w in out && e.v !== e.w) out[e.v].push(e.w); });
+  const dfs = v => {
+    state[v] = 1;
+    out[v].forEach(w => { if (state[w] === 1) back[v + '>' + w] = 1; else if (!state[w]) dfs(w); });
+    state[v] = 2;
+  };
+  ids.forEach(id => { if (!state[id]) dfs(id); });
+  for (let k = 0; k < ids.length; k++) {
+    let moved = false;
+    ids.forEach(v => out[v].forEach(w => {
+      if (!back[v + '>' + w] && rank[w] < rank[v] + 1) { rank[w] = rank[v] + 1; moved = true; }
+    }));
+    if (!moved) break;
+  }
+  return rank;
+}
+
+// Cell per node id. o.dir 'LR' (ranks are columns) or 'TB' (ranks are rows); o.lanes = ordered lane ids,
+// node.lane picks one: each lane is a column, rows follow rank. Hinted nodes keep their cell.
+function placeGrid(nodes, edges, o) {
+  o = o || {};
+  const cell = {}, taken = {}, K = (c, r) => c + ',' + r, warn = o.warn || [];
+  nodes.forEach(n => {
+    if (n.at == null) return;
+    if (!isCell(n.at)) { warn.push(n.id + ': at must be [col, row] of whole numbers >= 0, placed automatically'); return; }
+    if (taken[K(n.at[0], n.at[1])]) { warn.push(n.id + ': cell ' + n.at + ' already holds ' + taken[K(n.at[0], n.at[1])] + ', placed automatically'); return; }
+    cell[n.id] = n.at.slice(); taken[K(n.at[0], n.at[1])] = n.id;
+  });
+  const free = nodes.filter(n => !cell[n.id]);
+  if (!free.length) return cell;
+  const ids = nodes.map(n => n.id), rank = rankNodes(ids, edges);
+  const lanes = o.lanes && o.lanes.length ? o.lanes : null;
+  // primary axis: lane index or rank; secondary: order inside it.
+  const prim = {};
+  free.forEach(n => { prim[n.id] = lanes ? (lanes.indexOf(n.lane) < 0 ? lanes.length : lanes.indexOf(n.lane)) : rank[n.id]; });
+  const layers = [];
+  free.forEach(n => { (layers[prim[n.id]] = layers[prim[n.id]] || []).push(n.id); });
+  const nb = {};
+  ids.forEach(id => { nb[id] = { up: [], down: [] }; });
+  edges.forEach(e => { if (nb[e.v] && nb[e.w] && e.v !== e.w) { nb[e.w].up.push(e.v); nb[e.v].down.push(e.w); } });
+  const slot = {};
+  if (lanes) {
+    // Inside a lane, follow rank, then input order.
+    layers.forEach(L => { if (!L) return; L.sort((a, b) => rank[a] - rank[b] || ids.indexOf(a) - ids.indexOf(b)).forEach((id, i) => { slot[id] = i; }); });
+  } else {
+    // Barycenter sweeps (stable sort keeps input order on ties), then align each node with its neighbours' median.
+    layers.forEach(L => L && L.forEach((id, i) => { slot[id] = i; }));
+    const bary = (L, dir) => {
+      const bc = id => { const xs = nb[id][dir].filter(x => x in slot).map(x => slot[x]); return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : slot[id]; };
+      const keyed = L.map(id => [id, bc(id)]);
+      keyed.sort((a, b) => a[1] - b[1]);
+      keyed.forEach((k, i) => { slot[k[0]] = i; L[i] = k[0]; });
+    };
+    for (let round = 0; round < 2; round++) {
+      layers.forEach(L => L && bary(L, 'up'));
+      for (let i = layers.length - 1; i >= 0; i--) if (layers[i]) bary(layers[i], 'down');
+    }
+    layers.forEach(L => {
+      if (!L) return;
+      let last = -1;
+      L.forEach(id => {
+        const xs = nb[id].up.filter(x => x in slot && prim[x] < prim[id]).map(x => slot[x]).sort((a, b) => a - b);
+        const want = xs.length ? xs[Math.floor((xs.length - 1) / 2)] : last + 1;
+        slot[id] = Math.max(want, last + 1); last = slot[id];
+      });
+    });
+  }
+  const lr = lanes || (o.dir || 'LR') === 'LR';
+  layers.forEach((L, p) => L && L.forEach(id => {
+    let s = slot[id];
+    const at = () => lr ? [p, s] : [s, p];
+    while (taken[K(...at())]) s++;
+    cell[id] = at(); taken[K(...at())] = id;
+  }));
+  return cell;
+}
+
+// Route plans in grid terms. Each plan names its shape and the gutters it uses.
+// Gutter i on the column axis sits before column i (0 = left margin); on the row axis, before row i.
+function planRoutes(edges, cell) {
+  const occ = {};
+  Object.keys(cell).forEach(id => { occ[cell[id][0] + ',' + cell[id][1]] = id; });
+  const empty = (c, r) => !occ[c + ',' + r];
+  const between = (a, b) => { const out = []; for (let i = Math.min(a, b) + 1; i < Math.max(a, b); i++) out.push(i); return out; };
+  return edges.map(e => {
+    const A = cell[e.v], B = cell[e.w];
+    if (!A || !B) return null;
+    if (e.v === e.w) return { t: 'self' };
+    if (e.via) return { t: 'via' };
+    if (e.route === 'straight') return { t: 'straight' };
+    const [ca, ra] = A, [cb, rb] = B, dc = Math.sign(cb - ca), dr = Math.sign(rb - ra);
+    if (ra === rb && between(ca, cb).every(c => empty(c, ra))) return { t: 'h' };
+    if (ca === cb && between(ra, rb).every(r => empty(ca, r))) return { t: 'v' };
+    if (ra === rb) return { t: 'uh', rg: ra };
+    if (ca === cb) return { t: 'uv', cg: ca + 1 };
+    // L: along A's row to B's column, then into B's top or bottom.
+    if (between(ca, cb).concat([cb]).every(c => empty(c, ra)) && between(ra, rb).every(r => empty(cb, r))) return { t: 'L1' };
+    // L: along A's column to B's row, then into B's side.
+    if (between(ra, rb).concat([rb]).every(r => empty(ca, r)) && between(ca, cb).every(c => empty(c, rb))) return { t: 'L2' };
+    // Z through a column gutter, middle gutter first.
+    const cgs = []; for (let g = Math.min(ca, cb) + 1; g <= Math.max(ca, cb); g++) cgs.push(g);
+    const mid = (Math.min(ca, cb) + Math.max(ca, cb) + 1) / 2;
+    cgs.sort((a, b) => Math.abs(a - mid) - Math.abs(b - mid) || a - b);
+    // Gutter g sits between index g-1 and g. Cells between an end and the gutter must be empty.
+    const span = (a, b) => { const out = []; for (let i = a; i < b; i++) out.push(i); return out; };
+    for (const g of cgs) {
+      const okA = (dc > 0 ? span(ca + 1, g) : span(g, ca)).every(c => empty(c, ra));
+      const okB = (dc > 0 ? span(g, cb) : span(cb + 1, g)).every(c => empty(c, rb));
+      if (okA && okB) return { t: 'zh', cg: g };
+    }
+    const rgs = []; for (let g = Math.min(ra, rb) + 1; g <= Math.max(ra, rb); g++) rgs.push(g);
+    const midr = (Math.min(ra, rb) + Math.max(ra, rb) + 1) / 2;
+    rgs.sort((a, b) => Math.abs(a - midr) - Math.abs(b - midr) || a - b);
+    for (const g of rgs) {
+      const okA = (dr > 0 ? span(ra + 1, g) : span(g, ra)).every(r => empty(ca, r));
+      const okB = (dr > 0 ? span(g, rb) : span(rb + 1, g)).every(r => empty(cb, r));
+      if (okA && okB) return { t: 'zv', rg: g };
+    }
+    // Channel: out of A into its adjacent column gutter, along the row gutter next to B, into B.
+    return { t: 'ch', cg: dc > 0 ? ca + 1 : ca, rg: dr > 0 ? rb : rb + 1 };
+  });
+}
+
+// Pixel geometry from cells, node sizes and gutter widths.
+function geometry(nodes, cell, gc, gr, o) {
+  let nc = 0, nr = 0;
+  nodes.forEach(n => { const c = cell[n.id]; if (c) { nc = Math.max(nc, c[0] + 1); nr = Math.max(nr, c[1] + 1); } });
+  const cw = Array(nc).fill(o.emptyW || 60), rh = Array(nr).fill(o.emptyH || 40), seen = {};
+  nodes.forEach(n => {
+    const c = cell[n.id]; if (!c) return;
+    cw[c[0]] = Math.max(seen['c' + c[0]] ? cw[c[0]] : 0, n.w); seen['c' + c[0]] = 1;
+    rh[c[1]] = Math.max(seen['r' + c[1]] ? rh[c[1]] : 0, n.h); seen['r' + c[1]] = 1;
+  });
+  const cx = [], ry = [];
+  let x = 0; for (let i = 0; i < nc; i++) { x += gc[i]; cx.push(x); x += cw[i]; }
+  const W = x + gc[nc];
+  let y = 0; for (let i = 0; i < nr; i++) { y += gr[i]; ry.push(y); y += rh[i]; }
+  const H = y + gr[nr];
+  const box = {};
+  nodes.forEach(n => {
+    const c = cell[n.id]; if (!c) return;
+    box[n.id] = { x: cx[c[0]] + (cw[c[0]] - n.w) / 2, y: o.alignTop ? ry[c[1]] : ry[c[1]] + (rh[c[1]] - n.h) / 2, w: n.w, h: n.h };
+  });
+  const gx = i => (i === 0 ? 0 : cx[i - 1] + cw[i - 1]) + gc[i] / 2;
+  const gy = i => (i === 0 ? 0 : ry[i - 1] + rh[i - 1]) + gr[i] / 2;
+  const at = v => { const f = Math.floor(v); return v - f >= 0.25 ? gx(f + 1) : cx[f] + cw[f] / 2; };
+  const atY = v => { const f = Math.floor(v); return v - f >= 0.25 ? gy(f + 1) : ry[f] + rh[f] / 2; };
+  return { nc, nr, cw, rh, cx, ry, W, H, box, gx, gy, at, atY };
+}
+
+const sideOf = (b, s, t) => s === 'r' ? [b.x + b.w, b.y + b.h * t] : s === 'l' ? [b.x, b.y + b.h * t] : s === 'b' ? [b.x + b.w * t, b.y + b.h] : [b.x + b.w * t, b.y];
+// Where the ray from a box's center toward p leaves the box.
+function clip(b, p) {
+  const cx = b.x + b.w / 2, cy = b.y + b.h / 2, dx = p[0] - cx, dy = p[1] - cy;
+  if (!dx && !dy) return [cx, cy];
+  const s = Math.min(dx ? (b.w / 2) / Math.abs(dx) : Infinity, dy ? (b.h / 2) / Math.abs(dy) : Infinity);
+  return [cx + dx * s, cy + dy * s];
+}
+
+// Points per edge, plus which segment sits in which gutter (for track offsets) and which ends sit on which side.
+function pixelize(edges, plans, cell, G) {
+  return edges.map((e, i) => {
+    const p = plans[i]; if (!p) return null;
+    const A = G.box[e.v], B = G.box[e.w], [ca, ra] = cell[e.v], [cb, rb] = cell[e.w];
+    const acx = A.x + A.w / 2, acy = A.y + A.h / 2, bcx = B.x + B.w / 2, bcy = B.y + B.h / 2;
+    const r = { pts: null, tracks: [], ends: [] };
+    const hs = cb > ca ? ['r', 'l'] : ['l', 'r'], vs = rb > ra ? ['b', 't'] : ['t', 'b'];
+    if (p.t === 'self') {
+      const x = A.x + A.w, y = acy;
+      r.pts = [[x, y - 8], [x + 22, y - 8], [x + 22, y + 8], [x, y + 8]];
+    } else if (p.t === 'straight') {
+      r.pts = [clip(A, [bcx, bcy]), clip(B, [acx, acy])];
+    } else if (p.t === 'via') {
+      const raw = [[acx, acy]].concat(e.via.map(v => [G.at(v[0]), G.atY(v[1])]), [[bcx, bcy]]);
+      const pts = [raw[0]];
+      for (let k = 1; k < raw.length; k++) {
+        const a = pts[pts.length - 1], b = raw[k];
+        if (a[0] !== b[0] && a[1] !== b[1]) pts.push([b[0], a[1]]);
+        pts.push(b);
+      }
+      const first = pts[1], last = pts[pts.length - 2];
+      pts[0] = first[1] === acy ? [first[0] > acx ? A.x + A.w : A.x, acy] : [acx, first[1] > acy ? A.y + A.h : A.y];
+      pts[pts.length - 1] = last[1] === bcy ? [last[0] > bcx ? B.x + B.w : B.x, bcy] : [bcx, last[1] > bcy ? B.y + B.h : B.y];
+      r.pts = pts;
+    } else if (p.t === 'h') {
+      const y = (Math.max(A.y, B.y) + Math.min(A.y + A.h, B.y + B.h)) / 2;
+      r.pts = [[hs[0] === 'r' ? A.x + A.w : A.x, y], [hs[1] === 'l' ? B.x : B.x + B.w, y]];
+      r.ends = [[e.v, hs[0], 0, 'y'], [e.w, hs[1], 1, 'y']]; r.straight = 'y';
+    } else if (p.t === 'v') {
+      const x = (Math.max(A.x, B.x) + Math.min(A.x + A.w, B.x + B.w)) / 2;
+      r.pts = [[x, vs[0] === 'b' ? A.y + A.h : A.y], [x, vs[1] === 't' ? B.y : B.y + B.h]];
+      r.ends = [[e.v, vs[0], 0, 'x'], [e.w, vs[1], 1, 'x']]; r.straight = 'x';
+    } else if (p.t === 'uh') {
+      const y = G.gy(p.rg);
+      r.pts = [[acx, A.y], [acx, y], [bcx, y], [bcx, B.y]];
+      r.tracks = [['r', p.rg, 1]]; r.ends = [[e.v, 't', 0, 'x'], [e.w, 't', 3, 'x']];
+    } else if (p.t === 'uv') {
+      const x = G.gx(p.cg);
+      r.pts = [[A.x + A.w, acy], [x, acy], [x, bcy], [B.x + B.w, bcy]];
+      r.tracks = [['c', p.cg, 1]]; r.ends = [[e.v, 'r', 0, 'y'], [e.w, 'r', 3, 'y']];
+    } else if (p.t === 'L1') {
+      r.pts = [[hs[0] === 'r' ? A.x + A.w : A.x, acy], [bcx, acy], [bcx, vs[1] === 't' ? B.y : B.y + B.h]];
+      r.ends = [[e.v, hs[0], 0, 'y'], [e.w, vs[1], 2, 'x']];
+    } else if (p.t === 'L2') {
+      r.pts = [[acx, vs[0] === 'b' ? A.y + A.h : A.y], [acx, bcy], [hs[1] === 'l' ? B.x : B.x + B.w, bcy]];
+      r.ends = [[e.v, vs[0], 0, 'x'], [e.w, hs[1], 2, 'y']];
+    } else if (p.t === 'zh') {
+      const x = G.gx(p.cg);
+      r.pts = [[hs[0] === 'r' ? A.x + A.w : A.x, acy], [x, acy], [x, bcy], [hs[1] === 'l' ? B.x : B.x + B.w, bcy]];
+      r.tracks = [['c', p.cg, 1]]; r.ends = [[e.v, hs[0], 0, 'y'], [e.w, hs[1], 3, 'y']];
+    } else if (p.t === 'zv') {
+      const y = G.gy(p.rg);
+      r.pts = [[acx, vs[0] === 'b' ? A.y + A.h : A.y], [acx, y], [bcx, y], [bcx, vs[1] === 't' ? B.y : B.y + B.h]];
+      r.tracks = [['r', p.rg, 1]]; r.ends = [[e.v, vs[0], 0, 'x'], [e.w, vs[1], 3, 'x']];
+    } else {
+      const x = G.gx(p.cg), y = G.gy(p.rg), vin = rb > ra ? 't' : 'b';
+      r.pts = [[hs[0] === 'r' ? A.x + A.w : A.x, acy], [x, acy], [x, y], [bcx, y], [bcx, vin === 't' ? B.y : B.y + B.h]];
+      r.tracks = [['c', p.cg, 1], ['r', p.rg, 2]]; r.ends = [[e.v, hs[0], 0, 'y'], [e.w, vin, 4, 'x']];
+    }
+    return r;
+  });
+}
+
+// Spread segments sharing a gutter, and edge ends sharing a box side, so no two lines lie on top of each other.
+function separate(routes, edges, G, step) {
+  const groups = {};
+  routes.forEach((r, i) => r && r.tracks.forEach(t => { (groups[t[0] + t[1]] = groups[t[0] + t[1]] || []).push([i, t]); }));
+  Object.keys(groups).forEach(k => {
+    const g = groups[k]; if (g.length < 2) return;
+    const ax = g[0][1][0] === 'c' ? 0 : 1, oth = 1 - ax;
+    g.sort((a, b) => {
+      const pa = routes[a[0]].pts, pb = routes[b[0]].pts;
+      return Math.min(pa[a[1][2]][oth], pa[a[1][2] + 1][oth]) - Math.min(pb[b[1][2]][oth], pb[b[1][2] + 1][oth]) || a[0] - b[0];
+    });
+    g.forEach(([i, t], n) => {
+      const d = (n - (g.length - 1) / 2) * step, pts = routes[i].pts;
+      pts[t[2]][ax] += d; pts[t[2] + 1][ax] += d;
+    });
+  });
+  // Box sides: ends sorted by where the edge heads, then spaced evenly along the side.
+  const sides = {};
+  routes.forEach((r, i) => r && r.ends.forEach(en => { (sides[en[0] + '|' + en[1]] = sides[en[0] + '|' + en[1]] || []).push([i, en]); }));
+  Object.keys(sides).forEach(k => {
+    const s = sides[k]; if (s.length < 2) return;
+    const b = G.box[s[0][1][0]], ax = s[0][1][3] === 'y' ? 1 : 0;
+    const far = ([i, en]) => { const pts = routes[i].pts, j = en[2] === 0 ? Math.min(2, pts.length - 1) : Math.max(0, pts.length - 3); return pts[j][ax]; };
+    s.sort((a, b2) => far(a) - far(b2) || a[0] - b2[0]);
+    const len = ax ? b.h : b.w, gap = Math.min(24, len / (s.length + 1));
+    s.forEach(([i, en], n) => {
+      const pos = (ax ? b.y : b.x) + len / 2 + (n - (s.length - 1) / 2) * gap, pts = routes[i].pts;
+      if (routes[i].straight) return; // straight lines are moved below, both ends together
+      const j = en[2], nj = j === 0 ? 1 : j - 1;
+      pts[j][ax] = pos; pts[nj][ax] = pos;
+    });
+  });
+  // Parallel straight edges between the same two boxes sit side by side.
+  const pairs = {};
+  routes.forEach((r, i) => { if (r && r.straight) { const k = [edges[i].v, edges[i].w].sort().join('|'); (pairs[k] = pairs[k] || []).push(i); } });
+  Object.keys(pairs).forEach(k => {
+    const g = pairs[k]; if (g.length < 2) return;
+    g.forEach((i, n) => { const ax = routes[i].straight === 'y' ? 1 : 0, d = (n - (g.length - 1) / 2) * 22; routes[i].pts.forEach(p => { p[ax] += d; }); });
+  });
+}
+
+const hit = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+const segRect = (p, q) => ({ x: Math.min(p[0], q[0]) - 1, y: Math.min(p[1], q[1]) - 1, w: Math.abs(p[0] - q[0]) + 2, h: Math.abs(p[1] - q[1]) + 2 });
+
+// Label spots: each segment, longest first, at a few points along it, on either side.
+// Hard: a box, another label or the frame edge. Soft: crossing another edge's line.
+function placeLabels(edges, routes, G, obstacles, LH) {
+  const placed = [], fails = [], segs = [];
+  routes.forEach((r, i) => r && r.pts.slice(1).forEach((q, k) => segs.push({ i, p: r.pts[k], q })));
+  edges.forEach((e, i) => {
+    const r = routes[i]; if (!r || !e.lw) return;
+    const h = e.lines.length * LH, w = e.lw;
+    const cands = [];
+    r.pts.slice(1).map((q, k) => [r.pts[k], q]).sort((a, b) => Math.hypot(b[1][0] - b[0][0], b[1][1] - b[0][1]) - Math.hypot(a[1][0] - a[0][0], a[1][1] - a[0][1]))
+      .forEach(([p, q]) => [0.5, 0.35, 0.65, 0.2, 0.8, 0.1, 0.9].forEach(f => {
+        const mx = p[0] + (q[0] - p[0]) * f, my = p[1] + (q[1] - p[1]) * f;
+        if (p[1] === q[1]) {
+          cands.push({ x: mx - w / 2, y: my - h - 5, a: 'middle' }, { x: mx - w / 2, y: my + 5, a: 'middle' });
+        } else if (p[0] === q[0]) {
+          cands.push({ x: mx + 7, y: my - h / 2, a: 'start' }, { x: mx - 7 - w, y: my - h / 2, a: 'end' });
+        } else {
+          cands.push({ x: mx + 6, y: my - h - 2, a: 'start' }, { x: mx - 6 - w, y: my + 2, a: 'start' });
+        }
+      }));
+    let best = null, bestScore = Infinity;
+    cands.forEach(c => {
+      const rc = { x: c.x - 2, y: c.y - 1, w: w + 4, h: h + 2 };
+      let score = 0;
+      if (rc.x < 2 || rc.y < 2 || rc.x + rc.w > G.W - 2 || rc.y + rc.h > G.H - 2) score += 1000;
+      obstacles.forEach(b => { if (hit(rc, b)) score += 1000; });
+      placed.forEach(b => { if (hit(rc, b)) score += 1000; });
+      segs.forEach(s => { if (s.i !== i && hit(rc, segRect(s.p, s.q))) score += 1; });
+      if (score < bestScore) { bestScore = score; best = c; }
+    });
+    if (!best) return;
+    const rect = { x: best.x - 2, y: best.y - 1, w: w + 4, h: h + 2 };
+    placed.push(rect);
+    if (bestScore >= 1000) fails.push({ i, rect }); else if (bestScore > 0) fails.push({ i, rect, soft: true });
+    r.label = { x: best.a === 'middle' ? best.x + w / 2 : best.a === 'end' ? best.x + w : best.x, y: best.y, a: best.a, lines: e.lines, rect };
+  });
+  return fails;
+}
+
+// The whole pipeline. nodes [{id, w, h, at, lane}], edges [{v, w, lines, lw, via, route}].
+// o: {dir, lanes, gutterW, gutterH, margin, alignTop, warn, lineH, obstacles(G) -> rects}.
+// Returns {cell, box, routes, W, H, G}. Labels that cannot find a clear spot widen the gutters around them.
+function layoutGraph(nodes, edges, o) {
+  o = o || {};
+  const warn = o.warn || [], LH = o.lineH || 13;
+  const known = {}; nodes.forEach(n => { known[n.id] = 1; });
+  const ok = edges.filter(e => { if (known[e.v] && known[e.w]) return true; warn.push('edge ' + e.v + ' to ' + e.w + ': unknown end, not drawn'); return false; });
+  const cell = placeGrid(nodes, ok, { dir: o.dir, lanes: o.lanes, warn });
+  const plans = planRoutes(ok, cell);
+  let nc = 0, nr = 0;
+  Object.keys(cell).forEach(id => { nc = Math.max(nc, cell[id][0] + 1); nr = Math.max(nr, cell[id][1] + 1); });
+  const m = o.margin == null ? 40 : o.margin;
+  const gc = Array(nc + 1).fill(o.gutterW || 80), gr = Array(nr + 1).fill(o.gutterH || 56);
+  gc[0] = gc[nc] = m; gr[0] = gr[nr] = m;
+  Object.keys(o.gutterRows || {}).forEach(k => { if (+k <= nr) gr[+k] = Math.max(gr[+k], o.gutterRows[k]); });
+  // Gutters fit the labels of straight edges between neighbours and the tracks that run through them.
+  const count = {};
+  plans.forEach((p, i) => {
+    if (!p) return;
+    const e = ok[i], A = cell[e.v], B = cell[e.w];
+    if (p.t === 'h' && Math.abs(A[0] - B[0]) === 1) gc[Math.max(A[0], B[0])] = Math.max(gc[Math.max(A[0], B[0])], (e.lw || 0) + 30);
+    if (p.t === 'v' && Math.abs(A[1] - B[1]) === 1) gr[Math.max(A[1], B[1])] = Math.max(gr[Math.max(A[1], B[1])], e.lines.length * LH + 22);
+    if (p.cg != null) count['c' + p.cg] = (count['c' + p.cg] || 0) + 1;
+    if (p.rg != null) count['r' + p.rg] = (count['r' + p.rg] || 0) + 1;
+  });
+  Object.keys(count).forEach(k => { const g = +k.slice(1), need = count[k] * 12 + 28; if (k[0] === 'c') gc[g] = Math.max(gc[g], need); else gr[g] = Math.max(gr[g], need); });
+  let G, routes, fails = [];
+  for (let round = 0; round < 7; round++) {
+    G = geometry(nodes, cell, gc, gr, o);
+    routes = pixelize(ok, plans, cell, G);
+    separate(routes, ok, G, 12);
+    const obs = Object.keys(G.box).map(id => { const b = G.box[id]; return { x: b.x - 3, y: b.y - 3, w: b.w + 6, h: b.h + 6 }; }).concat(o.obstacles ? o.obstacles(G) : []);
+    // A label on top of another edge's line widens its gutter only in the first rounds; a label on a box always does.
+    fails = placeLabels(ok, routes, G, obs, LH).filter(f => !f.soft || round < 2);
+    if (!fails.length) break;
+    // Widen each gutter a failed label overlaps (once per round), then lay out again.
+    const wc = {}, wr = {};
+    fails.forEach(f => {
+      const r = f.rect;
+      for (let g = 0; g <= G.nc; g++) {
+        const x0 = g === 0 ? 0 : G.cx[g - 1] + G.cw[g - 1], x1 = g === G.nc ? G.W : G.cx[g];
+        if (r.x < x1 && r.x + r.w > x0) wc[g] = 1;
+      }
+      for (let g = 0; g <= G.nr; g++) {
+        const y0 = g === 0 ? 0 : G.ry[g - 1] + G.rh[g - 1], y1 = g === G.nr ? G.H : G.ry[g];
+        if (r.y < y1 && r.y + r.h > y0) wr[g] = 1;
+      }
+    });
+    Object.keys(wc).forEach(g => { gc[g] += 30; });
+    Object.keys(wr).forEach(g => { gr[g] += 16; });
+    if (!Object.keys(wc).length && !Object.keys(wr).length) gc[0] += 30;
+  }
+  fails = fails.filter(f => !f.soft);
+  if (fails.length) warn.push(fails.length + ' edge label(s) overlap something; add at: or via: hints');
+  const all = routes.map((r, i) => r && Object.assign(r, { e: ok[i] })).filter(Boolean);
+  return { cell, box: G.box, routes: all, W: G.W, H: G.H, G };
+}
+
+if (typeof module !== 'undefined') module.exports = { rankNodes, placeGrid, planRoutes, layoutGraph, isCell };
+</script>
+<script>
+(function(){
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const f1 = n => (+n).toFixed(1);
+const P = pts => pts.map(p => f1(p[0]) + ',' + f1(p[1])).join(' ');
+const T = (x,y,s,c,a) => `<text x="${f1(x)}" y="${f1(y)}"${c?` class="${c}"`:''}${a&&a!=='start'?` text-anchor="${a}"`:''}>${esc(s)}</text>`;
+const R = (x,y,w,h,c,rx) => `<rect x="${f1(x)}" y="${f1(y)}" width="${f1(w)}" height="${f1(h)}"${rx?` rx="${rx}"`:''} class="${c}"/>`;
+const line = (pts,c) => `<polyline points="${P(pts)}" class="${c||'edge'}"/>`;
+const nm = e => typeof e === 'string' ? e : (e.id || e.name);
+const label = e => typeof e === 'string' ? e : (e.name || e.id);
+const list = v => v == null ? [] : (Array.isArray(v) ? v : [v]);
+const ST = {new:'new', changed:'chg', removed:'rm', '':''};
+const st = it => ST[(it && it.st) || ''];
+const MARK = {new:'+ ', changed:'~ ', removed:'- ', '':''};
+
+/* Text width from the real fonts (canvas), so boxes and labels fit what the browser draws. */
+const ctx = document.createElement('canvas').getContext('2d');
+let FONT = {};
+function fonts(){
+  const cs = getComputedStyle(document.documentElement), v = k => cs.getPropertyValue(k).trim();
+  const z = parseFloat(v('--fz')) || 1, px = n => (n * z).toFixed(2) + 'px';
+  FONT = { name:`600 ${px(13)} ${v('--body')}`, case:`500 ${px(12.5)} ${v('--body')}`, stereo:`italic 400 ${px(10.5)} ${v('--body')}`,
+    note:`400 ${px(10.5)} ${v('--mono')}`, edge:`400 ${px(10.5)} ${v('--mono')}`, col:`400 ${px(11.5)} ${v('--mono')}`, th:`600 ${px(12.5)} ${v('--mono')}`, sys:`700 ${px(15)} ${v('--display')}` };
+}
+const meas = (s,k) => { ctx.font = FONT[k]; return ctx.measureText(String(s)).width; };
+// Balanced wrap: one line when it fits in max, else the two-line split with the shortest longer line.
+function wrap2(s,k,max){
+  s = String(s||''); if(!s) return [];
+  if(meas(s,k) <= max) return [s];
+  const w = s.split(' '); if(w.length < 2) return [s];
+  let best = null, bw = Infinity;
+  for(let i=1;i<w.length;i++){ const a=w.slice(0,i).join(' '), b=w.slice(i).join(' '), m=Math.max(meas(a,k),meas(b,k)); if(m<bw){ bw=m; best=[a,b]; } }
+  return best;
+}
+// Greedy wrap into at most n lines of width max (the last line takes the rest). A word wider than max
+// breaks after its last fitting : / . - _ (else mid-word) and the pieces join without a space.
+function wrapN(s,k,max,n){
+  const words=[];
+  String(s||'').split(' ').filter(Boolean).forEach(w=>{
+    let rest=w, glue=false;
+    while(meas(rest,k)>max&&rest.length>1){
+      let cut=0, fit=1;
+      for(let i=1;i<=rest.length&&meas(rest.slice(0,i),k)<=max;i++){ fit=i; if(/[:\/.\-_]/.test(rest[i-1])) cut=i; }
+      cut=cut||fit; words.push({t:rest.slice(0,cut),glue}); rest=rest.slice(cut); glue=true;
+    }
+    words.push({t:rest,glue});
+  });
+  const out=[]; let cur='';
+  words.forEach(w=>{ const nx=cur?cur+(w.glue?'':' ')+w.t:w.t; if(cur&&meas(nx,k)>max&&out.length<n-1){ out.push(cur); cur=w.t; } else cur=nx; });
+  if(cur) out.push(cur);
+  return out;
+}
+const linesW = (ls,k) => Math.max(0,...ls.map(l=>meas(l,k)));
+const edgeLabel = (s,max) => { const lines = wrap2(s,'edge',max||170); return { lines, lw: Math.ceil(linesW(lines,'edge')) }; };
+const labelSvg = r => r.label ? r.label.lines.map((l,i)=>T(r.label.x, r.label.y+10+i*13, l, 't-edge', r.label.a)).join('') : '';
+
+function tip(p,q,type){
+  const dx=q[0]-p[0], dy=q[1]-p[1], L=Math.hypot(dx,dy)||1, ux=dx/L, uy=dy/L, nx=-uy, ny=ux;
+  const at=(d,w)=>[q[0]-ux*d+nx*w, q[1]-uy*d+ny*w];
+  if(type==='open') return `<polyline points="${P([at(10,5),q,at(10,-5)])}" class="hd-open"/>`;
+  if(type==='fill') return `<polygon points="${P([at(10,4.5),q,at(10,-4.5)])}" class="hd-fill"/>`;
+  if(type==='tri') return `<polygon points="${P([at(14,8),q,at(14,-8)])}" class="hd-hollow"/>`;
+  if(type==='dia') return `<polygon points="${P([q,at(9,5),at(18,0),at(9,-5)])}" class="hd-fill"/>`;
+  return '';
+}
+function arrow(pts,o){
+  o=o||{};
+  let s=line(pts,'edge'+(o.dash?' dash':''));
+  if(o.end) s+=tip(pts[pts.length-2],pts[pts.length-1],o.end);
+  if(o.start) s+=tip(pts[1],pts[0],o.start);
+  return s;
+}
+// A tone is presentation only: a known name becomes a tone-<name> class, anything else is dropped with a sheet warning.
+const TONES=['blue','green','amber','rose','violet','gray'];
+function toneOf(el,warn,what){
+  const t=el&&typeof el==='object'&&!Array.isArray(el)?el.tone:null;
+  if(t==null||t==='') return '';
+  if(TONES.indexOf(String(t))>=0) return String(t);
+  const m=what+': unknown tone "'+t+'", ignored (use '+TONES.join(', ')+')';
+  if(warn.indexOf(m)<0) warn.push(m);
+  return '';
+}
+const TC = t => t?' tone-'+t:'';
+const TG = (t,inner) => t?`<g class="tone-${t}">${inner}</g>`:inner;
+const E = (s,inner,t) => `<g class="e${s?' '+s:''}${TC(t)}">${inner}</g>`;
+// The canvas never draws narrower than 780 px: a small figure gets centered on a wider sheet.
+function svg(W,H,lbl,body){
+  const w=Math.max(Math.ceil(W),780), dx=(w-W)/2;
+  return `<svg viewBox="0 0 ${w} ${Math.ceil(H)}" style="max-width:${w}px" role="img" aria-label="${esc(lbl)}"><g transform="translate(${f1(dx)},0)">${body}</g></svg>`;
+}
+const routeEdges = (L,fn) => L.routes.map(fn).join('');
+
+/* ---------- component ---------- */
+function rComp(d,M,warn){
+  const sp=d.spec, its=M.nodes;
+  // One box size per sheet, wide enough for every name; notes wrap inside it.
+  const BW=Math.min(260,Math.max(170,...its.map(it=>meas(label(it.el),'name')+28)));
+  const notes=its.map(it=>it.el.note?wrapN(it.el.note,'note',BW-16,3):[]);
+  const BH=Math.max(...its.map((it,i)=>16+(it.el.kind==='ext'?14:0)+16+notes[i].length*13+10),52);
+  const laneOf=e=>e.lane||e.group;
+  const laneNames={}, order=[];
+  list(sp.lanes).forEach(l=>{ const id=typeof l==='string'?l:l.id; laneNames[id]=typeof l==='string'?l:(l.name||l.id); order.push(id); });
+  its.forEach(it=>{ const l=laneOf(it.el); if(l&&order.indexOf(l)<0){ order.push(l); laneNames[l]=l; } });
+  const laneTone={};
+  list(sp.lanes).forEach(l=>{ if(typeof l!=='string'){ const t=toneOf(l,warn,'lane '+l.id); if(t) laneTone[l.id]=t; } });
+  const nodes=its.map(it=>({id:nm(it.el),w:BW,h:BH,at:it.el.at,lane:laneOf(it.el),it,tone:toneOf(it.el,warn,'node '+nm(it.el))||laneTone[laneOf(it.el)]||''}));
+  const edges=M.edges.map(it=>Object.assign({v:it.el.from,w:it.el.to,via:it.el.via,route:it.el.route,it,tone:toneOf(it.el,warn,'edge '+it.key)},it.el.label?edgeLabel(it.el.label):{lines:[],lw:0}));
+  const lanes=G=>order.map(id=>{
+    const bs=nodes.filter(n=>n.lane===id).map(n=>G.box[n.id]).filter(Boolean);
+    if(!bs.length) return null;
+    const x=Math.min(...bs.map(b=>b.x))-18, y=Math.min(...bs.map(b=>b.y))-18;
+    const x2=Math.max(...bs.map(b=>b.x+b.w))+18, y2=Math.max(...bs.map(b=>b.y+b.h))+30;
+    return {id,x,y,w:x2-x,h:y2-y,name:laneNames[id],tone:laneTone[id]||''};
+  }).filter(Boolean);
+  const L=layoutGraph(nodes,edges,{dir:'LR',lanes:order.length?order:null,warn,gutterW:80,gutterH:56,margin:34,
+    obstacles:G=>lanes(G).map(l=>({x:l.x+6,y:l.y+l.h-20,w:meas(l.name.toUpperCase(),'note')+16,h:16}))});
+  let s=lanes(L.G).map(l=>TG(l.tone,R(l.x,l.y,l.w,l.h,'frame'+TC(l.tone),6)+T(l.x+12,l.y+l.h-9,l.name,'t-lane'))).join('');
+  s+=routeEdges(L,r=>E(st(r.e.it),arrow(r.pts,{dash:!!r.e.it.el.dashed,end:'fill'})+labelSvg(r),r.e.tone));
+  nodes.forEach((n,i)=>{
+    const b=L.box[n.id], e=n.it.el, k=st(n.it), cx=b.x+b.w/2, ext=e.kind==='ext';
+    const ls=notes[its.indexOf(n.it)], body=(ext?14:0)+16+ls.length*13;
+    let y=b.y+(b.h-body)/2;
+    let x=R(b.x,b.y,b.w,b.h,'box'+(ext?' ext':'')+TC(n.tone)+(k?' '+k:''),4);
+    if(e.kind==='store') x+=line([[b.x,b.y+8],[b.x+b.w,b.y+8]],'edge');
+    if(ext){ x+=T(cx,y+10,'«external»','t-stereo','middle'); y+=14; }
+    x+=T(cx,y+12,label(e),'t-name'+(k==='rm'?' t-rm':''),'middle'); y+=16;
+    ls.forEach((l,j)=>{ x+=T(cx,y+11+j*13,l,'t-note','middle'); });
+    s+=`<g${n.tone?` class="tone-${n.tone}"`:''}><title>${esc(nm(e))}</title>${x}</g>`;
+  });
+  return svg(L.W,L.H,'Component diagram: '+d.title,s);
+}
+
+/* ---------- erd ---------- */
+function crow(q,p,k){
+  const dx=p[0]-q[0], dy=p[1]-q[1], L=Math.hypot(dx,dy)||1, ux=dx/L, uy=dy/L, nx=-uy, ny=ux;
+  const at=(d,w)=>[q[0]+ux*d+nx*w, q[1]+uy*d+ny*w];
+  let s='';
+  if(k==='one') s+=line([at(8,-7),at(8,7)],'crow')+line([at(13,-7),at(13,7)],'crow');
+  if(k==='zone') s+=line([at(8,-7),at(8,7)],'crow');
+  if(k==='many'||k==='zmany') s+=line([at(0,-8),at(12,0),at(0,8)],'crow');
+  if(k==='zone'||k==='zmany'){ const c=at(k==='zone'?19:20,0); s+=`<circle cx="${f1(c[0])}" cy="${f1(c[1])}" r="5" class="crow-o"/>`; }
+  return s;
+}
+const CARD = s => { s=String(s).trim(); return s==='1'?'one':s==='0..1'?'zone':/^0\.\./.test(s)?'zmany':'many'; };
+function rErd(d,M,warn){
+  const flag=r=>Array.isArray(r.el)&&r.el[1]!=null?String(r.el[1]):'';
+  const nodes=M.tables.map(it=>{
+    const cols=it.rows.cols;
+    const w=Math.max(220,meas(label(it.el),'th')+28,...cols.map(r=>meas(MARK[r.st||'']+r.key,'col')+meas(flag(r),'note')+44));
+    return {id:nm(it.el),w:Math.ceil(w),h:28+cols.length*20+10,at:it.el.at,it,cols};
+  });
+  const edges=M.rels.map(it=>Object.assign({v:it.el.from,w:it.el.to,via:it.el.via,route:it.el.route,it,tone:toneOf(it.el,warn,'rel '+it.key)},it.el.label?edgeLabel(it.el.label):{lines:[],lw:0}));
+  const L=layoutGraph(nodes,edges,{dir:'LR',warn,gutterW:100,gutterH:56,margin:40,alignTop:true});
+  let s=routeEdges(L,r=>{
+    const cd=String(r.e.it.el.cardinality||'1:N').split(':'), p=r.pts;
+    return E(st(r.e.it),line(p)+crow(p[0],p[1],CARD(cd[0]))+crow(p[p.length-1],p[p.length-2],CARD(cd[1]||'N'))+labelSvg(r),r.e.tone);
+  });
+  nodes.forEach(n=>{
+    const b=L.box[n.id], k=st(n.it);
+    let x=R(b.x,b.y,b.w,b.h,'box'+(k?' '+k:''))+R(b.x,b.y,b.w,28,'th'+(k?' '+k:''))+T(b.x+12,b.y+19,label(n.it.el),'t-th'+(k==='rm'?' t-rm':''));
+    n.cols.forEach((r,i)=>{
+      const yy=b.y+28+20*i, rs=ST[r.st||''];
+      if(rs==='new'||rs==='chg') x+=R(b.x+1,yy+3,b.w-2,20,'row-'+rs);
+      const tc=rs==='rm'||k==='rm'?' t-rm':rs?' t-'+rs:'';
+      x+=T(b.x+12,yy+17,MARK[r.st||'']+r.key,'t-col'+tc);
+      if(flag(r)) x+=T(b.x+b.w-12,yy+17,flag(r),'t-flag'+tc,'end');
+    });
+    s+=x;
+  });
+  return svg(L.W,L.H,'Entity relationship diagram: '+d.title,s);
+}
+
+/* ---------- state ---------- */
+function rState(d,M,warn){
+  const S=M.states;
+  const BW=Math.max(130,...S.map(it=>meas(label(it.el),'name')+40));
+  const nodes=S.map(it=>({id:nm(it.el),w:Math.ceil(BW),h:46,at:it.el.at,it,tone:toneOf(it.el,warn,'state '+nm(it.el))}));
+  const edges=M.transitions.map(it=>{ const t=it.el, ev=t.event||'';
+    const lines=t.guard?wrap2(ev,'edge',200).slice(0,1).concat(['['+t.guard+']']):wrap2(ev,'edge',170);
+    return {v:t.from,w:t.to,via:t.via,route:t.route,it,lines,lw:Math.ceil(linesW(lines,'edge')),tone:toneOf(t,warn,'transition '+it.key)}; });
+  const first=S.find(it=>it.el.initial&&it.st!=='removed')||S.find(it=>it.st!=='removed');
+  const fins=S.filter(it=>it.el.final);
+  const marks=G=>{ const out=[];
+    if(first){ const b=G.box[nm(first.el)]; out.push({x:b.x-54,y:b.y+b.h/2-10,w:50,h:20}); }
+    fins.forEach(it=>{ const b=G.box[nm(it.el)]; out.push({x:b.x+b.w,y:b.y+b.h/2-14,w:54,h:28}); });
+    return out; };
+  const L=layoutGraph(nodes,edges,{dir:'LR',warn,gutterW:110,gutterH:70,margin:70,obstacles:marks});
+  let s=routeEdges(L,r=>E(st(r.e.it),arrow(r.pts,{end:'fill'})+labelSvg(r),r.e.tone));
+  if(first){ const b=L.box[nm(first.el)], y=b.y+b.h/2; s+=`<circle class="dot" cx="${f1(b.x-46)}" cy="${f1(y)}" r="8"/>`+arrow([[b.x-38,y],[b.x,y]],{end:'fill'}); }
+  fins.forEach(it=>{ const b=L.box[nm(it.el)], y=b.y+b.h/2, x=b.x+b.w; s+=E(st(it),arrow([[x,y],[x+30,y]],{end:'fill'})+`<circle class="ring" cx="${f1(x+42)}" cy="${f1(y)}" r="11"/><circle class="dot" cx="${f1(x+42)}" cy="${f1(y)}" r="6"/>`,toneOf(it.el,[],'')); });
+  nodes.forEach(n=>{ const b=L.box[n.id], k=st(n.it);
+    s+=TG(n.tone,R(b.x,b.y,b.w,b.h,'state'+TC(n.tone)+(k?' '+k:''),23)+T(b.x+b.w/2,b.y+b.h/2+5,label(n.it.el),'t-name'+(k==='rm'?' t-rm':''),'middle')); });
+  return svg(L.W+20,L.H,'State machine: '+d.title,s);
+}
+
+/* ---------- class ---------- */
+function rClass(d,M,warn){
+  const rowT=r=>MARK[r.st||'']+(Array.isArray(r.el)?r.el[0]:String(r.el));
+  const nodes=M.classes.map(it=>{
+    const c=it.el, attrs=it.rows.attrs, ops=it.rows.ops, nameH=c.stereotype?44:32;
+    const w=Math.max(170,meas(label(c),'name')+32,...attrs.concat(ops).map(r=>meas(rowT(r),'col')+24));
+    return {id:nm(c),w:Math.ceil(w),h:nameH+(attrs.length?attrs.length*18+10:0)+ops.length*18+10,at:c.at,it,nameH,attrs,ops};
+  });
+  const edges=M.relations.map(it=>Object.assign({v:it.el.from,w:it.el.to,via:it.el.via,route:it.el.route,it,tone:toneOf(it.el,warn,'relation '+it.key)},it.el.label?edgeLabel(it.el.label):{lines:[],lw:0}));
+  const L=layoutGraph(nodes,edges,{dir:'TB',warn,gutterW:90,gutterH:70,margin:40,alignTop:true});
+  let s=routeEdges(L,r=>{
+    const el=r.e.it.el, k=el.kind||'assoc', p=r.pts;
+    const o=k==='comp'?{start:'dia',end:'open'}:k==='realize'?{dash:true,end:'tri'}:k==='dep'?{dash:true,end:'open'}:{end:'open'};
+    let x=arrow(p,o)+labelSvg(r);
+    const mu=list(el.mult), off=(a,b,dd)=>{ const dx=b[0]-a[0], dy=b[1]-a[1], l=Math.hypot(dx,dy)||1; return [a[0]+dx/l*dd-dy/l*10, a[1]+dy/l*dd+dx/l*10+4]; };
+    if(mu[0]!=null){ const q=off(p[0],p[1],k==='comp'?28:14); x+=T(q[0],q[1],mu[0],'t-edge','middle'); }
+    if(mu[1]!=null){ const q=off(p[p.length-1],p[p.length-2],20); x+=T(q[0],q[1],mu[1],'t-edge','middle'); }
+    return E(st(r.e.it),x,r.e.tone);
+  });
+  nodes.forEach(n=>{
+    const b=L.box[n.id], c=n.it.el, k=st(n.it), cx=b.x+b.w/2;
+    let x=R(b.x,b.y,b.w,b.h,'box'+(k?' '+k:''),3);
+    if(c.stereotype) x+=T(cx,b.y+16,'«'+c.stereotype+'»','t-stereo','middle');
+    x+=T(cx,b.y+n.nameH-11,label(c),'t-name'+(k==='rm'?' t-rm':''),'middle')+line([[b.x,b.y+n.nameH],[b.x+b.w,b.y+n.nameH]]);
+    let yy=b.y+n.nameH;
+    const row=(r,i,cl)=>{ const rs=ST[r.st||'']; return T(b.x+10,yy+18+i*18,rowT(r),cl+(rs?' t-'+rs:'')); };
+    if(n.attrs.length){ n.attrs.forEach((r,i)=>{ x+=row(r,i,'t-col'); }); yy+=n.attrs.length*18+10; x+=line([[b.x,yy],[b.x+b.w,yy]]); }
+    n.ops.forEach((r,i)=>{ x+=row(r,i,'t-ops'); });
+    s+=x;
+  });
+  return svg(L.W,L.H,'UML class diagram: '+d.title,s);
+}
+
+/* ---------- use case ---------- */
+function rUse(d,M,warn){
+  const sp=d.spec, A=M.actors, C=M.cases;
+  const amap={}, atone={}; A.forEach(it=>{ amap[nm(it.el)]=it; atone[nm(it.el)]=toneOf(it.el,warn,'actor '+nm(it.el)); });
+  const withOnly=id=>!C.some(it=>list(it.el.actor).indexOf(id)>=0)&&C.some(it=>list(it.el.with).indexOf(id)>=0);
+  const side=it=>{ const a=it.el; if(a.side==='left'||a.side==='right') return a.side; return (a.kind&&a.kind!=='human')||withOnly(nm(a))?'right':'left'; };
+  const RX=Math.ceil(Math.max(100,...C.map(it=>meas(label(it.el),'case')/2+22)));
+  // Fallback cells: cases of left actors fill column 0, grouped by actor in model order; every other case goes to
+  // column 1, on the row of the case that includes or extends it when that row is free.
+  const used={}, K=(c,r)=>c+','+r, cellOf={};
+  C.forEach(it=>{ if(isCell(it.el.at)){ used[K(...it.el.at)]=1; cellOf[nm(it.el)]=it.el.at; } });
+  const leftCase=it=>{ const p=list(it.el.actor)[0]; return !!(p&&amap[p]&&side(amap[p])==='left'); };
+  const put=(it,col,want)=>{ let r=want; while(used[K(col,r)]) r++; cellOf[nm(it.el)]=[col,r]; used[K(col,r)]=1; };
+  A.forEach(a=>C.forEach(it=>{ if(!cellOf[nm(it.el)]&&leftCase(it)&&list(it.el.actor)[0]===nm(a.el)) put(it,0,0); }));
+  C.forEach(it=>{
+    if(cellOf[nm(it.el)]) return;
+    const id=nm(it.el), src=C.find(o=>cellOf[nm(o.el)]&&(list(o.el.include).concat(list(o.el.extend)).indexOf(id)>=0||list(it.el.extend).indexOf(nm(o.el))>=0));
+    put(it,1,src?cellOf[nm(src.el)][1]:0);
+  });
+  const nodes=C.map(it=>({id:nm(it.el),w:RX*2,h:44,at:isCell(it.el.at)?it.el.at:cellOf[nm(it.el)],it,tone:toneOf(it.el,warn,'case '+nm(it.el))}));
+  const edges=[];
+  C.forEach(it=>{ const c=it.el, s=it.st==='removed'?'removed':it.st;
+    list(c.include).forEach(x=>edges.push({v:nm(c),w:x,lines:['«include»'],lw:Math.ceil(meas('«include»','edge')),it:{st:s}}));
+    list(c.extend).forEach(x=>edges.push({v:nm(c),w:x,lines:['«extend»'],lw:Math.ceil(meas('«extend»','edge')),it:{st:s}}));
+  });
+  const gutterRows={};
+  list(sp.bands).forEach((band,i)=>{ if(i) gutterRows[+list(band.rows)[0]||0]=64; });
+  const L=layoutGraph(nodes,edges,{dir:'LR',warn,gutterW:110,gutterH:28,margin:30,gutterRows});
+  const lefts=A.filter(it=>side(it)==='left'), rights=A.filter(it=>side(it)==='right');
+  const AB=Math.ceil(Math.max(124,...A.filter(it=>(it.el.kind||'human')!=='human').map(it=>meas(label(it.el),'name')+24))), hb=AB/2;
+  const AW=Math.max(150,AB), ox=lefts.length?AW+40:30, oy=78, bx=ox-10, by=20, bw=L.W+20, bh=oy-by+L.H+10;
+  const cb=id=>{ const b=L.box[id]; return b&&{id, cx:ox+b.x+b.w/2, cy:oy+b.y+b.h/2, rx:b.w/2}; };
+  let s=`<rect class="boundary" x="${bx}" y="${by}" width="${f1(bw)}" height="${f1(bh)}" rx="14"/>`;
+  if(sp.system){ const t=wrap2(sp.system,'sys',bw-40); s+=T(bx+18,by+26,t[0],'t-sys'); if(t[1]) s+=T(bx+18,by+44,t[1],'t-note'); }
+  list(sp.bands).forEach((band,i)=>{
+    const rows=list(band.rows), r0=+rows[0]||0;
+    if(i>0) s+=line([[bx,oy+L.G.gy(r0)],[bx+bw,oy+L.G.gy(r0)]],'band');
+    s+=T(bx+14,oy+L.G.gy(r0)+(i?14:6),band.name||'','t-lane');
+  });
+  // Actors: centered on their cases, then pushed apart so none overlap.
+  const placeSide=(arr,isLeft)=>{
+    const ys=arr.map(it=>{ const id=nm(it.el), cs=C.filter(c=>list(c.el.actor).concat(list(c.el.with)).indexOf(id)>=0).map(c=>cb(nm(c.el))).filter(Boolean);
+      return {it,y:cs.length?cs.reduce((a,c)=>a+c.cy,0)/cs.length:oy+40,cs}; });
+    ys.sort((a,b)=>a.y-b.y);
+    let last=-Infinity; ys.forEach(o=>{ o.y=Math.max(o.y,last+96,oy+20); last=o.y; });
+    return ys.map(o=>Object.assign(o,{x:isLeft?ox-AW/2-30:bx+bw+AW/2+10,left:isLeft}));
+  };
+  const placed=placeSide(lefts,true).concat(placeSide(rights,false));
+  let H=by+bh+20;
+  // An actor line that would cut through another case runs along the row gutter above its case instead.
+  const ells=nodes.map(n=>Object.assign({id:n.id},cb(n.id)));
+  const cuts=(p,q,id)=>ells.some(e=>e.id!==id&&Array.from({length:24},(_,i)=>i/23).some(t=>{ const x=p[0]+(q[0]-p[0])*t, y=p[1]+(q[1]-p[1])*t; return ((x-e.cx)/e.rx)**2+((y-e.cy)/22)**2<1.05; }));
+  const col0=ox+L.G.cx[0], colN=ox+L.G.cx[L.G.nc-1]+L.G.cw[L.G.nc-1];
+  placed.forEach(o=>{
+    const a=o.it.el, k=st(o.it), human=(a.kind||'human')==='human';
+    o.cs.forEach(c=>{ const tx=o.left?c.cx-c.rx:c.cx+c.rx, sx=o.left?o.x+(human?18:hb):o.x-(human?18:hb), p=[sx,o.y-(human?10:0)];
+      let pts=[p,[tx,c.cy]];
+      if(cuts(p,[tx,c.cy],c.id)){ const yg=oy+L.G.gy(L.cell[c.id][1])-8, xe=o.left?col0-14:colN+14; pts=[p,[xe,yg],[c.cx,yg],[c.cx,c.cy-22]]; }
+      s+=E(k==='rm'?'rm':(k==='new'?'new':''),line(pts),atone[nm(a)]); });
+    const at=atone[nm(a)];
+    if(human){ s+=TG(at,`<g class="actor${TC(at)}${k?' '+k:''}" transform="translate(${f1(o.x)},${f1(o.y)})"><circle cx="0" cy="-30" r="9"/><line x1="0" y1="-21" x2="0" y2="6"/><line x1="-15" y1="-12" x2="15" y2="-12"/><line x1="0" y1="6" x2="-12" y2="28"/><line x1="0" y1="6" x2="12" y2="28"/></g>`+T(o.x,o.y+46,label(a),'t-name'+(k==='rm'?' t-rm':''),'middle')); H=Math.max(H,o.y+60); }
+    else { s+=TG(at,R(o.x-hb,o.y-22,AB,44,'box'+(a.kind==='external'?' ext':'')+TC(at)+(k?' '+k:''),4)+T(o.x,o.y-5,a.kind==='external'?'«external»':'«system»','t-stereo','middle')+T(o.x,o.y+11,label(a),'t-name'+(k==='rm'?' t-rm':''),'middle')); H=Math.max(H,o.y+40); }
+  });
+  let inner=routeEdges(L,r=>E(st(r.e.it),arrow(r.pts,{dash:true,end:'open'})+labelSvg(r)));
+  nodes.forEach(n=>{ const b=L.box[n.id], k=st(n.it), cx=b.x+b.w/2, cy=b.y+b.h/2;
+    inner+=`<g${n.tone?` class="tone-${n.tone}"`:''}><title>${esc(nm(n.it.el))}</title><ellipse class="box${TC(n.tone)}${k?' '+k:''}" cx="${f1(cx)}" cy="${f1(cy)}" rx="${f1(b.w/2)}" ry="${f1(b.h/2)}"/>`+T(cx,cy+4,label(n.it.el),'t-case'+(k==='rm'?' t-rm':''),'middle')+`</g>`; });
+  s+=`<g transform="translate(${ox},${oy})">${inner}</g>`;
+  const W=rights.length?bx+bw+AW+30:bx+bw+30;
+  return svg(W,H,'Use case diagram: '+d.title,s);
+}
+
+/* ---------- sequence: evenly spaced lifelines, labels in at most two lines ---------- */
+function rSeq(d,M,warn){
+  const parts=M.participants, idx={}; parts.forEach((p,i)=>idx[nm(p.el)]=i);
+  const msgs=M.messages.filter(it=>{ const ok=it.el.from in idx&&it.el.to in idx; if(!ok) warn.push('message '+it.key+': unknown participant, not drawn'); return ok; });
+  // Two balanced lines; a long unbreakable token (a URL, a DID) splits at : / . so one step cannot widen every gap.
+  const lab=msgs.map((it,i)=>{ const t=(i+1)+' '+(it.el.text||''), ls=wrap2(t,'edge',150);
+    return linesW(ls,'edge')>190?wrapN(t,'edge',Math.max(150,Math.ceil(meas(t,'edge')/2)+12),2):ls; });
+  // Even gaps sized for the labels, capped at 200 px; a longer label spills past its lifelines and the canvas grows to fit.
+  let need=150;
+  msgs.forEach((it,i)=>{ const m=it.el; if(m.from===m.to) return; const span=Math.abs(idx[m.to]-idx[m.from]); need=Math.max(need,(linesW(lab[i],'edge')+28)/span); });
+  const sp=Math.ceil(Math.max(Math.min(need,200),...parts.map(p=>meas(label(p.el),'name')+40)));
+  let lo=0, hi=(parts.length-1)*sp;
+  msgs.forEach((it,i)=>{ const m=it.el; if(m.from===m.to) return; const c=(idx[m.from]+idx[m.to])/2*sp, h=linesW(lab[i],'edge')/2; lo=Math.min(lo,c-h); hi=Math.max(hi,c+h); });
+  const x0=Math.ceil(Math.max(80,sp/2+10,12-lo)), X=i=>x0+i*sp, hw=Math.min(sp-24,Math.max(110,...parts.map(p=>meas(label(p.el),'name')+28)));
+  let y=64, body='', W=Math.max(x0+(parts.length-1)*sp+x0,x0+hi+12);
+  msgs.forEach((it,i)=>{
+    const m=it.el, xa=X(idx[m.from]), xb=X(idx[m.to]), k=m.kind||'call', ls=lab[i];
+    const o=k==='return'?{dash:true,end:'open'}:k==='async'?{end:'open'}:{end:'fill'};
+    let s='';
+    if(m.from===m.to){
+      y+=10;
+      s+=arrow([[xa,y],[xa+26,y],[xa+26,y+16],[xa+2,y+16]],o);
+      ls.forEach((l,j)=>{ s+=T(xa+34,y+10+j*13,l,'t-edge'); });
+      W=Math.max(W,xa+34+linesW(ls,'edge')+16);
+      y+=Math.max(26,ls.length*13+10)+14;
+    } else {
+      y+=ls.length*13+12;
+      ls.forEach((l,j)=>{ s+=T((xa+xb)/2,y-6-(ls.length-1-j)*13,l,'t-edge','middle'); });
+      s+=arrow([[xa,y],[xb,y]],o);
+      y+=14;
+    }
+    body+=E(st(it),s,toneOf(m,warn,'message '+it.key));
+  });
+  const H=y+20;
+  let head='';
+  parts.forEach((p,i)=>{ const x=X(i), k=st(p), pt=toneOf(p.el,warn,'participant '+nm(p.el));
+    head+=line([[x,50],[x,H-8]],'life')+TG(pt,R(x-hw/2,16,hw,34,'box'+TC(pt)+(k?' '+k:''),3)+T(x,38,label(p.el),'t-name'+(k==='rm'?' t-rm':''),'middle')); });
+  return svg(W,H,'Sequence diagram: '+d.title,head+body);
+}
+
+const RENDER={class:rClass,erd:rErd,state:rState,component:rComp,usecase:rUse,sequence:rSeq};
+const TYPE={class:'Class',erd:'Entity relationship',state:'State machine',component:'Component',usecase:'Use case',sequence:'Sequence'};
+const CAPTION={
+  component:'Boxes are deployable parts; frames are lanes. Solid arrows are calls or data flow; dashed arrows are indirect links. Shaded boxes are «external».',
+  erd:'Crow’s feet mark the many side, a circle marks zero or optional, double bars mark exactly one. Rows marked + are new, ~ changed, - removed.',
+  sequence:'Time runs down. Filled arrowheads are calls, dashed arrows are replies, open arrowheads are asynchronous notices.',
+  state:'The filled dot is the start; the ringed dot is the end. Brackets hold a guard condition.',
+  usecase:'Ellipses are use cases inside the system boundary; actors sit outside it. Dashed arrows are «include» and «extend».',
+  class:'Diamonds mark composition, hollow triangles realization, dashed open arrows dependency. Numbers at the ends are multiplicities.'
+};
+const COUNT={component:['Nodes','nodes'],erd:['Tables','tables'],sequence:['Steps','messages'],state:['States','states'],usecase:['Cases','cases'],class:['Classes','classes']};
+
+/* ---------- page ---------- */
+function inline(s){ return esc(s).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>'); }
+function prose(md){
+  const paras=String(md||'').split(/\n\s*\n/).map(p=>p.trim()).filter(p=>p&&!/^#/.test(p));
+  const cells=l=>l.trim().replace(/^\||\|$/g,'').split('|').map(c=>c.trim());
+  const table=ls=>{ const rows=ls.filter(l=>!/^\s*\|[\s:|-]+\|\s*$/.test(l)).map(cells);
+    return '<div class="tablewrap"><table><thead><tr>'+rows[0].map(c=>'<th>'+inline(c)+'</th>').join('')+'</tr></thead><tbody>'+
+      rows.slice(1).map(r=>'<tr>'+r.map(c=>'<td>'+inline(c)+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>'; };
+  return paras.map(p=>{ const ls=p.split('\n');
+    if(ls.length>1&&ls.every(l=>/^\s*\|/.test(l))) return table(ls);
+    return ls.every(l=>/^\s*[-*] /.test(l)) ? '<ul>'+ls.map(l=>'<li>'+inline(l.replace(/^\s*[-*] /,''))+'</li>').join('')+'</ul>' : '<p>'+inline(ls.join(' '))+'</p>'; }).join('');
+}
+const TAGTXT={new:'new',chg:'changed',rm:'removed'};
+const tag = s => s ? `<span class="tag ${s}">${TAGTXT[s]}</span>` : '';
+const sid = id => 'd-'+String(id).replace(/[^A-Za-z0-9_-]/g,'_');
+const pad = n => String(n).padStart(2,'0');
+const dl = rows => '<dl>'+rows.map(r=>`<div><dt>${esc(r[0])}</dt><dd>${r[1]}</dd></div>`).join('')+'</dl>';
+
+function main(){
+  const curEl=$('uml-cur'), baseEl=$('uml-base'), ref=baseEl.dataset.ref;
+  const out=$('sheets');
+  if(!window.jsyaml){ out.innerHTML='<p class="err">Could not load js-yaml from cdnjs.cloudflare.com.</p>'; return; }
+  const cur=parseModel(curEl.textContent,jsyaml.load);
+  const base=ref?parseModel(baseEl.textContent,jsyaml.load):null;
+  const delta=diffModels(base,cur);
+  const title=cur.title||'System design', rev=cur.rev;
+  const cnt={new:0,changed:0,removed:0}; delta.list.forEach(x=>cnt[x.st]++);
+  const sheets=[];
+  const errs=cur.errors.map(e=>'current: '+e).concat(base?base.errors.map(e=>'base: '+e):[]);
+  if(errs.length) sheets.push({id:'errors',nav:'Errors',lvl:'Errors',title:'Model errors',facts:[],body:`<p class="err">${esc(errs.join('\n'))}</p>`});
+  delta.sheets.forEach(sh=>{
+    const d=sh.d, warn=[], s=ST[sh.st];
+    let fig;
+    try{ fig=RENDER[d.type](d,sh.merged,warn); }catch(e){ fig=''; warn.push('render failed: '+e.message); }
+    const mine=delta.list.filter(x=>x.diagram===d.id&&x.kind!=='diagram');
+    const review=d.review.length?`<div><h3>Check here</h3><ul>${d.review.map(r=>`<li>${inline(r)}</li>`).join('')}</ul></div>`:'';
+    const changes=mine.length?`<div><h3>Changes</h3><ul class="delta">${mine.map(x=>`<li>${tag(ST[x.st])}<span><code>${esc(x.kind+' '+x.key)}</code>${x.name&&x.name!==x.key?' '+esc(x.name):''}${x.detail.length?' <code>'+esc(x.detail.join(', '))+'</code>':''}</span></li>`).join('')}</ul></div>`:'';
+    const c=COUNT[d.type], n=(sh.merged[c[1]]||[]).filter(it=>it.st!=='removed').length;
+    sheets.push({id:sid(d.id),nav:d.title,lvl:(d.level?d.level+' · ':'')+TYPE[d.type],title:d.title,st:s,
+      facts:[[c[0],String(n)]],
+      body:(d.note.trim()?`<div class="note">${prose(d.note)}</div>`:'')+
+        (warn.length?`<p class="err">${esc(warn.join('\n'))}</p>`:'')+
+        `<figure><div class="canvas">${fig}</div><figcaption>${d.caption?esc(String(d.caption)):CAPTION[d.type]}</figcaption></figure>`+
+        (review||changes?`<div class="review">${review}${changes}</div>`:'<div style="height:24px"></div>')});
+  });
+  cur.sections.forEach((s,i)=>sheets.push({id:'prose-'+i,nav:s.title,lvl:'Notes',title:s.title,facts:[],body:`<div class="note" style="padding-bottom:24px">${prose(s.body)}</div>`}));
+  const N=sheets.length;
+  const facts=[['Source',`<code>${esc(curEl.dataset.model)}</code>`],['Base',ref?`<code>${esc(ref)}</code>`:'none'],['Sheets',String(N)]];
+  if(rev) facts.unshift(['Revision',esc(rev)]);
+  if(ref) facts.push(['Delta',`${cnt.new} new, ${cnt.changed} changed, ${cnt.removed} removed`]);
+  const cover=`<section class="cover" id="cover"><div><div class="lvl">System design drawing set${rev?' · Rev '+esc(rev):''}</div><h1>${esc(title)}</h1></div>`+
+    (cur.intro?`<div class="dek">${prose(cur.intro)}</div>`:'')+
+    `<dl class="facts">${facts.map(f=>`<div><dt>${esc(f[0])}</dt><dd>${f[1]}</dd></div>`).join('')}</dl>`+
+    `<div class="legend" aria-label="Legend"><span><i class="sw new"></i>new</span><span><i class="sw chg"></i>changed</span><span><i class="sw rm"></i>removed (struck through)</span><span><i class="sw ext"></i>«external» system</span><span><i class="sw"></i>unchanged</span></div>`+
+    (cur.decided.length?`<div class="ask"><h2>Decided${rev?' in rev '+esc(rev):''}</h2><ol>${cur.decided.map(x=>`<li>${inline(x)}</li>`).join('')}</ol></div>`:'')+`</section>`;
+  $('idx').innerHTML=`<div class="k">Drawing set${rev?' · Rev '+esc(rev):''}</div><a href="#cover"><span class="no">00</span><span>Cover</span><span></span></a>`+
+    sheets.map((s,i)=>`<a href="#${s.id}"><span class="no">${pad(i+1)}</span><span>${esc(s.nav)}</span>${tag(s.st)||'<span></span>'}</a>`).join('');
+  out.innerHTML=cover+sheets.map((s,i)=>{
+    const meta=[['Sheet',`${pad(i+1)} / ${pad(N)}`]].concat(rev?[['Rev',esc(rev)]]:[],s.facts.map(f=>[f[0],esc(f[1])]),[['Delta',ref?(tag(s.st)||'<span class="tag same">none</span>'):'no base']]);
+    return `<section class="sheet${s.st==='rm'?' s-rm':''}" id="${s.id}"><header class="tb"><div class="title"><div class="lvl">${esc(s.lvl)}</div><h2>${esc(s.title)}</h2></div>${dl(meta)}</header>${s.body}</section>`;
+  }).join('');
+  const links=[...document.querySelectorAll('.index a')];
+  if('IntersectionObserver' in window){
+    const io=new IntersectionObserver(es=>{ es.forEach(en=>{ if(en.isIntersecting) links.forEach(a=>a.classList.toggle('cur',a.hash==='#'+en.target.id)); }); },{rootMargin:'-40% 0px -55% 0px'});
+    document.querySelectorAll('section.sheet,section.cover').forEach(s=>io.observe(s));
+  }
+}
+const run=()=>{ try{ main(); }catch(e){ $('sheets').innerHTML='<p class="err">'+esc(e.stack||e)+'</p>'; } };
+// Measure with the web fonts once they load; draw anyway after 3 s (offline, blocked fonts).
+fonts();
+const load=document.fonts&&document.fonts.load?Promise.all(Object.values(FONT).map(f=>document.fonts.load(f).catch(()=>0))):Promise.resolve();
+Promise.race([load,new Promise(r=>setTimeout(r,3000))]).then(run);
+})();
+</script>
