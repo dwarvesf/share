@@ -350,6 +350,123 @@ Own pointer: on the origin, a valid v:2; on a member, a valid v:3 whose `origin`
 
 On the origin the tombstone rows (5, 8, 9, 10, 13) never fire in v1: tombstones exist only for v:3 links, and the origin ignores `t/` for its own v:2 rows (DEC-17).
 
+## UI design
+Date: 2026-11-13
+Source: this spec's `## Solution` (members serve from their own machines behind one tenant hostname), the as-built Share Bar (`mac/Sources/ShareBarCore/MenuModel.swift`, an `NSMenu` built from `share profiles --json`), and the owner's intent: one glance shows every link, where it lives, and whether it answers.
+
+References (Mobbin, web): Dub link list (inline copy, struck-through archived row, toast with Undo), Linear and Square members (quiet "Invited" chip beside the name, "Online" dot), AutoSend team table (dot plus one status word), SavvyCal (links grouped under their owner), Proton Drive shared links (an Expires column), Dropbox Dash and Mistral upload dialogs (a drop zone that names its limits).
+
+### Aesthetic direction (feeds the generator)
+- Purpose: a teammate or the tenant admin publishes a file from the Mac menu bar and checks, at a glance, which links answer, where each one lives (this Mac, a teammate's machine, or the cloud), and which members need attention. Two audiences: the admin (sees members) and a member (sees only the tenant's links and its own status).
+- Tone: instrument panel. Quiet, dense, precise, native macOS. Calm when everything answers; a single warm signal when something needs a hand.
+- Constraints: macOS 14+, SwiftUI inside an `NSPopover` anchored to the status item (replaces the `NSMenu`); the app keeps reading only `share profiles --json` and `share state --json` (no new wire format beyond the fields SPEC-009 adds: `origin`, `role`, `member_id`, `member_status`); system font (SF Pro) and SF Mono for ids and hosts; SF Symbols only; follows the system light and dark appearance and the accent color; keyboard first (arrow keys move through rows, Return copies, Space previews, Delete asks to remove).
+- Differentiation: the origin column. Every link row carries a small "where it lives" mark (this Mac, a member's initials, or a cloud) so the multi-member model is legible without reading docs. The tenant header reads like a route: `s.console.so` then `3 origins, 12 links`.
+- Exclude: no big hero, no gradient header, no card per link (rows only), no pill-shaped primary buttons, no colored backgrounds per section, no emoji, no avatar photos (initials only), no color as the only state signal, no toast that hides the link it reports on, no spinner without a step name.
+- Persona: the tenant admin on a busy afternoon, three tenants, eight members, wants to know in two seconds whether anything is wrong and copy a link in one more.
+
+### Layout & structure
+Popover 380 pt wide, height fits content up to 640 pt, then the link list scrolls. Regions top to bottom:
+1. Status line: tenant summary ("All links answer" or "Needs attention: an is offline, 2 links") with the status symbol; a gear menu at the right (Settings, Share Bar help, Quit).
+2. Tenant switcher: a segmented control of tenants (hosts) when more than one is set up; each segment shows an attention dot when that tenant needs attention. One tenant: no switcher.
+3. Tenant header: host in SF Mono, role chip (Admin or Member), counts ("3 origins, 12 links"), and Start or Stop when this Mac is the origin.
+4. Drop zone: a one-line target "Drop a file to share on s.console.so" with Share File... at its right; it grows to a 96 pt dashed target while a drag hovers anywhere over the popover, and names the storage it will use ("on this Mac" or "in the cloud").
+5. Links list, grouped by origin (this Mac first, then each member A to Z, then Cloud), each group a quiet header with the origin mark, name and its state.
+6. Members (admin only), collapsed to one line when every member is active and online ("8 members, all online"); expanded shows one row per member. Removed members fold into "Removed (2)".
+7. Footer hints only when they carry information: "12 more links: run `share ls`", a cloud read error, an update notice.
+
+### Components & states
+State priority for every interactive row: disabled > loading > active > focus > hover > default.
+
+Link row (one line, 28 pt): type glyph, name (truncates in the middle), origin mark, state chip (only when not live), trailing expiry ("6d", "never"), copy button visible on hover and focus.
+| state | bg | fg | border | opacity | cursor |
+|-------|----|----|--------|---------|--------|
+| default (live) | clear | label | - | 1 | default |
+| hover | row-hover | label | - | 1 | pointer |
+| focus | row-hover | label | focus ring 2 pt accent | 1 | default |
+| active (pressed) | row-pressed | label | - | 1 | pointer |
+| loading (publishing, step named) | clear | secondaryLabel | - | 1 | progress |
+| disabled (owner offline, paused) | clear | secondaryLabel | - | 0.6 | default |
+
+Link state chips (glyph plus word, never color alone): Live (no chip), Paused (pause.circle, amber, "Paused by admin"), Offline (moon.zzz, gray, "Owner offline"), Revoked (xmark.circle, rose, name struck through, "Removed by <who>"), Expired (clock.badge.xmark, gray, name dimmed), Publishing (arrow.up.circle with step, "Uploading 3/5").
+
+Member row (admin only, 32 pt): initials badge, name, status chip, presence (filled dot Online, hollow dot Offline with "last seen 2h"), link count, kebab menu (Pause or Resume, Rotate, Copy new invite, Remove).
+Member status chips: Invited (envelope, blue, "code expires in 6d"), Active (no chip; presence shows), Paused (pause.circle, amber), Expired invite (envelope.badge, gray, "Resend code"), Left (arrow.right.square, gray, "waiting for removal"), Removing (progress, named step), Removed (in the folded group only).
+
+Toast (bottom of popover, 2.5 s, never over the row it reports on): "Copied s.console.so/7f3a21/bao-cao.pdf", "Removed bao-cao.pdf  Undo" (Undo for 5 s, before the CLI call runs), "Couldn't publish: <reason>. <next step>".
+
+### Responsive behavior
+Fixed width 380 pt. Named sizes the critique checks: 380 x 320 (one tenant, 3 links, no members), 380 x 640 (admin, 3 tenants, 12 links, 8 members, one offline), 380 x 640 dark appearance, and the HTML prototype at 390 px phone width for the review page only.
+
+### Accessibility targets
+Contrast 4.5:1 for body text, 3:1 for chips, glyphs and the focus ring, in both appearances. Every state is a glyph plus a word; VoiceOver reads row name, origin, state, and expiry ("bao-cao.pdf, on An's machine, offline, 6 days left"). Full keyboard path: Tab moves between regions, arrows move rows, Return copies, Space previews, Command-Delete removes with a confirm. Reduce Motion turns the drop-zone grow into a fade.
+
+### Design-system tokens (3-tier ladder)
+- primitive: system colors only (`labelColor`, `secondaryLabelColor`, `separatorColor`, `controlAccentColor`, `systemOrange`, `systemGray`, `systemRed`, `systemBlue`, `systemGreen`); spacing 4 / 8 / 12 / 16 pt; radius 6 pt rows, 4 pt chips; type 13 pt body, 11 pt chips and meta, 12 pt SF Mono for hosts and ids.
+- semantic: `--state-attention` -> systemOrange; `--state-error` -> systemRed; `--state-quiet` -> systemGray; `--state-info` -> systemBlue; `--state-ok` -> systemGreen; `--row-hover` -> label at 6%; `--row-pressed` -> label at 10%.
+- component: `--chip-bg` -> state color at 14%; `--chip-fg` -> state color darkened for 4.5:1; `--origin-mark-bg` -> secondaryLabel at 12%.
+- dark mode: override the semantic layer only (system colors already adapt; chip backgrounds go to 22%).
+
+### Content/copy
+Voice: plain, not chatty; specific, not technical; calm, not alarming; short, not terse.
+| Context | Tone shift | Example |
+|---|---|---|
+| Everything answers | quietest | "All links answer" |
+| One thing needs a hand | direct, names it | "An's machine is offline: 2 links wait for it" |
+| A failure | what happened plus the next step | "Couldn't publish: the bucket refused the upload. Try again, or run `share status`." |
+| Destructive action | states the effect | "Remove bao-cao.pdf? The link stops answering. The copy on An's machine stays until An removes it." |
+| Member invite | tells the admin what to send | "Send An this code: it works once, for 7 days." |
+
+## Visual critique
+Date: 2026-11-13
+Visual source: scratchpad `share-design/share-bar-redesign.html` (round 0 prototype) and its headless screenshots
+Lenses run: hierarchy/typography, system-consistency, accessibility/contrast, restraint/simplicity, expressiveness/brand-fit, persona (tenant admin on a busy afternoon); missing: none
+
+### Critical findings
+(none)
+
+### High findings
+1. The eye lands on the solid blue Share File button, not on the warning; the "one warm signal" rule is broken by orange, amber, red, blue and green competing. Found by: restraint, hierarchy, persona, brand-fit. Fix: Share File becomes a neutral bordered button in the status row; orange only marks what needs a hand; paused, offline, expired and invited chips go neutral; red only for the destructive state; accent blue only for focus, selection and progress.
+2. One fact is said three to five times (offline in the status line, group chip, dimmed rows, members summary and member row; "expired" as chip and as trailing text; the host in tab, header and drop text). Found by: restraint, hierarchy, persona. Fix: one carrier per fact. The status line counts once, the group header owns origin state, a row chip appears only when the row differs from its group, the trailing column is blank for "never" and empty when a chip already says it, the host appears only in the switcher.
+3. Chrome above the first link is about 210 pt and the members roster sits under a 420 pt list, so the popover reaches about 850 pt (cap 640) with two scroll regions. Found by: persona, restraint, hierarchy. Fix: merge status and tenant header; a "needs a look" strip under the status line lists each problem with one action; one scroll region holds links and a collapsed roster; the drop target appears only during a drag.
+4. The origin idea reads as an ordinary grouping and the tenant header does not read like a route. Found by: brand-fit, hierarchy. Fix: a route line under the switcher (`s.console.so ▸ Mini · An · Bình · Dũng · Cloud`, attention origin warm, offline origins dimmed); group headers in label color, weight 600, written as a route ("→ An's MacBook"); distinct origin marks (filled for this Mac, outlined initials for members, dashed for cloud).
+5. The brief's 3-tier token ladder is not built and type drifts across 7 sizes. Found by: system-consistency, hierarchy. Fix: primitive, semantic and component tiers with dark overriding the semantic tier only; type at 15 title, 13 body, 12 mono, 11 meta; spacing 4/8/12/16; radius 6 and 4; one origin-mark background token.
+6. Light-mode contrast misses targets: secondary label 4.34:1, dimmed rows by opacity, green chip 4.19:1, white on the primary button 4.02:1, drop border and offline ring 2.2:1. Found by: accessibility. Fix: secondary label #5f5f64, dim by a fixed color, green ink #17692d, primary #0060df (dark #0a6fe0), tertiary #7a7a80 (dark #8a8a8f).
+7. Keyboard and VoiceOver path incomplete: focus drops to body on every re-render, the kebab menu and tab list have no arrow or Esc handling, the toast is not a live region and hides its Undo after 5 s. Found by: accessibility. Fix: restore focus by id after each render; roving arrows and Esc in the menu and tabs; `role="status"` toast that holds while hovered or focused; rows expose their action and shortcut.
+
+### Medium findings
+1. The copy toast appears up to 600 pt from the clicked row and says only "Copied" for a link whose owner is offline. Found by: persona. Fix: flash a check on the row itself; for a dim row the toast adds "An's MacBook is offline: visitors get a 503 until it is back".
+2. Tab attention is a 6 px dot with no count, glyph or accessible name; the menu bar badge is color only. Found by: accessibility, persona. Fix: a count with a warn glyph in the tab and in its accessible name; the status item gets a label.
+3. Invited and Left count as "need a look", so the status line cries wolf. Found by: persona. Fix: split alerts (offline, paused, expired code, left awaiting removal) from information (invited).
+4. Trailing columns and hover insets disagree between link rows and member rows; icon buttons come in two sizes. Found by: system-consistency. Fix: one trailing grid of 40 pt and one 24 x 24 icon button; equal row insets.
+5. Copy button below the 24 pt minimum and invisible until hover. Found by: accessibility. Fix: 24 x 24, shown at 40% opacity at rest.
+
+### Low findings
+1. The footer sentence is filler when nothing is truncated. Found by: restraint, persona. Fix: show it only when rows are capped.
+2. Hosts share the "s." prefix, so a long host truncates at the distinguishing tail. Found by: persona. Fix: truncate in the middle.
+
+### Scores
+- Hierarchy/typography: 6/10
+- System-consistency: 6/10
+- Accessibility/contrast: 5/10
+- Restraint/simplicity: 5/10
+- Expressiveness/brand-fit: 5/10
+- Tenant admin on a busy afternoon (persona): 6/10
+
+### Verdict: REVISE (round 1)
+
+### Rounds
+- Round 1 (prototype r0): REVISE. Scores 6 / 6 / 5 / 5 / 5 / 6. Seven HIGH findings above, all addressed in r1.
+- Round 2 (r1): hierarchy 8 SOLID, system 8 SOLID, brand fit 7 SOLID, busy admin 8 SOLID, restraint 7 REVISE (route line repeats the group headers), accessibility 7 REVISE (dim text contrast, Undo unreachable by keyboard, live region rebuilt each render).
+- Round 3 recheck of the two REVISE lenses (r2): restraint 8 SOLID (route line kept as the signature element, calm and hidden for one-origin tenants; orange only in the title glyph, strip tint and tab count); accessibility 8 with two small fixes applied after the recheck (dim text #66666b, the Undo hold timer).
+- Final: SOLID on every lens after the two small fixes. Prototype: `docs/design/share-bar-redesign.html`.
+
+### Deferred findings
+- MEDIUM: the attention strip's 9% orange tint is a colored section background, which the brief's exclude list names; kept as the one warm carrier, revisit after use.
+- MEDIUM: the tab truncates the host from the left ("...console.so"); keeps the distinguishing tail, clips the brand prefix.
+- MEDIUM: the strip adds about 90 pt above the first link in a busy state; capped at 3 rows.
+- LOW: copy icons rest at 40% opacity on every row (accessibility wants them visible; hierarchy would show them on hover only).
+- LOW: blue Uploading and red Removed chips remain beside the gray set.
+
 ## Task Breakdown
 
 Each task lands with its tests on the existing seams. Edge-case ids name the rows each task must turn green; tests are labeled `mm <id>: ...` in `tests/share.sh` and `v5 <id>: ...` in `tests/worker.mjs`.
