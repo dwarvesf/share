@@ -25,6 +25,7 @@
 #   share [status]            server state plus the share list
 #   share serve               serve in the foreground until Ctrl-C
 #   share skill [--install]   the SKILL.md that teaches an agent to use share
+#   share version             the CLI version (X.Y.Z)
 #   share teardown [--yes]    delete the tunnel, DNS record, service, and stored token
 #   share import ...          used by migrate over ssh
 #   share migrate --to <ssh-target>   move this tenant's origin to another machine (snapshots only, R2 off)
@@ -35,6 +36,8 @@
 #
 # Docs: https://github.com/dwarvesf/share
 set -euo pipefail
+
+SHARE_VERSION=0.9.0   # bin/release rewrites it in the release commit; the suite checks it against CHANGELOG.md's newest heading
 
 die() { echo "share: $*" >&2; exit 1; }
 
@@ -200,10 +203,10 @@ running() { # the pid must still be a share serve: an unclean exit leaves the fi
   kill -0 "$pid" 2>/dev/null && [[ $(ps -o command= -p "$pid" 2>/dev/null) == *share*serve* ]]
 }
 rows() { rows_in "$index" "$backend"; }   # the only index reader
-rows_in() { # rows_in <file> <backend>: a forged row (bad id, main or malformed host=, a bad access= or access_rule=) never reaches a path, Caddyfile, or Cloudflare call
+rows_in() { # rows_in <file> <backend>: a forged row (bad id, main or malformed host=, a bad access= or access_rule=) never reaches a path, Caddyfile, or Cloudflare call; a bad revoked_by= reads unknown
   [[ -f $1 ]] || return 0
   # no {n} intervals: mawk lacks them; the host regex is setup's hostname check; the rule grammar is access_parse's
-  awk -F'\t' -v main="$host_name" -v be="$2" '
+  awk -F'\t' -v OFS='\t' -v main="$host_name" -v be="$2" '
     function hostname(h) { return h ~ /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z][a-z]+$/ }
     function uuid(u) { return length(u) == 36 && u !~ /[^0-9a-f-]/ && substr(u, 9, 1) == "-" && substr(u, 14, 1) == "-" && substr(u, 19, 1) == "-" && substr(u, 24, 1) == "-" && gsub(/-/, "-", u) == 4 }
     function rule(r,   k, v, m, e, j, at) {
@@ -222,7 +225,7 @@ rows_in() { # rows_in <file> <backend>: a forged row (bad id, main or malformed 
       return 1
     }
     (NF == 5 || NF == 6) && length($1) == 6 && $1 !~ /[^0-9a-f]/ {
-      n = split($6, a, " "); app = 0; rl = 0
+      n = split($6, a, " "); app = 0; rl = 0; fix = 0
       hp = (be != "r2"); hb = (be != "r2")   # r2 rows must carry a sound prefix= and by=
       for (i = 1; i <= n; i++) {
         if (substr(a[i], 1, 5) == "host=") {
@@ -237,6 +240,10 @@ rows_in() { # rows_in <file> <backend>: a forged row (bad id, main or malformed 
                 substr(p, 9, 1) == "." && substr(p, 18, 1) == "/" && substr(p, 10, 8) ~ /^[0-9a-f]+$/)) next
           hp = 1
         }
+        if (substr(a[i], 1, 11) == "revoked_by=") {   # display only, from a t/ record any publisher can forge: anything odd reads unknown
+          b = substr(a[i], 12)
+          if (b == "" || length(b) > 64 || b ~ /[^A-Za-z0-9._@:-]/) { a[i] = "revoked_by=unknown"; fix = 1 }
+        }
         if (substr(a[i], 1, 3) == "by=") {
           b = substr(a[i], 4)
           if (b == "" || b ~ /[^a-z0-9.-]/) next
@@ -244,6 +251,7 @@ rows_in() { # rows_in <file> <backend>: a forged row (bad id, main or malformed 
         }
       }
       if (app != rl || !hp || !hb) next   # a gated row carries both, or it is a hand edit; an r2 row needs its prefix and host
+      if (fix) { o = a[1]; for (i = 2; i <= n; i++) o = o " " a[i]; $6 = o }
       print
     }' "$1"
 }
@@ -286,12 +294,18 @@ rand_id() { # loops past a collision with an existing row or an orphaned pub/<id
     echo "$id"; return
   done
 }
-r2_id_taken() { # r2_id_taken <id>: a live GET and a prefix scan; anything but 200/404 or empty fails closed
+r2_id_taken() { # r2_id_taken <id>: a live GET of m/ and t/, and a prefix scan; anything but 200/404 or empty fails closed
   r2_call GET "m/$1" || die "the r2 record check needs a publisher token (see above)"
   case $cf_code in
     200) return 0 ;;
     404) ;;
     *) die "the r2 record check for $1 failed (HTTP $cf_code); no id was picked" ;;
+  esac
+  r2_call GET "t/$1" || die "the r2 tombstone check needs a publisher token (see above)"   # a removed member link's id is never handed out again
+  case $cf_code in
+    200) return 0 ;;
+    404) ;;
+    *) die "the r2 tombstone check for $1 failed (HTTP $cf_code); no id was picked" ;;
   esac
   r2_call LIST "o/$1."
   [[ $cf_code == 200 ]] || die "the r2 prefix check for $1 failed (HTTP $cf_code); no id was picked"
@@ -701,13 +715,13 @@ cmd_add() {
 cmd_ls() {
   access_pending_note
   [[ -s $index || $backend == r2 || $r2on == 1 ]] || { echo "no shares"; return 0; }
-  local id name src date exp opts storage t by size until gone tag acc us=$'\x1f'
+  local id name src date exp opts storage t by origin size until gone tag acc us=$'\x1f'
   list_rows ls
   if [[ -z $list_out && ( $backend == r2 || $r2on == 1 ) ]]; then
     [[ -z $list_cloud_error ]] || echo "share: cloud links not listed: $list_cloud_error" >&2
     echo "no shares"; return 0
   fi
-  while IFS=$us read -r id name src date exp opts storage t by; do
+  while IFS=$us read -r id name src date exp opts storage t by origin; do
     [[ -n $id ]] || continue
     until="never"; [[ ${exp:-0} -gt 0 ]] && until="$(day_of "$exp")"
     share_url "$id" "$name" "$opts"
@@ -715,6 +729,9 @@ cmd_ls() {
     printf '%-7s  %-8s  by=%s  %s\n' "$tag" "$t" "$by" "$share_url_out"
     if [[ $storage == cloud ]]; then
       echo "    id=$id  added=$date  expires=$until$(access_col "$opts")  by=$by  from=$src"
+    elif [[ -n $origin ]]; then   # a member's machine link (v:3), read from its pointer
+      origin="${origin#m-}"; origin="${origin%-*}"
+      echo "    id=$id  added=$date  expires=$until  origin=$origin  served by $origin's machine"
     elif [[ $backend == r2 ]]; then   # a member: the origin's link, read from its pointer
       acc=""; has_opt gated "$opts" && acc="  access=gated"
       echo "    id=$id  added=$date  expires=$until$acc  served by the tenant's origin"
@@ -729,9 +746,9 @@ cmd_ls() {
   [[ -z $list_cloud_error ]] || echo "share: cloud links not listed: $list_cloud_error" >&2
   access_ls_check
 }
-state_lines() { # state_lines: list_out as the tab lines cmd_state's jq reads (id name url kind own_host expires access storage type by), this machine's rows newest first, then the bucket's
-  local id name src date exp opts storage t by kind oh rule line mine=() rest=() i us=$'\x1f'
-  while IFS=$us read -r id name src date exp opts storage t by; do
+state_lines() { # state_lines: list_out as the tab lines cmd_state's jq reads (id name url kind own_host expires access storage type by origin), this machine's rows newest first, then the bucket's
+  local id name src date exp opts storage t by origin kind oh rule line mine=() rest=() i us=$'\x1f'
+  while IFS=$us read -r id name src date exp opts storage t by origin; do
     [[ -n $id ]] || continue
     kind="snapshot"; has_opt live "$opts" && [[ $storage == machine ]] && kind="live"
     optv host "$opts"; oh=$optv_out
@@ -739,8 +756,8 @@ state_lines() { # state_lines: list_out as the tab lines cmd_state's jq reads (i
     optv access_rule "$opts"; rule=$optv_out
     [[ $storage == machine && $backend == r2 ]] && { rule=""; has_opt gated "$opts" && rule="gated"; }   # a pointer carries the flag, never the rule
     share_url "$id" "$name" "$opts"
-    printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$id" "$name" "$share_url_out" "$kind" "$oh" "${exp:-0}" "$rule" "$storage" "$t" "$by"
-    if [[ $storage == machine && $backend != r2 ]]; then mine+=("$line"); else rest+=("$line"); fi
+    printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$id" "$name" "$share_url_out" "$kind" "$oh" "${exp:-0}" "$rule" "$storage" "$t" "$by" "$origin"
+    if [[ $storage == machine && $backend != r2 && -z $origin ]]; then mine+=("$line"); else rest+=("$line"); fi
   done <<<"$list_out"
   for ((i = ${#mine[@]} - 1; i >= 0; i--)); do printf '%s\n' "${mine[i]}"; done
   [[ ${#rest[@]} == 0 ]] || printf '%s\n' "${rest[@]}"
@@ -1213,7 +1230,10 @@ cmd_migrate() {
 # --- serving ---
 
 write_caddyfile() { # rendered from index.tsv; no-store: Cloudflare must not cache past rm or stop
-  local id name src date exp opts fqdn sroot tmp main_site="http://:$port"
+  # only listed rows are served: an unexpired, unrevoked snapshot row gets a handle on /<id> and /<id>/*; every other path answers 404.
+  # A revoked row renders nothing; live and --host rows keep today's rule (served until prune drops them)
+  local id name src date exp opts fqdn sroot tmp main_site="http://:$port" now
+  now="$(date +%s)"
   # named mode: the main site answers its own hostname (and loopback, for local probes) and nothing else;
   # a --host fqdn routed here before its own block exists, or any foreign Host, gets the 404 catch-all
   # instead of the whole pub tree. Quick mode keeps the any-host site: its hostname is unknown at render time.
@@ -1229,6 +1249,7 @@ $main_site {
 	bind 127.0.0.1
 	header Cache-Control "no-store"
 	header X-Robots-Tag "noindex, nofollow"
+	header X-Share-Served "caddy"
 	log {
 		output file "$root/access.log"
 		format json
@@ -1242,26 +1263,33 @@ EOF
     # Caddy would, so /x/..%2F<id>/f reaches pub/<id>/f past the gate. A handle block, because a bare respond sorts after handle.
     if [[ -s $index ]]; then
       while IFS=$'\t' read -r id name src date exp opts; do
+        has_opt revoked "$opts" && continue   # revoked by an admin: the bytes stay, nothing serves them
         fqdn="$(opt_val host "$opts" || true)"
-        if has_opt live "$opts" && [[ -z $fqdn ]]; then
-          printf '\thandle_path /%s/* {\n\t\treverse_proxy http://127.0.0.1:%s\n\t}\n' "$id" "${src##*:}"
+        if has_opt live "$opts"; then
+          [[ -n $fqdn ]] || printf '\thandle_path /%s/* {\n\t\treverse_proxy http://127.0.0.1:%s\n\t}\n' "$id" "${src##*:}"
+        elif [[ ${exp:-0} == 0 ]] || { [[ $exp =~ ^[0-9]+$ ]] && (( 10#$exp > now )); }; then   # a --host snapshot keeps its /<id> path here too, as the whole tree gave it
+          printf '\t@s%s path /%s /%s/*\n\thandle @s%s {\n\t\troot * "%s"\n\t\tfile_server {\n\t\t\tindex index.html README.html\n\t\t}\n\t}\n' "$id" "$id" "$id" "$id" "$pub"
         fi
       done < <(rows)
     fi
+    # the CLI's own probe files (live_check, migrate's verify) sit at the root of pub/ with no row
     cat <<EOF
+	@probe path /_probe-* /_migrate-probe-*
+	handle @probe {
+		root * "$pub"
+		file_server
+	}
 	handle /healthz {
 		respond "ok" 200
 	}
 	handle {
-		root * "$pub"
-		file_server {
-			index index.html README.html
-		}
+		respond "no such link (it may have expired or been removed)" 404
 	}
 }
 EOF
     if [[ -s $index ]]; then
       while IFS=$'\t' read -r id name src date exp opts; do
+        has_opt revoked "$opts" && continue
         fqdn="$(opt_val host "$opts" || true)"
         [[ -n $fqdn ]] || continue
         cat <<EOF
@@ -1269,6 +1297,7 @@ http://$fqdn:$port {
 	bind 127.0.0.1
 	header Cache-Control "no-store"
 	header X-Robots-Tag "noindex, nofollow"
+	header X-Share-Served "caddy"
 	log {
 		output file "$root/access.log"
 		format json
@@ -1287,7 +1316,7 @@ EOF
         printf '}\n'
       done < <(rows)
     fi
-    [[ $main_site == "http://:$port" ]] || printf 'http://:%s {\n\tbind 127.0.0.1\n\trespond 404\n}\n' "$port"
+    [[ $main_site == "http://:$port" ]] || printf 'http://:%s {\n\tbind 127.0.0.1\n\theader X-Share-Served "caddy"\n\trespond 404\n}\n' "$port"
   } >"$tmp"
   mv -f "$tmp" "$root/Caddyfile"
 }
@@ -1663,7 +1692,8 @@ cmd_state() { # read-only JSON snapshot for the menu bar app: never prunes, writ
 }
 state_jq_row='def row: split("\t") | {id: .[0], name: .[1], url: .[2], kind: .[3],
       own_host: (if .[4] == "" then null else .[4] end), expires: (.[5] | tonumber),
-      access: (if .[6] == "" then null else .[6] end), storage: .[7], type: .[8], by: .[9]};'
+      access: (if .[6] == "" then null else .[6] end), storage: .[7], type: .[8], by: .[9]}
+      + (if (.[10] // "") == "" then {} else {origin: .[10]} end);'
 
 
 # --- Cloudflare setup / teardown ---
@@ -2962,10 +2992,10 @@ access_open_url() { # the platform opener, backgrounded; skipped over ssh or wit
 # port=r2 sentinel: an older share dies on that port at load, so it can never
 # write pub/ or an Access app against an r2 profile.
 
-WORKER_VERSION=4            # bump on every Worker source change; deploys refuse a downgrade without --force
-WORKER_SHA=2209e2a60db0     # first 12 hex of the emitted source's sha256; the suite fails when it drifts
+WORKER_VERSION=5            # bump on every Worker source change; deploys refuse a downgrade without --force
+WORKER_SHA=682fa73390b1     # first 12 hex of the emitted source's sha256; the suite fails when it drifts
 WORKER_COMPAT_DATE=2026-09-30   # moves only with a WORKER_VERSION bump
-WORKER_RECORD_V=2           # the record schema this source understands: v:1 cloud records, v:2 machine pointers; a newer record answers 404
+WORKER_RECORD_V=3           # the record schema this source understands: v:1 cloud records, v:2 and v:3 machine pointers; a newer record answers 404
 worker_meta() { printf '%s\n' "$WORKER_VERSION" "$WORKER_SHA" "$WORKER_COMPAT_DATE" "$WORKER_RECORD_V"; }   # one line, four fields, for the deploy and sweep paths
 
 worker_js() { # worker_js <path>: the Worker source to $1; never a heredoc inside $( ) (macOS /bin/bash 3.2)
@@ -2974,6 +3004,8 @@ worker_js() { # worker_js <path>: the Worker source to $1; never a heredoc insid
 // inside a valid Cloudflare Access session for that record's app. With PASS set (a tenant
 // with R2 on) it runs as a route in front of the tenant's tunnel: a cloud record is served
 // from R2, a machine pointer or a miss passes through to the origin, and an alias host 301s.
+// A member's pointer (v:3) reaches that member's machine through the deploy's M_<8hex> binding;
+// POST /_share/redeem hands out a sealed invite once.
 const TYPES = {
   html: "text/html", css: "text/css", js: "text/javascript", mjs: "text/javascript",
   json: "application/json", txt: "text/plain", md: "text/markdown", csv: "text/csv",
@@ -3046,8 +3078,121 @@ const hex = async (s) => {
   return [...d].map((b) => b.toString(16).padStart(2, "0")).join("");
 };
 
-const passed = new WeakSet();   // answers from the origin: no hit counted, headers already set
+// Worker v5: one pure route() before any read, one pure decide() per record, and a named row on every answer.
+// Every 404 carries the same body and no header names the row: a per-row answer would tell which 24-bit ids exist.
+const ROW = Object.freeze(Object.fromEntries([
+  "ALIAS_301", "WRONG_HOST", "BAD_PATH", "HEALTHZ", "PASS_NON_ID", "PASS_MISS", "BAD_JSON", "PASS_V2", "V2_EXPIRED", "BAD_RECORD",
+  "GATE_DENIED", "V3_PAUSED", "V3_UNBOUND", "V3_DOWN", "V3_METHOD", "V3_EXPIRED", "V3_SERVED", "REDEEM_OK", "REDEEM_METHOD",
+  "REDEEM_BAD_BODY", "REDEEM_UNKNOWN", "REDEEM_EXPIRED", "REDEEM_UNAVAILABLE", "SHARE_PATH_UNKNOWN", "CLOUD_OBJECT",
+].map((r) => [r, r])));
+const NOT_FOUND = "no such link (it may have expired or been removed)";
 const OFFLINE = "the machine serving this link is offline; try again later";
+const PAUSED_TEXT = "this link is paused by the tenant admin";
+const MISS = Symbol("miss"), BAD_JSON = Symbol("bad json");   // decide()'s record when the read found nothing, or found no JSON
+const ORIGIN = /^m-[a-z0-9-]{2,24}-[0-9a-f]{8}$/;
+const V3_WAIT_MS = 10000;   // a member listener that never answers is offline after this; cleared once headers arrive (TASK-1a(d))
+const INVITE_DAYS = 30;     // an invite that expires further ahead than this was not written by share
+const INERT = /^(image\/(?!svg)|audio\/|video\/|application\/pdf$|text\/plain$|application\/octet-stream$)/;
+const SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-downloads";
+const PASS_HEADERS = ["accept-ranges", "content-length", "content-range", "content-encoding", "content-disposition", "content-language",
+  "etag", "last-modified", "location", "date", "vary"];
+
+const rowOf = new WeakMap();   // the row of each answer; read by tests only, never a header
+const passed = new WeakSet();  // answers that set their own headers: the origin's, a member machine's; no hit counted
+const tag = (row, resp) => { rowOf.set(resp, row); return resp; };
+const plain = (row, status, headers = {}) => tag(row, status === 404
+  ? new Response(NOT_FOUND, { status, headers: { "Content-Type": "text/plain; charset=utf-8", ...headers } })
+  : new Response(null, { status, headers }));
+
+const getish = (request) => request.method === "GET" || request.method === "HEAD";
+const tailOf = (request) => {
+  const u = new URL(request.url);
+  return request.url.slice(request.url.indexOf(u.hostname) + u.hostname.length).replace(/^:\d+/, "");
+};
+const typeOf = (path) => {   // the Worker's type for a path: a folder (trailing /) is an index or listing
+  if (path.endsWith("/")) return "text/html";
+  const last = path.split("/").pop(), dot = last.lastIndexOf(".");
+  return (dot > 0 && TYPES[last.slice(dot + 1).toLowerCase()]) || "application/octet-stream";
+};
+const pausedSet = (env) => {   // a malformed PAUSED pauses every member link: only the admin's deploy writes it, so it fails closed
+  if (!env.PAUSED) return [];
+  try { const p = JSON.parse(env.PAUSED); return Array.isArray(p) ? p : null; } catch { return null; }
+};
+
+function route(request, env) { // pure: every row decided before a bucket read; { read } names the read the request needs
+  const u = new URL(request.url), tail = tailOf(request);
+  const aliases = (env.ALIASES || "").split(",").map((a) => a.trim()).filter(Boolean);
+  if (aliases.includes(u.hostname)) {
+    return getish(request) ? { row: ROW.ALIAS_301, status: 301, location: "https://" + env.HOST + tail.split("#")[0] } : { row: ROW.ALIAS_301, status: 405 };
+  }
+  if (u.hostname !== env.HOST) return { row: ROW.WRONG_HOST, status: 404 };
+  const raw = tail.split(/[?#]/)[0] || "/";
+  if (raw === "/_share/redeem") return request.method === "POST" ? { read: "redeem" } : { row: ROW.REDEEM_METHOD, status: 405 };
+  if (raw === "/_share" || raw.startsWith("/_share/")) return { row: ROW.SHARE_PATH_UNKNOWN, status: 404 };
+  if (!env.PASS && !getish(request)) return { row: ROW.BAD_PATH, status: 405 };
+  if (/%2f|%5c|%2e|%0[0-9a-f]|%1[0-9a-f]/i.test(raw) || raw.includes("//")) return { row: ROW.BAD_PATH, status: 400 };
+  if (raw === "/healthz") return { row: ROW.HEALTHZ, status: getish(request) ? 200 : 405 };
+  const id = u.pathname.split("/")[1];
+  if (!/^[0-9a-f]{6}$/.test(id)) return { row: ROW.PASS_NON_ID, status: env.PASS ? "pass" : 404 };
+  return { read: "m/" + id, id };
+}
+
+function decide(request, env, rec, now = Date.now() / 1000) { // pure: the row for a link request, given its m/<id> record (MISS, BAD_JSON, or the parsed value)
+  const id = new URL(request.url).pathname.split("/")[1];
+  if (rec === MISS) return { row: ROW.PASS_MISS, status: env.PASS ? "pass" : 404 };
+  if (rec === BAD_JSON) return { row: ROW.BAD_JSON, status: 404 };
+  const obj = rec !== null && typeof rec === "object";
+  if (obj && rec.v === 2 && rec.storage === "machine") {   // the origin's pointer
+    if (typeof rec.expires === "number" && rec.expires > 0 && now > rec.expires) return { row: ROW.V2_EXPIRED, status: 404 };
+    return { row: ROW.PASS_V2, status: env.PASS ? "pass" : 404 };
+  }
+  if (obj && rec.v === 3) {   // a member's pointer: routed by the deploy's binding for its origin's suffix, never by the record alone
+    if (rec.storage !== "machine" || rec.id !== id || typeof rec.origin !== "string" || !ORIGIN.test(rec.origin) || typeof rec.expires !== "number") {
+      return { row: ROW.BAD_RECORD, status: 404 };
+    }
+    if (rec.expires > 0 && now > rec.expires) return { row: ROW.V3_EXPIRED, status: 404 };
+    const sfx = rec.origin.slice(-8), paused = pausedSet(env);
+    if (paused === null || paused.includes(sfx)) return { row: ROW.V3_PAUSED, status: 503 };
+    const b = env["M_" + sfx];
+    if (!b || typeof b.fetch !== "function") return { row: ROW.V3_UNBOUND, status: 404 };
+    if (!getish(request)) return { row: ROW.V3_METHOD, status: 405 };
+    return { row: ROW.V3_SERVED, status: "bind", binding: "M_" + sfx };
+  }
+  // a cloud record is v:1 with no storage key; any other shape answers 404 and never reaches the origin
+  if (!obj || rec.v !== 1 || "storage" in rec || rec.id !== id || typeof rec.prefix !== "string" ||
+    !new RegExp("^o/" + id + "\\.[0-9a-f]{8}/$").test(rec.prefix) || (rec.expires > 0 && now > rec.expires)) {
+    return { row: ROW.BAD_RECORD, status: 404 };
+  }
+  return { row: ROW.CLOUD_OBJECT, status: "serve", gated: isGated(rec) };
+}
+
+function settleV3(answer, id, path) { // pure: a member machine's answer (null when the fetch threw or timed out) to its row
+  if (!answer || !answer.headers.has("x-share-served")) return { row: ROW.V3_DOWN, status: 503 };
+  const loc = answer.headers.get("location");
+  if (answer.status >= 300 && answer.status < 400 && loc !== null) {
+    let ok = false;   // a relative path, or an absolute path under /<id>/; never another host or scheme
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(loc) && !loc.startsWith("//") && !loc.includes("\\")) {
+      try {
+        const to = new URL(loc, "http://h.invalid" + path);
+        ok = to.host === "h.invalid" && (to.pathname === "/" + id + "/" || to.pathname.startsWith("/" + id + "/"));
+      } catch { ok = false; }
+    }
+    if (!ok) return { row: ROW.V3_SERVED, status: 502 };
+  }
+  return { row: ROW.V3_SERVED, status: answer.status };
+}
+
+function decideRedeem(body, env, mo, now = Date.now() / 1000) { // pure: the redeem row before the claim; mo is MISS, BAD_JSON, or the envelope
+  if (!/^[0-9a-f]{64}$/.test(body)) return { row: ROW.REDEEM_BAD_BODY, status: 400 };
+  if (mo === MISS || mo === BAD_JSON || mo === null || typeof mo !== "object") return { row: ROW.REDEEM_UNKNOWN, status: 404 };
+  if (mo.v !== 1 || typeof mo.member_id !== "string" || !ORIGIN.test(mo.member_id) || typeof mo.expires !== "number" ||
+    typeof mo.sealed !== "string" || !mo.sealed || typeof mo.mac !== "string" || !/^[0-9a-f]{64}$/.test(mo.mac)) {
+    return { row: ROW.REDEEM_UNKNOWN, status: 404 };   // a claimed envelope keeps no sealed bytes, so it lands here too
+  }
+  if (now > mo.expires) return { row: ROW.REDEEM_EXPIRED, status: 410 };
+  if (mo.expires > now + INVITE_DAYS * 86400) return { row: ROW.REDEEM_UNKNOWN, status: 404 };
+  return { row: ROW.REDEEM_OK, status: "claim" };
+}
 
 async function pass(request) {   // the route is skipped for a same-host fetch, so this reaches the tunnel (spike TASK-1a)
   let r;
@@ -3061,6 +3206,7 @@ async function pass(request) {   // the route is skipped for a same-host fetch, 
   const out = down
     ? new Response(OFFLINE, { status: 503, headers: { "Retry-After": "60", "Content-Type": "text/plain; charset=utf-8" } })
     : new Response(r.body, r);   // rewrapped: a fetch answer's headers are immutable
+  out.headers.delete("X-Share-Served");   // the origin Caddy's marker stays between the Worker and the machine
   out.headers.set("Cache-Control", "no-store");
   out.headers.set("X-Robots-Tag", "noindex, nofollow");
   passed.add(out);
@@ -3072,59 +3218,115 @@ const capped = (p, ms) => {   // a bucket read that hangs counts as a failed one
   return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error("slow")), ms); })]).finally(() => clearTimeout(t));
 };
 
+async function readJson(env, key) { // MISS for an absent or unreadable object (the read failed or hung), BAD_JSON for a body that is not JSON
+  let mo;
+  try { mo = await capped(env.BUCKET.get(key), 2000); } catch { mo = null; }
+  if (mo === null) return { rec: MISS, mo: null };
+  try { return { rec: await mo.json(), mo }; } catch { return { rec: BAD_JSON, mo }; }
+}
+
+async function redeem(request, env) { // row 3: POST /_share/redeem with h; the envelope once, claimed then deleted
+  let body = "";   // 64 hex: a declared length over 128 is refused unread
+  if (Number(request.headers.get("content-length") || 0) <= 128) {
+    try { body = new TextDecoder().decode((await request.arrayBuffer()).slice(0, 128)); } catch { body = ""; }
+  }
+  const pre = decideRedeem(body, env, MISS);
+  if (pre.row === ROW.REDEEM_BAD_BODY) return plain(pre.row, pre.status);
+  const key = "i/" + body;
+  let got;
+  try {
+    const mo = await capped(env.BUCKET.get(key), 2000);
+    got = mo === null ? { rec: MISS, mo } : await mo.text().then((t) => { try { return { rec: JSON.parse(t), mo, text: t }; } catch { return { rec: BAD_JSON, mo }; } });
+  } catch { return plain(ROW.REDEEM_UNAVAILABLE, 503); }
+  const d = decideRedeem(body, env, got.rec);
+  if (d.row === ROW.REDEEM_EXPIRED) {
+    try { await env.BUCKET.delete(key); } catch { /* the sweep in member sync deletes it later */ }
+    return plain(d.row, d.status);
+  }
+  if (d.row !== ROW.REDEEM_OK) return plain(d.row, d.status);
+  let claimed;   // only one of two concurrent redeems wins the conditional put; the claim keeps expires for the sweep
+  try {
+    claimed = await env.BUCKET.put(key, JSON.stringify({ v: 1, member_id: got.rec.member_id, expires: got.rec.expires, claimed: Math.floor(Date.now() / 1000) }),
+      { onlyIf: { etagMatches: got.mo.etag } });
+  } catch { return plain(ROW.REDEEM_UNAVAILABLE, 503); }
+  if (claimed === null) return plain(ROW.REDEEM_UNKNOWN, 404);
+  try { await env.BUCKET.delete(key); } catch { return plain(ROW.REDEEM_UNAVAILABLE, 503); }   // the sealed bytes stay unreturned; the claim stays
+  return tag(ROW.REDEEM_OK, new Response(got.text, { status: 200, headers: { "Content-Type": "application/json" } }));
+}
+
+async function member(request, env, d, id) { // row 15: GET or HEAD through the member's binding, with only content-negotiation headers
+  const tail = tailOf(request).split("#")[0], path = tail.split("?")[0];
+  const headers = new Headers();
+  for (const [k, v] of request.headers) {
+    const n = k.toLowerCase();
+    if (n === "range" || n.startsWith("if-") || n.startsWith("accept") || n === "user-agent") headers.set(k, v);
+  }
+  const ac = new AbortController(), timer = setTimeout(() => ac.abort(), V3_WAIT_MS);
+  let r;
+  try {
+    r = await env[d.binding].fetch(new Request("http://" + env.HOST + tail, { method: request.method, headers, redirect: "manual", signal: ac.signal }),
+      { signal: ac.signal });   // TASK-1a(d) sampled fetch(req, {signal}); the Request carries it too
+  } catch { r = null; } finally { clearTimeout(timer); }   // cleared once the headers arrive: a long body is never cut at the timer
+  const s = settleV3(r, id, path);
+  if (s.row === ROW.V3_DOWN) {
+    return tag(s.row, new Response(OFFLINE, { status: 503, headers: { "Retry-After": "60", "Content-Type": "text/plain; charset=utf-8" } }));
+  }
+  const keep = new Headers();   // an allowlist: no cookie, auth prompt, HSTS, Link, Refresh or Clear-Site-Data from a member machine
+  const redirect = s.status >= 300 && s.status < 400;   // Location only on a 3xx, the one settleV3 checked
+  if (s.status !== 502) for (const h of PASS_HEADERS) if (r.headers.has(h) && (h !== "location" || redirect)) keep.set(h, r.headers.get(h));
+  const out = new Response(s.status === 502 ? null : r.body, { status: s.status, statusText: s.status === 502 ? "" : r.statusText, headers: keep });
+  // the member's Caddy never picks the type: XHTML, XML or a sniffed answer would run script on this origin. The sandbox goes on
+  // unless both the path's type and the type the machine answered are inert (an answer with no type is not inert)
+  const type = typeOf(path), said = ((r && r.headers.get("content-type")) || "").split(";")[0].trim().toLowerCase();
+  out.headers.set("Content-Type", type);
+  out.headers.set("X-Content-Type-Options", "nosniff");
+  if (!INERT.test(type) || !INERT.test(said)) out.headers.set("Content-Security-Policy", SANDBOX);
+  out.headers.set("Cache-Control", "no-store");
+  out.headers.set("X-Robots-Tag", "noindex, nofollow");
+  passed.add(out);   // never counted as a hit
+  return tag(s.row, out);
+}
+
 async function handle(request, env) {
   const u = new URL(request.url);
-  const tail = request.url.slice(request.url.indexOf(u.hostname) + u.hostname.length).replace(/^:\d+/, "");
-  const getish = request.method === "GET" || request.method === "HEAD";
-  const aliases = (env.ALIASES || "").split(",").map((a) => a.trim()).filter(Boolean);
-  if (aliases.includes(u.hostname)) {
-    if (!getish) return new Response(null, { status: 405 });
-    return new Response(null, { status: 301, headers: { Location: "https://" + env.HOST + tail.split("#")[0] } });
-  }
-  if (u.hostname !== env.HOST) return new Response(null, { status: 404 });
-  if (!env.PASS && !getish) return new Response(null, { status: 405 });
-  const raw = tail.split(/[?#]/)[0] || "/";
-  if (/%2f|%5c|%2e|%0[0-9a-f]|%1[0-9a-f]/i.test(raw) || raw.includes("//")) {
-    return new Response(null, { status: 400 });
-  }
-  if (raw === "/healthz") {
-    if (!getish) return new Response(null, { status: 405 });
+  const rt = route(request, env);
+  if (rt.read === "redeem") return redeem(request, env);
+  if (rt.row === ROW.ALIAS_301 && rt.status === 301) return tag(rt.row, new Response(null, { status: 301, headers: { Location: rt.location } }));
+  if (rt.row === ROW.HEALTHZ && rt.status === 200) {
     const headers = {
       "X-Share-Worker": (env.VERSION || "") + " " + (env.SHA || ""),
       "X-Share-Gate": env.TEAM ? "1" : "0",
     };
-    if (!env.PASS) return new Response("ok", { status: 200, headers });
+    if (env.DEPLOY) headers["X-Share-Deploy"] = env.DEPLOY;   // the deploy nonce: a deploy is live once this answers it
+    if (!env.PASS) return tag(rt.row, new Response("ok", { status: 200, headers }));
     let up = false;   // the tunnel leg: the origin's own /healthz, through the same skipped route
     try {
       const r = await fetch("https://" + env.HOST + "/healthz", { signal: AbortSignal.timeout(3000) });
       up = r.status === 200 && (await r.text()).trim() === "ok";
     } catch { up = false; }
     headers["X-Share-Tunnel"] = up ? "1" : "0";
-    return new Response(up ? "ok" : "tunnel down", { status: up ? 200 : 503, headers });
+    return tag(rt.row, new Response(up ? "ok" : "tunnel down", { status: up ? 200 : 503, headers }));
   }
-  const segs = u.pathname.split("/");
-  const id = segs[1];
-  if (!/^[0-9a-f]{6}$/.test(id)) return env.PASS ? pass(request) : new Response(null, { status: 404 });
-  let mo;
-  try { mo = await capped(env.BUCKET.get("m/" + id), 2000); } catch { mo = null; }
-  if (mo === null) return env.PASS ? pass(request) : new Response(null, { status: 404 });
-  let rec;
-  try { rec = await mo.json(); } catch { return new Response(null, { status: 404 }); }
-  if (rec && typeof rec === "object" && rec.v === 2 && rec.storage === "machine") {
-    return env.PASS ? pass(request) : new Response(null, { status: 404 });
-  }
-  // a cloud record is v:1 with no storage key; any other shape answers 404 and never reaches the origin
-  if (!rec || typeof rec !== "object" || rec.v !== 1 || "storage" in rec || rec.id !== id || typeof rec.prefix !== "string" ||
-    !new RegExp("^o/" + id + "\\.[0-9a-f]{8}/$").test(rec.prefix) ||
-    (rec.expires > 0 && Date.now() / 1000 > rec.expires)) {
-    return new Response(null, { status: 404 });
-  }
-  if (isGated(rec)) {
+  if (!rt.read) return rt.status === "pass" ? tag(rt.row, await pass(request)) : plain(rt.row, rt.status);
+  const { rec } = await readJson(env, rt.read);
+  const d = decide(request, env, rec);
+  if (d.status === "pass") return tag(d.row, await pass(request));
+  if (d.status === "bind") return member(request, env, d, rt.id);
+  if (d.row === ROW.V3_PAUSED) return tag(d.row, new Response(PAUSED_TEXT, { status: 503, headers: { "Content-Type": "text/plain; charset=utf-8" } }));
+  if (d.status !== "serve") return plain(d.row, d.status);
+  if (d.gated) {
     let ok = false;
     try { ok = await gatedOk(request, env, rec); } catch { ok = false; }
-    if (!ok) return new Response(null, { status: 404 });
+    if (!ok) return plain(ROW.GATE_DENIED, 404);
   }
-  if (!getish) return new Response(null, { status: 405 });
+  return tag(ROW.CLOUD_OBJECT, await cloud(request, env, rec, u));
+}
+
+async function cloud(request, env, rec, u) { // row 16: a cloud record's bytes from R2
+  const id = rec.id, raw = tailOf(request).split(/[?#]/)[0] || "/";
+  const segs = u.pathname.split("/");
+  const nf = () => new Response(NOT_FOUND, { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8" } });
+  if (!getish(request)) return new Response(null, { status: 405 });
   const rest = segs.slice(2);
   if (rest.length === 0) return new Response(null, { status: 308, headers: { Location: u.origin + "/" + id + "/" } });
   const cond = { range: request.headers, onlyIf: request.headers };
@@ -3151,13 +3353,18 @@ async function handle(request, env) {
       await env.BUCKET.head(rec.prefix + rel + "/README.html") !== null)) {
     return new Response(null, { status: 308, headers: { Location: u.origin + u.pathname + "/" + u.search } });
   }
-  if (obj === null) return new Response(null, { status: 404 });
+  if (obj === null) return nf();
   if (obj.unsat !== undefined) return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${obj.unsat}` } });
   if (obj.body === null) return new Response(null, { status: 412 });
   const h = new Headers();
   if (obj.writeHttpMetadata) obj.writeHttpMetadata(h);
   const ext = rel.split(".").pop().toLowerCase();
-  h.set("Content-Type", TYPES[ext] || "application/octet-stream");
+  const type = TYPES[ext] || "application/octet-stream";
+  h.set("Content-Type", type);
+  if (env.MEMBERS === "1" && /^(text\/html|image\/svg\+xml|application\/xml)$/.test(type)) {   // on T2 any publisher token writes any cloud record
+    h.set("Content-Security-Policy", SANDBOX);
+    h.set("X-Content-Type-Options", "nosniff");
+  }
   let status = 200;   // R2 sets obj.range whenever a range option is passed, so only a request Range makes a 206
   if (request.headers.has("range") && obj.range) {
     const r = obj.range, sfx = r.suffix !== undefined;   // live R2 carries every key, unset ones undefined
@@ -3174,11 +3381,11 @@ export default {
     const id = (url.pathname.split("/")[1] || "");
     let resp;
     try { resp = await handle(request, env); }
-    catch { resp = new Response(null, { status: 404 }); }
+    catch { resp = plain(ROW.BAD_RECORD, 404); }   // an unexpected throw fails closed
     if (passed.has(resp)) return resp;
     resp.headers.set("Cache-Control", "no-store");
     resp.headers.set("X-Robots-Tag", "noindex, nofollow");
-    if (resp.status < 400 && url.pathname !== "/healthz" &&
+    if (resp.status < 400 && url.pathname !== "/healthz" && rowOf.get(resp) === ROW.CLOUD_OBJECT &&
       env.HITS && env.SALT && /^[0-9a-f]{6}$/.test(id)) {
       const pseudo = (await hex(env.SALT + (request.headers.get("cf-connecting-ip") || ""))).slice(0, 16);
       ctx.waitUntil(Promise.resolve(env.HITS.writeDataPoint({ indexes: [id], blobs: [id, pseudo] })).catch(() => {}));
@@ -3294,13 +3501,14 @@ list_bucket() { # list_bucket ls|state <local ids>: the bucket's display rows (f
     optv type "$opts"; type_out=$optv_out
     if ! type_ok "$type_out"; then if [[ $name == *.* ]]; then type_of "/dev/null/$name"; else type_out=folder; fi; fi
     optv by "$opts"
-    printf '%s\n' "$id$us$name$us$src$us$date$us$exp$us$opts${us}cloud$us$type_out$us${optv_out:-?}"
+    printf '%s\n' "$id$us$name$us$src$us$date$us$exp$us$opts${us}cloud$us$type_out$us${optv_out:-?}$us"
   done < <(crows)
-  [[ $backend == r2 ]] || return 0   # on the origin every machine record is its own pointer; its index is their truth
-  printf '%s' "${r2_mrows:-}" | tr '\t' "$us" | grep -v '^$' | awk -F"$us" -v OFS="$us" -v now="$(date +%s)" '$4 == 0 || $4 > now {print $1, $2, "", $3, $4, $5, "machine", $6, $7}' || true   # an expired pointer is a prune'"'"'s, not a link
+  # on the origin a v:2 is its own pointer (its index is their truth), so it lists only the members' v:3 rows; an expired pointer is a prune's, not a link
+  printf '%s' "${r2_mrows:-}" | tr '\t' "$us" | grep -v '^$' | awk -F"$us" -v OFS="$us" -v now="$(date +%s)" -v all="$([[ $backend == r2 ]] && echo 1)" \
+    '($4 == 0 || $4 > now) && (all == 1 || $8 != "") {print $1, $2, "", $3, $4, $5, "machine", $6, $7, $8}' || true
 }
 
-list_rows() { # list_rows ls|state|brief: this profile's display rows into list_out (fields split by \x1f): id name src added expires opts storage type by
+list_rows() { # list_rows ls|state|brief: this profile's display rows into list_out (fields split by \x1f): id name src added expires opts storage type by origin
   # sets list_cloud_error and list_cloud_more. Bucket rows are display data: they never reach rows(), the index, a Caddyfile, or a stage path
   local id name src date exp opts lids="" f me_by us=$'\x1f'
   list_out="" list_cloud_error="" list_cloud_error_code="" list_cloud_more=0
@@ -3309,7 +3517,7 @@ list_rows() { # list_rows ls|state|brief: this profile's display rows into list_
     while IFS=$'\t' read -r id name src date exp opts; do
       if has_opt live "$opts"; then type_out=site; else type_of "$pub/$id/$name"; fi
       optv by "$opts"
-      list_out+="$id$us$name$us$src$us$date$us$exp$us$opts${us}machine$us$type_out$us${optv_out:-$me_by}"$'\n'
+      list_out+="$id$us$name$us$src$us$date$us$exp$us$opts${us}machine$us$type_out$us${optv_out:-$me_by}$us"$'\n'
       lids+="$id"$'\n'
     done < <(rows)
     [[ $r2on == 1 && $1 != brief ]] || return 0
@@ -3667,29 +3875,36 @@ r2_read() { # r2_read [<n> <local ids>]: every m/ record into this process's own
   fi
 }
 
-r2_take() { # r2_take <snap> <m/ key> <json>: one record into the cloud rows, the sweep view, and r2_machine ("<id>\t<expires>" per v:2 machine pointer)
+r2_take() { # r2_take <snap> <m/ key> <json>: one record into the cloud rows, the sweep view, r2_machine ("<id>\t<expires>" per v:2 machine pointer), and r2_mrows (v:2 and v:3)
   local e
   r2_record_row "$2" "$3" >>"$1"; r2_record_raw "$2" "$3"
   e="$(jq -r --arg id "${2#m/}" 'select(.v == 2 and .storage == "machine" and .id == $id and (.expires | type == "number" and . >= 0 and . < 1e11)) | .expires | floor' <<<"$3" 2>/dev/null)" || return 0
   [[ -z $e ]] || r2_machine+="${2#m/}"$'\t'"$e"$'\n'
-  # the v:2 display reader: every field checked before shell arithmetic or a URL sees it; a record that fails is skipped like a forged row
+  # the machine display reader (v:2 the origin's pointer, v:3 a member's with its origin): every field checked before shell arithmetic
+  # or a URL sees it; a record that fails is skipped like a forged row. The reap list above stays v:2 only (a v:3 is never the origin's)
   r2_mrows+="$(jq -r --arg id "${2#m/}" '
     def clean: type == "string" and (explode | all(. >= 32 and . != 127));
-    select(type == "object" and .v == 2 and .storage == "machine" and .id == $id
+    select(type == "object" and .storage == "machine" and .id == $id
       and (.expires | tostring | test("^[0-9]{1,11}$")) and (.added | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$"))
       and (.name | clean and length > 0) and (.by | clean and test("^[a-z0-9.-]+$"))
-      and (.opts | type == "string" and (split(" ") | all(. == "" or . == "noindex" or . == "live" or . == "gated")))
       and ((.type // "") as $t | ["pdf", "image", "video", "audio", "folder", "site", "markdown", "archive", "text", "other"] | index($t))
-      and ((.own_host // "") | type == "string" and test("^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\\.[a-z][a-z]+$")))
-    | [.id, .name, .added, (.expires | tostring), (.opts + (if (.own_host // "") == "" then "" else " host=" + .own_host end)), .type, .by] | @tsv' <<<"$3" 2>/dev/null)"$'\n' || true
+      and ((.v == 2
+          and (.opts | type == "string" and (split(" ") | all(. == "" or . == "noindex" or . == "live" or . == "gated")))
+          and ((.own_host // "") | type == "string" and test("^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\\.[a-z][a-z]+$")))
+        or (.v == 3 and (.expires | type == "number")
+          and (.origin | type == "string" and test("^m-[a-z0-9-]{2,24}-[0-9a-f]{8}$"))
+          and (.opts | type == "string" and (split(" ") | all(. == "" or . == "noindex")))
+          and (has("own_host") | not))))
+    | [.id, .name, .added, (.expires | tostring), (.opts + (if (.own_host // "") == "" then "" else " host=" + .own_host end)), .type, .by,
+       (if .v == 3 then .origin else "" end)] | @tsv' <<<"$3" 2>/dev/null)"$'\n' || true
   return 0
 }
 
 r2_record_raw() { # r2_record_raw <m/ key> <json>: the orphan sweep's own view; the prefix into r2_refs, or the first key this CLI cannot read into r2_sweep_block
-  # a cloud record (v:1) names its upload; an origin's machine pointer (v:2, storage machine, no prefix) is readable and names none
+  # a cloud record (v:1) names its upload; a machine pointer (v:2 the origin's, v:3 a member's, any later v; storage machine, no prefix) is readable and names none
   local p
   p="$(jq -r 'if type == "object" and .v == 1 and (.prefix | type == "string") then .prefix
-    elif type == "object" and .v == 2 and .storage == "machine" and (has("prefix") | not) then ""
+    elif type == "object" and (.v | type == "number") and .v >= 2 and .storage == "machine" and (has("prefix") | not) then ""
     else error("unreadable") end' <<<"$2" 2>/dev/null)" ||
     { r2_sweep_block="${r2_sweep_block:-$1}"; return 0; }
   [[ -z $p ]] || r2_refs+="$p"$'\n'
@@ -4107,6 +4322,11 @@ r2_api_dry() { # the account API under SHARE_R2_DRY: state files in $SHARE_R2_DR
     "POST "*/analytics_engine/sql)
       printf 'SQL %s\n' "$3" >>"$root/r2-calls.log"
       cf_body="$(cat "$d/sql.json" 2>/dev/null || echo '{"meta":[],"data":[],"rows":0}')" ;;
+    "GET "*/connectivity/directory/services/*)   # one VPC Service by id: a file per service under .cf/services/ (the carry-forward check)
+      n="${p##*/}"
+      if [[ ${SHARE_R2_DRY_ROLE:-} == deny ]]; then cf_code=403 cf_body=$deny
+      elif [[ $n =~ ^[A-Za-z0-9-]+$ && -f $d/services/$n.json ]]; then cf_body="{\"success\":true,\"result\":$(cat "$d/services/$n.json")}"
+      else cf_code=404 cf_body='{"success":false,"errors":[{"code":5104}]}'; fi ;;
     "GET "*/cfd_tunnel*|"GET "*/connectivity/directory/services*|"GET /user/tokens?"*)   # admin-token and minter-token --test probes
       [[ ${SHARE_R2_DRY_ROLE:-} != deny ]] || { cf_code=403 cf_body=$deny; } ;;
     "GET "*/access/organizations)
@@ -4119,7 +4339,7 @@ r2_api_dry() { # the account API under SHARE_R2_DRY: state files in $SHARE_R2_DR
 
 r2_healthz() { # r2_healthz [secs]: hz_code (200 only for a "200 ok" body), hz_pair (X-Share-Worker), hz_gate (X-Share-Gate: 1 when TEAM is set), hz_tunnel (X-Share-Tunnel) from https://<host>/healthz
   # a tenant Worker answers 503 with its pair and X-Share-Tunnel: 0 while the origin is off: the Worker is up, so hz_code is 200 and hz_tunnel 0
-  hz_code=000 hz_pair="" hz_gate=0 hz_tunnel=""
+  hz_code=000 hz_pair="" hz_gate=0 hz_tunnel="" hz_deploy=""
   local h b
   h="$(mktemp "${TMPDIR:-/tmp}/share-hz.XXXXXX")"
   if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then   # the dry Worker's answer as a header file and a body, read by the same lines below
@@ -4130,6 +4350,9 @@ r2_healthz() { # r2_healthz [secs]: hz_code (200 only for a "200 ok" body), hz_p
     if [[ ${SHARE_R2_DRY_HEALTHZ:-} != down && ( -f $d/domain.json || $routed == 1 ) && -f $d/script.json ]]; then
       pair="$(jq -r '[(.bindings[] | select(.name == "VERSION") | .text), (.bindings[] | select(.name == "SHA") | .text)] | join(" ")' "$d/script.json")"
       gate="$(jq -r 'if any(.bindings[]; .name == "TEAM" and (.text // "") != "") then 1 else 0 end' "$d/script.json")"
+      local dn; dn="$(jq -r '[.bindings[] | select(.name == "DEPLOY") | .text] | first // ""' "$d/script.json")"
+      [[ ${SHARE_R2_DRY_HEALTHZ:-} != old-deploy ]] || dn="0000000000000000"   # the runtime still serves an earlier deploy
+      [[ -z $dn ]] || gate="$gate"$'\r\nx-share-deploy: '"$dn"
       case ${SHARE_R2_DRY_HEALTHZ:-} in
         tunnel-down) printf 'HTTP/2 503 \r\nx-share-worker: %s\r\nx-share-gate: %s\r\nx-share-tunnel: 0\r\n\r\n' "$pair" "$gate" >"$h"; b="tunnel down" ;;
         503-bare) printf 'HTTP/2 503 \r\n\r\n' >"$h"; b="" ;;
@@ -4146,6 +4369,7 @@ r2_healthz() { # r2_healthz [secs]: hz_code (200 only for a "200 ok" body), hz_p
   hz_pair="$(awk 'tolower($1) == "x-share-worker:" {sub(/\r$/, ""); print $2 " " $3; exit}' "$h")"
   [[ "$(awk 'tolower($1) == "x-share-gate:" {sub(/\r$/, ""); print $2; exit}' "$h")" == 1 ]] && hz_gate=1
   hz_tunnel="$(awk 'tolower($1) == "x-share-tunnel:" {sub(/\r$/, ""); print $2; exit}' "$h")"
+  hz_deploy="$(awk 'tolower($1) == "x-share-deploy:" {sub(/\r$/, ""); print $2; exit}' "$h")"
   rm -f "$h"
   if [[ $hz_code == 503 && $hz_tunnel == 0 && $hz_pair =~ ^[0-9]+\ [0-9a-f]{12}$ ]]; then hz_code=200   # read from the headers, never the status alone
   elif [[ $hz_code == 200 && ${b:-} != ok ]]; then hz_code=000; fi
@@ -4157,17 +4381,19 @@ r2_wait_healthz() { # r2_wait_healthz admin|join: three 200s in a row within SHA
   [[ ${SHARE_R2_DRY:-0} == 1 ]] && poll=0
   while :; do
     r2_healthz
-    if [[ $hz_code == 200 && ( $1 == join || $hz_pair == "$WORKER_VERSION $WORKER_SHA" ) && ( $1 != tenant || $hz_tunnel == 1 ) ]]; then
+    if [[ $hz_code == 200 && ( $1 == join || $hz_pair == "$WORKER_VERSION $WORKER_SHA" ) && ( $1 != tenant || $hz_tunnel == 1 ) &&
+      ( $1 == join || -z $r2_deploy_nonce || $hz_deploy == "$r2_deploy_nonce" ) ]]; then
       streak=$((streak + 1)); [[ $streak -ge 3 ]] && return 0
     else
       streak=0
     fi
     if [[ $1 == tenant && $((SECONDS - start)) -ge $wait ]]; then   # the config is written by now: the rollback is --no-r2
       local leg="the Worker leg"; [[ $hz_code == 200 && $hz_pair == "$WORKER_VERSION $WORKER_SHA" ]] && leg="the tunnel leg (X-Share-Tunnel: ${hz_tunnel:-none})"
+      [[ -z $r2_deploy_nonce || $hz_deploy == "$r2_deploy_nonce" ]] || leg="the deploy (X-Share-Deploy ${hz_deploy:-none}, not this deploy's $r2_deploy_nonce; rerun the same setup)"
       tenant_die "https://$host_name/healthz did not answer 200 ok with this share's Worker and X-Share-Tunnel: 1 three times in a row within ${wait}s (last: $hz_code ${hz_pair:-no pair}); $leg is down"
     fi
     [[ $((SECONDS - start)) -lt $wait ]] ||
-      die "https://$host_name/healthz did not answer 200 ok three times in a row within ${wait}s (last: $hz_code ${hz_pair:-no pair}); the config was not written; rerun setup once the certificate is issued"
+      die "https://$host_name/healthz did not answer 200 ok three times in a row within ${wait}s (last: $hz_code ${hz_pair:-no pair}${r2_deploy_nonce:+, X-Share-Deploy ${hz_deploy:-none} where this deploy is $r2_deploy_nonce}); the config was not written; rerun setup once the certificate is issued"
     sleep "$poll"
   done
 }
@@ -4177,13 +4403,80 @@ r2_deploy_meta() { # r2_deploy_meta <team> <dataset> [salt]: the multipart metad
   [[ -n ${3:-} ]] && salt=',{"type":"secret_text","name":"SALT","text":"'"$3"'"}'
   local tenant=""   # a tenant Worker (setup --r2) passes misses to the origin and 301s its aliases; an r2-only profile binds neither
   [[ -z ${r2_pass:-} ]] || tenant=',{"type":"plain_text","name":"PASS","text":"1"},{"type":"plain_text","name":"ALIASES","text":"'"${r2_aliases:-}"'"}'
-  printf '{"main_module":"share.js","compatibility_date":"%s","bindings":[{"type":"r2_bucket","name":"BUCKET","bucket_name":"%s"},{"type":"analytics_engine","name":"HITS","dataset":"%s"},{"type":"plain_text","name":"HOST","text":"%s"},{"type":"plain_text","name":"TEAM","text":"%s"},{"type":"plain_text","name":"VERSION","text":"%s"},{"type":"plain_text","name":"SHA","text":"%s"}%s%s],"keep_bindings":["secret_text"]}\n' \
-    "$WORKER_COMPAT_DATE" "$r2_bucket" "$2" "$host_name" "$1" "$WORKER_VERSION" "$WORKER_SHA" "$tenant" "$salt"
+  local carry=""   # every deployed member binding, MEMBERS and PAUSED, resent as read (SPEC-009 DEC-15); then this deploy's own nonce
+  [[ ${r2_carry:-[]} == "[]" ]] || carry=",$(jq -r 'map(tojson) | join(",")' <<<"$r2_carry")"
+  [[ -z ${r2_deploy_nonce:-} ]] || carry="$carry"',{"type":"plain_text","name":"DEPLOY","text":"'"$r2_deploy_nonce"'"}'
+  printf '{"main_module":"share.js","compatibility_date":"%s","bindings":[{"type":"r2_bucket","name":"BUCKET","bucket_name":"%s"},{"type":"analytics_engine","name":"HITS","dataset":"%s"},{"type":"plain_text","name":"HOST","text":"%s"},{"type":"plain_text","name":"TEAM","text":"%s"},{"type":"plain_text","name":"VERSION","text":"%s"},{"type":"plain_text","name":"SHA","text":"%s"}%s%s%s],"keep_bindings":["secret_text"]}\n' \
+    "$WORKER_COMPAT_DATE" "$r2_bucket" "$2" "$host_name" "$1" "$WORKER_VERSION" "$WORKER_SHA" "$tenant" "$carry" "$salt"
+}
+
+r2_carry="[]" r2_carry_dep="[]" r2_dep_nonce="" r2_deploy_nonce=""
+r2_carry_read() { # r2_carry_read <settings body>: the bindings every deploy re-sends (each M_<8hex> vpc_service, MEMBERS, PAUSED) into r2_carry, and the
+  # deployed copy into r2_carry_dep for the compare; the deployed DEPLOY nonce into r2_dep_nonce. A shape this share cannot carry dies before any write
+  local out
+  out="$(jq -c '[.result.bindings[]? | select((.type == "vpc_service" and (.name | type == "string" and test("^M_[0-9a-f]{8}$")))
+      or (.type == "plain_text" and (.name == "MEMBERS" or .name == "PAUSED")))
+    | if .type == "vpc_service" then {type, name, service_id} else {type, name, text} end] | sort_by(.name)' <<<"$1" 2>/dev/null)" || out=""
+  if [[ -z $out ]] || ! jq -e 'all(.[]; if .type == "vpc_service" then (.service_id | type == "string" and test("^[A-Za-z0-9-]{1,64}$"))
+      elif .name == "MEMBERS" then .text == "1"
+      else (.text | type == "string" and ((try fromjson catch null) | type == "array" and all(.[]; type == "string" and test("^[0-9a-f]{8}$")))) end)' <<<"$out" >/dev/null 2>&1; then
+    die "the deployed Worker's settings hold a member binding, MEMBERS or PAUSED this share cannot carry forward; refused, nothing was changed"
+  fi
+  r2_carry="$out" r2_carry_dep="$out"
+  r2_dep_nonce="$(jq -r '[.result.bindings[]? | select(.type == "plain_text" and .name == "DEPLOY") | .text] | first // ""' <<<"$1" 2>/dev/null || true)"
+  [[ $r2_dep_nonce =~ ^[0-9a-f]{16}$ ]] || r2_dep_nonce=""
+}
+
+r2_carry_fresh() { # r2_carry_fresh <settings path>: on a tenant with something to carry, the settings read must be what the Worker serves: its DEPLOY equals
+  # the X-Share-Deploy /healthz answers, re-read up to 3 times (a settings GET right after a deploy once answered the pre-deploy list, TASK-1a(b))
+  [[ $r2_carry != "[]" && -n $r2_dep_nonce ]] || return 0
+  local i prev
+  for i in 1 2 3; do
+    r2_healthz
+    [[ $hz_deploy == "$r2_dep_nonce" ]] && return 0
+    prev=$r2_dep_nonce
+    [[ ${SHARE_R2_DRY:-0} == 1 ]] || sleep 2
+    r2_api GET "$1"
+    [[ $cf_code == 200 ]] || die "reading the Worker settings again answered HTTP $cf_code; nothing was changed"
+    r2_carry_read "$cf_body"
+    if [[ ! $hz_pair =~ ^[0-9]+\ [0-9a-f]{12}$ && $r2_dep_nonce == "$prev" ]]; then   # no Worker answers /healthz (a missing route is what this rerun repairs)
+      echo "share: https://$host_name/healthz is not the Worker; two settings reads agree on deploy $prev, so they are used" >&2
+      return 0
+    fi
+  done
+  die "the Worker settings name deploy ${r2_dep_nonce:-none} while https://$host_name/healthz serves ${hz_deploy:-none}; a stale settings read could drop a member binding, so nothing was changed; rerun the same setup in a minute"
+}
+
+r2_carry_services() { # every carried vpc_service binding whose VPC Service is gone is dropped and named: a deploy naming a deleted service fails
+  # 10180, and so would every later deploy (TASK-1a(e)); any other answer dies before the deploy
+  [[ $r2_carry == *vpc_service* ]] || return 0
+  local name sid
+  while IFS=$'\t' read -r name sid; do
+    [[ -n $name ]] || continue
+    r2_api GET "/accounts/$acct/connectivity/directory/services/$sid"
+    case $cf_code in
+      200) ;;
+      404) [[ $cf_err == 5104 ]] || die "reading VPC Service $sid (binding $name) answered HTTP 404 without code 5104; refused, nothing was changed"
+           echo "share: binding $name names VPC Service $sid, which is gone; this deploy drops the binding" >&2
+           r2_carry="$(jq -c --arg n "$name" 'map(select(.name != $n))' <<<"$r2_carry")" ;;
+      *) die "reading VPC Service $sid (binding $name) answered HTTP $cf_code; a deploy that carries a member binding needs Connectivity Directory Admin on the admin token; nothing was changed" ;;
+    esac
+  done < <(jq -r '.[] | select(.type == "vpc_service") | [.name, .service_id] | @tsv' <<<"$r2_carry")
+  return 0
+}
+
+r2_carry_downgrade() { # r2_carry_downgrade <dep_v> [marker]: --force never lowers WORKER_VERSION under a member tenant: v:3 links and the redeem route need v5
+  [[ ${1:-0} -gt $WORKER_VERSION ]] || return 0
+  if jq -e 'any(.[]; .type == "vpc_service" or .name == "MEMBERS" or (.name == "PAUSED" and (.text | fromjson | length > 0)))' <<<"$r2_carry" >/dev/null 2>&1 ||
+    jq -e '.members == true' <<<"${2:-null}" >/dev/null 2>&1; then
+    die "Worker version $1 is deployed on a tenant with members (a member binding, MEMBERS, a pause, or members:true in share.json); --force would break every member link; refused, nothing was changed"
+  fi
 }
 
 r2_deploy() { # r2_deploy <worker> <team> <dataset> <first>: one multipart PUT; the first deploy adds the SALT secret, later ones keep it
   local worker=$1 team=$2 dataset=$3 salt="" out
   [[ $4 == 1 ]] && salt="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+  r2_deploy_nonce="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"   # DEPLOY: /healthz echoes it, so the wait below proves this deploy is the one serving
   if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then
     r2_api PUT "/accounts/$acct/workers/scripts/$worker"
     # the settings a real GET answers: every binding, the secret without its value
@@ -4424,6 +4717,10 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alia
     dep_aliases="$(jq -r '[.result.bindings[] | select(.name == "ALIASES") | .text] | first // ""' <<<"$cf_body")"
     [[ $dep_v -le $WORKER_VERSION || $force == 1 ]] ||
       die "Worker $worker runs version $dep_v, newer than this share's $WORKER_VERSION; upgrade share, or pass --force to downgrade it; nothing was changed"
+    r2_carry_read "$cf_body"   # carry-forward: this deploy re-sends every member binding, MEMBERS and PAUSED as deployed
+    r2_carry_downgrade "$dep_v"
+    r2_carry_fresh "/accounts/$acct/workers/scripts/$worker/settings"
+    r2_carry_services
   fi
 
   # step 3, SPEC-007 step 5: a private bucket, empty or holding this host's marker
@@ -4445,6 +4742,7 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alia
       r2_call GET share.json
       case $cf_code in
         200) marker="$cf_body" marker_etag=$r2_etag   # the fold: a marker naming the alias is the alias's bucket, adopted in place
+          r2_carry_downgrade "$dep_v" "$marker"   # a T2 tenant with cloud members only still needs the redeem route
           jq -e --arg h "$host_name" --arg a "$alias" '.v == 1 and (.host == $h or ($a != "" and .host == $a))
             and ((.aliases // []) - [$a] | length == 0)' <<<"$marker" >/dev/null 2>&1 ||
             die "bucket $bucket's share.json names another hostname or alias; refused, nothing was changed" ;;
@@ -4525,7 +4823,8 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alia
   fi
   # step 8: the Worker with PASS and ALIASES, workers.dev off
   r2_pass=1 r2_aliases="$alias"
-  if [[ $first == 1 || $dep_v != "$WORKER_VERSION" || $dep_sha != "$WORKER_SHA" || $dep_team != "$team" || $dep_pass != 1 || $dep_aliases != "$r2_aliases" ]]; then
+  if [[ $first == 1 || $dep_v != "$WORKER_VERSION" || $dep_sha != "$WORKER_SHA" || $dep_team != "$team" || $dep_pass != 1 || $dep_aliases != "$r2_aliases" ||
+    $r2_carry != "$r2_carry_dep" ]]; then
     r2_deploy "$worker" "$team" "$dataset" "$first"
     echo "worker:     $worker $WORKER_VERSION $WORKER_SHA deployed (passes misses to the tunnel)"
   else
@@ -4702,6 +5001,7 @@ cmd_setup_r2() { # cmd_setup_r2 <force> <bucket> <tname> <login> <service> <quic
     dep_team="$(jq -r '[.result.bindings[] | select(.name == "TEAM") | .text] | first // ""' <<<"$cf_body")"
     [[ $dep_v -le $WORKER_VERSION || $force == 1 ]] ||
       die "Worker $worker runs version $dep_v, newer than this share's $WORKER_VERSION; upgrade share, or pass --force to downgrade it; nothing was changed"
+    r2_carry_read "$cf_body"
     # a tenant Worker (PASS) sits in front of a tunnel: this path would drop PASS and ALIASES and swap the CNAME for a custom domain
     jq -e '.result.bindings | any(.name == "PASS" and .text == "1")' <<<"$cf_body" >/dev/null &&
       die "$host_name is a tenant with R2 on (its Worker passes misses to a tunnel); refused even with --force, nothing was changed; run '$me setup $host_name --r2 --bucket $bucket' on the origin"
@@ -4805,7 +5105,7 @@ cmd_setup_r2() { # cmd_setup_r2 <force> <bucket> <tname> <login> <service> <quic
       jq -e --arg h "$host_name" '.v == 1 and .host == $h' <<<"$cf_body" >/dev/null 2>&1 || die "bucket $bucket's share.json names another hostname"
     fi
   fi
-  if [[ $first == 1 || $dep_v != "$WORKER_VERSION" || $dep_sha != "$WORKER_SHA" || $dep_team != "$team" ]]; then
+  if [[ $first == 1 || $dep_v != "$WORKER_VERSION" || $dep_sha != "$WORKER_SHA" || $dep_team != "$team" || $r2_carry != "$r2_carry_dep" ]]; then
     [[ $first == 0 && $dep_team != "$team" ]] && echo "Access team: '${dep_team:-none}' -> '${team:-none}'"
     r2_deploy "$worker" "$team" "$dataset" "$first"
     echo "worker:     $worker $WORKER_VERSION $WORKER_SHA deployed"
@@ -5396,6 +5696,7 @@ case "${1:-status}" in
   state) cmd_state ;;
   profiles) shift; cmd_profiles "$@" ;;
   serve) cmd_serve ;;
+  version) echo "$SHARE_VERSION" ;;
   -h|--help|help) sed -n '2,/^# Docs:/p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) sed -n '2,/^# Docs:/p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

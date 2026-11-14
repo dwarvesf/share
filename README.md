@@ -90,6 +90,7 @@ share refresh <id|link>     # re-copy from source under the same link
 share rm <id|link>          # unpublish (copy goes to Trash)
 share hits <id|link>        # request and visitor counts
 share state                 # JSON snapshot for the menu bar app
+share version               # the CLI version (X.Y.Z)
 share stop | start          # take all links down / bring them back
 share teardown [--yes]      # remove tunnel, service, and config; the shares on disk stay
 share --profile <name> ...  # any command against another setup (or SHARE_PROFILE=<name>); share profiles lists them
