@@ -161,7 +161,7 @@ die_code <code> <message> [next]
 - `list_cloud_error` (L2918) keeps the last non-empty line of the subshell's stderr; it skips a line starting `{"error":` and stores its `code` in a new `state.cloud_error_code` (DEC-6).
 - `state` gains `codes_v: 1`. The code list grows without a bump; a renamed or removed code bumps `codes_v`.
 - `share state-fn codes` prints every code, one per line (the G5 skill check and SPEC-009's tests read it).
-- First codes (the state-transition guards, G1's migration set): `not_in_hosts` (L1179, L1380), `already_serving` (L1180), `no_tunnel_token` (L1195), `port_busy` (L1199), `metrics_port_busy` (the next line), `server_not_started` (L1391), `profile_migrated` (G3), `op_running`, `op_interrupted` (G2), `quick_has_named_tunnel` (`cmd_setup_quick`, L1657), `tenant_rollback` (`tenant_die`, L3957 to L3960). Serve-reason codes added by G6: `ok`, `tunnel_down`, `worker_down`, `caddy_failed`, `cloudflared_died`, `stopped`. Token and compat codes added by G10. SPEC-009 adds the member and join codes. The other die sites (`grep -c 'die ' bin/share` prints 388 lines) migrate as they are touched.
+- First codes (the state-transition guards, G1's migration set): `not_in_hosts` (L1179, L1380), `already_serving` (L1180), `no_tunnel_token` (L1195), `port_busy` (L1199), `metrics_port_busy` (the next line), `server_not_started` (L1391), `profile_migrated` (G3), `op_running`, `op_interrupted` (G2), `quick_has_named_tunnel` (`cmd_setup_quick`, L1657), `tenant_rollback` (`tenant_die`, L3957 to L3960). Serve-reason codes added by G6: `ok`, `tunnel_down`, `worker_down`, `caddy_failed`, `cloudflared_died`, `stopped`. Token and compat codes added by G10. Admin key codes added by G13: `admin_token_missing`, `admin_token_cmd_failed`, `admin_token_not_admin`; `config_key_unknown` and `config_value_bad` by G14. SPEC-009 adds the member and join codes, among them `members_present` (teardown of a tenant with members, SPEC-009 TASK-1d, DEC-16). The other die sites (`grep -c 'die ' bin/share` prints 388 lines) migrate as they are touched.
 
 `SHARE_EXIT_FILE` scoping: `cmd_serve` sets `SHARE_EXIT_FILE=$root/.serve-exit` for its own shell only and unsets it in the hourly loop subshell before it runs `bash "$0" prune` (DEC-7); `cmd_stop` (L1422) writes `{"code":"stopped","at":<epoch>}`; a successful `serve` start trashes a stale `.serve-exit`.
 
@@ -172,15 +172,16 @@ One file per running process, `$root/ops/<verb>.<pid>.json`, written tmp + `mv -
 ```
 {"v":1,"verb":"setup-r2","step":13,"of":16,"name":"route",
  "pid":4242,"start":"<proc_start pid>","started":1763000000,
- "rerun":"share setup s.example.com --r2 --bucket b"}
+ "rerun":"share setup s.example.com --r2 --bucket b",
+ "rollback":"share setup s.example.com --no-r2"}
 ```
 
-- `op_begin <verb> <rerun>`: `mkdir -p $root/ops`; for each `<verb>.*.json` of the same verb: alive per `owner_live` (L2213) refuses with `die_code op_running` naming the pid and the verb; dead prints `previous <verb> died at step <n> (<name>); continuing` and trashes it (`to_trash`, L194). Then writes its own file at step 0.
-- `op_step <n> <name>`: rewrites `step` and `name`.
-- `op_done`: trashes its own file. A die leaves the file (no EXIT-trap removal).
+- `op_begin <verb> <rerun> [rollback]`: `rollback` is optional and present only for verbs that have one (`setup-r2`: `--no-r2`; `join`: `leave --local`), so the Share Bar's Roll back button reads it instead of knowing each verb (gap G5, DEC-13). `mkdir -p $root/ops`; for each `<verb>.*.json` of the same verb: alive per `owner_live` (L2213) refuses with `die_code op_running` naming the pid and the verb; dead prints `previous <verb> died at step <n> (<name>); continuing` and trashes it (`to_trash`, L194). Then writes its own file at step 0.
+- `op_step <n> <name>`: rewrites `step` and `name`. With `SHARE_PROGRESS=1` it also writes one unprefixed stderr line `{"progress":{"verb":"<verb>","step":<n>,"of":<of>,"name":"<name>"}}` (built with `jq -nc`), which the Share Bar reads to show "step n of m" for a command it started, without polling `state` (DEC-14). The line never starts `share: `, so MO:L87's last-line rule ignores it.
+- `op_done`: trashes its own file. A die leaves the file (no EXIT-trap removal). So does SIGTERM, the Share Bar's Stop: the verb's existing traps still release its locks, the journal file stays at the step it reached, and the next run of the verb continues from it (gap G5, DEC-13).
 - `op_steps_<verb>` prints `n name` lines, once per verb; `of` and the `status` line and the die-point tests read the same list.
 - `ops_read` (used by `state` and `status`, read only) lists every file with `alive` from `owner_live`.
-- Verbs and their lists: `setup-tunnel` (`cmd_setup`, L4400), `setup-r2` (`cmd_setup_tenant`, steps 1 to 16 exactly as its comments number them, L3980 to L4193), `no-r2` (`cmd_setup_no_r2`, L4201), `teardown` (L4557), `teardown-purge` (`cmd_teardown_r2 --purge`, L4641), `migrate` (L938), and with G9 `add` (L465). SPEC-009 adds `join` and every admin member verb.
+- Verbs and their lists: `setup-tunnel` (`cmd_setup`, L4400), `setup-r2` (`cmd_setup_tenant`, steps 1 to 16 exactly as its comments number them, L3980 to L4193), `no-r2` (`cmd_setup_no_r2`, L4201), `teardown` (L4557), `teardown-purge` (`cmd_teardown_r2 --purge`, L4641), `migrate` (L938), and with G9 `add` (L465). SPEC-009 adds `join`, `setup-members`, `no-members` and every admin member verb. The Share Bar's Add a tenant and tier buttons run exactly these journals: Set up a hostname is `setup-tunnel`, Join a team is `join`, Turn on cloud storage is `setup-r2`, Turn on members is `setup-members` (gaps G2, G7, G8, DEC-12).
 - `status` prints, for a dead op: `<verb> stopped at step <n> of <of> (<name>); rerun: <rerun>`, plus the verb's rollback when it has one (`setup-r2`: `or roll back: share setup <host> --no-r2`, the line `tenant_die` prints today).
 
 ### `profile_role` (G3)
@@ -225,8 +226,22 @@ Writers and their owned sets (each set = the keys it writes today plus the keys 
 | `write_config_quick` (L1645) | `mode hosts port hostname tunnel_id tunnel_name auth zone` |
 | `tenant_config` (L3867) | `bucket r2_endpoint storage_default aliases` |
 | `api-token --cmd` (L2454) | `api_token_cmd` |
+| `admin-token --cmd`, `--clear` (G13) | `admin_token_cmd` |
+| `config <key> <value>`, `config <key> --unset` (G14) | the one key named |
 
 Keys today's writers keep by name (`token_cmd`, `api_token_cmd`, `r2_token_cmd`) need no special case: they are simply not owned. bash 3.2: the owned list is a space-joined string matched with `case " $owned " in *" $key "*)`; no associative arrays, no empty arrays.
+
+### The admin key command (G13)
+
+Gap G3 of `docs/design/share-bar-interactions.md`: the Share Bar runs admin verbs, but today the admin token lives only in `CLOUDFLARE_API_TOKEN`, which an app started by launchd never has (DEC-15, ADR-0009).
+
+- Config key `admin_token_cmd`: a command whose stdout is the admin token (for example `op read op://<vault>/<item>/credential`), never the token itself; the same pattern as `api_token_cmd`. Unset means "ask each time": the Share Bar asks for the token per action, passes it to that one child as `CLOUDFLARE_API_TOKEN`, and never stores it.
+- `admin_token_resolve`: `CLOUDFLARE_API_TOKEN` when set (it wins, and the command never runs); else run `admin_token_cmd` once per process, trim stdout, and export the result as `CLOUDFLARE_API_TOKEN` for that process only; a non-zero exit dies `admin_token_cmd_failed` naming the exit status, never the command's output; neither dies `admin_token_missing` with the next step `share admin-token --cmd '<command>'`. Called only at the top of admin paths (`setup`, `setup --r2`, `--no-r2`, `--members`, `--no-members`, `teardown`, `migrate`, `member`, an admin's `rm` of another member's link); never by `ls`, `add`, `refresh`, own `rm`, `prune`, `state`, `status` or `profiles`, so a listing never runs `op read` (the rule at L709) and a publisher path never sees an admin token (`r2_publisher_check`, L2521, still refuses one).
+- `share admin-token --cmd '<command>'` and `--clear` write or drop the key through `config_put`. `share admin-token --test [--json]` resolves the token and probes what it can do (tunnels, DNS, Workers scripts, R2, Connectivity Directory: one read call each), prints one line per capability, and never prints the token or the command's output; `--json` prints `{"source":"env|cmd","can":{"tunnels":true,...}}`. A token that fails the Workers settings probe dies `admin_token_not_admin`.
+
+### `share config` (G14)
+
+The Share Bar's General tab writes two CLI defaults (interactions doc section 7): `share config ttl <duration>` (validated as `add --ttl` validates it) and `share config storage_default local|cloud` (refused with `config_value_bad` on a profile with no bucket); `share config <key>` prints the value; `share config <key> --unset` drops it; any other key dies `config_key_unknown`. Writes go through `config_put` with the one key owned. No other key is settable this way: the token commands keep their own verbs (DEC-17).
 
 ### `share state` additions under schema 1
 
@@ -235,7 +250,7 @@ Keys today's writers keep by name (`token_cmd`, `api_token_cmd`, `r2_token_cmd`)
 | `codes_v` | `1` | G1 | an older CLI |
 | `cloud_error_code` | code string, beside `cloud_error` | G1 | no code |
 | `role`, `tier` | strings from `profile_role`; `tier` only on origin roles | G3 | derive as today |
-| `ops` | `[{verb, step, of, name, alive, rerun}]`, `[]` when none | G2a | an older CLI |
+| `ops` | `[{verb, step, of, name, alive, rerun, rollback?}]`, `[]` when none | G2a | an older CLI |
 | `serve` | `{phase, reason}` | G6 | derive from `state`/`ready` |
 | `shares[].link_state`, `.reason` | `live`, `expired`, `shadowed`, `gate_missing` | G7 | compare `expires` as today |
 | `access_inflight`, `access_bad` | integers; `access_pending` becomes deferred + orphan | G8 | today's count |
@@ -246,15 +261,15 @@ Keys today's writers keep by name (`token_cmd`, `api_token_cmd`, `r2_token_cmd`)
 
 ### Data model changes
 
-New local files only: `$root/ops/<verb>.<pid>.json`, `$root/.serve-exit`, `$config_dir/.health` (G10, 0600, no secret: `{token:{source, verified_at, expires_on, verify}, worker:{pair, deploy, at}, min_cli}`). No row, record, bucket key or config key changes shape.
+New local files only: `$root/ops/<verb>.<pid>.json`, `$root/.serve-exit`, `$config_dir/.health` (G10, 0600, no secret: `{token:{source, verified_at, expires_on, verify}, worker:{pair, deploy, at}, min_cli}`). One new config key, `admin_token_cmd` (G13), a command and never a secret. No row, record or bucket key changes shape.
 
 ### API changes
 
-None on the wire. The hidden verb `share state-fn role|serve|link|pending|ops|codes|config-put <args>` exposes each owner for the suite (X5; SPEC-009 adds `member-can`); it is unlisted in `--help`, as `r2-rows` and `worker-src` are.
+None on the wire. The hidden verb `share state-fn role|serve|link|pending|ops|codes|config-put <args>` exposes each owner for the suite (X5; SPEC-009 adds `member-can`); it is unlisted in `--help`, as `r2-rows` and `worker-src` are. Two public verbs, listed in `--help`: `share admin-token --cmd|--clear|--test [--json]` (G13) and `share config <key> [<value>|--unset]` (G14). One opt-in stderr line, `SHARE_PROGRESS=1`'s progress line (G2a).
 
 ### UI changes
 
-`status`: the `role:` line, the dead-op line, the `elsewhere` copy `not serving here: this machine is not in hosts=<list>; links work while a machine in hosts= serves` (G6), the access note only for deferred and orphan lines (G8). Share Bar (G11): new keys first, today's derivation as the fallback; no layout change here (the popover redesign is SPEC-009 TASK-4b1 to TASK-4b11, which reuses G11's types).
+`status`: the `role:` line, the dead-op line, the `elsewhere` copy `not serving here: this machine is not in hosts=<list>; links work while a machine in hosts= serves` (G6), the access note only for deferred and orphan lines (G8). Share Bar (G11): new keys first, today's derivation as the fallback; no layout change here (the revision 8 redesign is SPEC-009 TASK-4b1 to TASK-4b23, which reuses G11's types and runs G13's and G14's verbs).
 
 ### Infrastructure changes
 
@@ -267,9 +282,9 @@ Each task lands with its tests in `tests/share.sh` (sections named `=== state gr
 ### Phase 1: must (ship before SPEC-009 Phase 1)
 
 - [ ] G1: codes. `die_code`, `code_text`, `SHARE_ERROR_JSON`, `SHARE_EXIT_FILE` (with the serve scoping and `stop`'s record), `codes_v`, `cloud_error_code`, `state-fn codes`; migrate the state-transition guards listed in `### die_code` to `die_code`. AC: every existing die-text grep in `tests/share.sh` passes unchanged; with `SHARE_ERROR_JSON=1` each migrated guard's last stderr line parses with `jq -e .error.code` and equals its code; with the env unset stderr is byte-identical to a capture from HEAD for each migrated guard; an unknown code dies with exit 1 and a suite check fails; `cloud_error` stays the human text when the subshell's last line is JSON (CD-06).
-- [ ] G2a: journal core. `op_begin`, `op_step`, `op_done`, `ops_read`, `op_steps_<verb>` for the verbs below, `state.ops`, the `status` dead-op line, `state-fn ops`. AC: JN-01 to JN-07; `state` writes nothing with a live and a dead journal file present.
+- [ ] G2a: journal core. `op_begin`, `op_step`, `op_done`, `ops_read`, `op_steps_<verb>` for the verbs below, `state.ops`, the `status` dead-op line, `state-fn ops`; the optional `rollback` field; the `SHARE_PROGRESS=1` progress line; SIGTERM leaves the file (gap G5, DEC-13, DEC-14). AC: JN-01 to JN-10; `state` writes nothing with a live and a dead journal file present.
 - [ ] G2b: wire `setup-r2` and `no-r2`. `op_step` at each numbered step of `cmd_setup_tenant` and at each write of `cmd_setup_no_r2`; `tenant_die`'s rollback line reprinted by `status` from the journal. AC: the die-point loop (kill at each `op_step` through `SHARE_R2_DRY_PAUSE`, rerun, assert the happy end state and an empty `ops/`) for every step of both verbs; DP-G-01.
-- [ ] G2c: wire `setup-tunnel`, `teardown`, `teardown-purge`, `migrate`. AC: the same die-point loop on every step the existing seams reach (`SHARE_R2_DRY` for `--purge`, the migrate stubs, tests/share.sh L3555); a step no seam reaches is named in the implementation notes (OQ-2).
+- [ ] G2c: wire `setup-tunnel`, `teardown`, `teardown-purge`, `migrate`. `setup-tunnel` is what the Share Bar's Set up a hostname runs, so its `op_steps` names are the steps the add sheet shows (gaps G2, G8, DEC-12). AC: the same die-point loop on every step the existing seams reach (`SHARE_R2_DRY` for `--purge`, the migrate stubs, tests/share.sh L3555); a step no seam reaches is named in the implementation notes (OQ-2); `SHARE_PROGRESS=1 share setup s.example.test` in the dry seam prints one progress line per `op_steps_setup-tunnel` row, in order, with `of` equal to the row count.
 - [ ] G3: role. `profile_role`, `role` and `tier` in `state`, `status`'s role line, the `migrated` guards with `profile_migrated`. AC: RL-01 to RL-08; `state_schema_ok` (tests/share.sh L1000) passes on a migrated HOME with `state` `not_setup`.
 - [ ] G4: `config_put` replacing the four whitelist writers and the `api-token --cmd` write. AC: CF-01 to CF-07; the `r2 backend: byte identity of existing installs` section (tests/share.sh L1849) passes unchanged.
 - [ ] G5: the skill reads `share state`. `cmd_skill` (L4748): "Before anything" runs `share state`; the text lists every `role`, `serve.phase`, `link_state` and code value with one line of meaning each; `status` stays the human view. AC: the `=== skill ===` section (tests/share.sh L1748) gains `skill names share state first` and `every code in share state-fn codes appears in the skill`; the check fails when a code is added to `code_text` without a skill line (negative control NC-G5).
@@ -281,13 +296,15 @@ Each task lands with its tests in `tests/share.sh` (sections named `=== state gr
 - [ ] G8: `pending_state <line>`; `pending_count` takes a state list; `access_pending` = deferred + orphan; `access_inflight`, `access_bad`; `ls`/`status` note only for deferred and orphan. AC: PS-01 to PS-04.
 - [ ] G9: the `add` journal, and bare `prune` finishing or rolling back a dead add (step before the row append: trash `pub/<id>` with no row, drop its own pointer through `r2_pointer_drop`, leave Access lines to the sweep). AC: AD-01 to AD-03; the Share Bar's Stop Waiting copy (MO:L111) is G11's.
 - [ ] G10: `.health` cache, `token_state`, `compat_state`, `state.token`, `state.compat`; written by `api-token`, `status`, `setup`, interactive `prune`; `state` reads it only. AC: TK-01 to TK-05; the three `writes nothing` checks stay green with `.health` present and absent.
+- [ ] G13: the admin key command (gap G3, DEC-15). `admin_token_cmd`, `admin_token_resolve` called at the top of each admin path of `### The admin key command (G13)`, `share admin-token --cmd|--clear|--test [--json]`, the three codes. AC: AT-01 to AT-07; the existing `api_token_cmd` and listing rows of tests/share.sh pass unchanged; a grep of the dry `r2-calls.log` and every captured stdout and stderr finds no fixture token value (Q-SEC-7).
+- [ ] G14: `share config` for `ttl` and `storage_default` (interactions doc section 7, DEC-17). AC: CG-01 to CG-04.
 - [ ] G11: Share Bar consumes `role`, `serve`, `ops`, `link_state`, `token`, `compat` and the JSON error line, each with today's derivation as the fallback, inside today's `NSMenu`: health copy from `serve.phase`, `migrated` reads `Moved to another machine`, Copy Link disabled on `expired`, an alive op shows `Working: <verb> (<step>/<of>)`, a dead one an attention line with the rerun, mutations set `SHARE_ERROR_JSON=1` and show `next`, Stop Waiting copy `The add stops where it is; share prune cleans up what it left.` AC: `swift test --package-path mac` rows for each key present and absent; `StateMappingTests` unchanged on the old fixtures; `bash mac/build.sh 0.0.0`.
 
 ### Phase 3: later
 
 - [ ] G12: `locks[]` in `state` (holder pid, age, alive); the copy checkmark timer owned by `MenuModel` so a poll cannot cut it short (SIC:L846 to L858); quick-URL `phase` (`none`, `pending`, `live`). AC: LK-G-01 to LK-G-03.
 
-Task count: Phase 1: 7 (G1, G2a, G2b, G2c, G3, G4, G5); Phase 2: 6 (G6 to G11); Phase 3: 1 (G12); 14 in all. G2 is split in three because its wiring spans six verbs and one session per two verbs is the atomic size.
+Task count: Phase 1: 7 (G1, G2a, G2b, G2c, G3, G4, G5); Phase 2: 8 (G6 to G11, G13, G14); Phase 3: 1 (G12); 16 in all. G13 and G14 sit in Phase 2 because only SPEC-009's Share Bar tasks need them; they keep their numbers after G12 so no earlier id moves. G2 is split in three because its wiring spans six verbs and one session per two verbs is the atomic size.
 
 ## After state
 
@@ -306,10 +323,11 @@ Task count: Phase 1: 7 (G1, G2a, G2b, G2c, G3, G4, G5); Phase 2: 6 (G6 to G11); 
 - Q-REL-5 (new): every journaled verb converges after a kill at any step and leaves `ops/` empty. Tested by: the G2b and G2c die-point loops.
 - Q-REL-6 (new): no config writer drops a key it does not own. Tested by: CF-01 to CF-04.
 - Q-AX-1 (new): every refusal a guard raises has a stable code and a next command an agent can run. Tested by: G1 AC, G5 AC.
+- Q-SEC-7 (new): the admin token is never stored by share and never reaches an argv, a file or output; `admin_token_cmd` runs only on admin paths. Tested by: AT-02, AT-03, AT-05, AT-06, the G13 grep.
 
 ## Acceptance Criteria (global)
 
-- [ ] All 14 tasks pass their individual acceptance criteria; Phase 1 (G1 to G5) merged before any SPEC-009 Phase 1 task.
+- [ ] All 16 tasks pass their individual acceptance criteria; Phase 1 (G1 to G5) merged before any SPEC-009 Phase 1 task.
 - [ ] Every row of `## Compatibility` has its one test, green.
 - [ ] Every edge case below has a named passing test.
 - [ ] No regression: every existing `tests/share.sh`, `tests/worker.mjs` and `swift test` row passes unchanged.
@@ -353,6 +371,9 @@ Test file `tests/share.sh` unless marked `swift`.
 | JN-05 | a dead file whose pid the OS reused for another process (fixture: the test shell's pid with a wrong `start`) | treated as dead (`owner_live` compares the start time), never `op_running` |
 | JN-06 | a dead file whose pid now runs another `share` process of a different verb | dead for this verb; the other verb's own file is untouched |
 | JN-07 | `ops/` holds a truncated or non-JSON file | `state` lists it as `{verb:"?", alive:false}` and never fails; the next run of that verb trashes it |
+| JN-08 | SIGTERM (the Share Bar's Stop) during step n of `setup-r2` in the dry seam | the verb's locks released by its traps; the file stays at step n; `state.ops[0].alive` false with `rerun` and `rollback`; the rerun continues and ends with an empty `ops/` |
+| JN-09 | `SHARE_PROGRESS=1` on a clean run; the same with the env unset | one `{"progress":...}` stderr line per `op_step`, none starting `share: `; unset: stderr byte-identical to HEAD |
+| JN-10 | a verb with no rollback (`teardown`) | the file and `state.ops` carry no `rollback` key |
 | DP-G-01 | `setup --r2` killed between step 11 (config) and step 13 (route) | `status` names step 11 or 12 and both the rerun and `--no-r2`; the rerun converges |
 
 ### Role (G3)
@@ -383,6 +404,22 @@ Test file `tests/share.sh` unless marked `swift`.
 | PS-01 to PS-04 | an intent line owned by the live test shell; owner 0; a dead owner; a malformed line | `access_inflight 1`; `access_pending 1`; `access_pending 1`; `access_bad 1` |
 | AD-01 to AD-03 | add killed before the row append; after it; bare `prune` after the first | `pub/<id>` trashed and its pointer dropped; nothing touched; `ops/` empty |
 | TK-01 to TK-05 | no token; a token and no cache; cache `invalid`; `expires_on` past; within 14 days | `missing`, `unchecked`, `invalid`, `expired`, `expiring` |
+
+### Admin key and config (G13, G14)
+
+| # | Scenario | Expected |
+|---|---|---|
+| AT-01 | `CLOUDFLARE_API_TOKEN` present and `admin_token_cmd` set to a command that would fail | the variable wins; the command never runs (a marker file it would touch stays absent) |
+| AT-02 | only `admin_token_cmd` (a fixture command printing a token) on `setup --r2` in the dry seam | the command runs once; the setup proceeds; the token appears in no argv, file or output |
+| AT-03 | the command exits 3 and prints text to stdout and stderr | dies `admin_token_cmd_failed` naming exit 3; neither stream's text is printed |
+| AT-04 | neither source, on an admin path | dies `admin_token_missing` with `share admin-token --cmd '<command>'` as next, before any write |
+| AT-05 | `ls`, `add`, `prune`, `state`, `status`, `profiles --json` with `admin_token_cmd` set | the command never runs (marker absent) |
+| AT-06 | `admin-token --test --json` with a fixture admin token in the dry seam; with a publisher token | `can` lists each probed capability true; the publisher token dies `admin_token_not_admin`; neither prints the token |
+| AT-07 | `admin-token --cmd 'x'` on a config with `ttl=7d` and `members=on`; then `--clear` | both lines kept byte for byte; `admin_token_cmd=x` written, then dropped |
+| CG-01 | `config ttl 7d`; `config ttl`; `config ttl --unset` | written through `config_put`; prints `7d`; dropped |
+| CG-02 | `config ttl 7x` | dies `config_value_bad` with the valid forms; config untouched |
+| CG-03 | `config storage_default cloud` on a profile with no bucket; with one | dies `config_value_bad`; written |
+| CG-04 | `config admin_token_cmd x`; `config port 9` | dies `config_key_unknown` naming the settable keys; config untouched |
 
 ### Later (G12)
 
@@ -432,6 +469,8 @@ One test per change:
 | CP-06 | G8 `access_pending` fix, `access_inflight`, `access_bad` | The field keeps its documented meaning (SN:L52); old Share Bars stop showing a false line | bash: a pending line owned by the live test shell gives `access_pending 0`, `access_inflight 1`; an owner-0 line gives `access_pending 1` |
 | CP-07 | G4 `config_put` | Same file, same `key=value`, same tmp + mv; only stops deleting unknown lines. Old CLIs still drop keys, so SPEC-009 also reads T2 from the marker | bash: a config with `ttl=7d`, `members=on`, `x_future=1` survives a `setup <host>` rerun byte for byte on those lines |
 | CP-08 | G1 codes | Human stderr byte-identical unless `SHARE_ERROR_JSON=1`; the JSON line is not prefixed `share: `, so MO:L87 still picks the die line; exit status stays 1 | bash: every existing die-text grep passes unchanged; with the env set the last stderr line parses as JSON with `code` |
+| CP-10 | G13 `admin_token_cmd`, G14 `share config` | New key and verbs; old CLIs ignore the key, and an old CLI's whitelist writer drops it, which only sends the Share Bar back to asking each time | bash: AT-07 and CG-01 keep every other line byte for byte |
+| CP-11 | G2a `rollback`, `SHARE_PROGRESS` | An additive journal key; the progress line exists only under the env, unprefixed | bash: JN-09 with the env unset is byte-identical to HEAD |
 | CP-09 | G11 Share Bar consumes new keys | Each key optional; absent keys fall back to today's rules | swift: every existing `StateMappingTests` row passes on the old fixtures; one row per key present |
 
 Old rows, old records, old CLIs: no row format, record format or bucket key changes. A v0.9 CLI never reads `ops/`, `.serve-exit`, `.health` or the new state keys. D7 (Worker rows) and D8 (member table) are SPEC-009's and ride its v5 bump.
@@ -440,7 +479,7 @@ Old rows, old records, old CLIs: no row format, record format or bucket key chan
 
 - Worker named rows and the uniform 404 body (audit D7): SPEC-009 TASK-0d, inside the v5 bump.
 - The member status table, lease body and invite codes (audit D8): SPEC-009.
-- The Share Bar popover redesign: SPEC-009 TASK-4b1 to TASK-4b11; G11 only feeds today's `NSMenu`.
+- The Share Bar redesign: SPEC-009 TASK-4b1 to TASK-4b23; G11 only feeds today's `NSMenu`.
 - Migrating every one of the remaining die sites to `die_code`: they move as they are touched (X2).
 - Rewriting the 28 `r2on` sites to read `$role`: SPEC-009 TASK-1g does it with R7.
 - A `schema: 2` state document (approach C).
@@ -458,6 +497,15 @@ Old rows, old records, old CLIs: no row format, record format or bucket key chan
 - DEC-9: `profile_role` checks the tunnel token by existence only (Keychain item or 600 file), never the secret and never `token_cmd`, because `state` must not prompt or run a command. Rejected: `token_read` (L293), which may `eval` a `token_cmd` that prompts.
 - DEC-10: G2 splits into G2a (core), G2b (`setup --r2`, `--no-r2`), G2c (setup tunnel, teardown, `--purge`, migrate), one session each. Rejected: one G2 task (six verbs and their die-point loops do not fit one session).
 - DEC-11: G11 feeds today's `NSMenu` and owns the decode and derivation types; SPEC-009 TASK-4b reuses them for the popover. Rejected: waiting for the redesign (the must-rank fixes would reach no user for a whole SPEC-009 cycle).
+
+Entries DEC-12 to DEC-17 fold the gaps of `docs/design/share-bar-interactions.md` section 8 (written `gap Gn`, not this spec's task ids) that land here; SPEC-009 DEC-44 to DEC-53 hold the Share Bar side of each.
+
+- DEC-12 (gaps G2, G7, G8): the Share Bar's Add a tenant (first run included) and its tier buttons run the existing journaled verbs, never a GUI-only flow: Set up a hostname is `setup-tunnel` (G2c), Join a team is SPEC-009's `join`, Turn on cloud storage is `setup-r2` (G2b), Turn on members is SPEC-009's `setup-members`; G2c's step names are what the add sheet shows. Rejected: a Share Bar wizard that calls Cloudflare itself (ADR-0003: the app goes through the CLI).
+- DEC-13 (gap G5): SIGTERM, the Share Bar's Stop, leaves the journal at its step like any die; the journal carries an optional `rollback` so Roll back needs no per-verb knowledge in Swift. Rejected: an EXIT trap that removes the file (Resume would have nothing to read).
+- DEC-14: `op_step` prints a progress line under `SHARE_PROGRESS=1` so a running command's own parent sees each step. Rejected: polling `share state` while a command runs (a bucket read and a `/ready` probe per poll); parsing human stdout (it is not a contract).
+- DEC-15 (gap G3): the admin token comes from `CLOUDFLARE_API_TOKEN`, else from `admin_token_cmd`, a command and never the token; unset means the Share Bar asks per action and never stores it; only admin paths resolve it (ADR-0009 amended). Rejected: an admin token in the Keychain (stored on every Mac that ever ran an admin verb); reusing `api_token_cmd` (one key would then hold a publisher on one profile and an admin on another, and `r2_publisher_check` exists to keep them apart).
+- DEC-16 (gap G6): `members_present` is a reserved code in `code_text` for SPEC-009's teardown refusal on a tenant with members, so the Share Bar maps one code to its refusal sheet. Rejected: matching the refusal's text.
+- DEC-17: `share config` sets only `ttl` and `storage_default`, the two CLI defaults the Share Bar's General tab writes (interactions doc section 7); token commands keep their own verbs, which validate and test. Rejected: a general `config set` for any key (it would let the app write `tunnel_id` or `bucket` by hand).
 
 ## Open questions
 
