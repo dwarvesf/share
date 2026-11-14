@@ -13,6 +13,7 @@
 #   share api-token [--cmd '<command>' | --check]   the Cloudflare API token --access needs: prefilled form + paste, or point at one you have
 #   share admin-token --cmd '<command>' | --clear | --test [--json]   the command that prints the admin token (setup --r2, --no-r2, --purge)
 #   share minter-token --cmd '<command>' | --clear | --test [--json]  the command that prints the minter token (member tokens)
+#   share config ttl|storage_default [<value> | --unset]   the CLI defaults the Share Bar's General tab writes; with no value, print it
 #   share ls                  list shares: link, size, source, expiry
 #   share refresh <id|link>   re-copy from the source path (same link)
 #   share rm <id|link>        unpublish (moves the copy to the Trash)
@@ -62,6 +63,15 @@ admin_token_not_admin|the token cannot read the Worker settings: it is not an ad
 minter_token_missing|a minter path found neither SHARE_MINTER_TOKEN nor minter_token_cmd|{me} minter-token --cmd '"'"'<command>'"'"'
 minter_token_cmd_failed|minter_token_cmd exited non-zero or printed no token|{me} minter-token --test
 members_present|reserved: a tenant teardown refused while it has members|{me} member ls
+config_key_unknown|share config sets only ttl and storage_default; nothing was written|{me} config ttl
+ok|serve.reason of a serving profile: nothing is wrong|{me} state
+tunnel_down|serve runs but the tunnel does not answer yet (starting, or cloudflared lost the edge)|{me} status
+worker_down|the Worker at the hostname does not answer /healthz|{me} status
+token_missing|token.status: no publisher or Access token resolves on this profile|{me} api-token
+token_expired|token.status: the stored token is past its expires_on; every add fails|{me} api-token
+token_invalid|token.status: Cloudflare rejected the stored token|{me} api-token
+cli_below_min|compat.status: this share is older than the tenant requires (min_cli)|upgrade share
+worker_older|compat.status: the Worker at the hostname is older than this share ships|{me} status
 stopped|serve exit record: the stop verb ended serving|{me} start
 cloudflared_died|serve exit record: the cloudflared child exited|{me} status; see serve.log
 caddy_failed|serve exit record: caddy failed to start or exited|{me} status; see caddy.log'
@@ -591,6 +601,7 @@ parse_target() { # parse_target <arg>: "live <port>" for a port/localhost shape,
 
 cmd_add() {
   migrated_guard
+  local add_argv=("$@")   # the journal's rerun line
   local ttl="${SHARE_TTL:-$(cfg ttl || true)}"; ttl="${ttl:-30d}" noindex="" host_fqdn="" target="" ntargets=0 access="" storage=""
   local usage="usage: share add [--ttl 7d] [--host <name>.<zone>] [--no-index] [--access <rule>] [--cloud|--local] <file|dir|port|localhost:port|http://localhost:port>"
   while [[ $# -gt 0 ]]; do
@@ -671,22 +682,35 @@ cmd_add() {
   else
     stage_copy "$src" "$opts"
   fi
+  # the add journals with --concurrent (two adds may overlap): a dead one is finished or rolled back by the next bare prune (G9)
+  op_id_json="$(jq -nc --arg i "$id" '$i')"
+  op_begin add --concurrent add ${add_argv[@]+"${add_argv[@]}"}
+  op_step 1
   # R2 on: the pointer reserves the id in the bucket before any byte is served and before the Access app; a 412 takes a fresh id
-  if [[ $r2on == 1 ]]; then r2_pointer_put "$kind" "$name" "$src" "$exp" "$opts" "$access"; fi
+  if [[ $r2on == 1 ]]; then
+    r2_pointer_put "$kind" "$name" "$src" "$exp" "$opts" "$access"
+    op_id_json="$(jq -nc --arg i "$id" '$i')"; op_write   # a 412 moved the id
+  fi
+  op_step 2
   # a gated copy stays outside pub until the gate is observed; warn_private says "public to anyone with the link", which a gated link is not
   if [[ $kind == snapshot && -z $access ]]; then stage_publish "$id"; warn_private "$src" "$id"; fi
+  op_step 3
   if [[ -n $access ]]; then
     access_create "$id" "$host_fqdn"   # intent line, the app, its id into the line, read-back
     opts="${opts:+$opts }access=$access_app access_rule=$access_rule"
   fi
+  op_step 4
   [[ -n $host_fqdn ]] && { host_add "$host_fqdn"; held_fqdn="$host_fqdn"; }
+  op_step 5
   if [[ -n $access ]] && ! access_gate "$id" "$access_aud" "$host_fqdn"; then
     local left=""
     [[ -n $host_fqdn ]] && { held_fqdn=""; host_rm "$host_fqdn"; }
     if access_delete "$access_app" "$id"; then lock_take index; pending_drop "$id" "$access_app"; lock_release index; held_access_id=""
     else left="; the app stays in access-pending for the next '$me prune' with the token"; fi
+    op_done   # the add undid what it made: nothing is left for a prune to finish
     die "Cloudflare Access did not enforce on $host_name/$id within ${access_wait}s; nothing was published$left; rerun the same $me add (Access can take several minutes on a new app)"
   fi
+  op_step 6
   lock_take index   # publish: row, render, reload as one step, so no writer's row or render is lost
   if [[ -n $access ]]; then
     # only while this process's exact pending line is still there: a sweep that claimed it may have deleted the app
@@ -700,6 +724,7 @@ cmd_add() {
   held_fqdn="" held_access_id=""
   lock_release index   # before cmd_start: serve's startup render takes the lock itself
   [[ $r2on == 0 ]] || lock_release "add-$id"
+  op_done   # the row is in: nothing for a prune to finish
   share_url "$id" "$name" "$opts"
   url="$share_url_out"
   [[ -z $access ]] || access_link_check "$url" || access_link_die "$id" "$url"   # Access answers at the edge, so a stopped origin does not matter here
@@ -715,40 +740,41 @@ cmd_add() {
 cmd_ls() {
   access_pending_note
   [[ -s $index || $backend == r2 || $r2on == 1 ]] || { echo "no shares"; return 0; }
-  local id name src date exp opts storage t by origin size until gone tag acc us=$'\x1f'
+  local id name src date exp opts storage t by origin lstate lwhy size until gone tag acc stcol us=$'\x1f'
   list_rows ls
   if [[ -z $list_out && ( $backend == r2 || $r2on == 1 ) ]]; then
     [[ -z $list_cloud_error ]] || echo "share: cloud links not listed: $list_cloud_error" >&2
     echo "no shares"; return 0
   fi
-  while IFS=$us read -r id name src date exp opts storage t by origin; do
+  while IFS=$us read -r id name src date exp opts storage t by origin lstate lwhy; do
     [[ -n $id ]] || continue
+    stcol=""; [[ ${lstate:-live} == live ]] || stcol="  state=$lstate${lwhy:+ ($lwhy)}"   # a STATE column only when the row is not live
     until="never"; [[ ${exp:-0} -gt 0 ]] && until="$(day_of "$exp")"
     share_url "$id" "$name" "$opts"
     tag=$storage; [[ $storage == machine ]] && has_opt live "$opts" && tag=live
     printf '%-7s  %-8s  by=%s  %s\n' "$tag" "$t" "$by" "$share_url_out"
     if [[ $storage == cloud ]]; then
-      echo "    id=$id  added=$date  expires=$until$(access_col "$opts")  by=$by  from=$src"
+      echo "    id=$id  added=$date  expires=$until$(access_col "$opts")  by=$by  from=$src$stcol"
     elif [[ -n $origin ]]; then   # a member's machine link (v:3), read from its pointer
       origin="${origin#m-}"; origin="${origin%-*}"
-      echo "    id=$id  added=$date  expires=$until  origin=$origin  served by $origin's machine"
+      echo "    id=$id  added=$date  expires=$until  origin=$origin  served by $origin's machine$stcol"
     elif [[ $backend == r2 ]]; then   # a member: the origin's link, read from its pointer
       acc=""; has_opt gated "$opts" && acc="  access=gated"
-      echo "    id=$id  added=$date  expires=$until$acc  served by the tenant's origin"
+      echo "    id=$id  added=$date  expires=$until$acc  served by the tenant's origin$stcol"
     elif has_opt live "$opts"; then
-      echo "    id=$id  live -> $src  added=$date  expires=$until$(access_col "$opts")"
+      echo "    id=$id  live -> $src  added=$date  expires=$until$(access_col "$opts")$stcol"
     else
       size="$(du -sh "$pub/$id" 2>/dev/null | cut -f1 | tr -d ' ')"
       gone=""; [[ -e $src ]] || gone="  (source gone, snapshot still served)"
-      echo "    id=$id  size=${size:-?}  added=$date  expires=$until$(access_col "$opts")  from=$src$gone"
+      echo "    id=$id  size=${size:-?}  added=$date  expires=$until$(access_col "$opts")  from=$src$gone$stcol"
     fi
   done <<<"$list_out"   # a 5-field row (v0.1.x) reads with opts empty; malformed rows and records are skipped
   [[ -z $list_cloud_error ]] || echo "share: cloud links not listed: $list_cloud_error" >&2
   access_ls_check
 }
 state_lines() { # state_lines: list_out as the tab lines cmd_state's jq reads (id name url kind own_host expires access storage type by origin), this machine's rows newest first, then the bucket's
-  local id name src date exp opts storage t by origin kind oh rule line mine=() rest=() i us=$'\x1f'
-  while IFS=$us read -r id name src date exp opts storage t by origin; do
+  local id name src date exp opts storage t by origin lstate lwhy kind oh rule line mine=() rest=() i us=$'\x1f'
+  while IFS=$us read -r id name src date exp opts storage t by origin lstate lwhy; do
     [[ -n $id ]] || continue
     kind="snapshot"; has_opt live "$opts" && [[ $storage == machine ]] && kind="live"
     optv host "$opts"; oh=$optv_out
@@ -756,7 +782,7 @@ state_lines() { # state_lines: list_out as the tab lines cmd_state's jq reads (i
     optv access_rule "$opts"; rule=$optv_out
     [[ $storage == machine && $backend == r2 ]] && { rule=""; has_opt gated "$opts" && rule="gated"; }   # a pointer carries the flag, never the rule
     share_url "$id" "$name" "$opts"
-    printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$id" "$name" "$share_url_out" "$kind" "$oh" "${exp:-0}" "$rule" "$storage" "$t" "$by" "$origin"
+    printf -v line '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' "$id" "$name" "$share_url_out" "$kind" "$oh" "${exp:-0}" "$rule" "$storage" "$t" "$by" "$origin" "${lstate:-live}" "$lwhy"
     if [[ $storage == machine && $backend != r2 && -z $origin ]]; then mine+=("$line"); else rest+=("$line"); fi
   done <<<"$list_out"
   for ((i = ${#mine[@]} - 1; i >= 0; i--)); do printf '%s\n' "${mine[i]}"; done
@@ -849,6 +875,7 @@ cmd_prune() { # cmd_prune [quiet|listing]: unpublish every share past its expiry
   if [[ -n $api_token && -s $pending && -n $host_name ]]; then
     access_account soft && access_sweep
   fi
+  [[ -n ${1:-} ]] || add_sweep   # the prune verb and serve's hourly loop: a dead add is finished or rolled back
   [[ -s $index ]] || return 0
   local now ids id
   now="$(date +%s)"
@@ -857,6 +884,27 @@ cmd_prune() { # cmd_prune [quiet|listing]: unpublish every share past its expiry
   for id in $ids; do
     cmd_rm "$id" prune | sed 's/$/ (expired)/' || true   # a listing never dies on one row
   done
+}
+
+add_sweep() { # a dead add's journal: with its row in the index the add finished (the file goes); with no row the add stopped part way (its copy goes to the Trash, its pointer is dropped; Access lines stay for access_sweep)
+  local f id
+  for f in "$root/ops/add."*.json; do
+    [[ -e $f ]] || continue
+    if op_read "$f"; then owner_live "$op_r_pid" "$op_r_start" && continue   # a live add is still working
+    elif jq -e '(.v // 0) > 1' "$f" >/dev/null 2>&1; then continue; fi   # a newer CLI's journal is its own to read
+    id=""
+    lock_take ops
+    if [[ -e $f ]]; then   # still there: no other prune took it
+      id="$(jq -r '.id // empty' "$f" 2>/dev/null || true)"
+      rm -f "$f"
+    fi
+    lock_release ops
+    [[ $id =~ ^[0-9a-f]{6}$ ]] || continue
+    [[ -z "$(row "$id")" ]] || continue
+    if [[ -e $pub/$id ]]; then to_trash "$pub/$id"; echo "rolled back the add of $id that stopped part way (its copy is in the Trash)"; fi
+    [[ $r2on == 0 ]] || r2_pointer_drop "$id" "${prune_mode:-soft}"
+  done
+  return 0
 }
 
 cmd_hits() {
@@ -1337,6 +1385,46 @@ serve_ready() { # serve_ready: the links answer: /ready with the tunnel, the qui
   if [[ $mode == quick ]]; then [[ -s $root/quick.url ]]; return; fi
   curl -sf -m 1 -o /dev/null "http://127.0.0.1:$metrics_port/ready" 2>/dev/null
 }
+file_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }   # GNU first: BSD stat rejects -c, GNU stat takes -f as a different verb
+serve_exit_code() { # the code $root/.serve-exit holds; nothing when it is absent, unreadable or not a code
+  local c; [[ -f $root/.serve-exit ]] || return 0
+  c="$(jq -r '.code // empty' "$root/.serve-exit" 2>/dev/null)" || return 0
+  [[ $c =~ ^[a-z_]+$ ]] && printf '%s' "$c"
+  return 0
+}
+# The one classifier behind status, state and the Share Bar (G6). Sets serve_phase, serve_reason, and the old pair it maps onto:
+# serve_state_val (state.state) and serve_ready_val (state.ready), computed exactly as state always did. Reads only; the one
+# network call is the /ready probe (or the Worker's healthz) state already made. SHARE_STATE_NOW (a hidden clock seam) stands for the time.
+serve_phase="" serve_reason="" serve_state_val="" serve_ready_val=""
+serve_state() { # serve_state [healthz seconds]
+  local now m code
+  serve_ready_val=false serve_reason=""
+  if [[ $backend == r2 ]]; then   # nothing runs here: the Worker serves while the account does
+    if [[ -z $host_name ]]; then serve_phase=not_setup serve_state_val=not_setup
+    else
+      serve_state_val=serving
+      r2_healthz "${1:-2}"
+      if [[ $hz_code == 200 ]]; then serve_phase=serving serve_ready_val=true; else serve_phase=worker_down; fi
+    fi
+  elif running; then
+    serve_state_val=serving
+    if serve_ready; then serve_phase=serving serve_ready_val=true
+    else   # a pid younger than 30 s is still connecting; an older one lost the tunnel
+      now="${SHARE_STATE_NOW:-$(date +%s)}"; m="$(file_mtime "$pidfile" || true)"
+      if [[ $m =~ ^[0-9]+$ && $((now - m)) -lt 30 ]]; then serve_phase=starting; else serve_phase=tunnel_down; fi
+    fi
+  elif [[ $role == migrated ]] || [[ -z $host_name && $mode != quick ]]; then   # a moved profile reads not_setup: an old Share Bar renders it neutral with Set Up (DEC-3)
+    serve_phase=not_setup serve_state_val=not_setup
+  else
+    serve_state_val=stopped
+    code="$(serve_exit_code)"
+    if ! host_ok; then serve_phase=elsewhere
+    elif [[ -n $code && $code != stopped ]] && svc_installed; then serve_phase=failed serve_reason=$code
+    else serve_phase=stopped; fi
+  fi
+  [[ -n $serve_reason ]] || { serve_reason=$serve_phase; [[ $serve_phase != serving ]] || serve_reason=ok; }
+  return 0
+}
 
 cmd_serve() {
   # serve's own dies record their code in $root/.serve-exit, so a crash loop under launchd keeps its reason (DEC-7, DEC-26);
@@ -1623,15 +1711,24 @@ cmd_stop() {
 cmd_status() {
   [[ $backend != r2 ]] || { cmd_status_r2; return; }
   cmd_prune quiet
-  if running; then
-    if [[ $mode == quick ]]; then
-      echo "serving (pid $(cat "$pidfile")) on https://$(serving_host) (quick tunnel; the URL changes on every start)"
-    else
-      echo "serving (pid $(cat "$pidfile")) on $host_name: links are live"
-    fi
-  elif [[ $role == migrated ]]; then echo "not serving: this profile moved${migrated_to:+ to $migrated_to}; nothing serves here"
-  elif [[ -z $host_name && $mode != quick ]]; then echo "not set up: $me setup <hostname>, or $me setup --quick"
-  else echo "not serving: $me start"; fi
+  serve_state
+  case $serve_phase in
+    serving|starting|tunnel_down)
+      local where="$host_name"; [[ $mode != quick ]] || where="$(serving_host)"
+      case $serve_phase in
+        serving)
+          if [[ $mode == quick ]]; then echo "serving (pid $(cat "$pidfile")) on https://$where (quick tunnel; the URL changes on every start)"
+          else echo "serving (pid $(cat "$pidfile")) on $where: links are live"; fi ;;
+        starting) echo "starting (pid $(cat "$pidfile")): the tunnel is connecting; links answer in a few seconds" ;;
+        *) echo "serving (pid $(cat "$pidfile")) but the tunnel does not answer: links are down; see $root/cloudflared.log, then: $me stop; $me start" ;;
+      esac ;;
+    not_setup)
+      if [[ $role == migrated ]]; then echo "not serving: this profile moved${migrated_to:+ to $migrated_to}; nothing serves here"
+      else echo "not set up: $me setup <hostname>, or $me setup --quick"; fi ;;
+    elsewhere) echo "not serving here: this machine is not in hosts=$hosts; links work while a machine in hosts= serves" ;;
+    failed) echo "not serving: the last run ended with $serve_reason; see $root/serve.log, then: $me start" ;;
+    *) echo "not serving: $me start" ;;
+  esac
   role_line
   svc_installed && echo "service: installed ($svc_label)"
   ops_status
@@ -1650,19 +1747,9 @@ role_line() { # status: what kind of profile this is, in words
 
 cmd_state() { # read-only JSON snapshot for the menu bar app: never prunes, writes, needs a TTY, or touches the clipboard
   [[ $backend != r2 ]] || { cmd_state_r2; return; }
-  local mode_val="named" host_val="" state_val ready_val="false" serves_val="false" service_val="false" skipped_n=0
+  local mode_val="named" host_val="" state_val ready_val serves_val="false" service_val="false" skipped_n=0
   [[ $mode == quick ]] && mode_val="quick"
-  if running; then state_val="serving"
-  elif [[ $role == migrated ]]; then state_val="not_setup"   # an old Share Bar renders it neutral with Set Up; stopped would offer a Start that dies (DEC-3)
-  elif [[ -n $host_name || $mode == quick ]]; then state_val="stopped"
-  else state_val="not_setup"; fi
-  if [[ $state_val != serving ]]; then ready_val="false"
-  elif [[ $tunnel != 1 ]]; then ready_val="true"
-  elif [[ $mode_val == quick ]]; then
-    [[ -s $root/quick.url ]] && ready_val="true" || ready_val="false"
-  else
-    curl -sf -m 1 -o /dev/null "http://127.0.0.1:$metrics_port/ready" 2>/dev/null && ready_val="true" || ready_val="false"
-  fi
+  serve_state; state_val=$serve_state_val ready_val=$serve_ready_val
   if [[ $mode_val == named ]]; then host_val="$host_name"
   elif [[ $state_val == serving ]]; then host_val="$(cat "$root/quick.url" 2>/dev/null || true)"; fi
   host_ok && serves_val="true"
@@ -1676,24 +1763,26 @@ cmd_state() { # read-only JSON snapshot for the menu bar app: never prunes, writ
   state_lines | jq -nR \
     --arg state "$state_val" --argjson ready "$ready_val" --arg mode "$mode_val" \
     --arg host "$host_val" --arg hosts "$hosts" --argjson serves_here "$serves_val" \
-    --argjson service "$service_val" --argjson skipped "$skipped_n" --argjson access_pending "$(pending_count)" \
+    --argjson service "$service_val" --argjson skipped "$skipped_n" --argjson access_pending "$(pending_count deferred orphan)" --argjson access_inflight "$(pending_count intent bound)" --argjson access_bad "$(pending_count bad)" \
     --argjson r2 "$([[ $r2on == 1 ]] && echo true || echo false)" --arg sdef "$([[ $r2on == 1 ]] && { cfg storage_default || true; })" \
     --arg cerr "$list_cloud_error" --arg ccode "${list_cloud_error_code:-}" --argjson cmore "$list_cloud_more" \
-    --argjson codes_v "$codes_v" --arg role "$role" --arg tier "$tier" --argjson ops "$(ops_json)" "$state_jq_row"'
+    --argjson codes_v "$codes_v" --arg role "$role" --arg tier "$tier" --arg sphase "$serve_phase" --arg sreason "$serve_reason" --argjson token "$(token_json)" --argjson compat "$(compat_json)" --argjson ops "$(ops_json)" "$state_jq_row"'
     {schema: 1, state: $state, ready: $ready, mode: $mode,
      host: (if $host == "" then null else $host end), hosts: $hosts,
-     serves_here: $serves_here, service: $service, access_pending: $access_pending,
+     serves_here: $serves_here, service: $service, access_pending: $access_pending, access_inflight: $access_inflight, access_bad: $access_bad,
      shares: [inputs | select(length > 0) | row]}
     + (if $skipped > 0 then {skipped: $skipped} else {} end)
     + {r2: $r2} + (if $r2 then {storage_default: (if $sdef == "" then "local" else $sdef end)} else {} end)
     + (if $cerr == "" then {} else {cloud_error: $cerr} end) + (if $ccode == "" then {} else {cloud_error_code: $ccode} end)
     + (if $cmore > 0 then {cloud_more: $cmore} else {} end) + {codes_v: $codes_v, role: $role}
-    + (if $tier == "" then {} else {tier: $tier} end) + {ops: $ops}'
+    + (if $tier == "" then {} else {tier: $tier} end) + {ops: $ops, serve: {phase: $sphase, reason: $sreason}}
+    + (if $token == null then {} else {token: $token} end) + (if $compat == null then {} else {compat: $compat} end)'
 }
 state_jq_row='def row: split("\t") | {id: .[0], name: .[1], url: .[2], kind: .[3],
       own_host: (if .[4] == "" then null else .[4] end), expires: (.[5] | tonumber),
       access: (if .[6] == "" then null else .[6] end), storage: .[7], type: .[8], by: .[9]}
-      + (if (.[10] // "") == "" then {} else {origin: .[10]} end);'
+      + (if (.[10] // "") == "" then {} else {origin: .[10]} end)
+      + {link_state: (.[11] // "live")} + (if (.[12] // "") == "" then {} else {reason: .[12]} end);'
 
 
 # --- Cloudflare setup / teardown ---
@@ -2485,14 +2574,26 @@ pending_set_app() { # pending_set_app <id> <old> <new>: rewrite this process's e
   mv -f "$tmp" "$pending"
 }
 pending_line_ok() { [[ $1 =~ ^[0-9a-f]{6}$ ]] && [[ $2 =~ ^[0-9a-f-]{36}$ || $2 =~ ^-:[0-9a-f]{8}$ ]] && [[ $3 =~ ^[0-9]+$ ]]; }
-pending_count() { # pending_count [live|bad]: every non-empty line; `live` the well-formed ones a sweep can act on; `bad` the hand-edited rest
-  local id app pid st created n=0 bad=0
+pending_state() { # pending_state <line>: intent (an add before its app exists), bound (the app is known, the owner runs), deferred (owner 0: a delete waiting for a token), orphan (the owner died), bad (a hand-edited line)
+  local id app pid st created
+  IFS=$'\t' read -r id app pid st created <<<"$1"
+  if ! pending_line_ok "$id" "$app" "$created"; then echo bad
+  elif [[ $pid == 0 ]]; then echo deferred
+  elif owner_live "$pid" "$st"; then case $app in -:*) echo intent ;; *) echo bound ;; esac
+  else echo orphan; fi
+}
+pending_count() { # pending_count [<state>...]: no argument counts every non-empty line; `live` the well-formed ones; state names (intent bound deferred orphan bad) count the lines in any of them
+  local line n=0 w st
   [[ -f $pending ]] || { echo 0; return 0; }
-  while IFS=$'\t' read -r id app pid st created; do
-    [[ -n $id ]] || continue
-    n=$((n + 1)); pending_line_ok "$id" "$app" "$created" || bad=$((bad + 1))
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    case ${1:-} in
+      "") n=$((n + 1)) ;;
+      live) [[ $(pending_state "$line") == bad ]] || n=$((n + 1)) ;;
+      *) st="$(pending_state "$line")"; for w in "$@"; do if [[ $st == "$w" ]]; then n=$((n + 1)); break; fi; done ;;
+    esac
   done <"$pending"
-  case ${1:-} in live) echo $((n - bad)) ;; bad) echo "$bad" ;; *) echo "$n" ;; esac
+  echo "$n"
 }
 owner_live() { # owner_live <pid> <start>: alive, a share process, and the same start time (pid reuse, share serve included)
   [[ $1 != 0 ]] || return 1   # kill -0 0 would signal the process group and answer yes
@@ -2500,6 +2601,102 @@ owner_live() { # owner_live <pid> <start>: alive, a share process, and the same 
   [[ "$(proc_start "$1")" != "$2" ]] || return 0
   # one release only (DEC-34; drop in the release after next): a start a pre-upgrade CLI wrote in this same environment
   [[ -n $2 && "$(proc_start_local "$1")" == "$2" ]]
+}
+
+# --- the .health cache (G10): what the last token check and the last Worker probe saw ---
+# $config_dir/.health is one JSON file, mode 600, never a secret: {token: {source, verified_at, expires_on, verify}, worker: {pair, deploy, at},
+# gates: {at, missing}, min_cli}. Each writer replaces only its own top-level key (jq, tmp + mv -f), so a key another writer owns survives
+# (SPEC-009 adds a members key). `state` reads it and never refreshes it: it stays read-only and makes no network call.
+health="$config_dir/.health"
+health_put() { # health_put <key> <json>: this key only; a failure is ignored, the cache is advisory
+  [[ -d $config_dir && -d $root ]] || return 0   # never create a profile dir for a cache: a half-set-up profile would list as a ghost
+  local tmp cur='{}'
+  lock_take config
+  tmp="$(mktemp "$config_dir/.health.XXXXXX" 2>/dev/null)" || { lock_release config; return 0; }
+  chmod 600 "$tmp" 2>/dev/null || true
+  [[ ! -f $health ]] || cur="$(cat "$health" 2>/dev/null || echo '{}')"
+  if jq -c --arg k "$1" --argjson v "$2" '(if type == "object" then . else {} end) | .[$k] = $v' <<<"$cur" >"$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$health" 2>/dev/null || rm -f "$tmp"
+  else
+    rm -f "$tmp"
+  fi
+  lock_release config
+  return 0
+}
+tok_source="" tok_status="" tok_expires="" cmp_status="" cmp_worker="" cmp_min=""
+token_source() { # sets tok_source to the first token source that exists (cmd, keychain, file, env), nothing when none: existence only, never a value, never a command run
+  tok_source=""
+  if [[ -n "$(cfg api_token_cmd || true)$(cfg r2_token_cmd || true)" ]]; then tok_source="cmd"
+  elif command -v security >/dev/null && security find-generic-password -a share -s "$(api_token_key)" >/dev/null 2>&1; then tok_source="keychain"
+  elif [[ -s $api_token_file ]]; then tok_source="file"
+  elif [[ -n ${CLOUDFLARE_API_TOKEN:-}${SHARE_R2_TOKEN:-} ]]; then tok_source="env"; fi
+  return 0
+}
+token_state() { # token_state: tok_source, tok_status (missing, unchecked, invalid, expired, expiring, ok; empty when this profile uses no token), tok_expires; reads only
+  local c_verify="" c_at=0 c_exp="" c_src="" c_epoch="" now
+  tok_status="" tok_expires=""
+  token_source
+  [[ $r2on == 1 || $backend == r2 || -n $tok_source ]] || return 0   # a plain tunnel profile with no token has nothing to report
+  [[ -n $tok_source ]] || { tok_status=missing; return 0; }
+  now="${SHARE_STATE_NOW:-$(date +%s)}"
+  if [[ -f $health ]]; then
+    IFS=$'\037' read -r c_verify c_at c_exp c_src c_epoch < <(jq -r '(.token // {}) as $t
+      | [($t.verify // ""), (($t.verified_at // 0) | tostring), ($t.expires_on // ""), ($t.source // ""),
+         (try ($t.expires_on | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | tostring) catch "")] | join("\u001f")' "$health" 2>/dev/null) || true
+  fi
+  [[ $c_at =~ ^[0-9]+$ ]] || c_at=0
+  # a cache written for another source describes another token; one older than a week no longer vouches for the verdict,
+  # but an expires_on is a hard date for the same token, so it keeps counting
+  if [[ $c_src != "$tok_source" || $c_at -eq 0 ]]; then c_verify="" c_exp="" c_epoch=""
+  elif [[ $((now - c_at)) -gt 604800 ]]; then c_verify=""; fi
+  tok_expires=$c_exp
+  if [[ $c_epoch =~ ^[0-9]+$ && $c_epoch -le $now ]]; then tok_status=expired
+  elif [[ $c_verify == invalid ]]; then tok_status=invalid
+  elif [[ $c_epoch =~ ^[0-9]+$ && $((c_epoch - now)) -le 1209600 ]]; then tok_status=expiring
+  elif [[ -z $c_verify ]]; then tok_status=unchecked
+  else tok_status=ok; fi
+  return 0
+}
+ver_lt() { # ver_lt <a> <b>: a < b as dotted numbers; a non-numeric part counts as 0
+  awk -v a="$1" -v b="$2" 'BEGIN { na = split(a, x, "."); nb = split(b, y, "."); n = na > nb ? na : nb
+    for (i = 1; i <= n; i++) { p = x[i] + 0; q = y[i] + 0; if (p < q) exit 0; if (p > q) exit 1 } exit 1 }'
+}
+compat_state() { # compat_state: cmp_status (ok, worker_older, worker_newer, cli_below_min, unknown), cmp_worker (the Worker's "<version> <sha>" pair), cmp_min (min_cli); empty status when this profile has no Worker
+  local wv
+  cmp_status="" cmp_worker="" cmp_min=""
+  [[ $r2on == 1 || $backend == r2 ]] || return 0
+  if [[ -f $health ]]; then
+    IFS=$'\037' read -r cmp_worker cmp_min < <(jq -r '[(.worker.pair // ""), (.min_cli // "")] | join("\u001f")' "$health" 2>/dev/null) || true
+  fi
+  wv="${cmp_worker%% *}"
+  if [[ $cmp_min =~ ^[0-9]+(\.[0-9]+)*$ ]] && ver_lt "$SHARE_VERSION" "$cmp_min"; then cmp_status=cli_below_min
+  elif [[ $wv =~ ^[0-9]+$ ]]; then
+    if [[ $wv -lt $WORKER_VERSION ]]; then cmp_status=worker_older
+    elif [[ $wv -gt $WORKER_VERSION ]]; then cmp_status=worker_newer
+    else cmp_status=ok; fi
+  else cmp_status=unknown; fi
+  return 0
+}
+token_json() { # state.token: {source, status, expires_on}, null when this profile uses no token
+  token_state
+  [[ -n $tok_status ]] || { echo null; return 0; }
+  jq -nc --arg s "$tok_source" --arg st "$tok_status" --arg e "$tok_expires" '{source: (if $s == "" then null else $s end), status: $st, expires_on: (if $e == "" then null else $e end)}'
+}
+compat_json() { # state.compat: {cli, worker, status, min_cli}, null when this profile has no Worker
+  compat_state
+  [[ -n $cmp_status ]] || { echo null; return 0; }
+  jq -nc --arg c "$SHARE_VERSION" --arg w "$cmp_worker" --arg st "$cmp_status" --arg m "$cmp_min" \
+    '{cli: $c, worker: (if $w == "" then null else $w end), status: $st, min_cli: (if $m == "" then null else $m end)}'
+}
+health_token_put() { # health_token_put ok|invalid [expires_on]: what a verify call just saw, under the current source
+  token_source
+  [[ -n $tok_source ]] || return 0
+  health_put token "$(jq -nc --arg s "$tok_source" --argjson t "$(date +%s)" --arg e "${2:-}" --arg v "$1" \
+    '{source: $s, verified_at: $t, expires_on: (if $e == "" then null else $e end), verify: $v}')"
+}
+health_worker_put() { # health_worker_put: the Worker pair the last healthz answered (hz_pair, hz_deploy)
+  [[ $hz_code == 200 && $hz_pair =~ ^[0-9]+\ [0-9a-f]{12}$ ]] || return 0
+  health_put worker "$(jq -nc --arg p "$hz_pair" --arg d "${hz_deploy:-}" --argjson t "$(date +%s)" '{pair: $p, deploy: $d, at: $t}')"
 }
 
 # --- the step journal: one file per running multi-step verb, $root/ops/<verb>.<pid>.json (DEC-5) ---
@@ -2511,6 +2708,7 @@ op_prev_step="" op_prev_name=""   # op_prev_name: the step name a resuming verb 
 op_steps_setup_tunnel() { printf '%s\n' "1 auth" "2 tunnel" "3 route" "4 dns" "5 token" "6 config" "7 service" "8 live"; }
 op_steps_setup_r2() { printf '%s\n' "1 alias" "2 worker" "3 bucket" "4 alias-domain" "5 routes" "6 snapshot" "7 alias-apps" "8 deploy" \
   "9 pointers" "10 access" "11 config" "12 marker" "13 route" "14 alias-bind" "15 probe" "16 handoff"; }
+op_steps_add() { printf '%s\n' "1 pointer" "2 publish" "3 access" "4 host" "5 gate" "6 row"; }
 op_steps_no_r2() { printf '%s\n' "1 route" "2 config"; }
 op_steps_teardown() { printf '%s\n' "1 gated" "2 service" "3 dns" "4 hosts" "5 tunnel" "6 token" "7 config"; }
 op_steps_teardown_purge() { printf '%s\n' "1 shares" "2 records" "3 marker" "4 domain" "5 worker" "6 bucket" "7 local"; }
@@ -2852,26 +3050,30 @@ access_sweep() { # every pending line: a live owner is skipped, a finished add's
 }
 
 access_pending_note() { # ls and status: apps waiting for a token, and lines no sweep will ever touch
-  local n b; n="$(pending_count live)"; b="$(pending_count bad)"
+  local n b; n="$(pending_count deferred orphan)"; b="$(pending_count bad)"
   [[ $n -gt 0 ]] && echo "share: $n Access app(s) await deletion; run '$me prune' with a token (the stored one, or CLOUDFLARE_API_TOKEN)" >&2
   [[ $b -gt 0 ]] && echo "share: $b malformed line(s) in $pending; a sweep never acts on them; remove them by hand" >&2
   return 0
 }
 access_ls_check() { # with an exported CLOUDFLARE_API_TOKEN only (never op read or a prompt from a listing): a gated row whose app is gone is PUBLIC
   [[ $backend == r2 ]] && return 0   # on r2 a missing app leaves the link closed: the Worker checks the JWT itself
-  local pairs id app
+  local pairs id app missing=""
   api_token_resolve env
   [[ -n $api_token && -n $host_name ]] || return 0
   pairs="$(rows | awk -F'\t' '{n = split($6, a, " "); for (i = 1; i <= n; i++) if (substr(a[i], 1, 7) == "access=") print $1, substr(a[i], 8)}')"
-  [[ -n $pairs ]] || return 0
+  if [[ -z $pairs ]]; then gates_put ""; return 0; fi   # no gated row: an older "missing" list is stale
   access_account soft || return 0
   access_proof || return 0   # a 404 from a token without the Access read scope would call every gated link PUBLIC
   while read -r id app; do
     [[ -n $id ]] || continue
     cf_try GET "/accounts/$acct/access/apps/$app"
-    [[ $cf_code == 404 ]] && echo "share: Access app for $id is gone; the link is PUBLIC; $me rm $id" >&2
+    if [[ $cf_code == 404 ]]; then echo "share: Access app for $id is gone; the link is PUBLIC; $me rm $id" >&2; missing="$missing $id"; fi
   done <<<"$pairs"
+  gates_put "$missing"   # a check that ran; state reads it as link_state gate_missing and never makes the call itself
   return 0
+}
+gates_put() { # gates_put "<ids>": the gated rows whose Access app the last check found gone (G7); an empty list clears an older one
+  health_put gates "$(jq -nc --arg m "$1" --argjson t "$(date +%s)" '{at: $t, missing: ($m | split(" ") | map(select(length > 0)))}')"
 }
 
 cmd_api_token() { # cmd_api_token [--cmd '<command>' | --check]: store a token command, a hidden paste, or stdin; then the read-only preflight
@@ -2942,8 +3144,10 @@ r2_expiry_note() { # r2_expiry_note: the publisher token's expires_on from /user
   api_token_resolve
   [[ -n $api_token ]] || return 0
   r2_api GET /user/tokens/verify
+  case $cf_code in 401|403) health_token_put invalid ;; esac
   [[ $cf_code == 200 ]] || return 0
   e="$(jq -r '.result.expires_on // empty' <<<"$cf_body" 2>/dev/null)" || return 0
+  health_token_put ok "$e"
   [[ -n $e ]] || return 0
   left="$(jq -rn --arg e "$e" '(($e | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) - now) / 86400 | floor' 2>/dev/null)" || return 0
   [[ $left =~ ^-?[0-9]+$ ]] || return 0
@@ -3497,7 +3701,7 @@ list_bucket() { # list_bucket ls|state <local ids>: the bucket's display rows (f
   elif [[ -z ${r2_snap_file:-} ]]; then r2_read; fi   # a member's ls reuses the read its prune made
   echo "#more ${r2_list_more:-0}"
   while IFS=$'\t' read -r id name src date exp opts; do
-    case $'\n'"$2" in *$'\n'"$id"$'\n'*) continue ;; esac   # a shadowed id lists its local row once
+    case $'\n'"$2" in *$'\n'"$id"$'\n'*) echo "#shadow $id"; continue ;; esac   # a shadowed id lists its local row once, and link_state names it
     optv type "$opts"; type_out=$optv_out
     if ! type_ok "$type_out"; then if [[ $name == *.* ]]; then type_of "/dev/null/$name"; else type_out=folder; fi; fi
     optv by "$opts"
@@ -3508,7 +3712,16 @@ list_bucket() { # list_bucket ls|state <local ids>: the bucket's display rows (f
     '($4 == 0 || $4 > now) && (all == 1 || $8 != "") {print $1, $2, "", $3, $4, $5, "machine", $6, $7, $8}' || true
 }
 
-list_rows() { # list_rows ls|state|brief: this profile's display rows into list_out (fields split by \x1f): id name src added expires opts storage type by origin
+list_rows() { # list_rows ls|state|brief: this profile's display rows into list_out (fields split by \x1f): id name src added expires opts storage type by origin link_state reason
+  list_shadow="" list_shadow_read=0
+  list_rows_raw "$@"
+  link_apply
+}
+list_shadow="" list_shadow_read=0   # the local ids a cloud record also holds, read from the bucket by list_bucket (a full read only)
+shadow_put() { # shadow_put "<ids>": what the last full listing found; an empty list clears an older one
+  health_put shadow "$(jq -nc --arg m "$1" --argjson t "$(date +%s)" '{at: $t, ids: ($m | split(" ") | map(select(length > 0)))}')"
+}
+list_rows_raw() {
   # sets list_cloud_error and list_cloud_more. Bucket rows are display data: they never reach rows(), the index, a Caddyfile, or a stage path
   local id name src date exp opts lids="" f me_by us=$'\x1f'
   list_out="" list_cloud_error="" list_cloud_error_code="" list_cloud_more=0
@@ -3526,7 +3739,9 @@ list_rows() { # list_rows ls|state|brief: this profile's display rows into list_
   f="$(mktemp "${TMPDIR:-/tmp}/share-list.XXXXXX")"
   if ( list_bucket "$1" "$lids" ) >"$f" 2>"$f.err"; then
     list_cloud_more="$(sed -n '1s/^#more //p' "$f")"
-    list_out+="$(sed '1d' "$f")"
+    list_shadow="$(sed -n 's/^#shadow //p' "$f")"
+    if [[ $1 == ls ]]; then list_shadow_read=1; shadow_put "$list_shadow"; fi   # only a full read sees every local id's record (the menu poll skips them); remember what it saw
+    list_out+="$(sed '1d; /^#shadow /d' "$f")"
     [[ -z $list_out ]] || list_out+=$'\n'
   else
     # SHARE_ERROR_JSON=1 adds a JSON line after the die's own line: the human text stays the last other line, the code comes from it
@@ -3536,6 +3751,31 @@ list_rows() { # list_rows ls|state|brief: this profile's display rows into list_
   fi
   rm -f "$f" "$f.err"
   [[ $list_cloud_more =~ ^[0-9]+$ ]] || list_cloud_more=0
+}
+
+link_apply() { # appends link_state and reason to every list_out row (G7): revoked, expired, shadowed, gate_missing, else live
+  [[ -n $list_out ]] || return 0
+  local gates="" shadow="$list_shadow" now us=$'\x1f'
+  now="${SHARE_STATE_NOW:-$(date +%s)}"
+  # the menu poll never reads a local id's record, so a shadow is the one the last full listing (ls) saw, while that is under a week old
+  if [[ $list_shadow_read == 0 && -f $health ]]; then
+    shadow="$shadow $(jq -r --argjson now "$now" '(.shadow // {}) | select((.at // 0) > ($now - 604800)) | (.ids // [])[]' "$health" 2>/dev/null | tr '\n' ' ' || true)"
+  fi
+  # a gated row whose Access app the last listing with an exported token found gone, while that check is under a week old
+  [[ ! -f $health ]] || gates="$(jq -r --argjson now "$now" '(.gates // {}) | select((.at // 0) > ($now - 604800)) | (.missing // [])[]' "$health" 2>/dev/null | tr '\n' ' ' || true)"
+  list_out="$(awk -F"$us" -v OFS="$us" -v now="$now" -v shadow=" ${shadow//$'\n'/ } " -v gates=" $gates" '
+    NF == 0 { next }
+    { n = split($6, o, " "); st = "live"; why = ""; gated = 0
+      for (i = 1; i <= n; i++) {
+        if (o[i] == "revoked") st = "revoked"
+        if (o[i] ~ /^revoked_by=/ && why == "") why = o[i]
+        if (o[i] ~ /^access=/) gated = 1
+      }
+      if (st == "live" && $5 + 0 > 0 && $5 + 0 <= now) st = "expired"
+      if (st == "live" && $7 == "machine" && index(shadow, " " $1 " ")) { st = "shadowed"; why = "cloud_id_wins" }
+      if (st == "live" && gated && index(gates, " " $1 " ")) { st = "gate_missing"; why = "access_app_gone" }
+      if (st == "live" || st == "expired") why = ""
+      NF = 10; print $0, st, why }' <<<"$list_out")"$'\n'
 }
 
 r2_token_ok() { # r2_token_ok off|env|soft: a publisher token resolves, never a die; env reads the environment only, so a listing runs no command
@@ -4071,7 +4311,9 @@ cmd_hits_r2() { # cmd_hits_r2 <id>: one Analytics Engine SQL call; the id is che
 cmd_status_r2() { # read-only: the Worker's health and version, then the listing without its prune (status never deletes)
   local waiting
   echo "r2 backend: https://$host_name/"
-  r2_healthz
+  hz_code=000 hz_pair="" hz_gate=0
+  serve_state 5   # the one classifier probes the Worker; the lines below read its answer
+  health_worker_put
   if [[ $hz_code == 200 ]]; then echo "worker:     up ($hz_pair)"; else echo "worker:     DOWN: $hz_code"; fi
   if [[ $hz_code == 200 && $hz_gate == 1 ]]; then echo "gated:      on (the Worker checks the Access login)"
   elif [[ $hz_code == 200 ]]; then echo "gated:      off (the Worker has no Access team; add --access is refused)"; fi
@@ -4087,21 +4329,19 @@ cmd_status_r2() { # read-only: the Worker's health and version, then the listing
 }
 
 cmd_state_r2() { # the Share Bar snapshot for an r2 profile: schema 1 plus "backend"; SHARE_STATE_BRIEF=1 (profiles) skips the share list and its m/ reads
-  local state_val="not_setup" ready="false"
-  if [[ -n $host_name ]]; then
-    state_val="serving"   # nothing runs here; the Worker serves while the account does
-    r2_healthz 2; [[ $hz_code == 200 ]] && ready="true"
-  fi
+  local state_val ready
+  serve_state; state_val=$serve_state_val ready=$serve_ready_val
   list_out="" list_cloud_error="" list_cloud_error_code="" list_cloud_more=0
   [[ -z $host_name || ${SHARE_STATE_BRIEF:-0} == 1 ]] || list_rows state
-  state_lines | jq -nR --arg state "$state_val" --argjson ready "$ready" --arg host "$host_name" --argjson access_pending "$(pending_count)" \
+  state_lines | jq -nR --arg state "$state_val" --argjson ready "$ready" --arg host "$host_name" --argjson access_pending "$(pending_count deferred orphan)" --argjson access_inflight "$(pending_count intent bound)" --argjson access_bad "$(pending_count bad)" \
     --arg cerr "$list_cloud_error" --arg ccode "${list_cloud_error_code:-}" --argjson cmore "$list_cloud_more" \
-    --argjson codes_v "$codes_v" --arg role "$role" --argjson ops "$(ops_json)" "$state_jq_row"'
+    --argjson codes_v "$codes_v" --arg role "$role" --arg sphase "$serve_phase" --arg sreason "$serve_reason" --argjson token "$(token_json)" --argjson compat "$(compat_json)" --argjson ops "$(ops_json)" "$state_jq_row"'
     {schema: 1, state: $state, ready: $ready, mode: "named", host: (if $host == "" then null else $host end), hosts: "",
-     serves_here: false, service: false, access_pending: $access_pending, backend: "r2",
+     serves_here: false, service: false, access_pending: $access_pending, access_inflight: $access_inflight, access_bad: $access_bad, backend: "r2",
      shares: [inputs | select(length > 0) | row], r2: true}
     + (if $cerr == "" then {} else {cloud_error: $cerr} end) + (if $ccode == "" then {} else {cloud_error_code: $ccode} end)
-    + (if $cmore > 0 then {cloud_more: $cmore} else {} end) + {codes_v: $codes_v, role: $role, ops: $ops}'
+    + (if $cmore > 0 then {cloud_more: $cmore} else {} end) + {codes_v: $codes_v, role: $role, ops: $ops, serve: {phase: $sphase, reason: $sreason}}
+    + (if $token == null then {} else {token: $token} end) + (if $compat == null then {} else {compat: $compat} end)'
 }
 
 r2_own_get() { # r2_own_get <id>: the "<id>\t<prefix>\t<source>" line for one of this install's own adds
@@ -4383,7 +4623,7 @@ r2_wait_healthz() { # r2_wait_healthz admin|join: three 200s in a row within SHA
     r2_healthz
     if [[ $hz_code == 200 && ( $1 == join || $hz_pair == "$WORKER_VERSION $WORKER_SHA" ) && ( $1 != tenant || $hz_tunnel == 1 ) &&
       ( $1 == join || -z $r2_deploy_nonce || $hz_deploy == "$r2_deploy_nonce" ) ]]; then
-      streak=$((streak + 1)); [[ $streak -ge 3 ]] && return 0
+      streak=$((streak + 1)); [[ $streak -ge 3 ]] && { health_worker_put; return 0; }   # the pair this setup just proved is what compat reads
     else
       streak=0
     fi
@@ -5317,7 +5557,7 @@ cmd_teardown() {
     cmd_stop >/dev/null
     rm -f "$root/quick.url"
     to_trash "$config"
-    [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true   # a torn-down profile leaves no empty dir in `share profiles`
+    rm -f "$health" "$config_dir"/.health.??????; [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true   # a torn-down profile leaves no empty dir in `share profiles`
     echo "removed the quick setup (no tunnel, DNS, or token existed); shares in $root stay"
     return 0
   fi
@@ -5402,7 +5642,7 @@ cmd_teardown() {
   [[ -f $cert ]] && to_trash "$cert"
   rm -f "$config_dir/cert.zone"
   to_trash "$config"; echo "config:  moved to the Trash"
-  [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true
+  rm -f "$health" "$config_dir"/.health.??????; [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true
   op_done
 }
 
@@ -5434,7 +5674,7 @@ cmd_teardown_r2() { # cmd_teardown_r2 [--yes] [--purge]: local by default; --pur
   [[ $n == 0 ]] || echo "access:  $n Access app(s) stay listed in $pending; a later setup of $host_name and '$me prune' with the token removes them"
   [[ -f $r2own ]] && to_trash "$r2own"
   to_trash "$config"; echo "config:  moved to the Trash"
-  [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true
+  rm -f "$health" "$config_dir"/.health.??????; [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true
   [[ $purge == 1 ]] || echo "kept:    bucket $bucket, the Worker, and every share on $host_name stay for the other publishers; '$me teardown --yes --purge' with the admin token removes them"
   op_done
 }
@@ -5557,7 +5797,7 @@ Publish snapshots of local files/folders, or proxy a running `localhost` server,
 
 ## Before anything
 
-Run `share state` first and read its JSON: `state` (`not_setup`, `stopped`, `serving`), `ready`, `role`, `ops`, and `shares`. It never writes, prunes, or prompts. `share status` is the human view of the same facts; never parse its text. If `state` is `not_setup`, stop and tell the user: `share setup --quick` needs no account, or `share setup <hostname>` needs a browser login or `CLOUDFLARE_API_TOKEN`. Every profile: `share profiles --json`.
+Run `share state` first and read its JSON: `state` (`not_setup`, `stopped`, `serving`), `ready`, `serve`, `role`, `ops`, `token`, and `shares`. It never writes, prunes, or prompts. `share status` is the human view of the same facts; never parse its text. If `state` is `not_setup`, stop and tell the user: `share setup --quick` needs no account, or `share setup <hostname>` needs a browser login or `CLOUDFLARE_API_TOKEN`. Every profile: `share profiles --json`.
 
 `role` is what kind of profile this is:
 
@@ -5570,6 +5810,25 @@ Run `share state` first and read its JSON: `state` (`not_setup`, `stopped`, `ser
 | `r2_profile` | an R2 profile: a Worker serves the links; nothing runs here |
 | `member` | a member of another person's tenant |
 | `migrated` | this profile moved to another machine (`share migrate`); `state` reads `not_setup` and nothing serves here |
+
+`serve` says why links are or are not up: `serve.phase` and `serve.reason`. `reason` is the serve exit code for `failed`, `ok` for `serving`, else the phase name. Trust it over any guess from the process list; never tail `serve.log` first.
+
+| `serve.phase` | Meaning |
+|---|---|
+| `not_setup` | nothing to serve: run `share setup`, or the profile moved |
+| `elsewhere` | set up, but this machine is not in `hosts=`; links work while a machine in `hosts=` serves; do not run `share start` here |
+| `failed` | the login service is installed and the last serve ended with `serve.reason` (a code below); fix that, then `share start` |
+| `stopped` | set up and not running; `share start` |
+| `starting` | serve runs, the tunnel is still connecting (under 30 s); wait, then read `share state` again |
+| `tunnel_down` | serve runs but the tunnel does not answer: links are down; `share stop`, then `share start` |
+| `worker_down` | an r2 profile whose Worker does not answer `/healthz`; nothing local fixes it |
+| `serving` | links are up |
+
+Each `shares[]` row has `link_state`: `live`, `expired` (past its expiry, not yet pruned; do not hand the link out), `shadowed` (a cloud link holds the same id and wins), `gate_missing` (a gated link whose Access app is gone: the link is public; tell the user), or `revoked` (an admin revoked it; `reason` names who). Hand out a link only when its `link_state` is `live`.
+
+`access_pending` counts Access apps waiting for deletion (run `share prune` with a token); `access_inflight` counts apps a running `add` is still working on (do nothing); `access_bad` counts hand-edited lines (tell the user).
+
+`token` (when the profile uses one) is `{source, status, expires_on}`: `status` `missing`, `expired` or `invalid` means an add will fail (`share api-token`); `unchecked` means nothing verified it lately; `expiring` means within 14 days. `compat.status` `cli_below_min` means this share is too old for the tenant (upgrade it); `worker_older` means the Worker needs the admin's `share setup <host> --r2` rerun.
 
 `ops` lists multi-step verbs that are running (`alive: true`) or died part way (`alive: false`). A dead op names `rerun` (and `rollback` when it has one); tell the user and ask before running either. Never run them through a shell; the `rerun_argv` array is the exact argument list after `share`.
 
@@ -5597,6 +5856,15 @@ A refusal ends with `share: <message>` on stderr and exit 1. Set `SHARE_ERROR_JS
 | `minter_token_missing` | a member-token verb found neither `SHARE_MINTER_TOKEN` nor `minter_token_cmd` |
 | `minter_token_cmd_failed` | `minter_token_cmd` exited non-zero or printed no token |
 | `members_present` | reserved: a tenant teardown refused while it has members |
+| `config_key_unknown` | `share config` sets only `ttl` and `storage_default` |
+| `ok` | `serve.reason` of a serving profile: nothing is wrong |
+| `tunnel_down` | `serve.reason` while serve runs but the tunnel does not answer |
+| `worker_down` | `serve.reason` of an r2 profile whose Worker does not answer |
+| `token_missing` | `token.status`: no token resolves on this profile (`share api-token`) |
+| `token_expired` | `token.status`: the stored token is past its expiry; every add fails (`share api-token`) |
+| `token_invalid` | `token.status`: Cloudflare rejected the stored token (`share api-token`) |
+| `cli_below_min` | `compat.status`: this share is older than the tenant requires; upgrade it |
+| `worker_older` | `compat.status`: the Worker is older than this share ships; the admin reruns `share setup <host> --r2` |
 | `stopped` | serve exit record: `share stop` ended serving |
 | `cloudflared_died` | serve exit record: the tunnel process exited |
 | `caddy_failed` | serve exit record: the web server failed to start or exited |
@@ -5617,6 +5885,7 @@ A refusal ends with `share: <message>` on stderr and exit 1. Set `SHARE_ERROR_JS
 | `share start` / `share stop` | Serving on or off |
 | `share --profile <name> <command>` | Run any command against another setup (a second account or hostname); `share profiles` lists them. No flag is the default setup |
 | `share setup <hostname> --backend r2 --bucket <name>` | An R2 profile: a Worker serves links from a private bucket, so they stay up while this machine is off, and several people publish to one hostname. Live shares, `--host`, `start`, and `stop` are refused there; `share rm <id>` unpublishes |
+| `share config ttl\|storage_default [<value>\|--unset]` | The two defaults a person sets: the `add` expiry (`12h`, `7d`, `never`) and where `add` stores a link on a tenant with R2 on (`local` or `cloud`); with no value it prints the current one |
 | `share admin-token --cmd '<command>'` / `--clear` / `--test [--json]` | The command that prints the admin token for `setup --r2`, `--no-r2` and `teardown --purge` (never the token itself); `--test` names what the token can do |
 | `share minter-token --cmd '<command>'` / `--clear` / `--test [--json]` | The command that prints the minter token, which mints member tokens |
 
@@ -5634,6 +5903,29 @@ EOF
   [[ -n $d ]] && echo "installed $out"
 }
 
+cmd_config() { # cmd_config <key> [<value> | --unset]: the two CLI defaults a person sets (G14); every write goes through config_put with the one key owned
+  local key="${1:-}" val="${2:-}"
+  case $key in
+    ttl|storage_default) ;;
+    "") die "usage: $me config ttl|storage_default [<value> | --unset]" ;;
+    *) die_code config_key_unknown "$key is not a setting this verb writes; the settable keys are ttl and storage_default; nothing was written" "$me config ttl" ;;
+  esac
+  [[ $# -le 2 ]] || die "usage: $me config $key [<value> | --unset]"
+  if [[ $# == 1 ]]; then cfg "$key" || true; return 0; fi   # no value: print it, nothing when unset
+  [[ -f $config ]] || die "this profile has no config yet; run $me setup first"
+  if [[ $val == --unset ]]; then config_put "$key"; echo "$key unset"; return 0; fi
+  case $key in
+    ttl)
+      [[ $val == never || $val =~ ^[0-9]+[dh]?$ && ( $val == 0 || $val =~ [dh]$ ) ]] ||
+        die_code config_value_bad "ttl '$val' is not a duration (use 12h, 7d, or never); nothing was written" "$me config ttl 7d" ;;
+    storage_default)
+      [[ $val == local || $val == cloud ]] || die_code config_value_bad "storage_default '$val' is not local or cloud; nothing was written" "$me config storage_default local"
+      [[ -n "$(cfg bucket || true)" ]] || die_code config_value_bad "storage_default needs a bucket, and $host_name has none (R2 is off); nothing was written" "$me config storage_default --unset" ;;
+  esac
+  config_put "$key" "$key=$val"
+  echo "$key=$val"
+}
+
 cmd_state_fn() { # the hidden test verb (unlisted, like r2-rows): one state owner at a time
   local v n i w
   case ${1:-} in
@@ -5641,6 +5933,11 @@ cmd_state_fn() { # the hidden test verb (unlisted, like r2-rows): one state owne
     code) code_text "${2:-}" ;;
     die) shift; die_code "$@" ;;
     role) printf '%s %s\n' "$role" "${tier:--}" ;;
+    serve) serve_state; printf '%s %s %s %s\n' "$serve_phase" "$serve_reason" "$serve_state_val" "$serve_ready_val" ;;
+    link) list_rows state; printf '%s' "$list_out" | awk -F"$(printf '\037')" 'NF {print $1, $11, $12}' ;;
+    pending) pending_state "${2:-}" ;;
+    token) token_state; printf '%s %s %s\n' "${tok_source:--}" "${tok_status:--}" "${tok_expires:--}" ;;
+    compat) compat_state; printf '%s|%s|%s\n' "${cmp_status:--}" "${cmp_worker:--}" "${cmp_min:--}" ;;
     ops) ops_json; echo ;;
     owner-live) if owner_live "${2:-0}" "${3:-}"; then echo true; else echo false; fi ;;
     op-run)   # op-run <verb> <n> [rerun args... [-- rollback args...]]: op_begin, n op_steps, op_done; SHARE_OP_PAUSE holds a step
@@ -5657,7 +5954,7 @@ cmd_state_fn() { # the hidden test verb (unlisted, like r2-rows): one state owne
         write_config_quick) w=$own_write_config_quick ;; tenant_config) w=$own_tenant_config ;;
       esac
       config_put "$w" "$@" ;;
-    *) die "usage: share state-fn codes|code|die|role|ops|owner-live|op-run|config-put" ;;
+    *) die "usage: share state-fn codes|code|die|role|serve|link|pending|token|compat|ops|owner-live|op-run|config-put" ;;
   esac
 }
 
@@ -5673,6 +5970,7 @@ case "${1:-status}" in
   migrate-tunnel-id) cmd_migrate_tunnel_id ;;
   migrate-nonce) cmd_migrate_nonce ;;
   api-token) shift; cmd_api_token "$@" ;;
+  config) shift; cmd_config "$@" ;;
   admin-token) shift; token_verb admin "$@" ;;
   minter-token) shift; token_verb minter "$@" ;;
   ls) cmd_prune listing; cmd_ls ;;

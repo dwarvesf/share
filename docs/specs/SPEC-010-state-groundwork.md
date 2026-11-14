@@ -342,12 +342,12 @@ Each task lands with its tests in `tests/share.sh` (sections named `=== state gr
 
 ### Phase 2: should
 
-- [ ] G6 (after G1, G1b, G3): `serve_state`, `serve {phase, reason}`, `.serve-exit` read; `cmd_status`, `cmd_state`, `cmd_state_r2` all call it; `elsewhere` copy fix. AC: SS-01 to SS-09; for each phase fixture `jq '[.state,.ready]'` equals HEAD's output.
-- [ ] G7: `link_state` inside `list_rows` (L2897) for `live`, `expired`, `shadowed`, `gate_missing`; `ls` adds a STATE column only when a row is not `live`. AC: LS-01 to LS-05; every old row field equals HEAD's output.
-- [ ] G8: `pending_state <line>`; `pending_count` takes a state list; `access_pending` = deferred + orphan; `access_inflight`, `access_bad`; `ls`/`status` note only for deferred and orphan. AC: PS-01 to PS-04.
-- [ ] G9 (after G2a): the `add` journal, and bare `prune` finishing or rolling back a dead add (step before the row append: trash `pub/<id>` with no row, drop its own pointer through `r2_pointer_drop`, leave Access lines to the sweep). `add` uses `op_begin --concurrent`. AC: AD-01 to AD-04; the Share Bar's Stop Waiting copy (MO:L111) is G11's.
-- [ ] G10: `.health` cache, `token_state`, `compat_state`, `state.token`, `state.compat`; written by `api-token`, `status`, `setup`, interactive `prune`; `state` reads it only; per-key `jq` updates; teardown removes it. AC: TK-01 to TK-06; the three `writes nothing` checks stay green with `.health` present and absent.
-- [ ] G14 (after G1, G4): `share config` for `ttl` and `storage_default` (interactions doc section 7, DEC-17). AC: CG-01 to CG-04.
+- [x] G6 (after G1, G1b, G3): `serve_state`, `serve {phase, reason}`, `.serve-exit` read; `cmd_status`, `cmd_state`, `cmd_state_r2` all call it; `elsewhere` copy fix. AC: SS-01 to SS-09; for each phase fixture `jq '[.state,.ready]'` equals HEAD's output.
+- [x] G7: `link_state` inside `list_rows` (L2897) for `live`, `expired`, `shadowed`, `gate_missing`; `ls` adds a STATE column only when a row is not `live`. AC: LS-01 to LS-05; every old row field equals HEAD's output.
+- [x] G8: `pending_state <line>`; `pending_count` takes a state list; `access_pending` = deferred + orphan; `access_inflight`, `access_bad`; `ls`/`status` note only for deferred and orphan. AC: PS-01 to PS-04.
+- [x] G9 (after G2a): the `add` journal, and bare `prune` finishing or rolling back a dead add (step before the row append: trash `pub/<id>` with no row, drop its own pointer through `r2_pointer_drop`, leave Access lines to the sweep). `add` uses `op_begin --concurrent`. AC: AD-01 to AD-04; the Share Bar's Stop Waiting copy (MO:L111) is G11's.
+- [x] G10: `.health` cache, `token_state`, `compat_state`, `state.token`, `state.compat`; written by `api-token`, `status`, `setup`, interactive `prune`; `state` reads it only; per-key `jq` updates; teardown removes it. AC: TK-01 to TK-06; the three `writes nothing` checks stay green with `.health` present and absent.
+- [x] G14 (after G1, G4): `share config` for `ttl` and `storage_default` (interactions doc section 7, DEC-17). AC: CG-01 to CG-04.
 - [ ] G11a (after G3, G6, G10): Share Bar decodes `role`, `tier`, `serve`, `ops`, `link_state`, `token`, `compat` as optional keys, and derives health from them inside today's `NSMenu`: health copy from `serve.phase`, `migrated` reads `Moved to another machine`; an unknown value of any new key falls back to today's derivation. AC: SB-01 to SB-03; `StateMappingTests` unchanged on the old fixtures.
 - [ ] G11b (after G11a, G2a, G7): Copy Link disabled on `expired`; an alive op shows `Working: <verb> (<step>/<of>)`, a dead one an attention line with the `rerun` display string (copy only; the menu never runs it). AC: SB-04, SB-05.
 - [ ] G11c (after G1, G9): mutations set `SHARE_ERROR_JSON=1` and show the JSON line's message and `next`, else today's last `share: ` line; Stop Waiting copy `The add stops where it is; share prune cleans up what it left.` AC: SB-06, SB-07; `bash mac/build.sh 0.0.0`.
@@ -735,3 +735,11 @@ none (no `docs/verification/rejected-findings.md`)
 
 ### TODOs (open follow-ups)
 - the pre-existing two-link purge defect
+
+### Phase 2 review (G6 G7 G8 G9 G10 G14)
+
+Date: 2026-11-15 | Reviewer: /kit:review plus kit:advisor (critique). Verdict stays SHIP: no critical or high finding; the one major is folded.
+
+- MAJOR (folded): `token_state` dropped `expires_on` with the verdict after 7 days, so `expired` and `expiring` never showed on a profile nobody re-ran `api-token` on. A week-old cache now keeps the expiry date for the same source.
+- LOW (folded): a killed `health_put` left `.health.XXXXXX`, which blocks the teardown `rmdir`; every teardown now removes it.
+- LOW (open): `compat` reads the cache even when an r2 `state` just probed `/healthz`; `min_cli` has no writer until the members work; `add_sweep` may consume a journal before a token-less prune can drop its pointer; a flaky Access GET clears a true `gate_missing`; a cloud row's `revoked_by=` prints unsanitized in `ls`.
