@@ -205,3 +205,18 @@ Worker: `env.M_<8hex>.fetch(new Request("http://s.console.so/x", {redirect:"manu
 - Not sampled live: R2 is not enabled on Console Labs (see (c)).
 - Local sample on workerd through `wrangler dev --local` (wrangler 4.133.0; compatibility date lowered to 2026-09-23, the newest that binary supports): `put(k,"one")`; `put(k,"two",{onlyIf:{etagMatches:<first etag>}})` -> an `R2Object`; `put(k,"three",{onlyIf:{etagMatches:<first etag>}})` -> `null`; the body stays `two`. Excerpt: `{"matching_put":"R2Object etag b8a9f715…","stale_put":"null","final_body":"two"}`.
 - This matches the documented contract and the redeem claim (row 3), on the simulator only. OQ-7 stays open. The live check needs R2 on Console Labs and a new leg in `tests/e2e-members.sh` (see Spec deltas). That leg runs on the throwaway T2 tenant, before the first real one (SG-12).
+
+## Phase 1 build (SG-05: TASK-1b to 1i)
+
+Built on main at f8aba46 (SPEC-010 Phase 1 and Phase 2 shipped, so every row of the gate table holds). Dry seams only; no live Cloudflare call.
+
+### Build delta
+
+- P1 (tests): the Phase 1 rows live in `tests/members.sh`, sourced by `tests/share.sh` before the Worker section. Why: the suite file is 5,100 lines and takes 9 minutes; a sourced file can also run alone under a short harness while the build iterates. Labels stay `mm <id>: ...`.
+- P2 (TASK-1b): the dry account answers by the bearer token: `.cf/tokens/<user>/` holds each minter user's tokens, `<user>` a checksum of the token the call carries, so a second minter (MB-34, MB-37) sees its own list. A minted value is `msec-<n>-<user>`, so the Q-SEC-6 grep has a fixed shape to look for.
+- P3 (TASK-1b): new seam knobs beside `SHARE_R2_DRY_FAIL`: `SHARE_R2_DRY_DENY` (a glob over `API <METHOD> <path>` answering 403 10000, for the scope probes), `SHARE_R2_DRY_COMMIT_FAIL` (the call is applied, then answers 500: the "committed create that answered 500" warning above), and `SHARE_R2_DRY_PAUSE` now also matches `API <METHOD> <path>` globs (a die point at any Cloudflare step).
+- P4 (TASK-1c1): the later-phase verbs (`rm`, `purge`, `pause`, `resume`, `invite`, `rotate`, `renew`, `adopt`) are in the dispatcher: each resolves the admin context and, where DEC-80 names it, the minter, then dies `share member <verb> is not built in this version`. Why: TASK-1c1's AC runs `member renew` to prove the minter command runs once; building renew itself is TASK-3e's. No code is added for the stub, so removing it later bumps nothing.
+- P5 (TASK-1d): `--members` needs R2 on already (`bucket=` equal to `--bucket`); from T0 it refuses with the `setup <h> --r2 --bucket B` line first. `min_cli` in the marker is the CLI's own `SHARE_VERSION`, because the constant 0.10.0 in the data model would put the very CLI that wrote it below its own minimum until the release bump.
+- P6 (TASK-1d): the marker reaches `state` through a new `.health` key `marker` (`{members, at}`), written by every verb that reads `share.json` (setup --r2, --members, --no-members, member verbs). `profile_role` reads it, so `tier` is `t2` when config `members=on` OR the cached marker says `members:true`, and `state.tier_drift` is true when they disagree (TN-11). `state` stays network free.
+- P7 (TASK-1d, CC-14): the pause verb is TASK-3a's, so CC-14 runs both orders with `member add` as the concurrent deploy path; the end deploy holds the new binding. SG-08 adds the pause variant.
+- P8 (TASK-1f2): the HMAC is computed in bash over `shasum -a 256` (ipad and opad from the derived key, the message on stdin), because `openssl dgst -hmac <key>` and `-macopt` put the key in argv (Q-SEC-6). The cipher's passphrase rides `-pass fd:3` from a process substitution, never a here-string (bash 3.2 writes a here-string to a temp file).
