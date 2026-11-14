@@ -2178,6 +2178,7 @@ token_verb() { # token_verb admin|minter <args>: the admin-token and minter-toke
       config_put "$key" "$key=$2"
       echo "token:      $key stored in $config (a command, never the token; it runs only on $kind paths)" ;;
     --clear) [[ $# -eq 1 ]] || die "$usage"
+      [[ -f $config ]] || { echo "token:      no config at $config; nothing to clear"; return 0; }   # never create a profile by clearing
       config_put "$key"
       echo "token:      $key removed from $config" ;;
     --test) [[ $# -eq 1 || ( $# -eq 2 && $2 == --json ) ]] || die "$usage"
@@ -5033,8 +5034,8 @@ cmd_teardown() {
     local a; read -rp "Delete the tunnel and DNS record for $host_name? Shares in $root stay. [y/N] " a
     [[ $a == y* || $a == Y* ]] || die "aborted"
   fi
-  op_begin teardown teardown --yes
-  op_step 1
+  # the refusals come before the journal and before anything stops: a missing token is not a dead teardown
+  admin_token_resolve optional
   # a gated share never survives teardown: pub/ and the index stay, so a later setup would serve it with no app
   local gated n_apps
   gated="$(rows | awk -F'\t' '$6 ~ /(^| )access=/ {print $1}')"
@@ -5042,6 +5043,10 @@ cmd_teardown() {
   if [[ $n_apps -gt 0 ]]; then
     api_token_resolve
     [[ -n $api_token ]] || { access_no_token >&2; die "teardown would orphan $n_apps Access app(s); rerun with CLOUDFLARE_API_TOKEN"; }
+  fi
+  op_begin teardown teardown --yes
+  op_step 1
+  if [[ $n_apps -gt 0 ]]; then
     local gid
     for gid in $gated; do cmd_rm "$gid" | sed 's/$/ (gated: unpublished before the tunnel goes)/'; done
     access_account; access_sweep
@@ -5061,7 +5066,6 @@ cmd_teardown() {
   cmd_stop >/dev/null
   op_step 3
   local zone za rec rid _zn
-  admin_token_resolve optional
   if [[ -n ${CLOUDFLARE_API_TOKEN:-} ]]; then
     auth_api >/dev/null
     za="$(cf_zone)"; read -r zone account _zn <<<"$za"
