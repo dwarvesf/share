@@ -126,3 +126,30 @@ Decisions the spec left open, and changes from it, made while building Phase 2. 
 | C15 | `.health` writers: `r2_expiry_note` (the `api-token` paths) writes `token`; `cmd_status_r2` and `r2_wait_healthz` write `worker`; `access_ls_check` writes `gates`; teardown removes the file | one call site per fact that is already fetched; no new network call anywhere |
 | C16 | `state.compat.worker` is the Worker's `<version> <sha>` pair as it reported it | SG-06's Share Bar decode reads it as a string |
 | C17 | `share config` refuses with a plain `die` when the profile has no config file, and prints nothing for an unset key | `config_put` would otherwise create a config that makes a ghost profile |
+| C18 | `compat_state` reads the `.health` cache only, also on an r2 profile whose `state` just probed `/healthz` | the cache tests (worker_older, worker_newer, cli_below_min) drive the cache directly; a probe override would shadow them. Open: use `hz_pair` when in hand (advisor minor) |
+| C19 | a `token` verdict older than 7 days returns to `unchecked`, but the cached `expires_on` keeps counting for the same source | an expiry is a hard date: `expired` and `expiring` stay true when nobody reran `api-token` (advisor major, folded) |
+| C20 | `min_cli` has no writer in this spec; the members work writes it, so `cli_below_min` is dead until then. The test hand-edits the file | the spec names the field and its reader only |
+| C21 | the spec says `token` is written by `api-token`, `status`, `setup`, interactive `prune`; only `api-token` (via `r2_expiry_note`) writes it | those other paths make no token verify call today; a writer needs a call that already exists. The `worker` key is the one `status` and `setup` write |
+
+### AC to test map: Phase 2 (tests/share.sh, `=== state groundwork: G6 ... G14 ===`)
+
+| Task | AC rows | Test names (check labels start with the row id) |
+|---|---|---|
+| G6 | SS-01 to SS-12, `[state, ready]` equals HEAD's | `SS-nn ...` (one fixture per phase; HEAD's `bin/share` is captured with `git show`), `G6 state-fn serve prints the owner's four values` |
+| G7 | LS-01 to LS-05, revoked, NC-G7 | `LS-nn ...`, `LS revoked ...`, `LS ls adds a state ...`, `negative control NC-G7 ...` |
+| G8 | PS-01 to PS-04 | `PS-nn ...` (intent, bound, deferred, orphan, bad) |
+| G9 | AD-01 to AD-05 | `AD-nn ...` (journal steps, overlap, dead add with and without a row, concurrent) |
+| G10 | TK-01 to TK-06, state writes nothing | `TK-nn ...`, `TK state writes nothing with .health present / absent`, the negative control on `token_state` |
+| G14 | CG-01 to CG-04 | `CG-nn ...` (ttl, storage_default, unknown key, unset, no value) |
+
+### Advisor critique, Phase 2 (frozen diff)
+
+| # | Finding | Disposition |
+|---|---|---|
+| P1 major | `state.token` decays to `unchecked` a week after `api-token`, and never reaches `expired` | folded (C19); three TK checks cover a week-old cache with a past and a near expiry |
+| P2 minor | `compat` and `serve` can disagree on an r2 profile | open (C18) |
+| P3 minor | `min_cli` has no writer | recorded (C20) |
+| P4 minor | `add_sweep` consumes the journal before `r2_pointer_drop`; serve's hourly prune runs with `SHARE_API_TOKEN_OFF=1`, so the pointer drop may not happen | open: `r2_reconcile` finishes it on the next run with a token |
+| P5 minor | a killed `health_put` leaves `.health.XXXXXX`, which blocks `rmdir` | folded: every teardown removes `.health.??????` too |
+| P6 minor | one flaky Access GET clears a true `gate_missing` | open: `gates_put` records only a 404; a retry keeps the old list when a GET errors is a follow-up |
+| P7 minor | a cloud row's `revoked_by=` is printed raw by `ls` | open: bucket opts are not sanitized like local rows |

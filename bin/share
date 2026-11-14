@@ -2645,13 +2645,15 @@ token_state() { # token_state: tok_source, tok_status (missing, unchecked, inval
          (try ($t.expires_on | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | tostring) catch "")] | join("\u001f")' "$health" 2>/dev/null) || true
   fi
   [[ $c_at =~ ^[0-9]+$ ]] || c_at=0
-  # a cache written for another source, or older than a week, describes a token that may be gone
-  if [[ $c_src != "$tok_source" || $c_at -eq 0 || $((now - c_at)) -gt 604800 ]]; then c_verify="" c_exp="" c_epoch=""; fi
+  # a cache written for another source describes another token; one older than a week no longer vouches for the verdict,
+  # but an expires_on is a hard date for the same token, so it keeps counting
+  if [[ $c_src != "$tok_source" || $c_at -eq 0 ]]; then c_verify="" c_exp="" c_epoch=""
+  elif [[ $((now - c_at)) -gt 604800 ]]; then c_verify=""; fi
   tok_expires=$c_exp
   if [[ $c_epoch =~ ^[0-9]+$ && $c_epoch -le $now ]]; then tok_status=expired
   elif [[ $c_verify == invalid ]]; then tok_status=invalid
-  elif [[ -z $c_verify ]]; then tok_status=unchecked
   elif [[ $c_epoch =~ ^[0-9]+$ && $((c_epoch - now)) -le 1209600 ]]; then tok_status=expiring
+  elif [[ -z $c_verify ]]; then tok_status=unchecked
   else tok_status=ok; fi
   return 0
 }
@@ -5555,7 +5557,7 @@ cmd_teardown() {
     cmd_stop >/dev/null
     rm -f "$root/quick.url"
     to_trash "$config"
-    rm -f "$health"; [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true   # a torn-down profile leaves no empty dir in `share profiles`
+    rm -f "$health" "$config_dir"/.health.??????; [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true   # a torn-down profile leaves no empty dir in `share profiles`
     echo "removed the quick setup (no tunnel, DNS, or token existed); shares in $root stay"
     return 0
   fi
@@ -5640,7 +5642,7 @@ cmd_teardown() {
   [[ -f $cert ]] && to_trash "$cert"
   rm -f "$config_dir/cert.zone"
   to_trash "$config"; echo "config:  moved to the Trash"
-  rm -f "$health"; [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true
+  rm -f "$health" "$config_dir"/.health.??????; [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true
   op_done
 }
 
@@ -5672,7 +5674,7 @@ cmd_teardown_r2() { # cmd_teardown_r2 [--yes] [--purge]: local by default; --pur
   [[ $n == 0 ]] || echo "access:  $n Access app(s) stay listed in $pending; a later setup of $host_name and '$me prune' with the token removes them"
   [[ -f $r2own ]] && to_trash "$r2own"
   to_trash "$config"; echo "config:  moved to the Trash"
-  rm -f "$health"; [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true
+  rm -f "$health" "$config_dir"/.health.??????; [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true
   [[ $purge == 1 ]] || echo "kept:    bucket $bucket, the Worker, and every share on $host_name stay for the other publishers; '$me teardown --yes --purge' with the admin token removes them"
   op_done
 }
