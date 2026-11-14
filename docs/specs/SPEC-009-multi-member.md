@@ -594,12 +594,12 @@ A SPEC-009 task starts only when every SPEC-010 task in its row has shipped (DEC
 
 Phase 0 ships before TASK-1a's samples on purpose: a T1 tenant holds no v:3 pointer, `vpc_service` binding or `i/` object, so the new Worker branches are inert until the first T2 tenant, and TASK-1a runs before that. A sample that disagrees with the documented shape lands as a Worker v6 fix in Phase 1.
 
-- [ ] TASK-0a: CLI version constant. `SHARE_VERSION=0.9.0` near the top of `bin/share`, `share version`, and `bin/release` rewrites the constant in the release commit. AC: `share version` prints `X.Y.Z`; a suite check finds it equal to the newest `## [vX.Y.Z]` heading in `CHANGELOG.md`; OT-19.
-- [ ] TASK-0b: Caddy serves listed rows only. `write_caddyfile` renders, per live non-revoked snapshot row, a matcher on `/<id>` and `/<id>/*` with `root * "$pub"` and the existing `file_server`; the catch-all `handle` answers 404; every response carries `X-Share-Served: caddy`; `rows_in` accepts `revoked` and `revoked_by=`. AC: SV-01 to SV-05; SPEC-008 compat row 1 updated to expect the new Caddyfile and nothing else.
-- [ ] TASK-0c: readers. `r2_record_raw` treats any `storage:"machine"` record with no `prefix` and `v >= 2` as readable (the sweep no longer blocks); `r2_take` validates v:3 into the display rows with `origin`; the origin's reap list stays v:2; `rand_id` refuses an id with a `t/<id>`; `state` rows gain `origin`, and, once SPEC-010 G7 has shipped, SPEC-010's per-row `link_state` gains `revoked` (opts `revoked`, `reason` `revoked_by=<by>`); `paused` and `offline` come from the members cache (TASK-1i, DEC-71). `state` stays `schema: 1` and gains no `state.state` value (DEC-32). AC: SV-06 to SV-09, OC-01, OC-06, OC-08, RC-14, FG-16; `state_schema_ok` (tests/share.sh L1000) passes unchanged on every new fixture.
-- [ ] TASK-0d: Worker v5, every row of `### API changes`, one version bump, built as the pure `decide()` with named rows and the uniform 404 body (DEC-38). `tests/worker.mjs` gains a fake `vpc_service` binding (records each request, answers from a fixture or throws) and an R2 fake honoring `onlyIf.etagMatches`, and asserts the row id of every request, not only its status. AC: SV-10 to SV-24, SV-26 to SV-28, FG-12, OC-05, OT-07, OT-13, OT-18; SV-23 also covers `application/xhtml+xml`, `text/xml`, `text/html; charset=utf-8`, an answer with no type, a `Set-Cookie` and an off-path `Location` from the binding, and a cloud `.html` on a `MEMBERS=1` tenant; existing rows pass unchanged on the v5 source.
-- [ ] TASK-0e: deploy carry-forward. `r2_deploy_meta` takes the deployed bindings (from the settings GET every deploy path already makes) and re-sends each `vpc_service`, `MEMBERS` and `PAUSED`, plus a fresh `DEPLOY`; the deploy compare adds the binding set, `MEMBERS` and `PAUSED`; `setup --force` that would lower `WORKER_VERSION` is refused while the settings carry a `vpc_service` binding, `MEMBERS`, or a non-empty `PAUSED`, or the marker holds `members:true` (a T2 tenant with cloud members only still needs the redeem route); the dry seam keeps these bindings in `script.json`; deploy waits for `X-Share-Deploy` 3x. AC: DY-01 to DY-05.
-- [ ] TASK-0f: member config keys ride the key-keeping writer (DEC-34). Requires SPEC-010 G4 (`config_put`). Every writer a SPEC-009 path adds or touches (`setup --members`, `--no-members`, join's config write, `leave`) calls `config_put` with its owned set; no new whitelist writer. AC: a config holding `members=on`, `role=member`, `member_id=m-an-aaaaaaa1`, `member_mode=machine` keeps all four lines byte for byte across a `setup <host>` rerun and an `api-token --cmd '<cmd>'` write; TN-10.
+- [x] TASK-0a: CLI version constant. `SHARE_VERSION=0.9.0` near the top of `bin/share`, `share version`, and `bin/release` rewrites the constant in the release commit. AC: `share version` prints `X.Y.Z`; a suite check finds it equal to the newest `## [vX.Y.Z]` heading in `CHANGELOG.md`; OT-19.
+- [x] TASK-0b: Caddy serves listed rows only. `write_caddyfile` renders, per live non-revoked snapshot row, a matcher on `/<id>` and `/<id>/*` with `root * "$pub"` and the existing `file_server`; the catch-all `handle` answers 404; every response carries `X-Share-Served: caddy`; `rows_in` accepts `revoked` and `revoked_by=`. AC: SV-01 to SV-05; SPEC-008 compat row 1 updated to expect the new Caddyfile and nothing else.
+- [x] TASK-0c: readers (built with the gate table's fallback: `origin` and the readers; the `link_state` values wait for SPEC-010 G7). `r2_record_raw` treats any `storage:"machine"` record with no `prefix` and `v >= 2` as readable (the sweep no longer blocks); `r2_take` validates v:3 into the display rows with `origin`; the origin's reap list stays v:2; `rand_id` refuses an id with a `t/<id>`; `state` rows gain `origin`, and, once SPEC-010 G7 has shipped, SPEC-010's per-row `link_state` gains `revoked` (opts `revoked`, `reason` `revoked_by=<by>`); `paused` and `offline` come from the members cache (TASK-1i, DEC-71). `state` stays `schema: 1` and gains no `state.state` value (DEC-32). AC: SV-06 to SV-09, OC-01, OC-06, OC-08, RC-14, FG-16; `state_schema_ok` (tests/share.sh L1000) passes unchanged on every new fixture.
+- [x] TASK-0d: Worker v5, every row of `### API changes`, one version bump, built as the pure `decide()` with named rows and the uniform 404 body (DEC-38). `tests/worker.mjs` gains a fake `vpc_service` binding (records each request, answers from a fixture or throws) and an R2 fake honoring `onlyIf.etagMatches`, and asserts the row id of every request, not only its status. AC: SV-10 to SV-24, SV-26 to SV-28, FG-12, OC-05, OT-07, OT-13, OT-18; SV-23 also covers `application/xhtml+xml`, `text/xml`, `text/html; charset=utf-8`, an answer with no type, a `Set-Cookie` and an off-path `Location` from the binding, and a cloud `.html` on a `MEMBERS=1` tenant; existing rows pass unchanged on the v5 source.
+- [x] TASK-0e: deploy carry-forward. `r2_deploy_meta` takes the deployed bindings (from the settings GET every deploy path already makes) and re-sends each `vpc_service`, `MEMBERS` and `PAUSED`, plus a fresh `DEPLOY`; the deploy compare adds the binding set, `MEMBERS` and `PAUSED`; `setup --force` that would lower `WORKER_VERSION` is refused while the settings carry a `vpc_service` binding, `MEMBERS`, or a non-empty `PAUSED`, or the marker holds `members:true` (a T2 tenant with cloud members only still needs the redeem route); the dry seam keeps these bindings in `script.json`; deploy waits for `X-Share-Deploy` 3x. AC: DY-01 to DY-05.
+- [x] TASK-0f: member config keys ride the key-keeping writer (DEC-34). Requires SPEC-010 G4 (`config_put`). Every writer a SPEC-009 path adds or touches (`setup --members`, `--no-members`, join's config write, `leave`) calls `config_put` with its owned set; no new whitelist writer. AC: a config holding `members=on`, `role=member`, `member_id=m-an-aaaaaaa1`, `member_mode=machine` keeps all four lines byte for byte across a `setup <host>` rerun and an `api-token --cmd '<cmd>'` write; TN-10.
 
 ### Phase 1: Tenant, lease, registry, add, join, ls, sync
 
@@ -1217,3 +1217,41 @@ Seams: `SHARE_TUNNEL=0`; `SHARE_R2_DRY=1` with `SHARE_R2_DRY_DIR` (a directory b
 | NC-14 | reconcile row 9 removed (no young-skip) | member HOME row `ac0001`, own pointer, `t/ac0001` aged 60 s | `r2_reconcile`; then the admin's pending DELETE lands; then a second reconcile | `mm CC-06: an admin revoke in flight is never undone` (the second reconcile rewrote the pointer) |
 | NC-15 | the Worker serves a binding answer without `X-Share-Served` | `worker.mjs` fake binding answers 200 with no header | Worker row 15 | `v5 SV-22: a foreign listener is never served` |
 | NC-16 | `rand_id` skips the `t/` check | dry `t/ad0001`; `SHARE_TEST_IDS="ad0001 ad0002"` | member `add` | `mm SV-09: a tombstoned id is never picked` (the add lands on `ad0001`) |
+
+## Review
+Date: 2026-11-15 | Reviewer: /kit:review (scope: Phase 0, TASK-0a to 0f)
+
+### Verdict: SHIP
+
+Re-review after the folds: the two MEDIUM findings are closed (docs updated by `/kit:docs`; proof in `docs/verification/worker-v5.md`). The LOW stays open for TASK-1d.
+
+### Findings
+
+## MEDIUM: the docs still describe the whole-tree Caddy handle and Worker v4
+**File:** docs/how-it-works.md:22
+**What:** the serving diagram says `handle → file_server over ~/share/pub`; the Worker tables list v4 rows only; `WORKER_RECORD_V` is 2 at :407.
+**Why:** an operator reading the docs expects unlisted bytes to serve.
+**Fix:** `/kit:docs` scoped to this change: listed rows, X-Share-Served, the v5 rows, X-Share-Deploy and carry-forward, `share version`.
+**Effort:** S
+
+## MEDIUM: no verification log for the Phase 0 build yet
+**File:** docs/verification/worker-v5.md
+**What:** the suite and the negative controls ran, but no record holds their commands and exits.
+**Why:** done needs the recorded run.
+**Fix:** write it with every `Command:` / `Exit:` / `Verdict:` and the rollback.
+**Effort:** S
+
+## LOW: a stale settings read that holds nothing to carry skips the freshness check
+**File:** bin/share (`r2_carry_fresh`)
+**What:** the check runs only when the settings carry a binding, MEMBERS or PAUSED, so an empty stale read right after `setup --members` would drop MEMBERS.
+**Why:** no Phase 0 path writes MEMBERS; TASK-1d does, under the lease.
+**Fix:** TASK-1d compares the settings `DEPLOY` with the nonce its own deploy wrote before it trusts an empty carry.
+**Effort:** S
+
+Fixed during review: a member answer's `Location` on a non-3xx is now dropped (only a checked 3xx keeps one).
+
+### Previously rejected
+none
+
+### TODOs (open follow-ups)
+- TASK-1d: freshness of an empty carry (LOW above).

@@ -43,6 +43,52 @@ The criticals were folded into the spec (DEC-58 to DEC-73). These warnings were 
 - TASK-4b23 attributes the Stop Waiting copy to SPEC-010 G9; SPEC-010 says G11 owns it. Use G11's string.
 - Phase 0's "a sample that disagrees lands as a Worker v6 fix in Phase 1" also covers a CLI fix in carry-forward (TASK-0e), which needs no Worker bump.
 
+## Phase 0 build (SG-03: TASK-0a to 0f)
+
+Built on main at f28cb13 (SPEC-010 Phase 1 shipped). TASK-1a (SG-01) had landed, so the binding shape, the 10 s fetch timer and the carry-forward deltas above are built in, not guessed.
+
+### AC to test map
+
+| AC row | Test (label prefix `mm` in tests/share.sh, `v5` in tests/worker.mjs) |
+|---|---|
+| TASK-0a, OT-19 | `mm OT-19: share version equals the newest CHANGELOG heading` |
+| SV-01 | `mm SV-01: unlisted bytes answer 404` (NC-2) |
+| SV-02 | `mm SV-02: a listed snapshot: /<id>/ 200, /<id> redirects, /<id>/f 200` |
+| SV-03 | `mm SV-03: a revoked row answers 404 and leaves the Caddyfile` |
+| SV-04 | `mm SV-04: live and --host rows render as before` |
+| SV-05 | `mm SV-05: every Caddy answer carries X-Share-Served: caddy` |
+| SPEC-008 compat row 1 | `row 1: every artifact byte-identical but the listing additions` (Caddyfile normalized) plus `row 1: the Caddyfile changes only by listed rows, the 404 catch-all and X-Share-Served` |
+| SV-06 | `mm SV-06: a v:3 pointer never blocks the orphan sweep` (NC-12) |
+| SV-07 | `mm SV-07: ls and state show a v:3 row with its origin` |
+| SV-08 | `mm SV-08: a malformed v:3 is skipped as forged` |
+| SV-09 | `mm SV-09: a tombstoned id is never picked` (NC-16) |
+| OC-01 | `mm OC-01: the origin's reap list stays v:2` |
+| OC-06, OC-08, state_schema_ok | `mm SV-07` also runs `state_schema_ok`; `origin` is additive |
+| RC-14, FG-16 | `mm FG-16: rows_in reads revoked_by= only in its charset` |
+| SV-10 to SV-24, SV-26 to SV-28, FG-12, OC-05, OT-07, OT-13, OT-18 | `v5 <id>: ...` rows in tests/worker.mjs |
+| DY-01 to DY-05 | `mm DY-0n: ...` |
+| TASK-0f, TN-10 | `mm TN-10: member keys survive a setup rerun and api-token --cmd` |
+
+### Build delta
+
+- B1 (TASK-0b): a `--host` snapshot row also gets its `/<id>` handle on the main site, as today's whole-tree handle gave it, so SV-04 holds ("unchanged"). An expired row gets no handle at render time (invariant 4); the hourly prune still trashes it.
+- B2 (TASK-0b): `rows_in` keeps a row with `revoked`; a `revoked_by=` value outside `[A-Za-z0-9._@:-]{1,64}` is rewritten to `revoked_by=unknown` (FG-16), so the row stays visible to `ls`, `rm` and `prune` and still renders no handle. (First built as a drop; the advisor showed a dropped row's bytes could never be removed.)
+- B3 (TASK-0b): `X-Share-Served: caddy` is a `header` line in every site block, the 404 catch-all site included, so an unlisted path and a foreign Host carry it too.
+- B4 (TASK-0c): `state` emits `origin` only on a v:3 row, as the full member_id (`m-an-3f9a1c2d`). Why: DEC-71 matches the last 8 hex of `origin` to the members cache suffix, and an empty key on every row would change SPEC-008 compat row 1, which this sub-goal may change only for the Caddyfile. `ls` prints `origin=<name>` (the name part), as ML-5 expects.
+- B5 (TASK-0c): the origin now lists v:3 rows from the bucket (before, it listed no machine record from the bucket: its index was their truth). It still lists no v:2 from the bucket.
+- B6 (TASK-0c): `link_state` waits for SPEC-010 G7 (gate table fallback). `revoked` and the members-cache values land with G7 and TASK-1i.
+- B7 (TASK-0e): the nonce check of the TASK-1a delta compares the settings `DEPLOY` value with the `X-Share-Deploy` the Worker serves, re-reading both up to 3 times. It runs only when the settings carry something to carry (a `vpc_service`, `MEMBERS` or `PAUSED`), so T0 and T1 reruns make no extra call. Why: a local "last nonce" file breaks when another admin machine deploys in between, and nonces carry no order.
+- B9 (advisor critical): the listed-rows Caddyfile also serves `/_probe-*` and `/_migrate-probe-*` from the root of `pub/`. `live_check` and migrate's verify write those files with no row; without the handle every named `setup`, `setup --r2` and `migrate` died at its live check. The suite's fake curl answered 200 for any URL, so only a real-Caddy row (`mm SV-01: the CLI's own probe files ...`) catches it.
+- B10: the Caddy catch-all answers the Worker's 404 body, so an unlisted path on the origin reads like a Worker 404 (DEC-38). A file missing under a listed id still gets Caddy's empty 404; the v:3 pointer already says the id exists, so that leaks nothing new.
+- B11: the member fetch passes the timer's signal both in the `Request` and as `fetch`'s second argument (TASK-1a(d) sampled the second form). The test binding reads the second argument, so SV-11 is no longer vacuous (Node's `Request` always has a signal).
+- B12: a member answer keeps an allowlist of headers (`accept-ranges`, `content-length`, `content-range`, `content-encoding`, `content-disposition`, `content-language`, `etag`, `last-modified`, `location` on a checked 3xx only, `date`, `vary`). The denylist of the spec row let `WWW-Authenticate`, HSTS and `Link` through.
+- B13: a redeem body declared over 128 bytes is refused unread (400).
+- B14: `r2_carry_services` drops a binding only on 404 with code 5104 (the sampled "service gone"); any other 404 dies. `r2_carry_fresh` accepts two settings reads that agree when `/healthz` is not answered by a share Worker, so a rerun that repairs a missing route is not blocked.
+- B15: the deploy nonce global is `r2_deploy_nonce`; `r2_nonce()` stays the upload-prefix function.
+- Open (TASK-1d): the freshness check skips a settings read with nothing to carry, so a stale empty read right after `setup --members` would drop `MEMBERS`. TASK-1d builds its body after the lease; it should also compare the settings `DEPLOY` with the nonce it last deployed before it trusts an empty carry.
+- Open: render-time expiry covers listed snapshot handles only; live and `--host` rows keep today's rule (served until prune), as SV-04 asks for "unchanged".
+- B8 (TASK-0e): before a deploy that carries a `vpc_service` binding, a GET by `service_id` drops a binding whose service is gone (404) and names it; any other answer dies before the deploy. This adds `GET .../connectivity/directory/services/<id>` to the dry seam (one file per service under `.cf/services/`); TASK-1b grows the rest.
+
 ## TASK-1a live samples
 
 Run 2026-11-14 on the Console Labs account from the Mac Mini, cloudflared 2026.10.7, Caddy from Homebrew. Every object had a throwaway `share-e2e-` name and is deleted (proof: `docs/verification/members-live-samples.md`). Scripts stayed in the session scratchpad. They read credentials from 1Password into variables and pass tokens through `-H @<(printf ...)` and `-K <(printf ...)`, never argv. `<a>` is the account id, `<t>` a tunnel id, `<sid>` a VPC Service id. Excerpts are masked.

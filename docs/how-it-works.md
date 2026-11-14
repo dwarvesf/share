@@ -18,14 +18,19 @@
      │     main site (s.example.com, plus 127.0.0.1 and localhost for local probes; quick
      │     mode: any Host, its name is unknown at render time):
      │                   handle_path /<id>/* → reverse_proxy 127.0.0.1:<live port>  (live shares)
+     │                   handle /<id> and /<id>/* → file_server over ~/share/pub    (one per listed snapshot row)
+     │                   handle /_probe-* and /_migrate-probe-* → file_server       (the CLI's own probes)
      │                   handle /healthz → respond "ok" 200                         (health probe)
-     │                   handle → file_server over ~/share/pub                      (snapshots)
+     │                   handle → respond 404                                       (anything unlisted)
      │     per --host share: site block on <fqdn>:<port> → reverse_proxy or file_server
      │                   + a tunnel ingress rule pinning httpHostHeader to <fqdn>
      │                   + a CNAME <fqdn> → <tunnel>.cfargotunnel.com
      │     any other Host (named mode): a catch-all site answers 404, so a name routed
      │                   here before its own block exists never reaches the pub tree
-     │     headers: Cache-Control no-store, X-Robots-Tag noindex
+     │     only rows in index.tsv are served: a pub/<id> with no row, an expired snapshot row
+     │     (at render time) and a row whose opts hold `revoked` answer 404
+     │     headers: Cache-Control no-store, X-Robots-Tag noindex, X-Share-Served caddy (on
+     │     every answer; the Worker strips it, and a member machine's answer needs it)
      │     main host: a raw path with %2F, %5C, or %2E answers 400 (@encsep, the first
      │     handle): the Access edge does not decode those, Caddy would, so an encoded
      │     separator must never reach a gated pub/<id>
@@ -396,6 +401,8 @@ A tenant is one hostname with one shared list. Its origin is the one machine in 
 
 With `--alias <old-host>` the tenant Worker takes the alias's custom domain and answers 301 to the same path on the tenant host. Each gated cloud link's Access app gains the tenant destinations first (the PUT keeps the AUD), passes the gate probe, and drops the alias destinations last. A folded app keeps its name `share <id> <alias> <nonce>`, so `rm` and expiry still delete it.
 
+Every deploy (`setup --r2` and `--backend r2`) carries forward what is deployed: each `M_<8hex>` `vpc_service` binding, `MEMBERS` and `PAUSED` are read from the settings GET and sent again, with a fresh 16-hex `DEPLOY` nonce. A binding whose VPC Service answers 404 (code 5104) is dropped and named; any other answer stops before the deploy. When the settings carry any of these, their `DEPLOY` must equal the `X-Share-Deploy` that `/healthz` serves (read up to 3 times; with no Worker answering, two settings reads must agree), so a stale settings read cannot drop a binding. A deploy is live once `/healthz` answers its nonce three times; past `SHARE_R2_WAIT` the verb dies naming the rerun. `setup --force` never lowers `WORKER_VERSION` while a member binding, `MEMBERS`, a non-empty `PAUSED`, or `members: true` in `share.json` is present.
+
 `share setup <host> --no-r2` is the rollback for a tenant without an alias: the route goes, then the four config keys. The tunnel serves the hostname alone again; pointers, cloud records, the bucket, and the Worker stay. It refuses while an alias is set, because an alias whose 301 lands on a plain tunnel turns every folded cloud link into a 404. Every die after the marker moved prints the alias rollback list instead.
 
 ### Pointer records
@@ -404,7 +411,7 @@ With R2 on, a local add on the origin writes `m/<id>` as `{"v":2,"id","storage":
 
 `rm` and `prune` of a local row delete its pointer when a token resolves. The origin's interactive `ls` and `prune` reconcile: a pointer with no local row and a `LastModified` over 10 minutes old is deleted (an add that died), and a local row with no pointer gets one. A local row whose id already holds a cloud record prints `<id> is shadowed by a cloud link; rm one of them` and nothing is deleted.
 
-Cloud records stay `v:1` (with an optional `type`), so a v0.8.0 CLI and Worker keep reading every cloud link. A machine pointer is `v:2` and `WORKER_RECORD_V` is 2; an older Worker answers 404 for it.
+Cloud records stay `v:1` (with an optional `type`), so a v0.8.0 CLI and Worker keep reading every cloud link. The origin's machine pointer is `v:2`; a member machine's pointer is `v:3` with `origin` (its member_id, `m-<name>-<8 hex>`). `WORKER_RECORD_V` is 3; an older Worker answers 404 for any newer shape. Every reader shows a valid `v:3` row with its origin (`ls`: `origin=<name>`; `state`: `origin`, only on such rows), never reaps it (the reap list stays `v:2`), and the orphan sweep reads any `storage:"machine"` record with no `prefix` and `v >= 2` as one that names no upload. A new id is also refused when `t/<id>` exists (a tombstone of a removed member link).
 
 ### One shared list and its fields
 
@@ -437,7 +444,19 @@ Bindings are SPEC-007's set plus `PASS="1"` (pass misses to the origin) and `ALI
 | `v:2` machine pointer, no record, or `BUCKET.get` throwing or over 2 s | `PASS` set: pass through; else 404 |
 | any other record shape | 404, never passed through |
 
-A pass-through goes back with its status and body unchanged and `no-store` and `noindex` set. Only a failed fetch, 530, 520 to 527, or a 503 without `cf-cache-status` (the origin's own answers carry it, edge errors do not) becomes the 503 offline page with `Retry-After: 60`. A 502 is the origin's own answer, such as a dead live port, and passes through. A 101 WebSocket answer goes back untouched.
+Worker v5 adds these rows (SPEC-009 `### API changes`; a T0 or T1 tenant holds none of their inputs, so they stay inert there):
+
+| Request | Answer |
+|---|---|
+| `POST /_share/redeem` with a 64-hex body | the `i/<hash>` envelope once: a conditional claim (`onlyIf.etagMatches`), then a delete, then 200; absent, used or forged 404; past its expiry 410; a failed delete 503 (the bytes are not returned). Other methods 405, other bodies 400, any other `/_share/*` 404 |
+| `v:2` pointer past its `expires` | 404, never passed |
+| `v:3` pointer | 404 when malformed or expired; 503 `this link is paused by the tenant admin` when its origin's 8-hex suffix is in `PAUSED`; 404 with no `M_<suffix>` binding; 405 for other methods; else a GET or HEAD through the binding with only `Range`, `If-*`, `Accept*` and `User-Agent`, a 10 s timer cleared once headers arrive |
+| a `v:3` answer | offline page (503) on a throw, a timeout, or no `X-Share-Served`; otherwise only an allowlist of headers is kept, `Content-Type` comes from the path, `nosniff` always, and a CSP sandbox unless both the path's type and the answered type are inert (images but SVG, PDF, audio, video, plain text, octet-stream). A 3xx whose `Location` leaves `/<id>/` answers 502. No hit is counted |
+| a cloud HTML, SVG or XML answer with `MEMBERS="1"` | the same sandbox and `nosniff` |
+
+Every Worker 404 answers one body, `no such link (it may have expired or been removed)`, and no header names the row; the Caddy catch-all answers the same. `/healthz` adds `X-Share-Deploy: <DEPLOY>`.
+
+A pass-through goes back with its status and body unchanged, `X-Share-Served` removed, and `no-store` and `noindex` set. Only a failed fetch, 530, 520 to 527, or a 503 without `cf-cache-status` (the origin's own answers carry it, edge errors do not) becomes the 503 offline page with `Retry-After: 60`. A 502 is the origin's own answer, such as a dead live port, and passes through. A 101 WebSocket answer goes back untouched.
 
 Callers read the cloud leg from the `/healthz` headers, never the status alone: a `503` with a valid `X-Share-Worker` pair and `X-Share-Tunnel: 0` means the Worker is up and the origin is down, so a member's join, a gated member add, and an r2 `state` keep working while the origin is off.
 
@@ -513,6 +532,7 @@ The app changes anything only by running share's normal verbs (`add`, `rm`, `ref
 | `shares[].storage` | `machine` (served by the tenant's origin through its tunnel) or `cloud` (served from the bucket) |
 | `shares[].type` | the file type: `pdf`, `image`, `video`, `audio`, `folder`, `site`, `markdown`, `archive`, `text`, or `other` |
 | `shares[].by` | the machine that published the share |
+| `shares[].origin` | only on a member machine's link (a `v:3` pointer): that member's id, `m-<name>-<8 hex>`; absent on every other row |
 | `r2` | `true` when the profile reads a bucket (an origin with R2 on, or an r2 profile), else `false` |
 | `storage_default` | an origin with R2 on only: `local` or `cloud`, the storage of an `add` with neither `--local` nor `--cloud` |
 | `cloud_error` | why the bucket's rows are missing (the menu reads them only with a stored token); the local rows still list |
