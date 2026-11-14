@@ -1391,7 +1391,7 @@ out=$(acc prune 2>&1 1>/dev/null)
 check "a pending line whose app is not this share's is never deleted" "1" "$([[ $(grep -c 'DELETE app' "$alog") == 0 ]] && grep -c "Access app 00000000-0000-4000-8000-000000f0f0f0 is not the app of share f0f0f0 (its name is 'chat-staff'); left alone" <<<"$out")"
 check "malformed pending lines are kept and never acted on" "3" "$(awk 'NF' "$apending" | wc -l | tr -d ' ')"
 check "ls counts the malformed lines apart and names them as the user's to remove" "1" "$(bash "$SH" ls 2>&1 >/dev/null | grep -c "2 malformed line(s) in $apending; a sweep never acts on them; remove them by hand")"
-check "state counts every line" "3" "$(bash "$SH" state | jq .access_pending)"
+check "state counts the dead-owner line as pending and the two malformed lines as bad, apart" "1 0 2" "$(bash "$SH" state | jq -r '"\(.access_pending) \(.access_inflight) \(.access_bad)"')"
 check "the share root survived a '..' id" "1" "$([[ -d $SHARE_ROOT/pub && -f $SHARE_ROOT/index.tsv ]] && echo 1 || echo 0)"
 : >"$apending"
 
@@ -1902,8 +1902,8 @@ if [[ -s $main_bin ]]; then
   for c in main new; do   # the listing additions are the one allowed difference, with the groundwork's additive state keys
     caddy_norm "$WORK/compat-$c/Caddyfile"
     sed -i.bak -E 's/^(machine|live|cloud) +[a-z]+ +by=[a-z0-9.-]+  (https:)/\2/' "$WORK/compat-$c/ls.out"
-    jq -S 'del(.r2, .storage_default, .cloud_error, .cloud_more, .codes_v, .role, .tier, .ops) | .shares |= map(del(.storage, .type, .by))' "$WORK/compat-$c/state.out" >"$WORK/compat-$c/state.tmp" && mv -f "$WORK/compat-$c/state.tmp" "$WORK/compat-$c/state.out"
-    jq -S '.profiles |= map(if .state then .state |= (del(.r2, .storage_default, .cloud_error, .cloud_more, .codes_v, .role, .tier, .ops) | .shares |= map(del(.storage, .type, .by))) else . end)' "$WORK/compat-$c/profiles.out" >"$WORK/compat-$c/p.tmp" && mv -f "$WORK/compat-$c/p.tmp" "$WORK/compat-$c/profiles.out"
+    jq -S 'del(.r2, .storage_default, .cloud_error, .cloud_more, .codes_v, .role, .tier, .ops, .serve, .access_inflight, .access_bad, .token, .compat) | .shares |= map(del(.storage, .type, .by, .link_state, .reason))' "$WORK/compat-$c/state.out" >"$WORK/compat-$c/state.tmp" && mv -f "$WORK/compat-$c/state.tmp" "$WORK/compat-$c/state.out"
+    jq -S '.profiles |= map(if .state then .state |= (del(.r2, .storage_default, .cloud_error, .cloud_more, .codes_v, .role, .tier, .ops, .serve, .access_inflight, .access_bad, .token, .compat) | .shares |= map(del(.storage, .type, .by, .link_state, .reason))) else . end)' "$WORK/compat-$c/profiles.out" >"$WORK/compat-$c/p.tmp" && mv -f "$WORK/compat-$c/p.tmp" "$WORK/compat-$c/profiles.out"
     # another allowed difference: svc_path (TASK-7b) now walks the caller's own PATH directories in
     # their own order instead of resolving each tool from a fixed list, so a plist's baked PATH value
     # reorders even though the directory set is the same; normalize it like the binary's own path above
@@ -4559,6 +4559,323 @@ check "negative control NC-G5: a code added to code_text with no skill line fail
 # shellcheck disable=SC2016 # the backticks are the skill's own markdown
 check "skill lists every role" "7" "$(bash "$SH" skill | grep -cE '^\| `(none|quick|origin|tenant_origin|r2_profile|member|migrated)` \|')"
 
+echo "=== state groundwork: G6 ==="
+GW_HEAD_REV=29fb6eb   # the commit Phase 2 started from: the HEAD whose [state, ready] every phase fixture must still print
+GW_HEAD="$GW/share-head"
+git -C "$(cd "$(dirname "$SH")/.." && pwd)" show "$GW_HEAD_REV:bin/share" >"$GW_HEAD" 2>/dev/null; chmod +x "$GW_HEAD"
+check "G6: git show fetched Phase 2's starting bin/share (the HEAD captures)" "1" "$([[ -s $GW_HEAD ]] && ! grep -q 'serve_state' "$GW_HEAD" && echo 1 || echo 0)"
+mkdir -p "$GW/cfd"; cp "$GW/cfbin/cloudflared" "$GW/cfbin/trash" "$GW/cfd/"   # the stub tunnel and a Trash stand-in, with no curl stub: /ready is probed for real
+GV="$GW/phase"; GV_PORT=$((base + 360)); GV_SHA="$(sed -n 's/^WORKER_SHA=\([0-9a-f]*\).*/\1/p' "$SH")"; GV_WV="$(sed -n 's/^WORKER_VERSION=\([0-9]*\).*/\1/p' "$SH")"
+gv_fx() { # gv_fx <name> <config line>...: a fresh HOME, root and config for one fixture; GVD names it
+  GVD="$GV/$1"; shift; rm -rf "$GVD"; mkdir -p "$GVD/home" "$GVD/root" "$GVD/config" "$GVD/dry/.cf"
+  [[ $# == 0 ]] || printf '%s\n' "$@" >"$GVD/config/config"
+}
+gv() { # gv <verb...>: the fixture profile; hosts= names this machine unless GV_HOSTS is set; GV_TUNNEL=1 runs the cloudflared stub (GW_CFD_MODE); GV_R2=1 the dry bucket
+  env -u SHARE_HOSTNAME -u CLOUDFLARE_API_TOKEN -u SHARE_R2_TOKEN HOME="$GVD/home" SHARE_ROOT="$GVD/root" SHARE_CONFIG_DIR="$GVD/config" SHARE_HOSTS="${GV_HOSTS-$gw_this}" \
+    SHARE_PORT="${GV_PORT_USE:-$GV_PORT}" SHARE_TUNNEL="${GV_TUNNEL:-0}" PATH="$GW/cfd:$PATH" ${GV_R2:+SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$GVD/dry" SHARE_R2_TOKEN=drytoken SHARE_ACCESS_DRY=1 SHARE_ACCESS_POLL=0} ${GV_ACCESS:+SHARE_ACCESS_DRY=1} ${GV_TOK:+CLOUDFLARE_API_TOKEN=$GV_TOK} \
+    bash "${GV_SH:-$SH}" "$@"
+}
+gv_phase() { gv state 2>/dev/null | jq -r '"\(.serve.phase)/\(.serve.reason) \(.state) \(.ready)"'; }   # phase/reason state ready
+gv_head() { GV_SH="$GW_HEAD" gv state 2>/dev/null | jq -c '[.state, .ready]'; }
+gv_new() { gv state 2>/dev/null | jq -c '[.state, .ready]'; }
+gv_up() { # gv_up: poll until serve answers on its port (10 s)
+  local _; for _ in $(seq 1 100); do [[ -f $GVD/root/serve.pid ]] && curl -s -o /dev/null "http://127.0.0.1:${GV_PORT_USE:-$GV_PORT}/" && return 0; sleep 0.1; done; return 1
+}
+gv_ready() { local _; for _ in $(seq 1 100); do [[ "$(gv state 2>/dev/null | jq -r .ready)" == true ]] && return 0; sleep 0.1; done; return 1; }
+gv_serve() { # gv_serve <GW_CFD_MODE>: serve in the background under the cloudflared stub's mode
+  # shellcheck disable=SC2030 # the seam is meant for this one background run
+  ( export GW_CFD_MODE=$1; GV_TUNNEL=1 gv serve >/dev/null 2>&1 & )
+}
+gv_cfg=(hostname=gv.example.test tunnel_id=tid-gv "token_cmd=echo gvtok")
+# SS-01 and SS-02: nothing to serve
+gv_fx none; check "SS-01 role none: not_setup, and [state, ready] equals HEAD's" "not_setup/not_setup not_setup false|$(gv_head)" "$(gv_phase)|$(gv_new)"
+gv_fx moved "${gv_cfg[@]}" migrated=host-b; check "SS-02 migrated: not_setup, [state, ready] equals HEAD's" "not_setup/not_setup not_setup false|$(gv_head)" "$(gv_phase)|$(gv_new)"
+# SS-03 to SS-05: set up, nothing running
+gv_fx idle "${gv_cfg[@]}"; mkdir -p "$GVD/marker"; touch "$GVD/marker/m"; sleep 1.1
+check "SS-03 set up, not running: stopped, and [state, ready] equals HEAD's" "stopped/stopped stopped false|$(gv_head)" "$(gv_phase)|$(gv_new)"
+check "SS-03 state writes nothing" "" "$(find "$GVD/root" "$GVD/config" -newer "$GVD/marker/m" 2>/dev/null)"
+out="$(gv status 2>&1)"; check "SS-03 status keeps its stopped line" "1" "$(grep -c '^not serving: share start$' <<<"$out")"
+GV_HOSTS=nobody; check "SS-04 not in hosts=: elsewhere, and [state, ready] equals HEAD's" "elsewhere/elsewhere stopped false|$(GV_HOSTS=nobody gv_head)" "$(gv_phase)|$(gv_new)"
+out="$(gv status 2>&1)"; check "SS-04 status says the machine is not in hosts=, not 'share start'" "1 0" "$(grep -c '^not serving here: this machine is not in hosts=nobody; links work while a machine in hosts= serves$' <<<"$out") $(grep -c '^not serving: share start$' <<<"$out")"
+unset GV_HOSTS
+mkdir -p "$GVD/home/Library/LaunchAgents"; : >"$GVD/home/Library/LaunchAgents/$SHARE_SERVICE_LABEL.plist"
+printf '{"code":"port_busy","at":1}\n' >"$GVD/root/.serve-exit"
+check "SS-05 a service installed and a serve exit code: failed, reason the code, [state, ready] equals HEAD's" "failed/port_busy stopped false|$(gv_head)" "$(gv_phase)|$(gv_new)"
+out="$(gv status 2>&1)"; check "SS-05 status names the exit code" "1" "$(grep -c '^not serving: the last run ended with port_busy; see .*serve.log, then: share start$' <<<"$out")"
+printf '{"code":"stopped","at":1}\n' >"$GVD/root/.serve-exit"; check "SS-05 a stop record is not a failure" "stopped/stopped" "$(gv_phase | cut -d' ' -f1)"
+printf '{"code":"port_busy","at":1}\n' >"$GVD/root/.serve-exit"; rm -f "$GVD/home/Library/LaunchAgents/$SHARE_SERVICE_LABEL.plist"
+check "SS-05 the same record with no service installed: stopped" "stopped/stopped" "$(gv_phase | cut -d' ' -f1)"
+GV_HOSTS=nobody; check "SS-05 elsewhere beats failed (not_in_hosts is itself a serve exit code)" "elsewhere/elsewhere" "$(gv_phase | cut -d' ' -f1)"; unset GV_HOSTS
+# SS-06 to SS-08: a real serve under the stub tunnel; state probes /ready only with the tunnel on
+export GV_TUNNEL=1
+gv_fx up "${gv_cfg[@]}"
+gv_serve idle; gv_up
+check "SS-06 serve runs, the tunnel does not answer, pid under 30 s: starting, [state, ready] equals HEAD's" "starting/starting serving false|$(gv_head)" "$(gv_phase)|$(gv_new)"
+out="$(gv status 2>&1)"; check "SS-06 status says it is starting" "1" "$(grep -c '^starting (pid [0-9]*): the tunnel is connecting' <<<"$out")"
+now="$(( $(date +%s) + 60 ))"
+check "SS-07 the same serve a minute on (the clock seam): tunnel_down, [state, ready] equals HEAD's" "tunnel_down/tunnel_down serving false|$(SHARE_STATE_NOW=$now gv_head)" "$(SHARE_STATE_NOW=$now gv_phase)|$(SHARE_STATE_NOW=$now gv_new)"
+out="$(SHARE_STATE_NOW=$now gv status 2>&1)"; check "SS-07 status says links are down" "1" "$(grep -c '^serving (pid [0-9]*) but the tunnel does not answer: links are down' <<<"$out")"
+gv stop >/dev/null 2>&1
+gv_fx up2 "${gv_cfg[@]}"
+gv_serve ready; gv_up; gv_ready
+check "SS-08 serve runs and /ready answers: serving, reason ok, [state, ready] equals HEAD's" "serving/ok serving true|$(gv_head)" "$(gv_phase)|$(gv_new)"
+out="$(gv status 2>&1)"; check "SS-08 status keeps its serving line" "1" "$(grep -c '^serving (pid [0-9]*) on gv.example.test: links are live$' <<<"$out")"
+gv stop >/dev/null 2>&1
+# SS-09: the tunnel dies while the service is installed
+gv_fx die "${gv_cfg[@]}"; mkdir -p "$GVD/home/Library/LaunchAgents"; : >"$GVD/home/Library/LaunchAgents/$SHARE_SERVICE_LABEL.plist"
+# shellcheck disable=SC2031 # the seam is meant for this one run
+( export GW_CFD_MODE=exit1s; GV_TUNNEL=1 gv serve >/dev/null 2>&1 ); sleep 0.5
+check "SS-09 the stub cloudflared exits while the service is installed: failed, cloudflared_died, [state, ready] equals HEAD's" "failed/cloudflared_died stopped false|$(gv_head)" "$(gv_phase)|$(gv_new)"
+unset GV_TUNNEL
+# r2 profiles: nothing runs here; the Worker decides
+r2cfg=(backend=r2 hostname=r2v.example.test zone=example.test bucket=ok-bucket port=r2 r2_endpoint=https://acct-dry.r2.cloudflarestorage.com)
+gv_fx r2down "${r2cfg[@]}"; export GV_R2=1
+check "SS-10 an r2 profile whose Worker does not answer: worker_down, serving, not ready, [state, ready] equals HEAD's" "worker_down/worker_down serving false|$(gv_head)" "$(gv_phase)|$(gv_new)"
+jq -nc --arg v "$GV_WV" --arg s "$GV_SHA" '{bindings: [{name: "VERSION", text: $v}, {name: "SHA", text: $s}]}' >"$GVD/dry/.cf/script.json"; echo '{}' >"$GVD/dry/.cf/domain.json"
+check "SS-11 the same profile with its Worker up: serving, ok, ready, [state, ready] equals HEAD's" "serving/ok serving true|$(gv_head)" "$(gv_phase)|$(gv_new)"
+out="$(gv status 2>&1)"; check "SS-11 r2 status keeps its worker line" "1" "$(grep -c '^worker:     up (' <<<"$out")"
+gv_fx r2none backend=r2 zone=example.test bucket=ok-bucket port=r2 r2_endpoint=https://acct-dry.r2.cloudflarestorage.com; check "SS-12 an r2 profile with no hostname: not_setup" "not_setup/not_setup not_setup false" "$(gv_phase)"
+unset GV_R2
+check "G6 state-fn serve prints the owner's four values" "stopped stopped stopped false" "$(gv_fx fn "${gv_cfg[@]}"; gv state-fn serve)"
+echo "=== state groundwork: G7 ==="
+gl_forge() { # gl_forge <id> <expires> [opts]: a cloud record and its upload in the tenant's dry bucket, as another publisher would leave them
+  local id=$1 n; n="00000${id: -3}"
+  mkdir -p "$GT_DRY/m" "$GT_DRY/o/$id.$n"; printf 'f %s\n' "$id" >"$GT_DRY/o/$id.$n/f.txt"
+  jq -nc --arg id "$id" --argjson e "$2" --arg o "${3:-}" --arg p "o/$id.$n/" \
+    '{v: 1, id: $id, name: "f.txt", src: "/elsewhere/f.txt", added: "2026-09-01", expires: $e, opts: $o, prefix: $p, by: "peer"}' >"$GT_DRY/m/$id"
+}
+gl_old() { jq -c '[.shares[] | del(.link_state, .reason)]'; }   # a row without the keys this task adds: what HEAD printed
+gt_fresh; gwt setup ten.example.test --r2 --bucket ok-bucket >/dev/null 2>&1
+check "G7 fixture: the tenant origin has R2 on" "1" "$(gt_on)"
+printf '0c0002\ty.txt\t/src/y.txt\t2026-10-01\t0\t\n' >>"$GT_ROOT/index.tsv"; mkdir -p "$GT_ROOT/pub/0c0002"; printf 'y\n' >"$GT_ROOT/pub/0c0002/y.txt"
+gl_forge 100001 1000
+gl_forge 0c0002 0
+gl_forge 100003 0
+st="$(gwt state 2>/dev/null)"; hd="$(GT_SH="$GW_HEAD" gwt state 2>/dev/null)"
+lsf() { jq -r --arg id "$2" '.shares[] | select(.id == $id) | "\(.link_state)/\(.reason // "-")"' <<<"$1"; }
+check "LS-01 a local row with no expiry: live" "live/-" "$(lsf "$st" 0c0001)"
+check "LS-02 an expired cloud row: expired, still listed" "expired/-" "$(lsf "$st" 100001)"
+check "LS-03 before any full listing the poll cannot see a shadow: live" "live/-" "$(lsf "$st" 0c0002)"
+check "LS-01 a cloud row with no expiry: live" "live/-" "$(lsf "$st" 100003)"
+check "LS-01 every old row field equals HEAD's output (rows and order)" "$(jq -c '[.shares[]]' <<<"$hd")" "$(gl_old <<<"$st")"
+check "LS-01 the shadowed id lists once, as the local row" "1" "$(jq '[.shares[] | select(.id == "0c0002")] | length' <<<"$st")"
+out="$(gwt ls 2>&1)"
+check "LS-03 the full listing (ls) finds the shadowed id, and state then reads it from the .health cache" "shadowed/cloud_id_wins" "$(lsf "$(gwt state 2>/dev/null)" 0c0002)"
+check "LS ls adds a state to a row that is not live, and to no live row" "1 0" "$(grep -c 'id=0c0002 .*state=shadowed (cloud_id_wins)' <<<"$out") $(grep -c 'id=0c0001 .*state=' <<<"$out")"
+# a gated tunnel row whose Access app is gone, and the check that finds out
+GU_TOK=cftoken   # the fake Cloudflare answers any token
+gu_fresh; gwu setup gu.example.test --no-service >/dev/null 2>&1
+gapp1=00000000-0000-4000-8000-000000aaaaaa; gapp2=00000000-0000-4000-8000-000000bbbbbb
+for r in "a1a1a1 $gapp1" "b2b2b2 $gapp2"; do
+  read -r rid rapp <<<"$r"; mkdir -p "$GU_ROOT/pub/$rid"; printf 'g\n' >"$GU_ROOT/pub/$rid/g.txt"
+  printf '%s\tg.txt\t/src/g.txt\t2026-10-01\t0\taccess=%s access_rule=email:a@x.io\n' "$rid" "$rapp" >>"$GU_ROOT/index.tsv"
+done
+mkdir -p "$GU_ROOT/.access-dry"; jq -nc --arg u "$gapp2" '{id: $u, name: "share b2b2b2 gu.example.test 0000000b", aud: "x"}' >"$GU_ROOT/.access-dry/$gapp2.json"
+st="$(gwu state 2>/dev/null)"
+check "LS-05 a gated row with no check run: live" "live/- live/-" "$(lsf "$st" a1a1a1) $(lsf "$st" b2b2b2)"
+out="$(SHARE_ACCESS_DRY=1 GU_TOK=faketoken gwu ls 2>&1)"
+check "LS-04 ls with an exported token finds the gone app and says the link is PUBLIC" "1 0" "$(grep -c 'Access app for a1a1a1 is gone; the link is PUBLIC' <<<"$out") $(grep -c 'Access app for b2b2b2 is gone' <<<"$out")"
+st="$(gwu state 2>/dev/null)"
+check "LS-04 state then reads gate_missing for it, and live for the gated row whose app exists" "gate_missing/access_app_gone live/-" "$(lsf "$st" a1a1a1) $(lsf "$st" b2b2b2)"
+check "LS-04 the check is cached in .health under gates, with no secret" "a1a1a1 0" "$(jq -r '.gates.missing | join(" ")' "$GU_HOME/.config/share/.health") $(grep -c 'faketoken' "$GU_HOME/.config/share/.health")"
+jq '.gates.at = 1' "$GU_HOME/.config/share/.health" >"$GU_HOME/.config/share/.health.new" && mv "$GU_HOME/.config/share/.health.new" "$GU_HOME/.config/share/.health"
+check "LS-04 a check older than a week no longer says gate_missing" "live/-" "$(lsf "$(gwu state 2>/dev/null)" a1a1a1)"
+printf 'c3c3c3\tr.txt\t/src/r.txt\t2026-10-01\t0\trevoked revoked_by=bob\n' >>"$GU_ROOT/index.tsv"
+check "LS revoked: link_state revoked, reason revoked_by=bob" "revoked/revoked_by=bob" "$(lsf "$(gwu state 2>/dev/null)" c3c3c3)"
+check "G7 state-fn link prints id, link_state, reason" "1" "$(gwu state-fn link 2>/dev/null | grep -c '^c3c3c3 revoked revoked_by=bob$')"
+gl_forge 100001 1000   # the listing above pruned it
+# shellcheck disable=SC2016 # the sed program is literal source, expanded by sed
+sed 's/if (st == "live" \&\& \$5 + 0 > 0 \&\& \$5 + 0 <= now) st = "expired"/if (0) st = "expired"/' "$SH" >"$GW/share-no-expired"
+check "negative control NC-G7: a link_apply that never says expired leaves the expired cloud row live" "live/-" "$(GT_SH="$GW/share-no-expired" gwt state 2>/dev/null | jq -r '.shares[] | select(.id == "100001") | "\(.link_state)/\(.reason // "-")"')"
+
+echo "=== state groundwork: G8 ==="
+gp_fx() { gv_fx pend hostname=pd.example.test tunnel_id=tid-pd "hosts=$gw_this"; printf '%s\n' "$@" >"$GVD/root/access-pending"; }
+me_start="$(LC_ALL=C TZ=UTC0 ps -o lstart= -p $$ | sed 's/^ *//; s/ *$//')"; dp="$(gw_dead_pid)"; nowe="$(date +%s)"
+pst() { gv state 2>/dev/null | jq -r '"\(.access_pending) \(.access_inflight) \(.access_bad)"'; }   # pending inflight bad
+gp_fx "$(printf 'a1a1a1\t-:0badcafe\t%s\t%s\t%s' "$$" "$me_start" "$nowe")"
+check "PS-01 an intent line owned by the live test shell: inflight 1, pending 0" "0 1 0" "$(pst)"
+out="$(gv status 2>&1)"; check "PS-01 status and ls print no deletion note for a working add" "0" "$(grep -c 'await deletion' <<<"$out")"
+gp_fx "$(printf 'a1a1a1\t00000000-0000-4000-8000-0000000000a1\t%s\t%s\t%s' "$$" "$me_start" "$nowe")"
+check "PS bound: an app known to a live owner is inflight too" "0 1 0" "$(pst)"
+gp_fx "$(printf 'a1a1a1\t00000000-0000-4000-8000-0000000000a1\t0\t-\t%s' "$nowe")"
+check "PS-02 owner 0 (a delete waiting for a token): pending 1" "1 0 0" "$(pst)"
+out="$(gv status 2>&1)"; check "PS-02 the deletion note names the waiting app" "1" "$(grep -c '1 Access app(s) await deletion' <<<"$out")"
+gp_fx "$(printf 'a1a1a1\t00000000-0000-4000-8000-0000000000a1\t%s\tx\t%s' "$dp" "$nowe")"
+check "PS-03 a dead owner: pending 1" "1 0 0" "$(pst)"
+gp_fx "not a pending line"
+check "PS-04 a malformed line: bad 1, pending 0" "0 0 1" "$(pst)"
+out="$(gv status 2>&1)"; check "PS-04 the malformed note stays" "1" "$(grep -c '1 malformed line(s) in ' <<<"$out")"
+check "PS pending_state names each of the five states" "intent bound deferred orphan bad" "$(for l in "$(printf 'a1a1a1\t-:0badcafe\t%s\t%s\t%s' "$$" "$me_start" "$nowe")" "$(printf 'a1a1a1\t00000000-0000-4000-8000-0000000000a1\t%s\t%s\t%s' "$$" "$me_start" "$nowe")" "$(printf 'a1a1a1\t00000000-0000-4000-8000-0000000000a1\t0\t-\t%s' "$nowe")" "$(printf 'a1a1a1\t00000000-0000-4000-8000-0000000000a1\t%s\tx\t%s' "$dp" "$nowe")" "junk"; do gv state-fn pending "$l"; done | tr '\n' ' ' | sed 's/ $//')"
+# shellcheck disable=SC2016 # the sed program is literal source, expanded by sed
+sed 's/^  elif owner_live "\$pid" "\$st"; then case \$app in/  elif false; then case $app in/' "$SH" >"$GW/share-no-live"
+gp_fx "$(printf 'a1a1a1\t-:0badcafe\t%s\t%s\t%s' "$$" "$me_start" "$nowe")"
+check "negative control NC-G8: a pending_state that never sees a live owner reports the working add as pending" "1 0 0" "$(GV_SH="$GW/share-no-live" pst)"
+echo "=== state groundwork: G9 ==="
+GV_PORT_USE=$((base + 364))
+gv_fx add "${gv_cfg[@]}"; printf 'ad\n' >"$GW/ad.txt"; printf 'ad2\n' >"$GW/ad2.txt"
+ad_rows() { cat "$GVD/root/index.tsv" 2>/dev/null | awk -v i="${1:-}" 'i == "" || $1 == i {c++} END {print c + 0}'; }   # ad_rows [id]: rows in the index, or the rows of one id
+ad_op() { gv state 2>/dev/null | jq -r '.ops[0] // empty | "\(.verb) \(.step) \(.of) \(.alive)"'; }
+ad_dead() { # ad_dead <id> <row 0|1>: a dead add's journal, the copy it staged, and optionally its row
+  local i=$1 dpid; dpid="$(gw_dead_pid)"
+  mkdir -p "$GVD/root/ops" "$GVD/root/pub/$i"; printf 'x\n' >"$GVD/root/pub/$i/ad.txt"
+  jq -nc --argjson p "$dpid" --arg i "$i" '{v: 1, verb: "add", step: 3, of: 6, name: "access", pid: $p, start: "x", started: 0, rerun_argv: ["add", "ad.txt"], id: $i, rerun: "share add ad.txt"}' >"$GVD/root/ops/add.$dpid.json"
+  [[ $2 != 1 ]] || printf '%s\tad.txt\t/src/ad.txt\t2026-10-01\t0\t\n' "$i" >>"$GVD/root/index.tsv"
+}
+# shellcheck disable=SC2030 # the seam is meant for this one background run
+( export SHARE_OP_PAUSE=add:5; gv add "$GW/ad.txt" >/dev/null 2>&1 & )
+pid="$(gw_wait_step "$GVD/root" add 5)"; adid="$(jq -r .id "$GVD/root/ops/add.$pid.json")"
+check "AD-01 a held add journals its id at step 5 of 6, alive" "add 5 6 true|1" "$(ad_op)|$([[ $adid =~ ^[0-9a-f]{6}$ ]] && echo 1 || echo 0)"
+kill -9 "$pid"; gw_gone "$pid"
+check "AD-01 killed before the row append: the copy stands, no row, the op reads dead" "1 0 add 5 6 false" "$([[ -d $GVD/root/pub/$adid ]] && echo 1 || echo 0) $(ad_rows "$adid") $(ad_op)"
+out="$(gv status 2>&1)"; check "AD-01 status names the dead add with its rerun" "1" "$(grep -c '^add stopped at step 5 of 6 (gate); rerun: share add ' <<<"$out")"
+tr0="$(find "$GW/trashed" -type f -o -type d 2>/dev/null | wc -l | tr -d ' ')"
+out="$(gv prune 2>&1)"; rc=$?
+check "AD-03 bare prune after it: the copy is trashed, the journal gone, ops/ empty" "0 0 1 |" "$rc $([[ -e $GVD/root/pub/$adid ]] && echo 1 || echo 0) $([[ $(find "$GW/trashed" -mindepth 1 2>/dev/null | wc -l | tr -d ' ') -gt $tr0 ]] && echo 1 || echo 0) $(gw_ops "$GVD/root")|"
+check "AD-03 prune says what it rolled back" "1" "$(grep -c "rolled back the add of $adid that stopped part way" <<<"$out")"
+ad_dead 0d0201 1
+mkdir -p "$GVD/marker"; touch "$GVD/marker/m"; sleep 1.1
+out="$(gv prune 2>&1)"
+check "AD-02 a dead add whose row is in the index: only its journal goes; the row and the copy stay" "1 1 |" "$(ad_rows 0d0201) $([[ -d $GVD/root/pub/0d0201 ]] && echo 1 || echo 0) |$(gw_ops "$GVD/root")"
+check "AD-02 and prune did not claim to roll anything back" "0" "$(grep -c 'rolled back' <<<"$out")"
+ad_dead 0d0202 1
+# shellcheck disable=SC2016 # the sed program is literal source, expanded by sed
+sed '/^    \[\[ -z "\$(row "\$id")" \]\] || continue$/d' "$SH" >"$GW/share-add-always"
+GV_SH="$GW/share-add-always" gv prune >/dev/null 2>&1
+check "negative control NC-G9: an add_sweep that ignores the row trashes a finished add's copy" "0" "$([[ -d $GVD/root/pub/0d0202 ]] && echo 1 || echo 0)"
+# two adds overlap; the first waits in its gate step; a dead add's journal is on disk
+rm -rf "$GVD/root/ops"; printf '' >"$GVD/root/index.tsv"
+ad_dead 0d0301 0
+# shellcheck disable=SC2031 # the seam is meant for this one run
+( export SHARE_OP_PAUSE=add:5; gv add "$GW/ad.txt" >/dev/null 2>&1 & )
+pid1="$(gw_wait_step "$GVD/root" add 5)"
+out="$(gv add "$GW/ad2.txt" 2>&1)"; rc=$?
+check "AD-04 a second add runs while the first is held: it succeeds, no op_running" "0 0" "$rc $(grep -c 'already running' <<<"$out")"
+: >"$GVD/root/.op-release-add-5"; gw_gone "$pid1"
+check "AD-04 the first add finishes once released: both rows are in" "2" "$(ad_rows)"
+check "AD-04 neither add removed the dead add's journal: it waits for prune" "1" "$(gw_ops "$GVD/root" | tr ' ' '\n' | grep -c '^add\.')"
+gv prune >/dev/null 2>&1
+check "AD-04 prune then consumes it, and the two live rows stay" "|2" "$(gw_ops "$GVD/root")|$(ad_rows)"
+gv stop >/dev/null 2>&1
+# a clean add leaves no journal, and a handled gate failure leaves none either
+gv_fx addc "${gv_cfg[@]}"
+gv add "$GW/ad.txt" >/dev/null 2>&1
+check "AD-05 a clean add leaves ops/ empty" "|1" "$(gw_ops "$GVD/root")|$(ad_rows)"
+gv stop >/dev/null 2>&1
+gv_fx addg "${gv_cfg[@]}"; printf 'fail\n' >"$GVD/root/access-probe-fixture"   # the dry gate never passes
+out="$(GV_ACCESS=1 GV_TOK=faketoken SHARE_ACCESS_WAIT=2 SHARE_ACCESS_POLL=1 gv add "$GW/ad.txt" --access email:a@x.io 2>&1 1>/dev/null)"; rc=$?
+check "AD-05 an add whose gate never enforces dies after undoing itself: no row, no journal" "1 1|0|" "$rc $(grep -c 'did not enforce on gv.example.test/' <<<"$out")|$(ad_rows)|$(gw_ops "$GVD/root")"
+unset GV_PORT_USE
+echo "=== state groundwork: G10 ==="
+tk_iso() { jq -rn --argjson d "$1" '(now + ($d * 86400)) | strftime("%Y-%m-%dT%H:%M:%SZ")'; }   # tk_iso <days from now, may be negative>
+tk_health() { # tk_health <source> <verify> <expires_on|-> [age secs]: a .health holding only a token key
+  jq -nc --arg s "$1" --arg v "$2" --arg e "$3" --argjson t "$(( $(date +%s) - ${4:-0} ))" \
+    '{token: {source: $s, verified_at: $t, verify: $v, expires_on: (if $e == "-" then null else $e end)}}' >"$GVD/config/.health"
+}
+tkv() { gv state 2>/dev/null | jq -r '(.token // null) | if . == null then "none" else "\(.source // "-")/\(.status)/\(.expires_on // "-")" end'; }
+tk_cfg=(hostname=tk.example.test tunnel_id=tid-tk bucket=ok-bucket)
+gv_fx tk "${tk_cfg[@]}"
+check "TK-01 R2 on and no token source: missing" "-/missing/-" "$(tkv)"
+gv_fx tk "${tk_cfg[@]}" "api_token_cmd=echo tok"
+check "TK-02 a token command and no cache: unchecked" "cmd/unchecked/-" "$(tkv)"
+tk_health cmd invalid -; check "TK-03 cache says invalid: invalid" "cmd/invalid/-" "$(tkv)"
+exp="$(tk_iso -3)"; tk_health cmd ok "$exp"; check "TK-04 expires_on past: expired" "cmd/expired/$exp" "$(tkv)"
+exp="$(tk_iso 10)"; tk_health cmd ok "$exp"; check "TK-05 expires within 14 days: expiring" "cmd/expiring/$exp" "$(tkv)"
+exp="$(tk_iso 40)"; tk_health cmd ok "$exp"; check "TK ok: expires in 40 days" "cmd/ok/$exp" "$(tkv)"
+tk_health cmd ok "$exp" $((9 * 86400)); check "TK a cache older than 7 days: unchecked" "cmd/unchecked/-" "$(tkv)"
+tk_health keychain ok "$exp"; check "TK a cache written for another source: unchecked" "cmd/unchecked/-" "$(tkv)"
+gv_fx tkplain hostname=tkp.example.test tunnel_id=tid-tp; check "TK a plain tunnel profile with no token: no token key" "none" "$(tkv)"
+tk_health cmd ok "$(tk_iso 40)"; printf '%s\n' "api_token_cmd=echo tok" >>"$GVD/config/config"
+check "TK a tunnel profile with a token command reads it: ok" "1" "$(tkv | grep -c '^cmd/ok/')"
+# state reads the cache and writes nothing, with .health present and absent; no secret reaches it
+gv_fx tkw "${tk_cfg[@]}" "api_token_cmd=echo tok"; tk_health cmd ok "$(tk_iso 40)"
+printf '%s\n' "$(jq -c '. + {worker: {pair: "5 aaaaaaaaaaaa", deploy: "d", at: 1}, gates: {at: 1, missing: []}, min_cli: "0.1.0"}' "$GVD/config/.health")" >"$GVD/config/.health.new"; mv "$GVD/config/.health.new" "$GVD/config/.health"
+mkdir -p "$GVD/marker"; touch "$GVD/marker/m"; sleep 1.1
+gv state >/dev/null 2>&1; gv status >/dev/null 2>&1
+check "TK state writes nothing with .health present (state, and status's own prune aside)" "" "$(find "$GVD/config" -newer "$GVD/marker/m" 2>/dev/null)"
+sleep 1.1; rm -f "$GVD/config/.health"; touch "$GVD/marker/m"; sleep 1.1; gv state >/dev/null 2>&1
+check "TK state writes nothing with .health absent" "" "$(find "$GVD/config" "$GVD/root" -newer "$GVD/marker/m" 2>/dev/null)"
+# shellcheck disable=SC2016 # the sed program is literal source, expanded by sed
+sed 's/^token_state() {.*$/&\n  touch "$health"/' "$SH" >"$GW/share-health-write"
+tk_health cmd ok "$(tk_iso 40)"; sleep 1.1; touch "$GVD/marker/m"; sleep 1.1; GV_SH="$GW/share-health-write" gv state >/dev/null 2>&1
+check "negative control NC-G10: a token_state that touches .health trips the writes-nothing check" "1" "$([[ -n $(find "$GVD/config" -newer "$GVD/marker/m" 2>/dev/null) ]] && echo 1 || echo 0)"
+# a token command's verify answer lands in .health through the one writer that already makes the call
+gt_fresh; gwt setup ten.example.test --r2 --bucket ok-bucket >/dev/null 2>&1; printf 'api_token_cmd=echo pubtok\n' >>"$GT_CONF"
+out="$(GT_TOK='' SHARE_R2_DRY_ROLE=deny SHARE_R2_DRY_EXPIRES="$(tk_iso 5)" gwt api-token --check 2>&1)"
+check "TK api-token --check records the verify answer under token (source, expiry, no secret)" "cmd ok 1 0" "$(jq -r '.token | "\(.source) \(.verify) \(if .expires_on != null then 1 else 0 end)"' "$GT_HOME/.config/share/profiles/ten/.health" 2>/dev/null | tr -d '\n') $(grep -c 'pubtok' "$GT_HOME/.config/share/profiles/ten/.health" 2>/dev/null || true)"
+check "TK state then reads expiring from it" "cmd/expiring" "$(GT_TOK='' gwt state 2>/dev/null | jq -r '.token | "\(.source)/\(.status)"')"
+jq -c '.worker = {pair: "5 aaaaaaaaaaaa", deploy: "", at: 1}' "$GT_HOME/.config/share/profiles/ten/.health" >"$GT_HOME/.config/share/profiles/ten/.health.new" && mv "$GT_HOME/.config/share/profiles/ten/.health.new" "$GT_HOME/.config/share/profiles/ten/.health"
+GT_TOK='' gwt api-token --check >/dev/null 2>&1
+check "TK a second writer leaves the other keys alone (the worker key survives a token write)" "5 aaaaaaaaaaaa" "$(jq -r '.worker.pair' "$GT_HOME/.config/share/profiles/ten/.health")"
+# compat: the Worker pair a status or a setup saw
+gv_fx cm "${r2cfg[@]}"; export GV_R2=1
+jq -nc --arg v "$GV_WV" --arg s "$GV_SHA" '{bindings: [{name: "VERSION", text: $v}, {name: "SHA", text: $s}]}' >"$GVD/dry/.cf/script.json"; echo '{}' >"$GVD/dry/.cf/domain.json"
+cmv() { gv state 2>/dev/null | jq -r '(.compat // null) | if . == null then "none" else "\(.status)|\(.cli)|\(.worker // "-")|\(.min_cli // "-")" end'; }
+check "TK compat before any status: unknown" "unknown|$(bash "$SH" version)|-|-" "$(cmv)"
+gv status >/dev/null 2>&1
+check "TK r2 status saves the Worker pair; compat reads ok" "ok|$(bash "$SH" version)|$GV_WV $GV_SHA|-" "$(cmv)"
+check "TK the cache holds the pair and no secret" "$GV_WV $GV_SHA 0" "$(jq -r '.worker.pair' "$GVD/config/.health") $(grep -c 'drytoken' "$GVD/config/.health")"
+jq -c '.worker.pair = "4 aaaaaaaaaaaa"' "$GVD/config/.health" >"$GVD/config/.h" && mv "$GVD/config/.h" "$GVD/config/.health"; check "TK an older Worker: worker_older" "worker_older" "$(cmv | cut -d'|' -f1)"
+jq -c '.worker.pair = "99 aaaaaaaaaaaa"' "$GVD/config/.health" >"$GVD/config/.h" && mv "$GVD/config/.h" "$GVD/config/.health"; check "TK a newer Worker: worker_newer" "worker_newer" "$(cmv | cut -d'|' -f1)"
+jq -c '.min_cli = "99.0.0"' "$GVD/config/.health" >"$GVD/config/.h" && mv "$GVD/config/.h" "$GVD/config/.health"; check "TK min_cli above this share: cli_below_min wins" "cli_below_min|$(bash "$SH" version)|99 aaaaaaaaaaaa|99.0.0" "$(cmv)"
+unset GV_R2
+check "TK compat is absent on a tunnel profile with no bucket" "none" "$(gv_fx tkn "${gv_cfg[@]}"; gv state 2>/dev/null | jq -r '(.compat // "none")')"
+gv_fx tkf "${tk_cfg[@]}"
+check "TK state-fn token and compat print their owners' values" "1 1" "$(gv state-fn token | grep -c '^- missing -$') $(gv state-fn compat | grep -c '^unknown|-|-$')"
+# TK-06: every teardown removes .health, so the profile dir goes and profiles --json never lists a ghost
+GU_TOK=cftoken; gu_fresh
+tkq="$GU_HOME/.config/share/profiles/tkq"; mkdir -p "$tkq" "$GU_HOME/share/profiles/tkq"; printf 'mode=quick\nhosts=%s\nport=%s\n' "$gw_this" $((base + 366)) >"$tkq/config"; echo '{"token":{}}' >"$tkq/.health"
+gwu --profile tkq teardown --yes >/dev/null 2>&1
+check "TK-06 the quick teardown of a named profile: the dir is gone, profiles --json does not list it" "0 0" "$([[ -e $tkq ]] && echo 1 || echo 0) $(gwu profiles --json 2>/dev/null | jq '[.profiles[]? | select(.name == "tkq")] | length')"
+gwu --profile tkt setup gu.example.test --no-service >/dev/null 2>&1; tkt="$GU_HOME/.config/share/profiles/tkt"; echo '{"token":{}}' >"$tkt/.health"
+check "TK-06 fixture: the named tunnel profile is set up, its cache present" "1 1" "$([[ -f $tkt/config ]] && echo 1 || echo 0) $([[ -f $tkt/.health ]] && echo 1 || echo 0)"
+gwu --profile tkt teardown --yes >/dev/null 2>&1
+check "TK-06 the tunnel teardown of a named profile: the dir is gone, profiles --json does not list it" "0 0" "$([[ -e $tkt ]] && echo 1 || echo 0) $(gwu profiles --json 2>/dev/null | jq '[.profiles[]? | select(.name == "tkt")] | length')"
+rm -rf "$GP_HOME" "$GP_DRY"; mkdir -p "$GP_HOME" "$GP_DRY"; GP_TOK=admintoken gwp setup pg.example.test --backend r2 --bucket ok-bucket >/dev/null 2>&1
+tkp="$GP_HOME/.config/share/profiles/pg"; echo '{"token":{}}' >"$tkp/.health"
+check "TK-06 fixture: the r2 profile is set up, its cache present" "1 1" "$([[ -f $tkp/config ]] && echo 1 || echo 0) $([[ -f $tkp/.health ]] && echo 1 || echo 0)"
+gwp teardown --yes >/dev/null 2>&1
+check "TK-06 the r2 teardown of a named profile: the dir is gone" "0" "$([[ -e $tkp ]] && echo 1 || echo 0)"
+rm -rf "$GP_HOME" "$GP_DRY"; mkdir -p "$GP_HOME" "$GP_DRY"; GP_TOK=admintoken gwp setup pg.example.test --backend r2 --bucket ok-bucket >/dev/null 2>&1; echo '{"token":{}}' >"$tkp/.health"
+GP_TOK=admintoken gwp teardown --yes --purge >/dev/null 2>&1
+check "TK-06 the purge of a named profile: the dir is gone" "0" "$([[ -e $tkp ]] && echo 1 || echo 0)"
+
+echo "=== state groundwork: G14 ==="
+gu_fresh; gwu setup gu.example.test --no-service >/dev/null 2>&1
+printf 'ttl=3d\nr2_token_cmd=x\nx_future=1\n' >>"$GU_CONF"; sed -i.bak '/^ttl=3d$/d' "$GU_CONF"; rm -f "$GU_CONF.bak"
+cp "$GU_CONF" "$GW/cg.before"
+out="$(gwu config ttl 7d 2>&1)"; rc=$?
+check "CG-01 config ttl 7d: written, the line printed" "0 ttl=7d 1" "$rc $out $(grep -c '^ttl=7d$' "$GU_CONF")"
+check "CG-01 every other config line is kept byte for byte" "$(cat "$GW/cg.before")" "$(grep -v '^ttl=' "$GU_CONF")"
+check "CG-01 config ttl prints the value" "7d" "$(gwu config ttl 2>&1)"
+gwu config ttl --unset >/dev/null 2>&1
+check "CG-01 config ttl --unset drops the line and keeps the rest" "0 $(cat "$GW/cg.before" | cksum)" "$(grep -c '^ttl=' "$GU_CONF") $(cksum <"$GU_CONF")"
+check "CG config ttl on an unset key prints nothing, exit 0" "|0" "$(gwu config ttl 2>&1)|$?"
+for v in 12h 7d never 0; do gwu config ttl "$v" >/dev/null 2>&1 || break; done
+check "CG the valid ttl forms (12h 7d never 0) are all accepted" "ttl=0" "$(grep '^ttl=' "$GU_CONF")"
+gwu config ttl --unset >/dev/null 2>&1; cp "$GU_CONF" "$GW/cg.before"
+out="$(SHARE_ERROR_JSON=1 gwu config ttl 7x 2>&1)"; rc=$?
+check "CG-02 config ttl 7x: config_value_bad with the valid forms, config untouched" "1 config_value_bad 1 1" "$rc $(tail -1 <<<"$out" | jq -r .error.code) $(head -1 <<<"$out" | grep -c '12h, 7d, or never') $(cmp -s "$GU_CONF" "$GW/cg.before" && echo 1 || echo 0)"
+bad=""; for v in 7 d "7 d" "-1d" "1w" ""; do SHARE_ERROR_JSON=1 gwu config ttl "$v" >/dev/null 2>&1 && bad="$bad [$v]"; done
+check "CG-02 other bad durations are refused too" "" "$bad"
+out="$(SHARE_ERROR_JSON=1 gwu config storage_default cloud 2>&1)"; rc=$?
+check "CG-03 storage_default on a profile with no bucket: config_value_bad, config untouched" "1 config_value_bad 1" "$rc $(tail -1 <<<"$out" | jq -r .error.code) $(cmp -s "$GU_CONF" "$GW/cg.before" && echo 1 || echo 0)"
+printf 'bucket=ok-bucket\n' >>"$GU_CONF"; cp "$GU_CONF" "$GW/cg.before"
+out="$(gwu config storage_default cloud 2>&1)"; rc=$?
+check "CG-03 the same on a profile with a bucket: written" "0 storage_default=cloud 1" "$rc $out $(grep -c '^storage_default=cloud$' "$GU_CONF")"
+out="$(SHARE_ERROR_JSON=1 gwu config storage_default somewhere 2>&1)"
+check "CG-03 a value that is not local or cloud is refused" "config_value_bad" "$(tail -1 <<<"$out" | jq -r .error.code)"
+cp "$GU_CONF" "$GW/cg.before"
+out="$(SHARE_ERROR_JSON=1 gwu config admin_token_cmd x 2>&1)"; rc=$?
+check "CG-04 config admin_token_cmd: config_key_unknown naming the settable keys, config untouched" "1 config_key_unknown 1 1" "$rc $(tail -1 <<<"$out" | jq -r .error.code) $(head -1 <<<"$out" | grep -c 'ttl and storage_default') $(cmp -s "$GU_CONF" "$GW/cg.before" && echo 1 || echo 0)"
+out="$(SHARE_ERROR_JSON=1 gwu config port 9 2>&1)"; check "CG-04 config port 9: config_key_unknown" "config_key_unknown" "$(tail -1 <<<"$out" | jq -r .error.code)"
+out="$(gwu config 2>&1)"; check "CG config with no key prints the usage" "1" "$(grep -c 'usage: share config ttl|storage_default' <<<"$out")"
+out="$(SHARE_ERROR_JSON=1 gwu config ttl $'7d\r' 2>&1)"; rc=$?
+check "CG a value with a carriage return is refused and nothing is written" "1 1" "$rc $(cmp -s "$GU_CONF" "$GW/cg.before" && echo 1 || echo 0)"
+check "G14 share --help lists config, and the skill names it" "1 1" "$(bash "$SH" --help | grep -c 'share config ttl|storage_default') $(bash "$SH" skill | grep -c 'share config ttl')"
+# shellcheck disable=SC2016 # the sed program is literal source, expanded by sed
+sed 's/^  config_put "\$key" "\$key=\$val"$/  printf "%s=%s\\n" "$key" "$val" >"$config"/' "$SH" >"$GW/share-config-clobber"
+GU_SH="$GW/share-config-clobber" gwu config ttl 7d >/dev/null 2>&1
+check "negative control NC-G14: a config verb that rewrites the file instead of config_put loses the other keys" "0" "$(grep -c '^x_future=\|^bucket=' "$GU_CONF" 2>/dev/null || true)"
 echo "=== members: phase 0 (version, listed rows, readers, carry-forward, member config keys) ==="
 # OT-19: share version is the newest CHANGELOG heading
 newest="$(sed -n 's/^## \[v\([0-9][0-9.]*\)\].*/\1/p' "$(dirname "$SH")/../CHANGELOG.md" | head -1)"
