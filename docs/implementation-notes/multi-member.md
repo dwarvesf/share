@@ -42,3 +42,101 @@ The criticals were folded into the spec (DEC-58 to DEC-73). These warnings were 
 ### Other
 - TASK-4b23 attributes the Stop Waiting copy to SPEC-010 G9; SPEC-010 says G11 owns it. Use G11's string.
 - Phase 0's "a sample that disagrees lands as a Worker v6 fix in Phase 1" also covers a CLI fix in carry-forward (TASK-0e), which needs no Worker bump.
+
+## TASK-1a live samples
+
+Run 2026-11-14 on the Console Labs account from the Mac Mini, cloudflared 2026.10.7, Caddy from Homebrew. Every object had a throwaway `share-e2e-` name and is deleted (proof: `docs/verification/members-live-samples.md`). Scripts stayed in the session scratchpad. They read credentials from 1Password into variables and pass tokens through `-H @<(printf ...)` and `-K <(printf ...)`, never argv. `<a>` is the account id, `<t>` a tunnel id, `<sid>` a VPC Service id. Excerpts are masked.
+
+The admin token `cf-console-labs-token` holds no Connectivity Directory or R2 scope. The samples used a throwaway user token `share-e2e-admin-<8hex>`, minted by the minter with Connectivity Directory Admin, Cloudflare Tunnel Write, Workers Scripts Write and Workers R2 Storage Write on the account. It was deleted at the end.
+
+### Answers at a glance
+
+| Q | Closes | Verdict | Design consequence |
+|---|---|---|---|
+| (a) VPC Service REST | OQ-1 | pass | permission group `Connectivity Directory Admin`; PUT needs the whole body; one service per tunnel, ipv4 and port |
+| (b) binding entry, settings shape, drop | OQ-2 | pass | every T2 deploy needs Connectivity scope; a deploy without the entry drops it |
+| (c) bucket-scoped mint, extend, revoke | OQ-3 | pass, S3 leg from the 2026-09-30 run | 50 user tokens per user; the minter holds 42 today |
+| (d) binding fetch with the origin down | OQ-4 | pass | a down origin throws in under 1 s; a hung listener hangs, so row 15 needs `AbortSignal.timeout` |
+| (e) 25 bindings | OQ-5 | pass | the 20-member cap can rise to 25; delete a service only after a deploy drops its binding |
+| (f) connections | (Grounding row) | pass | connector count = entries of `GET .../connections`; the tunnel object's `connections` counts conns |
+| (g) tunnel with the catch-all, token | (Grounding row) | pass | as specified |
+| (h) R2 `put` with a stale `etagMatches` | OQ-7 | `null` on local workerd; live not sampled | R2 is not enabled on Console Labs; the live check moves to the first R2 run there |
+
+### (a) VPC Service create, get, list, update, delete
+
+- Scope: the current admin token gets `GET /accounts/<a>/connectivity/directory/services` -> 403 `{"code":10000,"message":"Authentication error"}`. The permission group is `Connectivity Directory Admin` (account scope). `Connectivity Directory Read` and `Connectivity Directory Bind` also exist. OQ-1 closed: the admin token needs `Connectivity Directory Admin`.
+- Create: `POST /accounts/<a>/connectivity/directory/services` with `{"type":"http","name":"share-e2e-1642d005-a","host":{"ipv4":"127.0.0.1","network":{"tunnel_id":"<t>"}},"http_port":18765}` -> 200:
+  `{"result":{"service_id":"01a1dad7-...","type":"http","name":"share-e2e-1642d005-a","http_port":18765,"https_port":null,"host":{"ipv4":"127.0.0.1","ipv6":null,"hostname":null,"network":{"tunnel_id":"<t>"},"resolver_network":null},"created_at":"...","updated_at":"..."},"success":true}`. The id field is `service_id`, not `id`.
+- Same name again -> 400 `{"code":5101,"message":"request contained invalid parameters: Service name 'share-e2e-1642d005-a' already exists"}`. Names are unique per account, so find by name is unambiguous.
+- Same tunnel, ipv4 and port under another name -> 400 `{"code":5101,"message":"... Service already exists for port https:18781 on 127.0.0.1"}`. The same port on another tunnel is accepted (the spike service and this one both used 18765). Rotate makes a new tunnel, so its new service never collides with the old one.
+- `GET .../services/<sid>` -> 200, the same object.
+- List: `GET .../services` returns every service (27 seen) and no `result_info`. `?name=<n>` is ignored (both services came back). `?per_page=10&page=2` returns the next 10. TASK-1f1 finds by name by paging with `per_page` and `page` until a page is short.
+- Update: `PUT .../services/<sid>` with the whole create body and `http_port` 18766 -> 200, `http_port` 18766. A partial body `{"http_port":18767}` -> 400 `{"code":5102,"message":"invalid json: bad json data: missing field \`host\` ..."}`. `invite --port` sends the whole body.
+- Delete: `DELETE .../services/<sid>` -> 200 `{"result":null,"success":true}`. Again -> 404 `{"code":5104,"message":"Service (ID: \"...\") not found"}`. `GET` of a deleted id -> 404 5104. An idempotent delete treats 404 5104 as done.
+
+### (b) the multipart `vpc_service` binding
+
+- Metadata part (the same multipart PUT as `r2_deploy`): `{"main_module":"w.js","compatibility_date":"2026-09-30","bindings":[{"type":"plain_text","name":"HOST","text":"s.console.so"},{"type":"vpc_service","name":"M_1642d005","service_id":"<sid>"}],"keep_bindings":["secret_text"]}`.
+- With the current admin token (Workers Scripts Write, no Connectivity scope) -> 403 `{"code":10196,"message":"Workers VPC binding configuration failed because your credentials are not authorized for the requested VPC resource. ..."}`. With `share-e2e-admin` -> 200. Every deploy that sends a `vpc_service` entry needs the Connectivity scope, the TASK-0e carry-forward included. A `setup --r2` rerun on T2 therefore needs it too, so TASK-1c1's scope probe covers every T2 deploy path, not only member verbs.
+- `GET /accounts/<a>/workers/scripts/<w>/settings` -> `.result.bindings`: `[{"name":"HOST","text":"s.console.so","type":"plain_text"},{"name":"M_1642d005","service_id":"<sid>","type":"vpc_service"}]`. The shape matches the deploy entry, so carry-forward can resend the entry as read. The current admin token can read it (200).
+- A deploy without the entry drops it. Settings and the runtime `Object.keys(env)` both read `["HOST"]`, with `keep_bindings` `["secret_text"]`, absent, or `[]`. A token without the Connectivity scope can drop the binding (200).
+- One settings GET made right after a deploy returned the pre-deploy binding list once (b2), and a repeat at +0 s did not (b4). TASK-0e reads the settings after `lease_take`, and the previous deploy waited for its `X-Share-Deploy` nonce, so this should not bite. The plain-text `DEPLOY` value is in the settings GET: a reader can check it equals the nonce the last deploy sent.
+- Not used, recorded: `keep_bindings: ["secret_text","vpc_service"]` with no entry keeps every existing `vpc_service` binding, even from a token without the Connectivity scope. It cannot drop one binding, so the spec's explicit carry-forward stays.
+
+### (c) the minter mints a bucket-scoped member token
+
+- `POST /user/tokens` with the minter: `{"name":"share share-e2e-1642d005 m-e2e-48155d47","expires_on":"<+2h>","policies":[{"effect":"allow","resources":{"com.cloudflare.edge.r2.bucket.<a>_default_share-e2e-1642d005":"*"},"permission_groups":[{"id":"<Workers R2 Storage Bucket Item Write>"}]},{"effect":"allow","resources":{"com.cloudflare.api.account.zone.<zone>":"*"},"permission_groups":[{"id":"<Zone Read>"}]}]}` -> 200, `status` `active`. The value is 53 chars. bin/share checks no token length, so nothing changes.
+- `GET /user/tokens/verify` with the new token -> `{"status":"active"}`.
+- `PUT /user/tokens/<id>` with name, policies and `expires_on` +1 day -> 200, `expires_on` moved. `PUT` with `{"expires_on":...}` alone -> 200, `expires_on` moved, both policies kept. Verify after the PUTs: `active`, same secret. `renew` may send either body.
+- `DELETE /user/tokens/<id>` -> 200 `{"result":{"id":"..."}}`. Again -> 404 `{"code":1003,"message":"token not found"}`. Verify after delete -> 401 `{"code":1000,"message":"Invalid API Token"}`.
+- Find by name (D3, TASK-1f1): `GET /user/tokens?per_page=50&page=<n>` with the minter. Each row has `id, name, status, issued_on, modified_on, expires_on, not_before, last_used_on, policies`, never the value. `result_info` has `page, per_page, total_pages, count, total_count`. Match `.name == "share <host> <member_id>"` and read `id` and `expires_on` from the row. `GET /user/tokens/<id>` returns the same row without the value.
+- Limit: Cloudflare allows 50 user API tokens per user (developers.cloudflare.com/fundamentals/api/reference/limits). The minter user holds 42 tokens after cleanup, so about 8 member tokens fit before `POST /user/tokens` fails. Proposed for SG-05: `member add`, `invite` and `rotate` read `result_info.total_count` before minting and die with a code naming the limit at 50; `member ls` shows the free slots. Moving members to account-owned tokens (500 per account) is the upgrade the spikes named.
+- S3 leg not run here: R2 is not enabled on Console Labs (`POST /accounts/<a>/r2/buckets` -> 403 `{"code":10042,"message":"Please enable R2 through the Cloudflare Dashboard."}`; the S3 host fails the TLS handshake). The same minter's bucket-scoped tokens (Bucket Item Write on one bucket plus Zone Read, plus account groups) did `PUT m/<id>` with `If-None-Match: *` live on the Dwarves account on 2026-09-30, `docs/verification/r2-e2e-2026-10-01-final.txt` (84/84). The S3 grant comes from the Bucket Item Write policy, which the member token holds. OQ-3 is closed on that evidence.
+
+### (d) the binding fetch when the origin is down
+
+Worker: `env.M_<8hex>.fetch(new Request("http://s.console.so/x", {redirect:"manual"}))` from a workers.dev Worker. Times are the Worker-side `Date.now()` difference.
+
+| Origin state | Result | Time |
+|---|---|---|
+| Caddy and cloudflared up | 200, `X-Share-Served: caddy`, body passes; Caddy's 404 passes as 404 | 162 to 376 ms |
+| Caddy stopped, cloudflared up | throws `Error: ProxyError: connection_refused` | 108 to 624 ms |
+| python `http.server` on the port | 200 or 404 from `SimpleHTTP`, no `X-Share-Served` | 163 to 345 ms |
+| cloudflared stopped, Caddy up | throws `Error: ProxyError: destination_not_found` for the first ~20 s, then `Error: ProxyError: destination_unavailable` | 13 to 512 ms |
+| both down | throws `destination_unavailable` | 13 ms |
+| a listener that accepts and never answers | no answer; the client gave up at 120 s | > 120 s |
+| the same, with `{signal: AbortSignal.timeout(5000)}` | throws `TimeoutError: The operation was aborted due to timeout` | 5000 ms (10000 with 10 s) |
+
+- Every down state throws fast, so SV-22's "throw" fixture matches the live shape. A foreign listener answers without `X-Share-Served`, which row 15 already treats as offline.
+- Row 15 needs the timeout: pick `AbortSignal.timeout(10000)` on the binding fetch, passed as the second `fetch` argument. Decision: 10 s, because every healthy answer took under 0.5 s and every down state under 1 s. Not sampled: `AbortSignal.timeout` keeps running after the headers arrive, and a fired abort also cancels a body still streaming. A large file must not die at 10 s, so row 15 uses an `AbortController` with a timer that it clears once the response headers resolve.
+- Caddy matches on Host: a site block for `http://127.0.0.1:<port>` answered the binding's `Host: s.console.so` with an empty 200 and no `X-Share-Served`. The spec's `write_caddyfile` serves `http://<host>:<port>` plus loopback, so it matches; the header check makes a mismatch fail closed (503) anyway.
+
+### (e) 25 bindings on one Worker
+
+- 25 VPC Services on one tunnel (ports 18782 to 18806; one port each, see (a)) were created in 12 s.
+- Deploy with 20 `vpc_service` bindings -> 200 in 884 ms; settings count 20; 20 of 20 routed 200 with `X-Share-Served: caddy`.
+- Deploy with 25 -> 200 in 997 ms; settings count 25; 25 of 25 routed. OQ-5 closed: 25 works. The CLI cap may rise to 25; above 25 stays unmeasured.
+- Delete order (new): `DELETE` of a service still bound to the deployed Worker -> 200, and the Worker kept routing through it right after. The next deploy naming that `service_id` -> 400 `{"code":10180,"message":"VPC Service '<sid>' not found. ..."}`. So:
+  - `member rm` and `rotate` deploy without the binding first, then delete the service.
+  - Carry-forward resends a binding only if its service still exists, or a deleted service blocks every deploy on the tenant; `sync --rebind` drops such a binding. SG-05 or SG-07 adds a die-point row for a service deleted outside the CLI.
+
+### (f) connections and tunnel delete
+
+- With one cloudflared: `GET /accounts/<a>/cfd_tunnel/<t>/connections` -> `.result` has 1 entry `{id, client_id:null, version:"2026.10.7", run_at, conns:[4 items], ...}`. Each `conns` item has `client_id, client_version, colo_name, id, is_pending_reconnect, opened_at, origin_ip, uuid`. Connector count = `.result | length` (1). `conns` length = 4.
+- `GET .../cfd_tunnel/<t>` and `GET .../cfd_tunnel?name=<n>` report `"connections": 4` and `"status":"healthy"`. That field counts conns, not connectors, so `extra_connector` must read `/connections`.
+- About 60 s after cloudflared stopped, `/connections` returned 0 entries.
+- `DELETE .../cfd_tunnel/<t>` while cloudflared is connected -> 400 `{"code":1022,"message":"This tunnel has active connections. Please stop all cloudflared replicas, or wait a few minutes for connections to close, then try again."}`. After stopping cloudflared: `DELETE .../connections` -> 200, then `GET .../connections` -> 0 entries, and `DELETE .../cfd_tunnel/<t>` -> 200 with `deleted_at`.
+- `DELETE` of a tunnel that a VPC Service still names -> 200. The service stays and names a deleted tunnel. The removal order is: deploy without the binding, delete the service, delete connections, delete the tunnel.
+
+### (g) a remote-managed tunnel with only the catch-all
+
+- `POST /accounts/<a>/cfd_tunnel` `{"name":"share-e2e-1642d005","config_src":"cloudflare"}` -> 200 `{"id":"<t>","name":"share-e2e-1642d005","status":"inactive","remote_config":true,"config_src":"cloudflare",...}`. Result keys: `account_tag, config_src, connections, conns_active_at, conns_inactive_at, created_at, deleted_at, id, metadata, name, remote_config, status, tun_type`.
+- `PUT .../cfd_tunnel/<t>/configurations` `{"config":{"ingress":[{"service":"http_status:404"}]}}` -> 200 `{"version":1,"config":{"ingress":[{"service":"http_status:404"}],"warp-routing":{"enabled":false}}}`. An empty `ingress` -> 400 `{"code":1056,"message":"Bad Configuration: Validation failed: The config file doesn't contain any ingress rules"}`.
+- `GET .../cfd_tunnel/<t>/token` -> 200, `.result` a 240-char string, base64 of JSON with keys `a, s, t`. `cloudflared tunnel --no-autoupdate run` read it from the `TUNNEL_TOKEN` environment variable (never argv) and registered in about 4 s.
+- `GET .../cfd_tunnel?name=<n>&is_deleted=false` -> 1 row; `result_info.per_page` 1000.
+
+### (h) R2 `put` with a stale `onlyIf.etagMatches`
+
+- Not sampled live: R2 is not enabled on Console Labs (see (c)).
+- Local sample on workerd through `wrangler dev --local` (wrangler 4.133.0; compatibility date lowered to 2026-09-23, the newest that binary supports): `put(k,"one")`; `put(k,"two",{onlyIf:{etagMatches:<first etag>}})` -> an `R2Object`; `put(k,"three",{onlyIf:{etagMatches:<first etag>}})` -> `null`; the body stays `two`. Excerpt: `{"matching_put":"R2Object etag b8a9f715…","stale_put":"null","final_body":"two"}`.
+- This matches the documented contract and the redeem claim (row 3). OQ-7 is answered for the runtime API. The live production check moves to the first R2 run on Console Labs (SG-11's `tests/e2e-members.sh`), which happens before the first T2 tenant exists, OQ-7's own deadline.
