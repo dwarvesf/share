@@ -159,7 +159,7 @@ A rule group for `group:<name>`: Zero Trust > Access controls > Policies > Rule 
 
 An r2 profile serves snapshots from a private R2 bucket through a Worker on your hostname, so links answer while every publisher's machine is off. One person, the admin, sets up the hostname once with an account-level token. Everyone else joins with a token scoped to the bucket (section 4g).
 
-The admin token is read from `CLOUDFLARE_API_TOKEN` only, never from a stored token, and share never stores it. Create it at **My Profile → API Tokens → Create Token → Create Custom Token**:
+The admin token is read from `CLOUDFLARE_API_TOKEN`, else from the output of the profile's `admin_token_cmd` (set it with `share admin-token --cmd 'op read "op://<vault>/<item>/credential"'`; `share admin-token --test` names what the token can do). share never stores the token itself. Create it at **My Profile → API Tokens → Create Token → Create Custom Token**:
 
 | Scope | Resource | Permission | Why |
 |---|---|---|---|
@@ -342,7 +342,7 @@ CLOUDFLARE_API_TOKEN=<admin token> share --profile df teardown --yes --purge   #
 | Bucket | stays | deleted when empty; otherwise kept, with the count of keys share did not write |
 | Analytics Engine dataset | stays | stays: it cannot be deleted and ages out |
 
-`--purge` reads the admin token from `CLOUDFLARE_API_TOKEN` only. Before the first delete it checks that the Worker's bindings name this hostname and bucket (a publisher token gets 403 there and is refused), that `share.json` names this hostname, that no other Worker holds the hostname, and, when any gated share or waiting Access app exists, that the token has Access: Apps and Policies Edit. Any failed check changes nothing. After the shares it deletes every Access app named for this hostname, which catches apps parked in teammates' local `access-pending` files (it skips that pass with a line when the token cannot read Access apps), then every leftover `m/` and `o/` key, including records no share release could read. The local form prints how many Access apps stay in this install's `access-pending`.
+`--purge` reads the admin token from `CLOUDFLARE_API_TOKEN`, else from `admin_token_cmd`; with neither it stops with `admin_token_missing` before any change. Before the first delete it checks that the Worker's bindings name this hostname and bucket (a publisher token gets 403 there and is refused), that `share.json` names this hostname, that no other Worker holds the hostname, and, when any gated share or waiting Access app exists, that the token has Access: Apps and Policies Edit. Any failed check changes nothing. After the shares it deletes every Access app named for this hostname, which catches apps parked in teammates' local `access-pending` files (it skips that pass with a line when the token cannot read Access apps), then every leftover `m/` and `o/` key, including records no share release could read. The local form prints how many Access apps stay in this install's `access-pending`.
 
 ## 7. Troubleshooting
 
