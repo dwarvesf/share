@@ -5,7 +5,7 @@ Branch: docs/members-live-samples
 Spec: docs/specs/SPEC-009-multi-member.md, TASK-1a (a) to (h)
 Answers: docs/implementation-notes/multi-member.md, `## TASK-1a live samples`
 
-Run on the Console Labs account from the Mac Mini. Scripts lived in the session scratchpad and read credentials from 1Password into variables. Tokens went through `-H @<(printf ...)` and `-K <(printf ...)`, never argv, files or output. `<a>` is the account id, `<t>` a tunnel id, `<sid>` a VPC Service id; every hex run of 32 or more is masked as first8…last8.
+Run on the Console Labs account from the Mac Mini. Scripts lived in the session scratchpad and read credentials from 1Password into variables. Tokens went through `-H @<(printf ...)` and `-K <(printf ...)`, never argv, files or output. The throwaway admin and tunnel tokens were stored with `printf 'add-generic-password ... -w ...' | security -i`, so the value travels on stdin, never in an argv. `<a>` is the account id, `<t>` a tunnel id, `<sid>` a VPC Service id; every hex run of 32 or more is masked as first8…last8.
 
 Throwaway objects: tunnel `share-e2e-1642d005`, VPC Services `share-e2e-1642d005`, `share-e2e-1642d005-a`, `share-e2e-1642d005-e01` to `-e25`, Worker `share-e2e-1642d005` (workers.dev), user tokens `share-e2e-admin-59439714` and `share share-e2e-1642d005 m-e2e-48155d47`.
 
@@ -143,7 +143,7 @@ No process of the run is left: `pgrep` after each script found no cloudflared, C
 
 ## UAT
 
-Live on Console Labs, 2026-11-14: (a), (b), (d), (e), (f), (g) ran against production Cloudflare and are accepted. (c) ran live for mint, find, extend and revoke; its S3 leg is accepted on the 2026-09-30 live run. (h) ran on the local workerd runtime only and is accepted as provisional; the live check is owed by SG-11.
+Live on Console Labs, 2026-11-14: (a), (b), (d), (e), (f), (g) ran against production Cloudflare and are accepted. (c) ran live for mint, find, extend and revoke; its S3 leg is accepted on the 2026-09-30 live run. (h) ran on the local workerd runtime only, so OQ-7 stays open; SG-11 owes a live leg once the owner turns R2 on for Console Labs.
 
 ## Rollback
 
