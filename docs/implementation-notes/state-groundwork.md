@@ -89,3 +89,14 @@ Decisions the spec left open, and changes from it, made while building Phase 1. 
 | G13 | AT-01 to AT-13, Q-SEC-7 grep, `--help` | `AT-nn ...` checks, `Q-SEC-7 no fixture token value in any captured output ...`, `--help lists admin-token and minter-token` |
 | G5 | skill reads `share state`; every code has a line; NC-G5 | `skill names share state first`, `every code in share state-fn codes appears in the skill`, `negative control NC-G5 ...`, `skill lists every role` |
 | CP-01 (swift) | decode with today's types | `mac/Tests/ShareBarCoreTests/GroundworkCompatTests.swift` (three cases) |
+
+### Advisor critique (frozen diff) and what was folded
+
+| # | Finding | Disposition |
+|---|---|---|
+| A1 major | tunnel `teardown` resolved `admin_token_cmd` at step 3, after the service stopped, so a failing command said "nothing was changed" with links down | folded: teardown resolves the admin token and refuses a missing gated-share token before `op_begin` and before anything stops |
+| A2 minor | `admin-token --clear` on a profile with no config created an empty config, a ghost profile | folded: `--clear` with no config is a no-op |
+| A3 minor | serve waits on the tunnel only; caddy dying under a live tunnel records nothing | open: the wait is pre-existing; a liveness poll on both children is G6's (`serve_state`, SS-09) |
+| A4 minor | a refusal after `op_begin` reads as a dead op (B8) | partly folded: teardown's refusals moved before the journal (A1); `setup --r2` refusals at its read steps keep B8 |
+| A5 minor | CD-07's curl stub answers `/ready`, so "keeps the reason" cannot see a removal at start | open: add a not-ready cloudflared fixture with a failing `/ready` |
+| A6 minor | AT-09 cannot see an export behind `env -u`; no check fails without `lock_take config` or `lock_take ops` | open: add an `env` dump from the token command, and two concurrent writers per lock |
