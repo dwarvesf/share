@@ -74,7 +74,7 @@ B. The CLI stays the only code that knows what a share is. The app is a thin vie
  Quit                      ⌘Q
 ```
 
-- Status icon: one SF Symbol, filled while serving, slashed while not serving. No badge, no color.
+- Status icon: one template glyph, the Share mark drawn in code: an open ring plus a dot while serving, a closed ring while not serving. No badge, no color. (Amended: this was one SF Symbol, filled while serving, slashed while not; see `docs/decisions/ADR-0010-share-mark-drawn-in-code.md`.)
 - Dropping files or folders on the icon runs `share add` for each and copies the last link.
 - "Share File…" opens an `NSOpenPanel` (files and folders, multiple).
 - A small notification is not used; the copied link is confirmed by a brief icon change.
@@ -141,3 +141,4 @@ ASCII by house rule (no Mermaid).
 ### ADR link(s)
 
 - `docs/decisions/ADR-0003-menu-bar-reads-through-cli.md`
+- `docs/decisions/ADR-0010-share-mark-drawn-in-code.md`
