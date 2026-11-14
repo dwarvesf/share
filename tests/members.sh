@@ -369,3 +369,137 @@ for order in setup-first add-first; do
     "$ra $rb $(cat "$MX_LOG" "$MX/other/share/r2-calls.log" 2>/dev/null | grep -c '^API PUT /accounts/acct-dry/workers/scripts/share-mx-example-test$') $(mx_bind | grep -c 'MEMBERS=1 M_aaaaaaa1=[^ ]* PAUSED=\[\]') $([[ -e $MX_DRY/lock/admin ]] && echo 1 || echo 0)"
   : >"$MX/other/share/r2-calls.log" 2>/dev/null
 done
+
+echo "=== members: the registry (member_can, reg_status, member ids) ==="
+# the doc table of "### Member status transitions", read from the spec, is the expectation; member_can must answer every tuple the same
+mx_spec="$(dirname "$SH")/../docs/specs/SPEC-009-multi-member.md"
+mx_doc="$(awk '/^### Member status transitions/ {f = 1} f && /^\| [a-z0-9 ]+ \| (admin|member) \|/ {print} /^Guards:/ {f = 0}' "$mx_spec")"
+mx_expect() { # mx_expect <status> <verb> <actor> <mode>: yes, no or busy from the doc table plus its stated guards
+  local st=$1 vb=$2 ac=$3 md=$4 row from intent all="adding invited joining active pausing paused resuming inviting rotating renewing removing removed left"
+  if [[ $vb == join ]]; then row="$(grep '^| join step 3 |' <<<"$mx_doc")"
+  else row="$(awk -F'|' -v v="$vb" '{x = $2; gsub(/ /, "", x)} x == v {print; exit}' <<<"$mx_doc")"; fi
+  [[ -n $row ]] || { echo no; return; }
+  [[ "$(awk -F'|' '{x = $3; gsub(/ /, "", x); print x}' <<<"$row")" == "$ac" ]] || { echo no; return; }
+  from="$(awk -F'|' '{print $4}' <<<"$row" | sed 's/(machine mode)//; s/,/ /g')"
+  intent="$(awk -F'|' '{x = $5; gsub(/ /, "", x); print x}' <<<"$row")"
+  case $from in *"every status but removed"*) from="${all/ removed/}" ;; esac
+  from="${from//(none)/none}"
+  [[ $vb != add ]] || from="$from invited"   # step 2 of the add table: an invited record of the name resumes
+  case $vb in pause|resume|rotate) [[ $md != cloud ]] || { echo no; return; } ;; esac
+  case " $from $intent " in *" $st "*) echo yes; return ;; esac
+  [[ $vb != rm && $vb != sync && $ac == admin ]] || { echo no; return; }
+  case $st in adding|joining|pausing|resuming|inviting|rotating|renewing|removing) echo busy ;; *) echo no ;; esac
+}
+mx_all="$(bash "$SH" state-fn member-can-all)"
+mx_bad=""; mx_n=0
+while read -r st vb ac md ans; do
+  mx_n=$((mx_n + 1)); [[ "$(mx_expect "$st" "$vb" "$ac" "$md")" == "$ans" ]] || mx_bad="$mx_bad $st/$vb/$ac/$md=$ans"
+done <<<"$mx_all"
+check "mm member_can: every (status, verb, actor, mode) tuple matches the doc table (14 x 12 x 2 x 2)" "672 12" "$mx_n $(grep -c . <<<"$mx_doc")$mx_bad"
+check "mm member_can: rm and sync never refuse busy; pause, resume and rotate refuse a cloud member; the single form agrees" "yes yes no no busy yes yes" \
+  "$(bash "$SH" state-fn member-can pausing rm admin) $(bash "$SH" state-fn member-can resuming sync admin) $(bash "$SH" state-fn member-can active pause admin cloud) $(bash "$SH" state-fn member-can active rotate admin cloud) $(bash "$SH" state-fn member-can pausing rotate admin machine) $(bash "$SH" state-fn member-can joining rotate admin machine) $(bash "$SH" state-fn member-can invited join member)"
+check "mm member_can: the member never writes once the record is removing or removed" "no no no" \
+  "$(bash "$SH" state-fn member-can removing join member) $(bash "$SH" state-fn member-can removed leave member) $(bash "$SH" state-fn member-can removing leave member)"
+# a record per test: m-an-aaaaaaa1 machine, written straight into the dry bucket
+mx_put_rec() { mkdir -p "$MX_DRY/u"; jq -nc --arg id "${2:-m-an-aaaaaaa1}" --arg st "$1" '{v: 1, member_id: $id, name: ($id | sub("^m-"; "") | sub("-[0-9a-f]{8}$"; "")), mode: "machine",
+  status: $st, rotation: 0, port: 8787, added: "2026-11-15T00:00:00Z", updated: "2026-11-15T00:00:00Z", by: "admin"}' | jq -c "${3:-.}" >"$MX_DRY/u/${2:-m-an-aaaaaaa1}.json"; }
+mx_load t2; mx_put_rec pausing m-an-aaaaaaa1 '.step = 2 | .step_name = "deploy" | .prev_status = "active"'
+out=$(mx_env=(SHARE_ERROR_JSON=1); mxa member rotate an 2>&1); rc=$?
+check "mm MB-24: rotate on a pausing record is refused member_busy naming pause, step 2 and its rerun" "1 member_busy 1" \
+  "$rc $(mx_jcode "$out") $(grep -c '^share: an is mid-pause (step 2) since 2026-11-15T00:00:00Z; finish it: share member pause an$' <<<"$out")"
+out=$(mxa member rm an 2>&1); out2=$(mx_env=(SHARE_ERROR_JSON=1); mxa member sync 2>&1); rc2=$?
+check "mm MB-24: rm proceeds past member_can (its build is later); sync reports and writes no refusal" "1 0 none 0" \
+  "$(grep -c 'member rm is not built' <<<"$out") $rc2 $(mx_jcode "$out2") $(grep -c 'member_busy' <<<"$out2")"
+mx_load t2; mx_put_rec active
+o1=$(mx_fn reg-step m-an-aaaaaaa1 pause pausing 2 2>&1); o2=$(mx_fn reg-step m-an-aaaaaaa1 pause pausing 2 2>&1); o3=$(mx_fn reg-step m-an-aaaaaaa1 pause pausing 2 2>&1); o4=$(mx_fn reg-step m-an-aaaaaaa1 pause paused 2>&1)
+check "mm MB-25: prev_status is written entering pausing from active, never rewritten by two reruns, cleared when paused lands" \
+  "pausing/active/2 pausing/active pausing/active paused/null/null" \
+  "$(jq -r '"\(.status)/\(.prev_status)/\(.step)"' <<<"$(tail -1 <<<"$o1")") $(jq -r '"\(.status)/\(.prev_status)"' <<<"$(tail -1 <<<"$o2")") $(jq -r '"\(.status)/\(.prev_status)"' <<<"$(tail -1 <<<"$o3")") $(jq -r '"\(.status)/\(.prev_status)/\(.step)"' <<<"$(tail -1 <<<"$o4")")"
+mx_put_rec invited m-an-aaaaaaa1 '.prev_status = "paused"'
+o1=$(mx_fn reg-step m-an-aaaaaaa1 invite inviting 3 2>&1); o2=$(mx_fn reg-step m-an-aaaaaaa1 invite invited 2>&1)
+check "mm DEC-41: entering an ...ing from invited keeps prev_status, and reaching invited keeps it" "inviting/paused invited/paused" \
+  "$(jq -r '"\(.status)/\(.prev_status)"' <<<"$(tail -1 <<<"$o1")") $(jq -r '"\(.status)/\(.prev_status)"' <<<"$(tail -1 <<<"$o2")")"
+# a 412 re-reads once and continues only if member_can still allows the move
+mx_put_rec active
+( mx_env=(SHARE_STATE_FN_WRITE=1 SHARE_R2_DRY_PAUSE="PUT u/m-an-aaaaaaa1.json"); mxa state-fn reg-step m-an-aaaaaaa1 pause pausing 2 >"$MX/r412.out" 2>&1 ) & pa=$!
+mx_wait_paused; mx_put_rec pausing m-an-aaaaaaa1 '.step = 1 | .prev_status = "active" | .by = "other"'
+: >"$MX_DRY/.resume"; wait "$pa"; ra=$?; rm -f "$MX_DRY/.resume" "$MX_DRY/.paused"
+check "mm TASK-1e: a 412 re-reads once and continues when member_can still allows the move (a rerun of the same ...ing)" "0 pausing 2" \
+  "$ra $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json") $(jq -r .step "$MX_DRY/u/m-an-aaaaaaa1.json")"
+mx_put_rec active
+( mx_env=(SHARE_STATE_FN_WRITE=1 SHARE_ERROR_JSON=1 SHARE_R2_DRY_PAUSE="PUT u/m-an-aaaaaaa1.json"); mxa state-fn reg-step m-an-aaaaaaa1 pause pausing 2 >"$MX/r412.out" 2>&1 ) & pa=$!
+mx_wait_paused; mx_put_rec removing m-an-aaaaaaa1 '.step = 2'
+: >"$MX_DRY/.resume"; wait "$pa"; ra=$?; rm -f "$MX_DRY/.resume" "$MX_DRY/.paused"
+check "mm TASK-1e: after a 412, a status member_can no longer allows refuses (rm won), and the record is untouched" "1 member_busy removing" \
+  "$ra $(mx_jcode "$(cat "$MX/r412.out")") $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json")"
+mx_put_rec active m-an-aaaaaaa1 '.status = 7'
+out=$(mx_env=(SHARE_STATE_FN_WRITE=1 SHARE_ERROR_JSON=1); mxa state-fn reg-step m-an-aaaaaaa1 pause pausing 2 2>&1); rc=$?
+out2=$(mxa member ls --json 2>&1)
+check "mm TASK-1e: a record failing validation is reported (record_invalid), never trusted" "1 record_invalid record_invalid" \
+  "$rc $(mx_jcode "$out") $(jq -r '.[] | select(.member_id == "m-an-aaaaaaa1") | .drift[0]' <<<"$out2")"
+# MB-03: names
+mx_load t2
+for nm in A_n abcdefghijklmnopqrstuvwxy; do
+  : >"$MX_LOG"; out=$(mx_env=(SHARE_ERROR_JSON=1); mxa member add "$nm" 2>&1); rc=$?
+  check "mm MB-03: name '$nm' is refused before any write" "1 member_name_bad 0" "$rc $(mx_jcode "$out") $(mx_writes)"
+done
+mx_put_rec active
+: >"$MX_LOG"; out=$(mx_env=(SHARE_ERROR_JSON=1); mxa member add an 2>&1); rc=$?
+check "mm MB-03: a name an active record holds is refused before any write" "1 member_name_taken 0" "$rc $(mx_jcode "$out") $(mx_writes)"
+for st in adding invited; do
+  mx_load t2; mx_put_rec "$st" m-an-aaaaaaa1 '.step = 2'
+  out=$(SHARE_TEST_MEMBER_IDS=m-an-ccccccc3 mxa member add an --port $((base + 373)) 2>&1); rc=$?
+  check "mm MB-03: an $st record of the name resumes with its member_id" "0 invited 0" "$rc $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json") $([[ -f $MX_DRY/u/m-an-ccccccc3.json ]] && echo 1 || echo 0)"
+done
+# FG-13 and DEC-60: a new id never reuses a suffix that a record, u/purged.json, a binding or an account service holds
+mx_load t2; mkdir -p "$MX_DRY/u" "$MX_DRY/.cf/services"; printf '{"v":1,"ids":[]}\n' >"$MX_DRY/u/purged.json"
+jq -c '.bindings += [{type: "vpc_service", name: "M_aaaaaaa1", service_id: "svc-x"}]' "$MX_DRY/.cf/script.json" >"$MX/s.json" && mv "$MX/s.json" "$MX_DRY/.cf/script.json"
+printf '{"service_id":"svc-x","name":"share-mx-example-test-aaaaaaa1"}\n' >"$MX_DRY/.cf/services/svc-x.json"
+printf '{"service_id":"svc-y","type":"http","name":"share-mx-example-test-bbbbbbb2-r1","host":{"ipv4":"127.0.0.1","network":{"tunnel_id":"t"}},"http_port":9}\n' >"$MX_DRY/.cf/services/svc-y.json"
+mx_put_rec removed m-zz-ccccccc3
+out=$(SHARE_TEST_MEMBER_IDS="m-x-aaaaaaa1 m-x-bbbbbbb2 m-x-ccccccc3 m-x-ddddddd4" mxa member add bo --cloud 2>&1); rc=$?
+check "mm FG-13: a forged u/purged.json cannot free a suffix: a binding, a service (-r1 too) and any record still hold theirs" "0 1" \
+  "$rc $([[ -f $MX_DRY/u/m-bo-ddddddd4.json ]] && echo 1 || echo 0)"
+
+echo "=== members: Cloudflare object helpers ==="
+mx_load t2
+o1=$(mx_fn obj tunnel-ensure share-mx-example-test-ab12cd34 2>&1); o2=$(mx_fn obj tunnel-ensure share-mx-example-test-ab12cd34 2>&1)
+tid="$(tail -1 <<<"$o1")"
+check "mm TASK-1f1: tunnel-ensure twice finds one tunnel, its config only the catch-all" "1 1 1" \
+  "$([[ $tid == "$(tail -1 <<<"$o2")" ]] && echo 1) $(cat "$MX_DRY"/.cf/tunnels/*.json | jq -s '[.[] | select(.name == "share-mx-example-test-ab12cd34")] | length') $(jq -c .config "$MX_DRY/.cf/tunnels/$tid.config" | grep -c '^{"ingress":\[{"service":"http_status:404"}\]}$')"
+o1=$(mx_fn obj service-ensure share-mx-example-test-ab12cd34 "$tid" 8801 2>&1); o2=$(mx_fn obj service-ensure share-mx-example-test-ab12cd34 "$tid" 8802 2>&1)
+check "mm TASK-1f1: service-ensure twice finds one service, and puts a new port right with the whole body" "1 1 8802" \
+  "$([[ $(tail -1 <<<"$o1") == "$(tail -1 <<<"$o2")" ]] && echo 1) $(cat "$MX_DRY"/.cf/services/*.json | jq -s '[.[] | select(.name == "share-mx-example-test-ab12cd34")] | length') $(jq .http_port "$MX_DRY/.cf/services/$(tail -1 <<<"$o1").json")"
+o1=$(mx_fn obj token-mint "share mx.example.test m-x-ab12cd34" 2027-01-01T00:00:00Z 2>&1); o2=$(mx_fn obj token-find "share mx.example.test m-x-ab12cd34" 2>&1)
+check "mm TASK-1f1: a minted token is found by its name only, with its expires_on; the value never prints" "$(tail -1 <<<"$o1") 2027-01-01T00:00:00Z 0" \
+  "$(tail -1 <<<"$o2") $(grep -c msec- <<<"$o1$o2")"
+o3=$(MX_MINT=othermint mx_fn obj token-find "share mx.example.test m-x-ab12cd34" 2>&1)
+check "mm TASK-1f1: another minter user finds no token of that name (DEC-78)" "- -" "$(tail -1 <<<"$o3")"
+kid="$(tail -1 <<<"$o2" | cut -d' ' -f1)"
+o1=$(mx_fn obj token-delete "$kid" 2>&1); o2=$(mx_fn obj token-delete "$kid" 2>&1)
+o3=$(mx_fn obj service-gone share-mx-example-test-ab12cd34 2>&1); o4=$(mx_fn obj service-gone share-mx-example-test-ab12cd34 2>&1)
+echo 1 >"$MX_DRY/.cf/tunnels/$tid.conns"
+o5=$(mx_fn obj tunnel-gone share-mx-example-test-ab12cd34 2>&1); o6=$(mx_fn obj tunnel-gone share-mx-example-test-ab12cd34 2>&1)
+check "mm TASK-1f1: each delete is done twice over (404 is done); a tunnel's connections go before the tunnel" "done done done done done done - 0" \
+  "$(for x in "$o1" "$o2" "$o3" "$o4" "$o5" "$o6"; do tail -1 <<<"$x"; done | tr '\n' ' ')$(mx_fn obj tunnel-find share-mx-example-test-ab12cd34 2>/dev/null | tail -1) $(find "$MX_DRY/.cf/services" -name '*.json' | grep -c .)"
+o1=$(mx_fn obj tunnel-ensure share-mx-example-test-ab12cd34 2>&1); other="$(mx_fn obj tunnel-ensure share-mx-example-test 2>&1 | tail -1)"
+check "mm TASK-1f1, FG-15: a record id naming another object is ignored; the expected name's id is used" "ignored used" \
+  "$(mx_fn obj tunnel-hint "$other" share-mx-example-test-ab12cd34 2>&1 | tail -1) $(mx_fn obj tunnel-hint "$(tail -1 <<<"$o1")" share-mx-example-test-ab12cd34 2>&1 | tail -1)"
+: >"$MX_LOG"; out=$(mx_env=(SHARE_STATE_FN_WRITE=1 SHARE_R2_DRY_COMMIT_FAIL='API POST */cfd_tunnel'); mxa state-fn obj tunnel-ensure share-mx-example-test-ef56ab78 2>&1); rc=$?
+out2=$(mx_fn obj tunnel-ensure share-mx-example-test-ef56ab78 2>&1); rc2=$?
+check "mm TASK-1f1: a create that committed but answered 500 is never retried; the rerun finds it by name (one tunnel)" "1 1 0 1" \
+  "$rc $(grep -c '^API POST /accounts/acct-dry/cfd_tunnel$' "$MX_LOG") $rc2 $(cat "$MX_DRY"/.cf/tunnels/*.json | jq -s '[.[] | select(.name == "share-mx-example-test-ef56ab78")] | length')"
+
+echo "=== members: the invite seal ==="
+mx_seal() { SHARE_TEST_CODE=${2:-ABCDEFGHIJKLMNOPQRST} bash "$SH" state-fn invite-seal <<<"$1"; }
+mx_open() { SHARE_TEST_CODE=${3:-ABCDEFGHIJKLMNOPQRST} SHARE_ERROR_JSON=1 bash "$SH" state-fn invite-open "$1" "$2" 2>&1; }
+read -r h1 sealed mac <<<"$(mx_seal '{"v":1,"publisher_token":"msec-9-x"}')"
+check "mm TASK-1f2: seal then open is a roundtrip, with this host's openssl ($(openssl version 2>/dev/null | cut -d' ' -f1-2))" '{"v":1,"publisher_token":"msec-9-x"}' "$(mx_open "$sealed" "$mac")"
+flip() { local s=$1 i=$2 c; c="${s:i:1}"; if [[ $c == A ]]; then c=B; else c=A; fi; printf '%s' "${s:0:i}$c${s:i+1}"; }
+out=$(mx_open "$(flip "$sealed" 10)" "$mac"); out2=$(mx_open "$sealed" "$(flip "$mac" 3)"); out3=$(mx_open "$sealed" "$mac" BBBBBBBBBBBBBBBBBBBB)
+check "mm TASK-1f2: a flipped byte in sealed or mac, or another code, dies invite_tampered" "invite_tampered invite_tampered invite_tampered" "$(mx_jcode "$out") $(mx_jcode "$out2") $(mx_jcode "$out3")"
+mx_hk="$(printf '%064d' 7)"   # a fixture key: 64 hex digits
+check "mm TASK-1f2: the in-shell HMAC equals openssl's (fixture key and message)" \
+  "$(printf 'hello' | openssl dgst -sha256 -mac HMAC -macopt "hexkey:$mx_hk" 2>/dev/null | sed 's/.*= //')" \
+  "$(printf 'hello' | bash "$SH" state-fn hmac "$mx_hk")"
+check "mm TASK-1f2: h1 is the domain-separated sha256 of the code" "$(printf 'share-invite-id:ABCDEFGHIJKLMNOPQRST' | shasum -a 256 | cut -c1-64)" "$h1"

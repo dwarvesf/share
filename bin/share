@@ -6227,7 +6227,7 @@ member_can() { # member_can <status|none> <verb> <admin|member> [machine|cloud]:
   case $verb in join|leave) [[ $actor == member ]] || return 1 ;; *) [[ $actor == admin ]] || return 1 ;; esac
   case $verb in pause|resume|rotate) [[ $mode != cloud ]] || return 1 ;; esac
   case " $from $own " in *" $st "*) return 0 ;; esac
-  [[ $verb != sync && $verb != rm ]] || return 1   # rm wins from every status it can; sync reports, never refuses busy
+  [[ $verb != sync && $verb != rm && $actor == admin ]] || return 1   # rm wins from every status it can; sync reports; the member never refuses busy, it just may not write
   case $st in adding|joining|pausing|resuming|inviting|rotating|renewing|removing) return 2 ;; esac
   return 1
 }
