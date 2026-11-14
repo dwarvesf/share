@@ -143,7 +143,7 @@ a{color:var(--accent)}
 .tab[aria-selected="true"]{background:var(--sel);color:var(--state-info-ink)}
 .tab:hover{color:var(--label)}
 .pane{padding:18px 24px 22px;min-height:360px}
-.form{display:grid;grid-template-columns:170px 1fr;gap:14px 16px;align-items:start}
+.form{display:grid;grid-template-columns:132px minmax(0,360px);gap:12px 14px;align-items:start;justify-content:center;padding-block:4px 8px}
 @media (max-width:560px){.form{grid-template-columns:1fr;gap:4px 0}.form .lab{margin-top:10px}}
 .lab{text-align:right;color:var(--label);padding-top:3px}
 @media (max-width:560px){.lab{text-align:left}}
@@ -224,7 +224,8 @@ select,.tf{font:var(--fs-body) var(--sys);color:var(--label);background:var(--fi
 .first p{margin:0 0 4px;color:var(--label-2)}
 @media (prefers-reduced-motion:reduce){.spin{animation:none}}
 /* r5: settings panes */
-.pane{padding:16px 20px 20px;min-height:400px}
+.pane{padding:16px 20px 20px}
+.pane.tall{min-height:420px}
 .tsplit{display:grid;grid-template-columns:190px minmax(0,1fr);gap:20px;align-items:start}
 @media (max-width:560px){.tsplit{grid-template-columns:1fr}}
 .srcwrap{display:flex;flex-direction:column}
@@ -331,12 +332,69 @@ select,.tf{font:var(--fs-body) var(--sys);color:var(--label);background:var(--fi
 .kb2{font:500 10.5px var(--sys);color:var(--label-3);border:1px solid rgba(var(--p-ink-a),.14);border-radius:4px;padding:0 4px;flex:none}
 .row[draggable="true"]{cursor:grab}
 .row[draggable="true"]:active{cursor:grabbing}
+/* r14: forms, invite, impact, all links */
+.fieldrow{display:flex;gap:8px;align-items:center;min-width:0}
+.fieldrow .tf{flex:1;min-width:0}
+.okline{display:inline-flex;align-items:center;gap:5px;font-size:var(--fs-meta);color:var(--label-2)}
+.okline svg{width:13px;height:13px;color:var(--state-ok)}
+.btn .spin{width:10px;height:10px;margin-right:5px}
+.shead{display:flex;flex-direction:column;gap:4px}
+.sheet{width:min(440px,calc(100% - 24px));padding:20px 20px 16px;gap:14px}
+.tf.sans{font-family:var(--sys);font-size:var(--fs-body)}
+fieldset.fl{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+fieldset.fl legend{padding:0;margin-bottom:6px;font-size:var(--fs-meta);color:var(--label-2)}
+.opt2{display:flex;gap:10px;align-items:flex-start;padding:9px 11px;border:1px solid rgba(var(--p-ink-a),.14);border-radius:8px;background:var(--field);cursor:pointer;color:var(--label)}
+.opt2.on{border-color:var(--state-info);box-shadow:0 0 0 1px var(--state-info) inset}
+.opt2 input{margin-top:2px;accent-color:var(--state-info)}
+.opt2 span{display:flex;flex-direction:column;gap:1px}
+.opt2 b{font-weight:600;font-size:var(--fs-body)}
+.opt2 small{font-size:var(--fs-meta);color:var(--label-2)}
+.fl>.seg2{align-self:flex-start}
+.impact{list-style:none;margin:0;padding:10px 12px;display:flex;flex-direction:column;gap:7px;background:var(--field);border:1px solid var(--sep);border-radius:8px}
+.impact li{display:flex;gap:8px;align-items:flex-start;font-size:var(--fs-body)}
+.impact svg{width:14px;height:14px;flex:none;margin-top:1px}
+.impact .bad svg{color:var(--state-error-ink)} .impact .good svg{color:var(--state-ok)}
+.tb.slim{padding-bottom:8px}
+.lclose{width:12px;height:12px;border-radius:50%;background:#ff5f57;border:0;padding:0;cursor:pointer}
+.lights .lclose+i{background:#febc2e}.lights .lclose+i+i{background:#28c840}
+.bulk{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:6px 8px 6px 12px;border-radius:7px;background:color-mix(in srgb,var(--state-info) 10%,var(--field));font-weight:500}
+.bulk .sp{flex:1}
+.ltable{border:1px solid var(--sep);border-radius:8px;background:var(--field);overflow:hidden}
+.lth,.ltr{display:grid;grid-template-columns:28px minmax(0,1fr) 64px 112px 58px 46px 34px;align-items:center;gap:8px;padding:0 8px}
+.lth{height:28px;font-size:var(--fs-meta);color:var(--label-2);border-bottom:1px solid var(--sep);font-weight:500}
+.ltb{max-height:300px;overflow-y:auto}
+.ltr{min-height:42px;border-bottom:1px solid var(--sep)}
+.ltr:last-child{border-bottom:0}
+.ltr:hover{background:var(--hover)}
+.ltr.sel{background:color-mix(in srgb,var(--state-info) 9%,transparent)}
+.ltr.dim .nm,.ltr.dim .cell{color:var(--label-dim)}
+.ltr input,.lth input{accent-color:var(--state-info);margin:0}
+.ln{display:flex;align-items:center;gap:8px;min-width:0}
+.ln .ti{width:26px;height:26px;border-radius:6px;background:rgba(var(--p-ink-a),.06);display:inline-flex;align-items:center;justify-content:center;flex:none;color:var(--label-2)}
+.ln .ti svg{width:14px;height:14px}
+.ln .tx{display:flex;flex-direction:column;min-width:0;line-height:1.25}
+.ln .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ln .mt{font-size:var(--fs-meta);color:var(--label-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ln .wd{color:var(--state-attention-ink)}
+.cell{font-size:var(--fs-meta);color:var(--label-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.r{text-align:right}
+.na{color:var(--label-3)}
+.ib[disabled]{opacity:.35;cursor:not-allowed}
+.lfoot{margin-top:8px;font-size:var(--fs-meta);color:var(--label-2)}
+.more{margin-top:4px}
+.picked{flex:1;min-width:0;display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid rgba(var(--p-ink-a),.14);border-radius:6px;background:var(--field)}
+.picked svg{width:14px;height:14px;color:var(--label-2);flex:none}
+.picked span{display:flex;flex-direction:column;min-width:0;line-height:1.2}
+.picked b{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.picked small{font-size:var(--fs-meta);color:var(--label-2)}
+.mac .search input:focus-visible{outline:none}
+.mac .search:focus-within{box-shadow:0 0 0 2px var(--focus)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 
 <div class="wrap">
   <header>
-    <h1>Share Bar, revision 7: Quick Look and friends</h1>
+    <h1>Share Bar, revision 8: dialogs and All links</h1>
     <p class="lede">The menu shows your recent links and nothing else. Team status, members and machines move to Settings. A single line at the bottom appears only when something needs a hand. Built for a team of ten or more. Revision 7 adds Quick Look (focus a link, press Space), dragging a link out of the menu, tenant groups in Needs a look, view counts on cloud links, and Control-Option-S to search. Revision 5 rebuilt Members and Tenants on the pattern real team tools use (a row menu instead of a button bar, a source list instead of a table) and was checked in 20 screenshotted states, light, dark and narrow. Every button runs its real workflow: open Settings and try Tenants and Members, right-click a link, or pick First run.</p>
   </header>
 
@@ -537,6 +595,8 @@ const SCN_LINKS = {
 };
 let TEN = mkTenants(), MEMBERS = mkMembers();
 let cur='admin', tIdx=0, view='list', scope='mine', q='', tmenu=false, ctx=null, dragging=false, flashId=null, toastMsg=null, toastUndo=false, toastT=null, appearance='match';
+let invMode='machine', invTtl='7';
+let akSrc='1p', akTest=null, winMode='settings', lfilter='all', lq='', lsel=new Set();
 let tab='tenants', selTenant=0, selMember='An', mfilter='', mview='all', memberMenu=null, sheet=null, runner=null;
 const pop=document.getElementById('pop'), win=document.getElementById('win');
 const isAdmin = () => TEN[cur].some(t=>t.role==='Admin');
@@ -596,7 +656,7 @@ function renderPop(){
       const meta = [scope==='team'&&showScope ? l.who : null, l.where, word || (l.exp==='never'?null:l.exp==='live'?'live server':l.exp+' left'), (l.views!=null && !word) ? (l.views===1?'1 view':l.views+' views') : null].filter(Boolean).join(' · ');
       h+=`<div class="row ${st?'dim':''} ${flashId===l.id?'flash':''} ${ctx&&ctx.id===l.id?'menu-open':''}" role="listitem" tabindex="0" draggable="${st==='expired'||st==='revoked'?'false':'true'}" id="r-${l.id}" data-id="${l.id}" aria-label="${esc(l.n+', '+meta)}"><span class="ti">${svg(l.t)}</span><span class="tx"><span class="nm">${esc(l.n)}</span><span class="mt">${esc(meta)}</span></span><span class="ago">${esc(l.ago)}</span><button class="ib rmore" tabindex="-1" aria-label="More for ${esc(l.n)}" data-id="${l.id}">${svg('more')}</button></div>`;
     });
-    if (total>8) h+=`<button class="more" id="showall">Show all ${total} links…</button>`;
+    h+=`<button class="more" id="showall">Show all ${links.length} links…</button>`;
     h+=`</div><div class="pf">`;
     if (toastMsg) h+=`<span class="fstatus" role="status">${svg(toastIcon)}<span>${esc(toastMsg)}</span></span>${toastUndo?'<button class="btn" id="undo">Undo</button>':''}`;
     else h+= iss.length ? `<button class="issue" id="issuebtn">${svg('warn')}${iss.length} need a look</button>` : `<span class="ok"><i></i>All links answer</span>`;
@@ -693,7 +753,7 @@ function bindPop(iss){
   on('sc-team',()=>{ scope='team'; renderPop(); });
   on('issuebtn',()=>{ view='issues'; renderPop(); document.getElementById('backbtn')?.focus(); });
   on('backbtn',()=>{ view='list'; renderPop(); document.getElementById('issuebtn')?.focus(); });
-  on('showall',()=>toast('Opens all links in a window, with the same search.'));
+  on('showall',()=>{ winMode='links'; lfilter='all'; lq=''; lsel.clear(); renderWin(); document.getElementById('lq')?.focus(); });
   (iss||[]).forEach((x,i)=>on('ia-'+i,()=>{ x.fn(); renderPop(); }));
   pop.querySelector('.list')?.addEventListener('scroll',()=>{ if (ctx){ ctx=null; renderPop(); } },{once:true});
   const qi=document.getElementById('q'); if (qi) qi.oninput=e=>{ q=e.target.value; renderPop(); };
@@ -753,7 +813,7 @@ function memberVerb(n, v){
   const m=MEMBERS.find(x=>x.n===n); tab='members'; selMember=n;
   const st=m.st;
   if (v==='invite' || v==='rotate'){ openSheet({kind:'code',member:n,rotate:v==='rotate'}); if (v==='rotate'){ m.prev=st; m.st='invited'; m.seen='new code, expires in 7d'; } else { m.st='invited'; m.seen='code expires in 7d'; } return; }
-  if (v==='pause'){ openSheet({kind:'confirm',title:`Pause ${n}?`,body:`${n}'s links on their machine answer 503 until you resume. Cloud links keep working. ${n} cannot add links while paused.`,ok:'Pause',fn:()=>{ m.st='paused'; toast(n+' is paused.'); }}); return; }
+  if (v==='pause'){ openSheet({kind:'confirm',title:`Pause ${n}?`,body:'',impact:[['x2',`${m.links} ${m.links===1?'link on their computer answers':'links on their computer answer'} "paused" until you resume`,'bad'],['x2',`${n} cannot add links while paused`,'bad'],['check','Their cloud links keep working','good']],ok:'Pause',fn:()=>{ m.st='paused'; toast(n+' is paused.'); }}); return; }
   if (v==='resume'){ m.st='active'; toast(n+' is active again; their links answer.'); }
   if (v==='renew'){ openSheet({kind:'confirm',title:`Renew ${n}'s key`,body:'Extends the key by 90 days. Nothing changes on their machine.',ok:'Renew',fn:()=>toast(n+"'s key now expires in 90 days.")}); return; }
   if (v==='rm'){ openSheet({kind:'remove-member',member:n}); return; }
@@ -776,11 +836,12 @@ function tenantButtons(t){
   return b;
 }
 function renderWin(){
+  if (winMode==='links'){ renderLinksWin(); return; }
   const ts=TEN[cur];
   const tabs = TABS.filter(x=> x[0]!=='members' || isAdmin());
   if (!tabs.find(x=>x[0]===tab)) tab='general';
   const keep=document.activeElement && win.contains(document.activeElement) ? document.activeElement.id : null;
-  let h=`<div class="tb"><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><div class="wtitle">${esc(tabs.find(x=>x[0]===tab)[1])}</div>${tabs.map(x=>`<button class="tab" role="tab" id="tab-${x[0]}" aria-selected="${tab===x[0]}">${svg(x[2])}${x[1]}</button>`).join('')}</div><div class="pane">`;
+  let h=`<div class="tb"><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><div class="wtitle">${esc(tabs.find(x=>x[0]===tab)[1])}</div>${tabs.map(x=>`<button class="tab" role="tab" id="tab-${x[0]}" aria-selected="${tab===x[0]}">${svg(x[2])}${x[1]}</button>`).join('')}</div><div class="pane ${tab==='tenants'||tab==='members'?'tall':''}">`;
   if (tab==='general'){
     h+=`<div class="form">
       <div class="lab">Startup</div><div class="ctl"><label><input type="checkbox" id="g-login" checked> Open Share Bar at login</label></div>
@@ -834,8 +895,11 @@ function renderWin(){
     h+=`</div>`;
   } else {
     h+=`<div class="form">
-      <div class="lab">share CLI</div><div class="ctl"><input class="tf" id="a-cli" value="/opt/homebrew/bin/share"><small>Version 0.10.0. Every action runs this command.</small></div>
-      <div class="lab">Admin key</div><div class="ctl"><input class="tf" id="a-admin" value="op read op://Toolkit/cf-console-labs-admin/credential"><small>A command that prints the Cloudflare admin token. Share Bar runs it only for admin actions and never saves the token. Leave empty to be asked each time.</small></div>
+      <div class="lab">share CLI</div><div class="ctl"><input class="tf" id="a-cli" value="/opt/homebrew/bin/share" spellcheck="false" autocomplete="off"><small>Version 0.10.0. Every action runs this command.</small></div>
+      <div class="lab">Admin key</div><div class="ctl"><select id="a-src"><option value="1p" ${akSrc==='1p'?'selected':''}>From 1Password</option><option value="cmd" ${akSrc==='cmd'?'selected':''}>From a command</option><option value="ask" ${akSrc==='ask'?'selected':''}>Ask me each time</option></select>
+        ${akSrc==='ask'?'<small>Share Bar asks for the Cloudflare admin token before each admin action and forgets it right after.</small>':`${akSrc==='1p'?`<div class="fieldrow"><span class="picked">${svg('key')}<span><b>cf-console-labs-admin</b><small>Toolkit vault · credential</small></span></span><button class="btn" id="a-choose">Choose…</button></div>`:`<div class="fieldrow"><input class="tf" id="a-admin" spellcheck="false" autocomplete="off" value="security find-generic-password -w -s cf-admin" aria-label="Command that prints the token"></div>`}
+        <div class="fieldrow"><button class="btn" id="a-test">${akTest==='run'?'<span class="spin" aria-hidden="true"></span>Testing':'Test'}</button>${akTest==='ok'?`<span class="okline">${svg('check')}Works for tunnels, DNS and Workers</span>`:''}</div>
+        <small>Used only for admin actions such as inviting members or turning on cloud storage. The token is read when needed and never saved.</small>`}</div>
       <div class="lab">Logs</div><div class="ctl"><button class="btn" id="a-logs" style="width:max-content">Show serve log in Finder</button></div>
       <div class="lab">Menu style</div><div class="ctl"><label><input type="checkbox" id="a-legacy"> Use the classic menu (one release only)</label></div>
       <div class="lab">Diagnostics</div><div class="ctl"><button class="btn" id="a-copy" style="width:max-content">Copy share state as JSON</button><small>For bug reports and agents.</small></div>
@@ -846,6 +910,35 @@ function renderWin(){
   win.innerHTML=h;
   bindWin(tabs);
   if (keep){ const el=document.getElementById(keep); if (el){ el.focus(); if (keep==='mf') el.setSelectionRange(mfilter.length,mfilter.length); } }
+}
+function renderLinksWin(){
+  const all=SCN_LINKS[cur], t=TEN[cur][tIdx]||{h:''};
+  const klass=l=>l.state==='expired'?'expired':l.state?'look':'live';
+  const n={all:all.length,live:all.filter(l=>klass(l)==='live').length,look:all.filter(l=>klass(l)==='look').length,expired:all.filter(l=>klass(l)==='expired').length};
+  let rows=all.filter(l=>lfilter==='all'||klass(l)===lfilter);
+  if (lq) rows=rows.filter(l=>(l.n+' '+l.who+' '+l.where).toLowerCase().includes(lq.toLowerCase()));
+  const keep=document.activeElement && win.contains(document.activeElement) ? document.activeElement.id : null;
+  const word=l=>l.state==='offline'?'Owner offline':l.state==='paused'?'Paused':l.state==='expired'?'Expired':null;
+  let h=`<div class="tb slim"><span class="lights" aria-hidden="true"><button class="lclose" id="lw-close" aria-label="Close All links"></button><i></i><i></i></span><div class="wtitle">All links on ${esc(t.h)}</div></div>
+  <div class="pane tall"><div class="mtop"><div class="seg2 small" role="group" aria-label="Show">${[['all','All'],['live','Live'],['look','Needs a look'],['expired','Expired']].map(([k,l])=>`<button id="lf-${k}" aria-pressed="${lfilter===k}">${l} ${n[k]}</button>`).join('')}</div><span class="sp"></span><div class="search sm">${svg('search')}<input id="lq" placeholder="Search" value="${esc(lq)}" aria-label="Search links" spellcheck="false"></div></div>`;
+  if (lsel.size) h+=`<div class="bulk"><span>${lsel.size} selected</span><span class="sp"></span><button class="btn" id="lb-copy">Copy links</button><button class="btn danger" id="lb-rm">Remove…</button><button class="ib" id="lb-x" aria-label="Clear selection">${svg('x2')}</button></div>`;
+  h+=`<div class="ltable" role="table"><div class="lth" role="row"><span role="columnheader"><input type="checkbox" id="l-all" aria-label="Select all" ${rows.length&&rows.every(r=>lsel.has(r.id))?'checked':''}></span><span role="columnheader">Name</span><span role="columnheader">Owner</span><span role="columnheader">Lives on</span><span role="columnheader" class="r">Expires</span><span role="columnheader" class="r">Views</span><span></span></div><div class="ltb">`;
+  if (!rows.length) h+=`<div class="empty">${lq?'No links match.':'Nothing here.'}</div>`;
+  rows.forEach(l=>{ const w=word(l);
+    h+=`<div class="ltr ${lsel.has(l.id)?'sel':''} ${l.state==='expired'?'dim':''}" role="row" id="lr-${l.id}"><span><input type="checkbox" data-id="${l.id}" ${lsel.has(l.id)?'checked':''} aria-label="Select ${esc(l.n)}"></span><span class="ln"><span class="ti">${svg(l.t)}</span><span class="tx"><span class="nm">${esc(l.n)}</span><span class="mt">${w?`<span class="wd">${w}</span> · `:''}created ${esc(l.ago==='now'?'just now':/^[0-9]/.test(l.ago)?l.ago+' ago':l.ago)}</span></span></span><span class="cell">${esc(l.who)}</span><span class="cell">${esc(l.where)}</span><span class="cell r">${esc(l.exp==='never'?'Never':l.exp==='live'?'Live':l.exp==='expired'?'Expired':l.exp)}</span><span class="cell r">${l.views!=null?l.views:''}</span><span class="cell r"><button class="ib lcopy" data-id="${l.id}" aria-label="Copy link to ${esc(l.n)}" ${l.state==='expired'?'disabled':''}>${svg('copy')}</button></span></div>`; });
+  h+=`</div></div><div class="lfoot">${all.length} links · ${all.filter(l=>l.who==='You').length} yours · Views are counted for cloud links only</div></div>`;
+  win.innerHTML=h;
+  const on=(id,f)=>{ const el=document.getElementById(id); if (el) el.onclick=f; };
+  on('lw-close',()=>{ winMode='settings'; lsel.clear(); renderWin(); });
+  ['all','live','look','expired'].forEach(k=>on('lf-'+k,()=>{ lfilter=k; lsel.clear(); renderWin(); }));
+  const qi=document.getElementById('lq'); if (qi) qi.oninput=e=>{ lq=e.target.value; renderWin(); };
+  win.querySelectorAll('.ltr input[type=checkbox]').forEach(c=>c.onchange=()=>{ c.checked?lsel.add(c.dataset.id):lsel.delete(c.dataset.id); renderWin(); });
+  const ca=document.getElementById('l-all'); if (ca) ca.onchange=()=>{ rows.forEach(r=>ca.checked?lsel.add(r.id):lsel.delete(r.id)); renderWin(); };
+  win.querySelectorAll('.lcopy').forEach(b=>b.onclick=()=>{ copyRow(b.dataset.id); });
+  on('lb-copy',()=>{ toast(`Copied ${lsel.size} links, one per line.`); lsel.clear(); renderWin(); });
+  on('lb-rm',()=>{ toast(`Removed ${lsel.size} links. They stop answering.`, true); lsel.clear(); renderWin(); });
+  on('lb-x',()=>{ lsel.clear(); renderWin(); });
+  if (keep){ const el=document.getElementById(keep); if (el){ el.focus(); if (keep==='lq') el.setSelectionRange(lq.length,lq.length); } }
 }
 function memberMenuHTML(m, can){
   const items=[];
@@ -867,7 +960,7 @@ function sheetHTML(){
   } else if (s.kind==='progress'){
     b=`<h4>${esc(s.title)}</h4><ol class="steps">${s.steps.map((x,i)=>`<li class="${i<s.i?'done':i===s.i?'now':''}">${i<s.i?svg('check'):i===s.i?'<span class="spin" aria-hidden="true"></span>':'<span class="dot"></span>'}${esc(x)}</li>`).join('')}</ol><p class="sm" role="status">Step ${s.i+1} of ${s.steps.length}. Stopping keeps your place; Resume continues from this step.</p><div class="pm"><span class="sp"></span><button class="btn" id="sh-stop">${esc(s.cancelLabel)}</button></div>`;
   } else if (s.kind==='confirm'){
-    b=`<h4>${esc(s.title)}</h4><p class="sm">${esc(s.body)}</p><div class="pm"><span class="sp"></span><button class="btn" id="sh-cancel">Cancel</button><button class="btn ${s.danger?'dangerf':'prim'}" id="sh-ok">${esc(s.ok)}</button></div>`;
+    b=`<div class="shead"><h4>${esc(s.title)}</h4>${s.body?`<p class="sm">${esc(s.body)}</p>`:''}</div>${s.impact?`<ul class="impact">${s.impact.map(([ic,txt,c])=>`<li class="${c}">${svg(ic)}<span>${esc(txt)}</span></li>`).join('')}</ul>`:''}<div class="pm"><span class="sp"></span><button class="btn" id="sh-cancel">Cancel</button><button class="btn ${s.danger?'dangerf':'prim'}" id="sh-ok">${esc(s.ok)}</button></div>`;
   } else if (s.kind==='remove-tenant'){
     const t=TEN[cur][selTenant];
     let body, ok='Remove', refuse=false;
@@ -879,9 +972,17 @@ function sheetHTML(){
   } else if (s.kind==='remove-member'){
     b=`<h4>Remove ${esc(s.member)}?</h4><p class="sm">Their machine links stop answering now. Their tunnel and key are deleted. Their files stay on their machine.</p><label class="fl">Their cloud links<select id="sh-cl"><option>Keep until they expire</option><option>Delete now</option></select></label><div class="pm"><span class="sp"></span><button class="btn" id="sh-cancel">Cancel</button><button class="btn dangerf" id="sh-ok">Remove</button></div>`;
   } else if (s.kind==='code'){
-    b=`<h4>${s.rotate?'New keys for '+esc(s.member):'Invite code for '+esc(s.member)}</h4><p class="sm">${s.rotate?'Old keys stop working now. Their links keep the same addresses. They join again with this code.':'Send this to '+esc(s.member)+'. It works once, for 7 days.'}</p><div class="code mono">SHR-7Q4K-M2XD-9PLA-3VTB</div><p class="sm">Share Bar shows the code only now. If it is lost, send a new one.</p><div class="pm"><span class="sp"></span><button class="btn" id="sh-copy">Copy code</button><button class="btn prim" id="sh-cancel">Done</button></div>`;
+    b=`<h4>${s.rotate?'New keys for '+esc(s.member):'Invite code for '+esc(s.member)}</h4><p class="sm">${s.rotate?'Old keys stop working now. Their links keep the same addresses. They join again with this code.':'Send this to '+esc(s.member)+'. It works once, for '+(invTtl==='1'?'1 day':invTtl+' days')+'.'}</p><div class="code mono">SHR-7Q4K-M2XD-9PLA-3VTB</div><p class="sm">Share Bar shows the code only now. If it is lost, send a new one.</p><div class="pm"><span class="sp"></span><button class="btn" id="sh-copy">Copy code</button><button class="btn prim" id="sh-cancel">Done</button></div>`;
   } else if (s.kind==='invite'){
-    b=`<h4>Invite a member</h4><label class="fl">Name<input class="tf" id="sh-name" placeholder="e.g. linh"></label><label class="fl">Their links live<select id="sh-mode"><option>On their machine</option><option>In the cloud only</option></select></label><label class="fl">Code works for<select id="sh-ttl"><option>7 days</option><option>1 day</option><option>30 days</option></select></label><div class="pm"><span class="sp"></span><button class="btn" id="sh-cancel">Cancel</button><button class="btn prim" id="sh-go">Create invite</button></div>`;
+    const th=(TEN[cur][tIdx]||{}).h||'';
+    b=`<div class="shead"><h4>Invite to ${esc(th)}</h4><p class="sm">You get a one-time code to send them. Nothing is sent from here.</p></div>
+      <label class="fl">Name<input class="tf sans" id="sh-name" placeholder="As the team will see it" spellcheck="false" autocomplete="off"></label>
+      <fieldset class="fl"><legend>Where their links live</legend>
+        <label class="opt2 ${invMode==='machine'?'on':''}"><input type="radio" name="im" id="im-m" ${invMode==='machine'?'checked':''}><span><b>On their computer</b><small>Files stay on their machine. Links answer while it is on.</small></span></label>
+        <label class="opt2 ${invMode==='cloud'?'on':''}"><input type="radio" name="im" id="im-c" ${invMode==='cloud'?'checked':''}><span><b>In the cloud</b><small>Uploaded to the team bucket. Links answer any time.</small></span></label>
+      </fieldset>
+      <div class="fl"><span>Code expires after</span><div class="seg2 small" role="group" aria-label="Code expires after"><button id="it-1" aria-pressed="${invTtl==='1'}">1 day</button><button id="it-7" aria-pressed="${invTtl==='7'}">7 days</button><button id="it-30" aria-pressed="${invTtl==='30'}">30 days</button></div></div>
+      <div class="pm"><span class="sp"></span><button class="btn" id="sh-cancel">Cancel</button><button class="btn prim" id="sh-go">Create code</button></div>`;
   }
   return `<div class="scrim"></div><div class="sheet" role="dialog" aria-modal="true">${b}</div>`;
 }
@@ -894,7 +995,7 @@ function bindWin(tabs){
   on('t-rm',()=>openSheet({kind:'remove-tenant'}));
   const t=ts[selTenant];
   on('tb-start',()=>startServe(selTenant));
-  on('tb-stop',()=>openSheet({kind:'confirm',title:`Stop serving ${t.h}?`,body:"Links on this Mac stop answering until you start again. Cloud links and other members' links keep working.",ok:'Stop serving',fn:()=>{ t.phase='stopped'; toast(t.h+' stopped serving from this Mac.'); }}));
+  on('tb-stop',()=>{ const all=SCN_LINKS[cur]; const here=all.filter(l=>l.where==='this Mac').length; const rest=all.length-here; openSheet({kind:'confirm',title:`Stop serving ${t.h} from this Mac?`,body:'',impact:[['x2',`${here} ${here===1?'link':'links'} on this Mac stop answering until you start again`,'bad'],['check',`${rest} cloud and member ${rest===1?'link keeps':'links keep'} working`,'good']],ok:'Stop serving',fn:()=>{ t.phase='stopped'; toast(t.h+' stopped serving from this Mac.'); }}); });
   on('tb-resume',()=>resumeOp(selTenant));
   on('tb-rollback',()=>openSheet({kind:'confirm',title:'Roll back cloud storage?',body:`Runs "${t.op.rollback}". The route is removed and links serve from this Mac alone again. Nothing in the bucket is deleted.`,ok:'Roll back',fn:()=>{ t.op=null; t.tier='T0'; toast('Rolled back: '+t.h+' serves from this Mac only.'); }}));
   on('tb-r2',()=>runSteps(`Turning on cloud storage for ${t.h}`,'r2',0,()=>{ t.tier='T1'; toast(t.h+': cloud storage is on.'); }));
@@ -910,6 +1011,11 @@ function bindWin(tabs){
   });
   on('m-new',()=>openSheet({kind:'invite'}));
   /* sheet */
+  const src=document.getElementById('a-src'); if (src) src.onchange=()=>{ akSrc=src.value; akTest=null; renderWin(); };
+  on('a-choose',()=>toast('Opens the 1Password item picker.'));
+  on('a-test',()=>{ akTest='run'; renderWin(); setTimeout(()=>{ akTest='ok'; renderWin(); },900); });
+  on('im-m',()=>{ invMode='machine'; renderWin(); }); on('im-c',()=>{ invMode='cloud'; renderWin(); });
+  ['1','7','30'].forEach(d=>on('it-'+d,()=>{ invTtl=d; renderWin(); }));
   on('sh-cancel',()=>{ sheet=null; renderWin(); });
   on('sp-join',()=>{ sheet.path='join'; renderWin(); document.getElementById('sh-code')?.focus(); });
   on('sp-setup',()=>{ sheet.path='setup'; renderWin(); document.getElementById('sh-host')?.focus(); });
@@ -921,7 +1027,7 @@ function bindWin(tabs){
   on('sh-members',()=>{ sheet=null; tab='members'; renderWin(); });
   on('sh-copy',()=>toast('Invite code copied.'));
   on('sh-go',()=>{ const s=sheet;
-    if (s.kind==='invite'){ const n=(document.getElementById('sh-name').value||'linh').trim(); MEMBERS.push({n,st:'invited',pres:null,seen:'code expires in 7d',links:0,mach:'none yet'}); selMember=n; sheet={kind:'code',member:n}; renderWin(); return; }
+    if (s.kind==='invite'){ const n=(document.getElementById('sh-name').value||'linh').trim(); MEMBERS.push({n,st:'invited',pres:null,seen:`code expires in ${invTtl}d`,links:0,mach:invMode==='cloud'?'cloud only':'none yet'}); selMember=n; sheet={kind:'code',member:n}; renderWin(); return; }
     if (s.path==='join'){ runSteps('Joining s.console.so','join',0,()=>{ TEN[cur].push({h:'s.console.so',role:'Member',tier:'T2',from:'this Mac',phase:'serving',reason:'',token:'Keychain, expires in 90d',links:0}); selTenant=TEN[cur].length-1; toast('You joined s.console.so.'); }); }
     else { const host=(document.getElementById('sh-host').value||'s.example.com').trim(); runSteps('Setting up '+host,'setup',0,()=>{ TEN[cur].push({h:host,role:'Owner',tier:'T0',from:'Mini (this Mac)',phase:'serving',reason:'',token:'asks each time',links:0}); selTenant=TEN[cur].length-1; toast(host+' is serving from this Mac.'); }); }
   });

@@ -63,6 +63,22 @@ Steps: zone, tunnel, DNS, token stored, service, live check (journal names). Fai
 
 Row context menu: Copy link; Open in browser; Show in Finder (own machine links); Refresh from source (only on the install that added it); Remove (own) or Revoke (admin on someone else's link, explains the file stays on their machine). Items a state does not allow are hidden, not disabled.
 
+## 3a. All links window ("Show all N links" in the menu)
+
+The menu shows recent live links only; the window shows every link of the current tenant, expired ones included. Reference pattern: Pitch "Links overview" and Mistral's counted status tabs (Mobbin).
+
+| Part | Behavior | Source |
+|---|---|---|
+| Tabs | All, Live, Needs a look, Expired, each with its count | `share state` rows, `link_state` (D4) |
+| Search | name, owner, machine; focused when the window opens | local filter |
+| Columns | Name (with created time and a state word), Owner, Lives on, Expires, Views (cloud links only; blank otherwise), Copy | rows; views from Analytics for v:1 records |
+| Select | checkboxes, select all; a bar shows "N selected" with Copy links (one per line) and Remove | `share rm <id>...`; another member's link is revoked, not removed (D8) |
+| Expired rows | dimmed; Copy disabled | D4 |
+
+## 3b. Dialog rules
+
+Every confirm dialog lists its effect as lines with a cross (what stops) and a check (what keeps working), with real counts: Stop serving counts this Mac's links against cloud and member links; Pause counts the member's machine links. The invite dialog states the tenant, offers "On their computer" or "In the cloud" with one-line consequences, sets the code expiry with 1, 7 or 30 days, and says no message is sent from the app. The admin key setting picks a source (1Password item, command, ask each time), shows the picked item by name rather than its path, and has a Test button that reports what the token can do, never the token.
+
 ## 4. "Need a look" (admins see team items; everyone sees their own)
 
 Each line is one state with one action. Lines are ordered: interrupted commands, own serving problems, token problems, member problems.
