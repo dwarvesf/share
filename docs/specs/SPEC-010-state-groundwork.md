@@ -680,3 +680,58 @@ Test cites: `tests/share.sh` L1000 (`state_schema_ok`), L1025, L1036, L1081 (`wr
 | NC-G4 | `config_put` drops unowned keys | config with `x_future=1` | `share setup <host>` rerun | `CF-01` |
 | NC-G5 | a code added to `code_text` with no skill line | `share state-fn codes` vs `share skill` | the G5 skill check | `every code in share state-fn codes appears in the skill` |
 | NC-G6 | `op_done` not called on a clean run | a clean `setup --r2` in the dry seam | `ops/` after exit | `JN-01` (`ops/` not empty) |
+
+## Review
+Date: 2026-11-15 | Reviewer: /kit:review (Phase 1 diff, feat/state-groundwork-must)
+
+### Verdict: SHIP
+
+### Findings
+
+## MEDIUM: serve polls /ready every 0.5 s for as long as a stale exit record outlives a down tunnel
+**File:** bin/share (cmd_serve, the `.serve-exit` watcher)
+**What:** with a stale record and a tunnel that never reports ready, the loop runs one curl per 0.5 s until the child exits.
+**Why:** a crash-looping or down tunnel keeps one curl per half second running for hours.
+**Fix:** back off to 5 s after the first 10 s of polling.
+**Effort:** S
+
+## MEDIUM: a profile moved before G3 forks `security` on every invocation
+**File:** bin/share (profile_role)
+**What:** the pre-G3 migrated fallback checks the Keychain item's existence on each load, `state` polls included.
+**Why:** a locked login Keychain could prompt on a poll. The spec chose the existence check (DEC-9); it runs only when `index.migrated` exists and no `migrated=` key is set.
+**Fix:** none now; a rerun of `migrate` or `setup` writes or drops the explicit key. Watch for reports.
+**Effort:** S
+
+## LOW: `serve_exit_write` prints the code into JSON unescaped
+**File:** bin/share (serve_exit_write)
+**What:** codes come from literals, but the `SHARE_PRUNE_DIE_CODE` and `state-fn die` seams accept any string.
+**Why:** a seam value holding a quote writes a record that does not parse.
+**Fix:** write only a snake_case code; anything else records `unknown`.
+**Effort:** S
+
+## LOW: a hand-written journal with a non-numeric step reaches `[[ -gt ]]`
+**File:** bin/share (op_read, op_begin)
+**What:** `op_read` checks the pid only; a step such as `1x` reaches an arithmetic compare.
+**Why:** bash prints an arithmetic error on stderr; the run continues.
+**Fix:** `op_read` also requires a numeric step and of.
+**Effort:** S
+
+## LOW: tunnel teardown now creates `$root/ops` on a profile with no root
+**File:** bin/share (cmd_teardown, op_begin)
+**What:** `op_begin` runs `mk_root`; a teardown of a profile that never published leaves an empty `ops/`.
+**Why:** an empty directory under `~/share/profiles/<p>`; `profiles` lists config dirs, so no ghost profile.
+**Fix:** none needed; noted.
+**Effort:** S
+
+## LOW: `teardown --purge` of two cloud links dies at the second `rm` (pre-existing)
+**File:** bin/share (cmd_rm_r2 inside r2_purge)
+**What:** reproduces on the base commit 84ebd9a; a rerun removes the next link.
+**Why:** a purge needs one rerun per extra link.
+**Fix:** a separate change; recorded in the implementation notes and the mega-goal ledger.
+**Effort:** M
+
+### Previously rejected
+none (no `docs/verification/rejected-findings.md`)
+
+### TODOs (open follow-ups)
+- the pre-existing two-link purge defect

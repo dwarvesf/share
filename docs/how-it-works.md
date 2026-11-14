@@ -516,6 +516,11 @@ The app changes anything only by running share's normal verbs (`add`, `rm`, `ref
 | `access_pending` | count of Access apps waiting for deletion (`access-pending` lines) |
 | `skipped` | count of malformed index rows; present only when greater than zero |
 | `backend` | `"r2"` on an r2 profile only, absent on a tunnel profile. There `state` is `serving` once set up, `ready` comes from one `/healthz` probe (2 s), `mode` is `named`, `hosts` is `""`, `serves_here` and `service` are `false`, every share is a `snapshot`, and `skipped` is never set. Share Bar shows neither Start nor Stop for it |
+| `codes_v` | integer, `1`: the version of the refusal code list (`share state-fn codes`); it moves only when a code is renamed or removed |
+| `cloud_error_code` | the code of `cloud_error` when the bucket read died with one (seen under `SHARE_ERROR_JSON=1`), else absent |
+| `role` | what kind of profile this is: `none`, `quick`, `origin`, `tenant_origin`, `r2_profile`, `member`, or `migrated`. A `migrated` profile moved to another machine; its `state` reads `not_setup` |
+| `tier` | on `origin` and `tenant_origin` only: `t0` no bucket, `t1` a bucket, `t2` a bucket and `members=on` |
+| `ops` | the step journal: `[{verb, step, of, name, alive, rerun, rerun_argv}]`, plus `rollback` and `rollback_argv` on a verb that has one; `[]` when nothing runs or died. An entry that cannot be read is `{"verb": "?", "alive": false}` |
 
 Invariants: `state` never prunes, never writes or creates a file, never needs a TTY,
 and never touches the clipboard. Removing or renaming a field bumps `schema`; adding a
@@ -524,6 +529,16 @@ tab fields (the shape share wrote before this version) reads with empty opts; a 
 skipped, and counted in `skipped` instead of breaking the read, when it has fewer than 5
 or more than 6 fields, when its id is not exactly 6 lowercase hex characters, or when its
 `host=` opt is the main hostname or not a valid hostname.
+
+### Codes, the step journal, and the serve exit record
+
+A refusal still ends with one `share: <message>` line on stderr and exit 1. With `SHARE_ERROR_JSON=1` it adds one unprefixed last line, `{"error":{"code":...,"message":...,"next":...}}`; `code` is stable and listed by `share state-fn codes` (a hidden test verb), and the skill names each one. Without the variable stderr is unchanged.
+
+The multi-step verbs (`setup <host>`, `setup --r2`, `--no-r2`, tunnel `teardown`, `teardown --purge`, `migrate`) each keep a journal file, `$root/ops/<verb>.<pid>.json`, at the step they reached. A clean finish removes it, and a success also removes every dead journal of the profile except a dead `add`'s. A die, a kill, or the Share Bar's Stop leaves it: `state` lists it in `ops`, `status` prints `<verb> stopped at step <n> of <of> (<name>); rerun: <command>` (plus `or roll back: <command>` for `setup --r2`), and the next run of the verb prints `previous <verb> died at step <n> (<name>); continuing`, then runs from step 1 again, each step skipping what is already in place. A second run while the first is alive is refused `op_running`; liveness is the pid, a share process, and the same start time, read with `LC_ALL=C TZ=UTC0` so a locale or zone never makes a live run read dead. `SHARE_PROGRESS=1` prints one `{"progress":{...}}` stderr line per step.
+
+`serve` records why it ended in `$root/.serve-exit` (`{"code":...,"at":...}`): its own refusal's code, `cloudflared_died` or `caddy_failed` when a child exits, and `stopped` from `share stop`. A serve removes a stale record only once it answers, so a crash loop under launchd keeps its reason.
+
+The admin token for `setup --r2`, `--no-r2` and `teardown --purge` comes from `CLOUDFLARE_API_TOKEN`, else from `admin_token_cmd` in the profile config (`share admin-token --cmd '<command>'`): a command that prints it, run once per process and never stored or exported, so the serve daemon never holds it. `minter_token_cmd` (`share minter-token`) works the same for the token that mints member tokens. Config writers rewrite only the keys they own and keep every other line byte for byte, in place.
 
 ## Why each choice
 
