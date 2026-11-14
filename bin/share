@@ -11,6 +11,8 @@
 #   share add ... --access group:<name>|email:<a>[,<b>...]|domain:<domain>   a login gate (Cloudflare Access) on this link
 #   share add --cloud|--local <file|dir>   R2 on: this link in the bucket, or on this machine (default: storage_default)
 #   share api-token [--cmd '<command>' | --check]   the Cloudflare API token --access needs: prefilled form + paste, or point at one you have
+#   share admin-token --cmd '<command>' | --clear | --test [--json]   the command that prints the admin token (setup --r2, --no-r2, --purge)
+#   share minter-token --cmd '<command>' | --clear | --test [--json]  the command that prints the minter token (member tokens)
 #   share ls                  list shares: link, size, source, expiry
 #   share refresh <id|link>   re-copy from the source path (same link)
 #   share rm <id|link>        unpublish (moves the copy to the Trash)
@@ -36,6 +38,47 @@ set -euo pipefail
 
 die() { echo "share: $*" >&2; exit 1; }
 
+# Stable refusal and serve-exit codes, one "code|meaning|next" line each; {me} in a next stands for the profile's own command. A new code adds a line here and a
+# line in the skill; a renamed or removed code bumps codes_v (state's schema never moves for it).
+codes_v=1
+code_table='not_in_hosts|this machine is not in hosts=, so it does not serve this profile|{me} status (serve from a machine in hosts=)
+already_serving|a server already runs for this profile|{me} status
+no_tunnel_token|the tunnel token is missing from the Keychain or the 600 file|{me} setup <hostname>
+port_busy|the share port is taken by another process or profile|{me} profiles
+metrics_port_busy|the tunnel metrics port (port + 1) is taken|{me} profiles
+server_not_started|the server did not answer within 10 s; serve.log says why|{me} status
+profile_migrated|this profile moved to another machine (share migrate); nothing serves here|{me} teardown --yes (destructive: ask the user first)
+op_running|another run of the same multi-step verb is still alive|wait for it, then {me} state
+quick_has_named_tunnel|setup --quick on a profile that already has a named tunnel|{me} teardown, then {me} setup --quick
+tenant_rollback|setup --r2 died after its config write; the message names the rollback|rerun the same setup, or the rollback it names
+config_value_bad|a config value holds a line break, or is not a value the key takes; nothing was written|fix the value, then rerun
+cloud_token_missing|the menu reads cloud links only with a stored publisher token|{me} api-token
+admin_token_missing|an admin path found neither CLOUDFLARE_API_TOKEN nor admin_token_cmd|{me} admin-token --cmd '"'"'<command>'"'"'
+admin_token_cmd_failed|admin_token_cmd exited non-zero or printed no token|{me} admin-token --test
+admin_token_not_admin|the token cannot read the Worker settings: it is not an admin token|{me} admin-token --cmd '"'"'<command>'"'"'
+minter_token_missing|a minter path found neither SHARE_MINTER_TOKEN nor minter_token_cmd|{me} minter-token --cmd '"'"'<command>'"'"'
+minter_token_cmd_failed|minter_token_cmd exited non-zero or printed no token|{me} minter-token --test
+members_present|reserved: a tenant teardown refused while it has members|{me} member ls
+stopped|serve exit record: the stop verb ended serving|{me} start
+cloudflared_died|serve exit record: the cloudflared child exited|{me} status; see serve.log
+caddy_failed|serve exit record: caddy failed to start or exited|{me} status; see caddy.log'
+code_text() { # code_text <code>: "<meaning>\t<next>"; returns 1 for an unknown code
+  printf '%s\n' "$code_table" | awk -F'|' -v c="$1" '$1 == c {print $2 "\t" $3; f = 1; exit} END {exit !f}'
+}
+serve_exit_write() { # serve_exit_write <code>: {"code":..,"at":..} into $root/.serve-exit, tmp + mv; a failed write is ignored
+  local c=$1; [[ $c =~ ^[a-z_]+$ ]] || c=unknown   # a seam can pass any string; the record stays valid JSON
+  { printf '{"code":"%s","at":%s}\n' "$c" "$(date +%s)" >"$root/.serve-exit.tmp" && mv -f "$root/.serve-exit.tmp" "$root/.serve-exit"; } 2>/dev/null
+  return 0
+}
+die_code() { # die_code <code> <message> [next]: die's own line; SHARE_ERROR_JSON=1 adds one unprefixed JSON line, last; serve records its code
+  echo "share: $2" >&2
+  if [[ ${SHARE_ERROR_JSON:-} == 1 ]]; then
+    jq -nc --arg c "$1" --arg m "$2" --arg n "${3:-}" '{error: {code: $c, message: $m, next: $n}}' >&2 2>/dev/null || true
+  fi
+  [[ -z ${SHARE_EXIT_FILE:-} || $SHARE_EXIT_FILE != "${root:-}/.serve-exit" ]] || serve_exit_write "$1"   # only serve's own file, never a path from the env
+  exit 1
+}
+
 # A profile (--profile <name> before the verb, or SHARE_PROFILE) is a second setup beside the
 # default one: its own config dir, root, port, service label, and Keychain item. With no
 # profile every value below is what a single-profile install has always used.
@@ -57,6 +100,75 @@ config_dir="${SHARE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/share${profile
 config="$config_dir/config"
 cfg() { [[ -f $config ]] && awk -v k="$1" 'index($0, k "=") == 1 {print substr($0, length(k) + 2); exit}' "$config"; }
 
+# Each config writer owns the keys it writes plus the keys it drops; every other line is kept byte for byte.
+own_write_config="hostname tunnel_id tunnel_name auth hosts port zone mode migrated"
+own_write_config_r2="backend hostname zone bucket port r2_endpoint aliases tunnel_id tunnel_name auth hosts mode migrated"
+own_write_config_quick="mode hosts port hostname tunnel_id tunnel_name auth zone migrated"
+own_tenant_config="bucket r2_endpoint storage_default aliases migrated"
+config_put() { # config_put "<owned keys>" key=value...: owned keys rewritten at their first line (later duplicates dropped), owned keys not given dropped, every other line kept in order; tmp + mv
+  local owned=$1 kv k tmp pairs="" src=/dev/null; shift
+  for kv in "$@"; do   # every refusal before the lock and before any write
+    k="${kv%%=*}"
+    case $kv in *$'\n'*|*$'\r'*) die_code config_value_bad "the value of $k holds a line break; nothing was written" "fix the value, then rerun" ;; esac
+    case " $owned " in *" $k "*) ;; *) die "config_put: $k is not a key this writer owns" ;; esac
+    pairs="$pairs$kv"$'\n'
+  done
+  mk_root
+  mkdir -p "$config_dir" 2>/dev/null || die "cannot create $config_dir; the config was not written"
+  lock_take config
+  tmp="$(mktemp "$config_dir/.config.XXXXXX" 2>/dev/null)" || { lock_release config; die "cannot write in $config_dir; the config was not written"; }
+  if [[ -f $config ]]; then src=$config; cp -p "$config" "$tmp" 2>/dev/null || true; else chmod 644 "$tmp"; fi   # cp -p carries the config's own mode to the tmp
+  # values reach awk through the environment, never -v (which would read backslash escapes)
+  if ! CONFIG_PUT_PAIRS="$pairs" awk -v owned=" $owned " '
+      BEGIN { n = split(ENVIRON["CONFIG_PUT_PAIRS"], p, "\n")
+              for (i = 1; i <= n; i++) if (p[i] != "") { k = substr(p[i], 1, index(p[i], "=") - 1); val[k] = p[i]; ord[++m] = k } }
+      { e = index($0, "="); k = e ? substr($0, 1, e - 1) : ""
+        if (e > 1 && index(owned, " " k " ")) { if ((k in val) && !(k in done)) { print val[k]; done[k] = 1 }; next }
+        print }
+      END { for (i = 1; i <= m; i++) if (!(ord[i] in done)) { print val[ord[i]]; done[ord[i]] = 1 } }' \
+      "$src" >"$tmp" || ! mv -f "$tmp" "$config"; then
+    rm -f "$tmp"; lock_release config; die "writing $config failed; the config was not changed"
+  fi
+  lock_release config
+  profile_role   # a guard later in this process reads the config just written
+}
+
+# The one kind a profile is (first match wins), and an origin's tier. Reads the config and file existence only:
+# never a secret, never token_cmd, never the network, so state can call it on every poll.
+role="" tier="" migrated_to=""
+profile_role() {
+  local c_role="" c_mid="" c_mig="" c_tid="" c_bucket="" c_members="" c_tcmd="" stored=0
+  if [[ -f $config ]]; then
+    IFS=$'\037' read -r c_role c_mid c_mig c_tid c_bucket c_members c_tcmd < <(awk -v keys="role member_id migrated tunnel_id bucket members token_cmd" '
+      BEGIN { n = split(keys, K, " ") }
+      { for (i = 1; i <= n; i++) if (!(K[i] in v) && index($0, K[i] "=") == 1) v[K[i]] = substr($0, length(K[i]) + 2) }
+      END { for (i = 1; i <= n; i++) printf "%s%s", v[K[i]], (i < n ? "\037" : "\n") }' "$config") || true
+  fi
+  role=none tier="" migrated_to="$c_mig"
+  if [[ -z $c_mig && -f $root/index.migrated && -n $c_tid && -z $c_tcmd ]]; then   # moved before the migrated= key existed: no stored tunnel token is the sign
+    [[ -f $config_dir/tunnel-token ]] && stored=1
+    if [[ $stored == 0 ]] && command -v security >/dev/null; then   # no -w: the item's existence, never its secret
+      security find-generic-password -a share -s "share-tunnel${profile:+.$profile}:$host_name" >/dev/null 2>&1 && stored=1
+    fi
+  fi
+  if [[ $c_role == member && -n $c_mid ]]; then role=member
+  elif [[ -n $c_mig ]] || [[ -f $root/index.migrated && -n $c_tid && -z $c_tcmd && $stored == 0 ]]; then role=migrated
+  elif [[ $backend == r2 ]]; then role=r2_profile
+  elif [[ $mode == quick ]]; then role=quick
+  elif [[ -n $c_tid && -n $c_bucket ]]; then role=tenant_origin
+  elif [[ -n $c_tid ]]; then role=origin
+  fi
+  case $role in origin|tenant_origin)
+    tier=t0; [[ -z $c_bucket ]] || tier=t1; [[ -z $c_bucket || $c_members != on ]] || tier=t2 ;;
+  esac
+  return 0
+}
+migrated_guard() { # a profile that moved away refuses start, serve, service install, add, --r2 and --no-r2 before any write
+  [[ $role == migrated ]] || return 0
+  local t; t="$(printf '%s' "$migrated_to" | tr -d '[:cntrl:]')"
+  die_code profile_migrated "this profile moved${t:+ to $t} (rows in index.migrated); nothing serves here" "$me teardown --yes"
+}
+
 root="${SHARE_ROOT:-$HOME/share${profile:+/profiles/$profile}}"
 pub="$root/pub"            # served tree; nothing else is reachable from the tunnel
 index="$root/index.tsv"    # id, name, source, added date, expiry epoch (0 = never)
@@ -77,6 +189,7 @@ tunnel="${SHARE_TUNNEL:-1}"  # 0 = local-only (tests)
 mode="$(cfg mode || true)"   # "quick" = trycloudflare, no domain; empty = named tunnel
 r2on=0   # a tunnel profile with bucket= is a tenant origin with R2 on: local links get pointer records, --cloud adds go to the bucket
 [[ $backend != r2 && -n "$(cfg bucket || true)" ]] && r2on=1
+profile_role
 api="https://api.cloudflare.com/client/v4"
 
 this_host() { local h; h="$(uname -n)"; echo "${h%%.*}"; }
@@ -463,6 +576,7 @@ parse_target() { # parse_target <arg>: "live <port>" for a port/localhost shape,
 }
 
 cmd_add() {
+  migrated_guard
   local ttl="${SHARE_TTL:-$(cfg ttl || true)}"; ttl="${ttl:-30d}" noindex="" host_fqdn="" target="" ntargets=0 access="" storage=""
   local usage="usage: share add [--ttl 7d] [--host <name>.<zone>] [--no-index] [--access <rule>] [--cloud|--local] <file|dir|port|localhost:port|http://localhost:port>"
   while [[ $# -gt 0 ]]; do
@@ -699,6 +813,7 @@ cmd_rm() { # cmd_rm <id> [prune]: prune passes through with no credential, so ex
 }
 
 cmd_prune() { # cmd_prune [quiet|listing]: unpublish every share past its expiry; sweep waiting Access apps when a token resolves
+  [[ -n ${1:-} || -z ${SHARE_PRUNE_DIE_CODE:-} ]] || die_code "$SHARE_PRUNE_DIE_CODE" "prune died (the SHARE_PRUNE_DIE_CODE test seam; bare prune only, as serve's hourly loop runs it)"
   if [[ $backend == r2 ]]; then r2_prune "${1:-}"; return 0; fi
   if [[ $r2on == 1 && ${1:-} != quiet ]]; then   # an origin with R2 on, interactive: cloud expiry, the sweep, and the reconcile through its own reader
     local pm=soft; [[ ${1:-} != listing ]] || pm="env"
@@ -897,10 +1012,10 @@ migrate_tar() { # migrate_tar <id>: the whole pub/<id> tree on stdout (a bare fi
 migrate_retire() { # migrate_retire <target_tid> <id>...: index.migrated and migrated/ (nothing deleted), then the teardown path with no Access-app delete and no DNS delete unless it still points here; target_tid is the new origin's own tunnel id, so a collision with this machine's refuses the tunnel and DNS deletes (DEC-010: the new origin always gets its own tunnel, never this one)
   local target_tid="$1"; shift
   local mids=("$@") id midlist=" " line keep
-  for id in "${mids[@]}"; do midlist="$midlist$id "; done
+  for id in ${mids[@]+"${mids[@]}"}; do midlist="$midlist$id "; done   # a rerun after the rows moved has no ids: bash 3.2 aborts on a bare empty "${mids[@]}" under set -u
   lock_take index
   mkdir -p "$root/migrated"
-  for id in "${mids[@]}"; do
+  for id in ${mids[@]+"${mids[@]}"}; do
     line="$(awk -F'\t' -v id="$id" '$1 == id' "$index")"
     [[ -n $line ]] || continue
     printf '%s\n' "$line" >>"$root/index.migrated"
@@ -910,8 +1025,10 @@ migrate_retire() { # migrate_retire <target_tid> <id>...: index.migrated and mig
   printf '%s\n' "$keep" | sed '/^$/d' >"$index.tmp"; mv -f "$index.tmp" "$index"
   write_caddyfile; caddy_reload || true
   lock_release index
+  config_put migrated "migrated=$migrate_target"   # role migrated: state reads not_setup, start and add refuse (DEC-19)
   svc_uninstall
   cmd_stop >/dev/null 2>&1 || true
+  op_step 5
   local tid; tid="$(cfg tunnel_id)"
   if [[ -z $target_tid ]]; then   # without the new origin's own tunnel id there is no proof the two tunnels differ
     echo "dns:        left alone; could not read $migrate_target's tunnel id, so deleting the DNS record or this tunnel might take down the new origin"
@@ -925,10 +1042,10 @@ migrate_retire() { # migrate_retire <target_tid> <id>...: index.migrated and mig
     rid="$(jq -r --arg t "$tid.cfargotunnel.com" '.result[] | select(.content == $t) | .id' <<<"$rec" | head -1)"
     if [[ -n $rid ]]; then cf DELETE "/zones/$zone/dns_records/$rid" >/dev/null; echo "dns:        deleted (still pointed at this tunnel)"
     else echo "dns:        $host_name no longer points at this tunnel, left alone"; fi
-    cf DELETE "/accounts/$account/cfd_tunnel/$tid/connections" >/dev/null 2>&1 || true
-    cf DELETE "/accounts/$account/cfd_tunnel/$tid" >/dev/null
-    echo "tunnel:     deleted"
+    op_step 6
+    if tunnel_delete "$account" "$tid"; then echo "tunnel:     deleted"; else echo "tunnel:     already deleted"; fi
   fi
+  op_step 7
   token_forget; api_token_forget
   rm -f "$config_dir/cert.zone"
   [[ -f $cert ]] && to_trash "$cert"
@@ -964,6 +1081,7 @@ cmd_migrate() {
     local hfqdn; hfqdn="$(opt_val host "$(row "$hostrow" | cut -f6)")"
     die "$hfqdn has its own hostname on this tunnel; remove it first: $me rm $hostrow"
   fi
+  admin_token_resolve optional
   [[ -n ${CLOUDFLARE_API_TOKEN:-} ]] || die "migrate needs CLOUDFLARE_API_TOKEN (Cloudflare Tunnel Edit, DNS Edit, Zone Read on $host_name's zone)"
   auth_api
   local zone account _zn; read -r zone account _zn <<<"$(cf_zone)"
@@ -989,7 +1107,7 @@ cmd_migrate() {
   case $rstate in
     not_setup)
       if [[ $rpempty != 1 ]]; then   # a bare row is a stranger; one matching this run's own ids is a rerun resuming a prior partial copy
-        local foreign=""; foreign="$(awk -F'\t' -v ids=" $(printf '%s ' "${mids[@]}")" '{if (index(ids, " " $1 " ") == 0) print $1}' <<<"$target_index")"
+        local foreign=""; foreign="$(awk -F'\t' -v ids=" $(printf '%s ' ${mids[@]+"${mids[@]}"})" '{if (index(ids, " " $1 " ") == 0) print $1}' <<<"$target_index")"
         [[ -z $foreign ]] || die "migrate: $to's profile is not_setup but already has shares not in this move ($foreign); pick another --remote-profile"
       fi ;;
     stopped|serving) [[ $rhost == "$host_name" ]] || die "migrate: $to's profile is already set up for $rhost, not $host_name; pick another --remote-profile" ;;
@@ -1004,8 +1122,14 @@ cmd_migrate() {
     local a; read -rp "Move ${#mids[@]} link(s) of $host_name to $to and retire this machine as its origin? [y/N] " a
     [[ $a == y* || $a == Y* ]] || die "aborted"
   fi
+  local rerun=(migrate --to "$to")
+  [[ -z $rprofile ]] || rerun+=(--remote-profile "$rprofile")
+  [[ -z $rbin ]] || rerun+=(--remote-bin "$rbin")
+  [[ -z $maxbytes ]] || rerun+=(--max-bytes "$maxbytes")
+  op_begin migrate "${rerun[@]}" --yes
   echo "preflight:  ok ($to, $rstate)"
 
+  op_step 1
   for i in "${!mids[@]}"; do
     local id=${mids[$i]} name=${names[$i]} src=${srcs[$i]} added=${addeds[$i]} exp=${exps[$i]} opts=${optss[$i]} rc man by srcbare sendopts tarfile
     if grep -qE "^$id	$name	$added\$" <<<"$target_index"; then echo "copy:       $id already on $to, skipping"; continue; fi
@@ -1045,11 +1169,13 @@ cmd_migrate() {
   [[ -n $old_tunnel_name ]] || die "migrate: this profile's config has neither tunnel_name nor a tunnel_id the API still knows; run '$me setup $host_name --tunnel-name <name> --force' by hand first"
   local new_tunnel_name="${old_tunnel_name}-m"   # DEC-010: the new origin always gets its own tunnel; a name this machine already holds would reuse its tunnel id, and migrate_retire would later delete the new origin's only tunnel
   local switch_rc=0
+  op_step 2
   printf '%s\n' "$CLOUDFLARE_API_TOKEN" | migrate_remote_run "$rbin" "$maxbytes" "$rprofile" setup "$host_name" --tunnel-name "$new_tunnel_name" --force --token-stdin >/dev/null || switch_rc=$?
   if [[ $switch_rc != 0 ]]; then
     die "migrate: the switch on $to failed; this machine may still be serving, or the DNS record may already point at the new tunnel. Rollback if $host_name is down: $me setup $host_name --tunnel-name $old_tunnel_name --force"
   fi
   echo "switch:     $to is the new origin for $host_name"
+  op_step 3
 
   migrate_remote "$rbin" "" "$rprofile" migrate-tunnel-id || true
   local target_tid="$mr_out"
@@ -1078,7 +1204,9 @@ cmd_migrate() {
   done
   echo "verify:     every moved link answers from $to"
 
-  migrate_retire "$target_tid" "${mids[@]}"
+  op_step 4
+  migrate_retire "$target_tid" ${mids[@]+"${mids[@]}"}
+  op_done
   echo "retire:     $host_name no longer serves from this machine; moved rows in index.migrated, trees in migrated/"
 }
 
@@ -1174,10 +1302,21 @@ caddy_reload() { # apply Caddyfile changes over the admin socket; a failure warn
   fi
 }
 
+serve_child_alive() { kill -0 "$1" 2>/dev/null && [[ $(ps -o stat= -p "$1" 2>/dev/null) != Z* ]]; }   # kill -0 alone answers yes for an unreaped child
+serve_ready() { # serve_ready: the links answer: /ready with the tunnel, the quick URL in quick mode, caddy alone without a tunnel
+  [[ $tunnel == 1 ]] || return 0
+  if [[ $mode == quick ]]; then [[ -s $root/quick.url ]]; return; fi
+  curl -sf -m 1 -o /dev/null "http://127.0.0.1:$metrics_port/ready" 2>/dev/null
+}
+
 cmd_serve() {
+  # serve's own dies record their code in $root/.serve-exit, so a crash loop under launchd keeps its reason (DEC-7, DEC-26);
+  # a shell variable, never exported: caddy, cloudflared and the hourly prune never write it
+  SHARE_EXIT_FILE="$root/.serve-exit"
   r2_no_local
-  host_ok || die "$(this_host) is not in hosts=$hosts; serve from one machine only (a second one splits requests)"
-  running && die "already serving (pid $(cat "$pidfile"))"
+  migrated_guard
+  host_ok || die_code not_in_hosts "$(this_host) is not in hosts=$hosts; serve from one machine only (a second one splits requests)" "$me status"
+  running && SHARE_EXIT_FILE="" die_code already_serving "already serving (pid $(cat "$pidfile"))" "$me status"   # the running serve's own record stays
   export SHARE_API_TOKEN_OFF=1   # the daemon and its hourly prune never make an Access call, from any token source
   mk_root; mkdir -p "$pub"
   cmd_prune quiet   # before the render, so the Caddyfile never carries expired rows
@@ -1192,23 +1331,26 @@ cmd_serve() {
   if [[ $tunnel == 1 && $mode != quick ]]; then
     need_host
     token="$(token_read || true)"
-    [[ -n $token ]] || die "no tunnel token for $host_name: run '$me setup $host_name'"
+    [[ -n $token ]] || die_code no_tunnel_token "no tunnel token for $host_name: run '$me setup $host_name'" "$me setup $host_name"
   fi
   # caddy binds with SO_REUSEPORT, so a second server on the same port would start and split requests silently
   local busy="an orphaned server, or another share profile (share profiles)? free it, or change port= in $config and rerun $me setup"
-  ! listening "$port" || die "127.0.0.1:$port is already in use: $busy"
-  [[ $tunnel != 1 ]] || ! listening "$metrics_port" || die "127.0.0.1:$metrics_port (metrics) is already in use: $busy"
+  ! listening "$port" || die_code port_busy "127.0.0.1:$port is already in use: $busy" "share profiles"
+  [[ $tunnel != 1 ]] || ! listening "$metrics_port" || die_code metrics_port_busy "127.0.0.1:$metrics_port (metrics) is already in use: $busy" "share profiles"
   echo $$ >"$pidfile"
   caddy run --config "$root/Caddyfile" --adapter caddyfile >>"$root/caddy.log" 2>&1 &
   caddy_pid=$!
   # The prune loop redirects to the log: inheriting serve's stdout would let an
   # orphaned sleep hold a caller's $( ) pipe open for an hour after serve dies.
-  (while sleep 3600; do bash "$0" prune || true; done) >>"$root/serve.log" 2>&1 &
+  # The loop unsets SHARE_EXIT_FILE: a prune that dies must never overwrite serve's own exit record (CD-05).
+  (unset SHARE_EXIT_FILE; while sleep "${SHARE_PRUNE_EVERY:-3600}"; do bash "$0" prune || true; done) >>"$root/serve.log" 2>&1 &
   loop_pid=$!
   # The trap lands before the tunnel work and reads the pids at run time:
   # a die in the quick-URL parse must still reap caddy and the prune loop.
   # pkill first: the loop's current sleep is a grandchild kill(1) can't reach.
-  trap 'release_locks; [[ -n ${loop_pid:-} ]] && pkill -P "$loop_pid" 2>/dev/null; kill ${caddy_pid:-} ${loop_pid:-} ${tunnel_pid:-} 2>/dev/null; wait 2>/dev/null; rm -f "$pidfile" "$root/quick.url"' EXIT
+  # every step is non-fatal: the trap runs under set -e, and a pkill that finds no child (the loop between two
+  # prunes) would otherwise end it before caddy is killed and the pidfile removed
+  trap 'release_locks; [[ -z ${loop_pid:-} ]] || pkill -P "$loop_pid" 2>/dev/null || true; kill ${caddy_pid:-} ${loop_pid:-} ${tunnel_pid:-} 2>/dev/null || true; wait 2>/dev/null; rm -f "$pidfile" "$root/quick.url"' EXIT
   trap 'exit 0' INT TERM
   if [[ $tunnel == 1 && $mode == quick ]]; then
     # quick tunnel: no token, no DNS; cloudflared prints a random trycloudflare URL.
@@ -1223,7 +1365,7 @@ cmd_serve() {
       [[ -n $qu ]] && break
       # kill -0 alone lies for an unreaped child (zombie): check the state too
       if ! kill -0 "$tunnel_pid" 2>/dev/null || [[ $(ps -o stat= -p "$tunnel_pid" 2>/dev/null) == Z* ]]; then
-        die "cloudflared died before printing a URL; see $root/cloudflared.log"
+        die_code cloudflared_died "cloudflared died before printing a URL; see $root/cloudflared.log" "$me status"
       fi
       sleep 0.2
     done
@@ -1235,11 +1377,21 @@ cmd_serve() {
   fi
   # Wait for the children, so the next serve never meets a dying cloudflared still answering /ready.
   sleep 1
-  kill -0 "$caddy_pid" 2>/dev/null || die "caddy failed to start, see $root/caddy.log"
-  local display="${host_name:-127.0.0.1:$port}"
+  kill -0 "$caddy_pid" 2>/dev/null || die_code caddy_failed "caddy failed to start, see $root/caddy.log" "$me status"
+  local display="${host_name:-127.0.0.1:$port}" wrc=0
   [[ $mode == quick ]] && display="$(serving_host)"
   echo "serving $pub on $display (pid $$)"
-  wait "${tunnel_pid:-$caddy_pid}"
+  if [[ -f $root/.serve-exit ]]; then   # a stale record goes only once this serve really answers, never at start (DEC-26)
+    local polls=0
+    while serve_child_alive "${tunnel_pid:-$caddy_pid}"; do
+      if serve_ready; then rm -f "$root/.serve-exit"; break; fi
+      polls=$((polls + 1)); if [[ $polls -lt 20 ]]; then sleep 0.5; else sleep 5; fi   # a tunnel still down after 10 s is polled less often
+    done
+  fi
+  wait "${tunnel_pid:-$caddy_pid}" || wrc=$?
+  # a child's death is not a die: record which one went (stop's TERM exits through the trap and never reaches here)
+  if serve_child_alive "$caddy_pid"; then serve_exit_write cloudflared_died; else serve_exit_write caddy_failed; fi
+  return "$wrc"
 }
 
 
@@ -1361,7 +1513,8 @@ cmd_service() {
   r2_no_local
   case "${1:-status}" in
     install)
-      host_ok || die "$(this_host) is not in hosts=$hosts"
+      migrated_guard
+      host_ok || die_code not_in_hosts "$(this_host) is not in hosts=$hosts" "$me status"
       svc_install
       wait_running 10 || die "the service did not start, see $root/serve.log"
       warn_not_live
@@ -1376,8 +1529,9 @@ cmd_service() {
 
 cmd_start() {
   r2_no_local
+  migrated_guard
   running && { echo "already serving (pid $(cat "$pidfile"))"; return 0; }
-  host_ok || die "$(this_host) is not in hosts=$hosts; serve from one machine only (a second one splits requests)"
+  host_ok || die_code not_in_hosts "$(this_host) is not in hosts=$hosts; serve from one machine only (a second one splits requests)" "$me status"
   mk_root
   if svc_installed; then
     if [[ -f $svc_plist ]]; then
@@ -1386,9 +1540,13 @@ cmd_start() {
       systemctl --user start "$svc_label.service"
     fi
   else
-    nohup bash "$0" serve >>"$root/serve.log" 2>&1 &   # serve exports SHARE_API_TOKEN_OFF: an inherited token serves --host cleanup only, never Access
+    local envu=(env)   # a long-lived child never inherits a token resolved from a command (DEC-28)
+    [[ $admin_token_src != cmd ]] || envu+=(-u CLOUDFLARE_API_TOKEN)
+    [[ $minter_token_src != cmd ]] || envu+=(-u SHARE_MINTER_TOKEN)
+    nohup "${envu[@]}" bash "$0" serve >>"$root/serve.log" 2>&1 &   # serve exports SHARE_API_TOKEN_OFF: an inherited token serves --host cleanup only, never Access
   fi
-  wait_running 10 || die "server did not start, see $root/serve.log"
+  wait_running 10 || die_code server_not_started "server did not start, see $root/serve.log" "$me status"
+  local _; for _ in $(seq 1 20); do [[ -e $root/.serve-exit ]] || break; sleep 0.1; done   # serve drops a stale exit record once it answers; start returns after it
   warn_not_live
   echo "  serving in the background (pid $(cat "$pidfile")); $me stop to end"
 }
@@ -1427,6 +1585,7 @@ cmd_stop() {
   elif [[ -f $svc_unit ]]; then systemctl --user stop "$svc_label.service"
   else kill "$pid"; fi
   while kill -0 "$pid" 2>/dev/null; do sleep 0.2; done
+  serve_exit_write stopped   # after the serve pid is gone, so serve's own post-wait record never lands on top of it
   rm -f "$root/quick.url"
   if svc_installed; then echo "stopped (all links down; the service starts again at next login)"
   else echo "stopped (all links down)"; fi
@@ -1441,10 +1600,23 @@ cmd_status() {
     else
       echo "serving (pid $(cat "$pidfile")) on $host_name: links are live"
     fi
+  elif [[ $role == migrated ]]; then echo "not serving: this profile moved${migrated_to:+ to $migrated_to}; nothing serves here"
   elif [[ -z $host_name && $mode != quick ]]; then echo "not set up: $me setup <hostname>, or $me setup --quick"
   else echo "not serving: $me start"; fi
+  role_line
   svc_installed && echo "service: installed ($svc_label)"
+  ops_status
   cmd_ls
+}
+
+role_line() { # status: what kind of profile this is, in words
+  local w
+  case $role in
+    none) return 0 ;;
+    quick) w="quick tunnel" ;; origin) w="origin" ;; tenant_origin) w="tenant origin (R2 on)" ;;
+    r2_profile) w="r2 profile" ;; member) w="member" ;; migrated) w="moved to another machine" ;; *) w=$role ;;
+  esac
+  echo "role: $w"
 }
 
 cmd_state() { # read-only JSON snapshot for the menu bar app: never prunes, writes, needs a TTY, or touches the clipboard
@@ -1452,6 +1624,7 @@ cmd_state() { # read-only JSON snapshot for the menu bar app: never prunes, writ
   local mode_val="named" host_val="" state_val ready_val="false" serves_val="false" service_val="false" skipped_n=0
   [[ $mode == quick ]] && mode_val="quick"
   if running; then state_val="serving"
+  elif [[ $role == migrated ]]; then state_val="not_setup"   # an old Share Bar renders it neutral with Set Up; stopped would offer a Start that dies (DEC-3)
   elif [[ -n $host_name || $mode == quick ]]; then state_val="stopped"
   else state_val="not_setup"; fi
   if [[ $state_val != serving ]]; then ready_val="false"
@@ -1476,14 +1649,17 @@ cmd_state() { # read-only JSON snapshot for the menu bar app: never prunes, writ
     --arg host "$host_val" --arg hosts "$hosts" --argjson serves_here "$serves_val" \
     --argjson service "$service_val" --argjson skipped "$skipped_n" --argjson access_pending "$(pending_count)" \
     --argjson r2 "$([[ $r2on == 1 ]] && echo true || echo false)" --arg sdef "$([[ $r2on == 1 ]] && { cfg storage_default || true; })" \
-    --arg cerr "$list_cloud_error" --argjson cmore "$list_cloud_more" "$state_jq_row"'
+    --arg cerr "$list_cloud_error" --arg ccode "${list_cloud_error_code:-}" --argjson cmore "$list_cloud_more" \
+    --argjson codes_v "$codes_v" --arg role "$role" --arg tier "$tier" --argjson ops "$(ops_json)" "$state_jq_row"'
     {schema: 1, state: $state, ready: $ready, mode: $mode,
      host: (if $host == "" then null else $host end), hosts: $hosts,
      serves_here: $serves_here, service: $service, access_pending: $access_pending,
      shares: [inputs | select(length > 0) | row]}
     + (if $skipped > 0 then {skipped: $skipped} else {} end)
     + {r2: $r2} + (if $r2 then {storage_default: (if $sdef == "" then "local" else $sdef end)} else {} end)
-    + (if $cerr == "" then {} else {cloud_error: $cerr} end) + (if $cmore > 0 then {cloud_more: $cmore} else {} end)'
+    + (if $cerr == "" then {} else {cloud_error: $cerr} end) + (if $ccode == "" then {} else {cloud_error_code: $ccode} end)
+    + (if $cmore > 0 then {cloud_more: $cmore} else {} end) + {codes_v: $codes_v, role: $role}
+    + (if $tier == "" then {} else {tier: $tier} end) + {ops: $ops}'
 }
 state_jq_row='def row: split("\t") | {id: .[0], name: .[1], url: .[2], kind: .[3],
       own_host: (if .[4] == "" then null else .[4] end), expires: (.[5] | tonumber),
@@ -1499,6 +1675,18 @@ state_jq_row='def row: split("\t") | {id: .[0], name: .[1], url: .[2], kind: .[3
 # `cloudflared tunnel route dns` and checks the hostname through public DNS.
 
 cf_token="" account="" auth="" zone_name="" zone_id="" tun_id=""
+cf_soft() { # cf_soft METHOD PATH: cf's call that never dies; sets cf_code (HTTP status, 000 on a transport failure) and cf_body
+  local out
+  cf_code=000 cf_body=""
+  out="$(curl -sS --max-time 30 -w '\n%{http_code}' -X "$1" "$api$2" -H @<(printf 'Authorization: Bearer %s\n' "$cf_token") 2>/dev/null)" || return 0
+  cf_code="${out##*$'\n'}"; cf_body="${out%$'\n'*}"
+}
+tunnel_delete() { # tunnel_delete <account> <tid>: its connections, then the tunnel; 1 when it is gone already (404, or deleted_at set), so a rerun converges
+  cf_soft GET "/accounts/$1/cfd_tunnel/$2"
+  [[ $cf_code != 404 && -z "$(jq -r '(.result | objects | .deleted_at) // empty' <<<"$cf_body" 2>/dev/null)" ]] || return 1
+  cf_soft DELETE "/accounts/$1/cfd_tunnel/$2/connections"
+  cf DELETE "/accounts/$1/cfd_tunnel/$2" >/dev/null
+}
 cf() { # cf METHOD PATH [JSON]; the token goes through a header file, never argv
   local out
   out="$(curl -sS --max-time 30 -X "$1" "$api$2" -H @<(printf 'Authorization: Bearer %s\n' "$cf_token") \
@@ -1644,17 +1832,11 @@ cmd_profiles_json() { # one read for the menu app: every profile's `state` objec
 
 write_config_quick() { # quick mode: a mode flag and the serving facts, nothing Cloudflare
   hosts="${hosts:-$(this_host)}"
-  mkdir -p "$config_dir"
-  {
-    echo "mode=quick"
-    echo "hosts=$hosts"
-    echo "port=$port"
-  } >"$config.tmp"
-  mv -f "$config.tmp" "$config"
+  config_put "$own_write_config_quick" mode=quick "hosts=$hosts" "port=$port"
 }
 
 cmd_setup_quick() {
-  [[ -z $(cfg tunnel_id || true) ]] || die "already set up with a named tunnel; run '$me teardown' first"
+  [[ -z $(cfg tunnel_id || true) ]] || die_code quick_has_named_tunnel "already set up with a named tunnel; run '$me teardown' first" "$me teardown"
   local missing="" c
   for c in caddy cloudflared jq curl; do command -v "$c" >/dev/null || missing="$missing $c"; done
   [[ -z $missing ]] || die "missing:$missing (brew install$missing)"
@@ -1674,23 +1856,11 @@ cmd_setup_quick() {
   echo "ready:      https://$q/ is live. The URL changes on every start. Next: $me add <file|dir>"
 }
 
-write_config() { # write_config <tunnel_id> <tunnel_name>; keeps a token_cmd and an api_token_cmd line if there was one
-  local keep keep_api; keep="$(cfg token_cmd || true)"; keep_api="$(cfg api_token_cmd || true)"
+write_config() { # write_config <tunnel_id> <tunnel_name>: the tunnel keys; token_cmd, api_token_cmd, the tenant keys and every other line stay
+  local z=()
   hosts="${hosts:-$(this_host)}"
-  mkdir -p "$config_dir"
-  {
-    echo "hostname=$host_name"
-    echo "tunnel_id=$1"
-    echo "tunnel_name=$2"
-    echo "auth=$auth"
-    echo "hosts=$hosts"
-    echo "port=$port"
-    [[ -n $zone_name ]] && echo "zone=$zone_name"
-    [[ -n $keep ]] && echo "token_cmd=$keep"
-    [[ -n $keep_api ]] && echo "api_token_cmd=$keep_api"
-    if [[ -f $config ]]; then grep -E '^(bucket|r2_endpoint|storage_default|aliases)=' "$config" || true; fi   # an origin with R2 on stays on through a tunnel rerun
-  } >"$config.tmp"
-  mv -f "$config.tmp" "$config"
+  [[ -z $zone_name ]] || z=("zone=$zone_name")
+  config_put "$own_write_config" "hostname=$host_name" "tunnel_id=$1" "tunnel_name=$2" "auth=$auth" "hosts=$hosts" "port=$port" ${z[@]+"${z[@]}"}
 }
 
 # --- own hostnames: one CNAME + one ingress rule per --host share ---
@@ -1973,6 +2143,88 @@ EOF
 access_scope_line() { echo "the token lacks '$1'; add it at https://dash.cloudflare.com/?to=/:account/api-tokens (account API tokens), then: $me api-token --check"; }
 access_enable_line() { echo "Cloudflare Access is not enabled on the account that owns $zone_name; enable Zero Trust for this account in the Cloudflare dashboard, then: $me api-token --check"; }
 
+# --- admin and minter tokens (G13): a command in the config prints each, never the token itself (ADR-0009, DEC-15, DEC-35) ---
+admin_token_src="" minter_token_src="" token_cmd_out=""
+token_cmd_run() { # token_cmd_run <command> <key> <code> <next>: token_cmd_out = its first stdout line; neither of its streams is ever printed
+  local rc=0 out
+  out="$(eval "$1" 2>/dev/null)" || rc=$?
+  [[ $rc == 0 ]] || die_code "$3" "$2 exited $rc; its output is not shown (run it by hand to see why); nothing was changed" "$4"
+  token_cmd_out="${out%%$'\n'*}"
+  [[ $token_cmd_out =~ ^[A-Za-z0-9_-]+$ ]] || { token_cmd_out=""; die_code "$3" "$2 printed no token on its first line (letters, digits, - and _ only); nothing was changed" "$4"; }
+}
+admin_token_resolve() { # admin_token_resolve required|optional [what]: CLOUDFLARE_API_TOKEN wins; else admin_token_cmd, once per process, into this shell only (never exported, never stored)
+  [[ -z $admin_token_src ]] || return 0
+  if [[ -n ${CLOUDFLARE_API_TOKEN:-} ]]; then admin_token_src="env"; return 0; fi
+  local cmd; cmd="$(cfg admin_token_cmd || true)"
+  if [[ -z $cmd ]]; then
+    [[ $1 == required ]] || return 0   # optional: today's path (the browser-login cert, or the verb's own refusal)
+    die_code admin_token_missing "${2:-this} needs the admin token: set CLOUDFLARE_API_TOKEN, or store a command that prints it with $me admin-token --cmd '<command>'; nothing was changed" "$me admin-token --cmd '<command>'"
+  fi
+  token_cmd_run "$cmd" admin_token_cmd admin_token_cmd_failed "$me admin-token --test"
+  CLOUDFLARE_API_TOKEN="$token_cmd_out" token_cmd_out="" admin_token_src=cmd
+}
+minter_token_resolve() { # minter_token_resolve: SHARE_MINTER_TOKEN wins; else minter_token_cmd, once per process, into this shell only; minter paths only
+  [[ -z $minter_token_src ]] || return 0
+  if [[ -n ${SHARE_MINTER_TOKEN:-} ]]; then minter_token_src="env"; return 0; fi
+  local cmd; cmd="$(cfg minter_token_cmd || true)"
+  [[ -n $cmd ]] || die_code minter_token_missing "this needs the minter token (API Tokens Read and Write): set SHARE_MINTER_TOKEN, or store a command that prints it with $me minter-token --cmd '<command>'; nothing was changed" "$me minter-token --cmd '<command>'"
+  token_cmd_run "$cmd" minter_token_cmd minter_token_cmd_failed "$me minter-token --test"
+  SHARE_MINTER_TOKEN="$token_cmd_out" token_cmd_out="" minter_token_src=cmd
+}
+token_verb() { # token_verb admin|minter <args>: the admin-token and minter-token verbs; --cmd and --clear write the config, --test probes
+  local kind=$1 key="$1_token_cmd" usage="usage: share $1-token --cmd '<command>' | --clear | --test [--json]"; shift
+  case ${1:-} in
+    --cmd) [[ $# -eq 2 && -n $2 ]] || die "$usage"
+      config_put "$key" "$key=$2"
+      echo "token:      $key stored in $config (a command, never the token; it runs only on $kind paths)" ;;
+    --clear) [[ $# -eq 1 ]] || die "$usage"
+      config_put "$key"
+      echo "token:      $key removed from $config" ;;
+    --test) [[ $# -eq 1 || ( $# -eq 2 && $2 == --json ) ]] || die "$usage"
+      if [[ $kind == admin ]]; then admin_token_test "${2:-}"; else minter_token_test "${2:-}"; fi ;;
+    *) die "$usage" ;;
+  esac
+}
+admin_token_test() { # admin_token_test [--json]: one read per capability with the resolved admin token; the token and the command's output are never printed
+  local worker="share-${host_name//./-}" k can="{}" ok
+  need_host
+  admin_token_resolve required "admin-token --test"
+  api_token="$CLOUDFLARE_API_TOKEN"
+  r2_setup_zone
+  r2_api GET "/accounts/$acct/workers/scripts/$worker/settings"   # first: a token that cannot read the Worker's settings is no admin token
+  case $cf_code in
+    200|404) ;;
+    401|403) api_token=""; die_code admin_token_not_admin "the token cannot read Worker $worker's settings (HTTP $cf_code): it is not an admin token" "$me admin-token --cmd '<command>'" ;;
+    *) api_token=""; die "reading Worker $worker's settings answered HTTP $cf_code; the token was not judged" ;;
+  esac
+  can="$(jq -c '. + {workers: true}' <<<"$can")"
+  for k in tunnels dns r2 connectivity; do
+    case $k in
+      tunnels) r2_api GET "/accounts/$acct/cfd_tunnel?per_page=1" ;;
+      dns) r2_api GET "/zones/$zone_id/dns_records?per_page=1" ;;
+      r2) r2_api GET "/accounts/$acct/r2/buckets" ;;
+      connectivity) r2_api GET "/accounts/$acct/connectivity/directory/services?per_page=1" ;;
+    esac
+    ok=false; [[ $cf_code == 200 ]] && ok=true
+    can="$(jq -c --arg k "$k" --argjson v "$ok" '. + {($k): $v}' <<<"$can")"
+  done
+  api_token=""
+  if [[ ${1:-} == --json ]]; then jq -nc --arg s "$admin_token_src" --argjson can "$can" '{source: $s, can: $can}'; return 0; fi
+  echo "admin token: from ${admin_token_src/cmd/admin_token_cmd}"
+  jq -r 'to_entries[] | "  \(.key): \(if .value then "yes" else "no" end)"' <<<"$can"
+}
+minter_token_test() { # minter_token_test [--json]: one read, GET /user/tokens; the token and the command's output are never printed
+  local ok=false
+  minter_token_resolve
+  api_token="$SHARE_MINTER_TOKEN"
+  r2_api GET "/user/tokens?per_page=1"
+  api_token=""
+  [[ $cf_code == 200 ]] && ok=true
+  if [[ ${1:-} == --json ]]; then jq -nc --arg s "$minter_token_src" --argjson ok "$ok" '{source: $s, can: {list_tokens: $ok}}'; return 0; fi
+  echo "minter token: from ${minter_token_src/cmd/minter_token_cmd}"
+  echo "  list_tokens: $([[ $ok == true ]] && echo yes || echo no)"
+}
+
 cf_try() { # cf_try METHOD PATH [JSON]: like cf() but never dies; sets cf_body, cf_code (HTTP status, 000 on transport failure), cf_err (first errors[].code).
   # Call it directly, never inside $( ): globals set in a command substitution are lost. The token goes through a header file, never argv.
   local out
@@ -2172,7 +2424,8 @@ EOF
 }
 
 # the pending file: <share id>\t<app uuid or -:<nonce>>\t<owner pid>\t<owner start>\t<created epoch>; every read and write under the index lock
-proc_start() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }
+proc_start() { LC_ALL=C TZ=UTC0 ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }   # pinned: a locale or zone never changes a start another process compares (DEC-23, DEC-34)
+proc_start_local() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }   # the caller's own format, which a pre-upgrade CLI wrote
 own_start() { [[ -n $own_start_v ]] || own_start_v="$(proc_start $$)"; echo "$own_start_v"; }
 pending_add() { # pending_add <id> <app> [created] [owner pid]: an owner of 0 (a deferred delete) is dead by definition, so the next sweep claims it
   local o="${4-$$}" st="-"; o="${o:-0}"   # an empty fourth argument means "no owner", never this pid
@@ -2212,7 +2465,161 @@ pending_count() { # pending_count [live|bad]: every non-empty line; `live` the w
 }
 owner_live() { # owner_live <pid> <start>: alive, a share process, and the same start time (pid reuse, share serve included)
   [[ $1 != 0 ]] || return 1   # kill -0 0 would signal the process group and answer yes
-  kill -0 "$1" 2>/dev/null && [[ $(ps -o command= -p "$1" 2>/dev/null) == *share* && "$(proc_start "$1")" == "$2" ]]
+  kill -0 "$1" 2>/dev/null && [[ $(ps -o command= -p "$1" 2>/dev/null) == *share* ]] || return 1
+  [[ "$(proc_start "$1")" != "$2" ]] || return 0
+  # one release only (DEC-34; drop in the release after next): a start a pre-upgrade CLI wrote in this same environment
+  [[ -n $2 && "$(proc_start_local "$1")" == "$2" ]]
+}
+
+# --- the step journal: one file per running multi-step verb, $root/ops/<verb>.<pid>.json (DEC-5) ---
+# op_begin before the first step, op_step <n> at each step, op_done on success. A die or a signal leaves the
+# file at the step it reached; the next run of the verb reports it and runs from step 1 again, each step
+# skipping what is already in place. The file never holds a token, a secret, or a single-use code.
+op_verb="" op_file="" op_of=0 op_n=0 op_name="" op_started=0 op_conc=0 op_rerun_json='[]' op_rerun="" op_rollback_json="" op_rollback=""
+op_prev_step="" op_prev_name=""   # op_prev_name: the step name a resuming verb reads (SPEC-009's join)
+op_steps_setup_tunnel() { printf '%s\n' "1 auth" "2 tunnel" "3 route" "4 dns" "5 token" "6 config" "7 service" "8 live"; }
+op_steps_setup_r2() { printf '%s\n' "1 alias" "2 worker" "3 bucket" "4 alias-domain" "5 routes" "6 snapshot" "7 alias-apps" "8 deploy" \
+  "9 pointers" "10 access" "11 config" "12 marker" "13 route" "14 alias-bind" "15 probe" "16 handoff"; }
+op_steps_no_r2() { printf '%s\n' "1 route" "2 config"; }
+op_steps_teardown() { printf '%s\n' "1 gated" "2 service" "3 dns" "4 hosts" "5 tunnel" "6 token" "7 config"; }
+op_steps_teardown_purge() { printf '%s\n' "1 shares" "2 records" "3 marker" "4 domain" "5 worker" "6 bucket" "7 local"; }
+op_steps_migrate() { printf '%s\n' "1 copy" "2 switch" "3 verify" "4 retire" "5 dns" "6 tunnel" "7 token"; }
+op_steps() { # op_steps <verb>: its "n name" lines; nothing for a verb with no list
+  local f="op_steps_${1//-/_}"
+  if declare -F "$f" >/dev/null; then "$f"; fi
+  return 0
+}
+op_argv_json() { # op_argv_json <arg>...: a JSON array of strings, one jq per argument so a newline or quote survives
+  local a s out=""
+  for a in "$@"; do s="$(printf '%s' "$a" | jq -Rs .)"; out="${out:+$out,}$s"; done
+  printf '[%s]' "$out"
+}
+op_display() { # op_display <arg>...: "share" plus each argument through printf %q; for reading only, never run
+  local a q out=share
+  for a in "$@"; do printf -v q '%q' "$a"; out="$out $q"; done
+  printf '%s' "$out"
+}
+op_read() { # op_read <file>: op_r_* from one v1 journal file; 1 for a file that is not one (truncated, not JSON, an unknown v)
+  local line
+  op_r_pid="" op_r_start="" op_r_step="" op_r_of="" op_r_name="" op_r_verb="" op_r_rerun="" op_r_rollback=""
+  line="$(jq -r 'select(.v == 1) | [.pid, .start, .step, .of, .name, .verb, .rerun, (.rollback // "")] | map(tostring) | join("\u001f")' "$1" 2>/dev/null)" || return 1
+  [[ -n $line ]] || return 1
+  IFS=$'\037' read -r op_r_pid op_r_start op_r_step op_r_of op_r_name op_r_verb op_r_rerun op_r_rollback <<<"$line"
+  [[ $op_r_pid =~ ^[0-9]+$ && $op_r_step =~ ^[0-9]+$ && $op_r_of =~ ^[0-9]+$ ]]
+}
+op_write() { # the journal file at the current step, tmp + mv; a failed write (disk full) is ignored: the journal never blocks its verb
+  [[ -n $op_file ]] || return 0
+  local tmp="$root/ops/.$op_verb.$$.json.tmp"
+  if jq -nc --arg verb "$op_verb" --argjson step "$op_n" --argjson of "$op_of" --arg name "$op_name" --argjson pid "$$" \
+      --arg start "$(own_start)" --argjson started "$op_started" --argjson rerun_argv "$op_rerun_json" --arg rerun "$op_rerun" \
+      --argjson id "${op_id_json:-null}" --arg rb "$op_rollback" --argjson rb_argv "${op_rollback_json:-null}" \
+      '{v: 1, verb: $verb, step: $step, of: $of, name: $name, pid: $pid, start: $start, started: $started,
+        rerun_argv: $rerun_argv, id: $id, rerun: $rerun} + (if $rb_argv == null then {} else {rollback_argv: $rb_argv, rollback: $rb} end)' \
+      >"$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$op_file" 2>/dev/null || rm -f "$tmp"
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
+}
+op_begin() { # op_begin <verb> [--concurrent] <rerun args...> [-- <rollback args...>]: refuse a live run of the same verb, report and clear a dead one, write step 0
+  local verb=$1 a inrb=0 f rerun=() rb=() pfx=(); shift
+  op_conc=0; if [[ ${1:-} == --concurrent ]]; then op_conc=1; shift; fi
+  for a in "$@"; do
+    if [[ $inrb == 0 && $a == -- ]]; then inrb=1; elif [[ $inrb == 1 ]]; then rb+=("$a"); else rerun+=("$a"); fi
+  done
+  [[ -z $profile ]] || pfx=(--profile "$profile")
+  op_verb=$verb op_n=0 op_name="" op_prev_step="" op_prev_name="" op_started="$(date +%s)"
+  op_of="$(op_steps "$verb" | grep -c . || true)"
+  op_rerun_json="$(op_argv_json ${pfx[@]+"${pfx[@]}"} ${rerun[@]+"${rerun[@]}"})"
+  op_rerun="$(op_display ${pfx[@]+"${pfx[@]}"} ${rerun[@]+"${rerun[@]}"})"
+  op_rollback_json="" op_rollback=""
+  if [[ ${#rb[@]} -gt 0 ]]; then
+    op_rollback_json="$(op_argv_json ${pfx[@]+"${pfx[@]}"} "${rb[@]}")"; op_rollback="$(op_display ${pfx[@]+"${pfx[@]}"} "${rb[@]}")"
+  fi
+  mk_root; mkdir -p "$root/ops" 2>/dev/null && chmod 700 "$root/ops" 2>/dev/null
+  op_file="$root/ops/$verb.$$.json"
+  if [[ $op_conc == 0 ]]; then   # one owner at a time: a live run of this verb refuses; a dead one is reported and removed
+    lock_take ops
+    for f in "$root/ops/$verb".*.json; do
+      [[ -e $f && $f != "$op_file" ]] || continue
+      if op_read "$f"; then
+        if owner_live "$op_r_pid" "$op_r_start"; then
+          lock_release ops; op_file=""
+          die_code op_running "$verb is already running (pid $op_r_pid, step $op_r_step of $op_r_of); wait for it to finish" "$me state"
+        fi
+        echo "previous $verb died at step $op_r_step ($op_r_name); continuing"
+        # shellcheck disable=SC2034 # op_prev_name is read by the resuming verbs SPEC-009 adds
+        if [[ -z $op_prev_step || $op_r_step -gt $op_prev_step ]]; then op_prev_step=$op_r_step op_prev_name=$op_r_name; fi
+      fi
+      rm -f "$f"   # transient bookkeeping, like the pidfile: never to the Trash (DEC-24)
+    done
+  fi
+  op_write
+  [[ $op_conc == 1 ]] || lock_release ops
+}
+op_step() { # op_step <n>: the step this run reached; SHARE_PROGRESS=1 prints one progress line; SHARE_OP_PAUSE=<verb>:<n> holds here (test seam)
+  [[ -n $op_file ]] || return 0
+  op_n=$1 op_name="$(op_steps "$op_verb" | awk -v n="$1" '$1 == n {print $2; exit}')"
+  op_write
+  if [[ ${SHARE_PROGRESS:-} == 1 ]]; then   # unprefixed, so a reader of the last "share: " line never takes it for the error
+    jq -nc --arg v "$op_verb" --argjson n "$op_n" --argjson of "$op_of" --arg name "$op_name" '{progress: {verb: $v, step: $n, of: $of, name: $name}}' >&2 2>/dev/null || true
+  fi
+  if [[ ${SHARE_OP_PAUSE:-} == "$op_verb:$1" ]]; then   # held at this step until the release file appears, 60 s at most
+    local rel="$root/.op-release-$op_verb-$1" w=0
+    while [[ ! -e $rel && $w -lt 300 ]]; do sleep 0.2; w=$((w + 1)); done
+    rm -f "$rel"
+  fi
+  return 0
+}
+op_done() { # op_done: this run's file goes; a success also removes every dead journal of the profile, except dead adds, which only prune consumes (DEC-33)
+  [[ -n $op_file ]] || return 0
+  rm -f "$op_file"; op_file=""
+  [[ $op_conc == 0 ]] || return 0   # a concurrent verb (add) runs no sweep of its own
+  local f
+  lock_take ops
+  for f in "$root/ops/"*.json; do
+    [[ -e $f ]] || continue
+    case ${f##*/} in add.*) continue ;; esac
+    op_read "$f" || continue   # a file this share cannot read (a newer CLI's?) goes only with the next run of its own verb
+    owner_live "$op_r_pid" "$op_r_start" && continue   # another process's live run is never touched
+    rm -f "$f"
+  done
+  lock_release ops
+}
+ops_dead() { # ops_dead <verb>: 0 when a dead journal of that verb is on disk
+  local f
+  for f in "$root/ops/$1".*.json; do
+    [[ -e $f ]] || continue
+    if op_read "$f" && owner_live "$op_r_pid" "$op_r_start"; then continue; fi
+    return 0
+  done
+  return 1
+}
+ops_json() { # state.ops: [{verb, step, of, name, alive, rerun, rerun_argv, rollback?, rollback_argv?}]; reads only
+  local f o alive out=""
+  for f in "$root/ops/"*.json; do
+    [[ -e $f ]] || continue
+    o=""
+    if op_read "$f"; then
+      alive=false; owner_live "$op_r_pid" "$op_r_start" && alive=true
+      o="$(jq -c --argjson alive "$alive" '{verb, step, of, name, alive: $alive, rerun, rerun_argv}
+        + (if has("rollback_argv") then {rollback, rollback_argv} else {} end)' "$f" 2>/dev/null)" || o=""
+    fi
+    [[ -n $o ]] || o='{"verb":"?","alive":false}'
+    out="${out:+$out,}$o"
+  done
+  printf '[%s]' "$out"
+}
+ops_status() { # status: one line per journal file; a dead op names its rerun, and its rollback when it has one
+  local f
+  for f in "$root/ops/"*.json; do
+    [[ -e $f ]] || continue
+    if ! op_read "$f"; then echo "op:         ${f##*/} is not a journal this share reads; the next run of its verb removes it"; continue; fi
+    if owner_live "$op_r_pid" "$op_r_start"; then echo "$op_r_verb running (pid $op_r_pid): step $op_r_step of $op_r_of ($op_r_name)"
+    else echo "$op_r_verb stopped at step $op_r_step of $op_r_of ($op_r_name); rerun: $op_r_rerun${op_r_rollback:+; or roll back: $op_r_rollback}"; fi
+  done
+  return 0
 }
 
 access_create() { # access_create <id> [fqdn]: the intent line, the app, its uuid into the line, then a read-back; sets access_app and access_aud
@@ -2450,9 +2857,7 @@ cmd_api_token() { # cmd_api_token [--cmd '<command>' | --check]: store a token c
         [[ -n $tok ]] || die "the command printed no token; run it by hand to see why; nothing was stored"
         r2_publisher_check "$tok"; tok=""
       fi
-      mkdir -p "$config_dir"
-      { [[ -f $config ]] && { grep -v '^api_token_cmd=' "$config" || true; }; echo "api_token_cmd=$2"; } >"$config.tmp"
-      mv -f "$config.tmp" "$config"
+      config_put api_token_cmd "api_token_cmd=$2"
       echo "token:      api_token_cmd stored in $config (no secret written)" ;;
     "")
       if [[ $backend == r2 ]]; then url="$(r2_publisher_token_url)"; else url="$(access_token_url)"; fi
@@ -2879,7 +3284,7 @@ r2_menu_token() { # state (the menu poll): the bucket is read only with a stored
 list_bucket() { # list_bucket ls|state <local ids>: the bucket's display rows (fields split by \x1f), "#more <n>" first; run in a subshell, so a die becomes cloud_error
   local id name src date exp opts us=$'\x1f'
   if [[ $1 == state ]]; then
-    r2_menu_token || die "the menu reads cloud links only with a stored token: $me api-token"
+    r2_menu_token || die_code cloud_token_missing "the menu reads cloud links only with a stored token: $me api-token" "$me api-token"
     r2_read 25 "$2"
   elif [[ -z ${r2_snap_file:-} ]]; then r2_read; fi   # a member's ls reuses the read its prune made
   echo "#more ${r2_list_more:-0}"
@@ -2897,7 +3302,7 @@ list_bucket() { # list_bucket ls|state <local ids>: the bucket's display rows (f
 list_rows() { # list_rows ls|state|brief: this profile's display rows into list_out (fields split by \x1f): id name src added expires opts storage type by
   # sets list_cloud_error and list_cloud_more. Bucket rows are display data: they never reach rows(), the index, a Caddyfile, or a stage path
   local id name src date exp opts lids="" f me_by us=$'\x1f'
-  list_out="" list_cloud_error="" list_cloud_more=0
+  list_out="" list_cloud_error="" list_cloud_error_code="" list_cloud_more=0
   if [[ $backend != r2 ]]; then
     me_by="$(r2_by)"
     while IFS=$'\t' read -r id name src date exp opts; do
@@ -2915,7 +3320,9 @@ list_rows() { # list_rows ls|state|brief: this profile's display rows into list_
     list_out+="$(sed '1d' "$f")"
     [[ -z $list_out ]] || list_out+=$'\n'
   else
-    list_cloud_error="$(awk 'NF {l = $0} END {print l}' "$f.err")"; list_cloud_error="${list_cloud_error#share: }"
+    # SHARE_ERROR_JSON=1 adds a JSON line after the die's own line: the human text stays the last other line, the code comes from it
+    list_cloud_error="$(awk 'NF && index($0, "{\"error\":") != 1 {l = $0} END {print l}' "$f.err")"; list_cloud_error="${list_cloud_error#share: }"
+    list_cloud_error_code="$(awk 'index($0, "{\"error\":") == 1 {l = $0} END {print l}' "$f.err" | jq -r '.error.code // empty' 2>/dev/null || true)"
     list_cloud_error="${list_cloud_error:-the bucket could not be read}"
   fi
   rm -f "$f" "$f.err"
@@ -3454,6 +3861,8 @@ cmd_status_r2() { # read-only: the Worker's health and version, then the listing
   elif [[ $hz_code == 200 ]]; then echo "gated:      off (the Worker has no Access team; add --access is refused)"; fi
   [[ $hz_code != 200 || $hz_pair == "$WORKER_VERSION $WORKER_SHA" ]] ||
     echo "the Worker at $host_name runs $hz_pair; this share ships $WORKER_VERSION $WORKER_SHA; whoever holds the admin token reruns '$me setup $host_name --backend r2 --bucket $(cfg bucket || true)'"
+  role_line
+  ops_status
   cmd_prune quiet
   [[ -z ${r2_sweep_block:-} ]] || echo "orphan sweep blocked by $r2_sweep_block"
   waiting="$(rows | awk -F'\t' -v now="$(date +%s)" '$5 > 0 && $5 < now && (" " $6) ~ / access=/ {c++} END {print c + 0}')"
@@ -3467,14 +3876,16 @@ cmd_state_r2() { # the Share Bar snapshot for an r2 profile: schema 1 plus "back
     state_val="serving"   # nothing runs here; the Worker serves while the account does
     r2_healthz 2; [[ $hz_code == 200 ]] && ready="true"
   fi
-  list_out="" list_cloud_error="" list_cloud_more=0
+  list_out="" list_cloud_error="" list_cloud_error_code="" list_cloud_more=0
   [[ -z $host_name || ${SHARE_STATE_BRIEF:-0} == 1 ]] || list_rows state
   state_lines | jq -nR --arg state "$state_val" --argjson ready "$ready" --arg host "$host_name" --argjson access_pending "$(pending_count)" \
-    --arg cerr "$list_cloud_error" --argjson cmore "$list_cloud_more" "$state_jq_row"'
+    --arg cerr "$list_cloud_error" --arg ccode "${list_cloud_error_code:-}" --argjson cmore "$list_cloud_more" \
+    --argjson codes_v "$codes_v" --arg role "$role" --argjson ops "$(ops_json)" "$state_jq_row"'
     {schema: 1, state: $state, ready: $ready, mode: "named", host: (if $host == "" then null else $host end), hosts: "",
      serves_here: false, service: false, access_pending: $access_pending, backend: "r2",
      shares: [inputs | select(length > 0) | row], r2: true}
-    + (if $cerr == "" then {} else {cloud_error: $cerr} end) + (if $cmore > 0 then {cloud_more: $cmore} else {} end)'
+    + (if $cerr == "" then {} else {cloud_error: $cerr} end) + (if $ccode == "" then {} else {cloud_error_code: $ccode} end)
+    + (if $cmore > 0 then {cloud_more: $cmore} else {} end) + {codes_v: $codes_v, role: $role, ops: $ops}'
 }
 
 r2_own_get() { # r2_own_get <id>: the "<id>\t<prefix>\t<source>" line for one of this install's own adds
@@ -3695,6 +4106,8 @@ r2_api_dry() { # the account API under SHARE_R2_DRY: state files in $SHARE_R2_DR
     "POST "*/analytics_engine/sql)
       printf 'SQL %s\n' "$3" >>"$root/r2-calls.log"
       cf_body="$(cat "$d/sql.json" 2>/dev/null || echo '{"meta":[],"data":[],"rows":0}')" ;;
+    "GET "*/cfd_tunnel*|"GET "*/connectivity/directory/services*|"GET /user/tokens?"*)   # admin-token and minter-token --test probes
+      [[ ${SHARE_R2_DRY_ROLE:-} != deny ]] || { cf_code=403 cf_body=$deny; } ;;
     "GET "*/access/organizations)
       if [[ -f $d/team ]]; then cf_body="{\"success\":true,\"result\":{\"auth_domain\":\"$(cat "$d/team")\"}}"
       else cf_code=403 cf_body=$deny; fi ;;
@@ -3814,32 +4227,22 @@ r2_setup_zone() { # r2_setup_zone: zone_name, zone_id, acct for the zone owning 
   die "no active Cloudflare zone for $host_name in this token's accounts; nothing was changed"
 }
 
-write_config_r2() { # write_config_r2 <bucket>: the r2 profile config; keeps api_token_cmd and r2_token_cmd; never a tunnel key
-  local keep_api keep_r2; keep_api="$(cfg api_token_cmd || true)"; keep_r2="$(cfg r2_token_cmd || true)"
-  mkdir -p "$config_dir"
-  {
-    echo "backend=r2"
-    echo "hostname=$host_name"
-    echo "zone=$zone_name"
-    echo "bucket=$1"
-    echo "port=r2"
-    echo "r2_endpoint=$r2_endpoint"
-    [[ -n ${r2_join_aliases:-} ]] && echo "aliases=$r2_join_aliases"   # a member's rm and expiry of a folded share delete its app
-    [[ -n $keep_api ]] && echo "api_token_cmd=$keep_api"
-    [[ -n $keep_r2 ]] && echo "r2_token_cmd=$keep_r2"
-  } >"$config.tmp"
-  mv -f "$config.tmp" "$config"
+write_config_r2() { # write_config_r2 <bucket>: the r2 profile config; never a tunnel key; api_token_cmd, r2_token_cmd and every other line stay
+  local a=()
+  [[ -z ${r2_join_aliases:-} ]] || a=("aliases=$r2_join_aliases")   # a member's rm and expiry of a folded share delete its app
+  config_put "$own_write_config_r2" backend=r2 "hostname=$host_name" "zone=$zone_name" "bucket=$1" port=r2 "r2_endpoint=$r2_endpoint" ${a[@]+"${a[@]}"}
 }
 
 tenant_admin() { # tenant_admin <bucket>: setup --r2 and --no-r2 on the origin: the profile checks, the admin token, zone, and the admin's own S3 pair
   [[ $mode != quick ]] || die "$host_name is a quick tunnel; R2 needs a named tunnel tenant: '$me teardown', then '$me setup <hostname>'"
+  migrated_guard
   [[ -n $(cfg tunnel_id || true) && "$(cfg hostname || true)" == "$host_name" && $backend != r2 ]] ||
     die "this profile is not the tunnel origin of $host_name; run '$me setup $host_name' on the origin first"
   host_ok || die "run this on the origin, $hosts"
   local c
   for c in jq curl; do command -v "$c" >/dev/null || die "missing: $c (brew install $c)"; done
-  api_token="${CLOUDFLARE_API_TOKEN:-}"
-  [[ -n $api_token ]] || die "setup --r2 and --no-r2 read the tenant admin token from CLOUDFLARE_API_TOKEN only (Workers Scripts Edit, Workers R2 Storage Edit, Workers Routes Edit, Zone Read, DNS Read, Access Organizations Read); nothing was changed"
+  admin_token_resolve required "setup --r2 and --no-r2 (Workers Scripts Edit, Workers R2 Storage Edit, Workers Routes Edit, Zone Read, DNS Read, Access Organizations Read)"
+  api_token="$CLOUDFLARE_API_TOKEN"
   r2_setup_zone
   r2_endpoint="https://$acct.r2.cloudflarestorage.com" r2_bucket=$1
   r2_api GET /user/tokens/verify   # the admin token's own S3 pair, as SPEC-007's setup uses it
@@ -3865,10 +4268,8 @@ tenant_route() { # tenant_route <worker>: the routes on the zone; sets route_id 
 }
 
 tenant_config() { # tenant_config [<bucket> <endpoint> <storage_default> <aliases>]: the four tenant keys in the tunnel config; none given drops them
-  local tmp; tmp="$(mktemp "$config_dir/.config.XXXXXX")"
-  grep -vE '^(bucket|r2_endpoint|storage_default|aliases)=' "$config" >"$tmp" || true
-  [[ $# == 0 ]] || printf 'bucket=%s\nr2_endpoint=%s\nstorage_default=%s\naliases=%s\n' "$1" "$2" "$3" "$4" >>"$tmp"
-  mv -f "$tmp" "$config"
+  if [[ $# == 0 ]]; then config_put "$own_tenant_config"
+  else config_put "$own_tenant_config" "bucket=$1" "r2_endpoint=$2" "storage_default=$3" "aliases=$4"; fi
   if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then if [[ $# == 0 ]]; then echo "CONFIG r2 off"; else echo "CONFIG r2 on"; fi >>"$root/r2-calls.log"; fi
 }
 
@@ -3955,8 +4356,8 @@ alias_rollback() { # alias_rollback: the alias rollback list on stderr, in the o
 }
 
 tenant_die() { # tenant_die <msg>: a die after the config write names the rollback: the alias list when an alias is folded, --no-r2 otherwise
-  if [[ -n ${alias:-} ]]; then alias_rollback; die "$1; roll back with the alias rollback list above, or rerun the same setup"; fi
-  die "$1; roll back with: $me setup $host_name --no-r2"
+  if [[ -n ${alias:-} ]]; then alias_rollback; die_code tenant_rollback "$1; roll back with the alias rollback list above, or rerun the same setup" "$me setup $host_name --r2 --bucket ${bucket:-<name>}"; fi
+  die_code tenant_rollback "$1; roll back with: $me setup $host_name --no-r2" "$me setup $host_name --no-r2"
 }
 
 alias_own_handoff() { # the local profile serving $alias hands its r2-own lines to this profile, so refresh keeps working on the shares it added; its own file stays
@@ -3986,11 +4387,21 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alia
   local cur; cur="$(cfg bucket || true)"
   [[ -z $cur || $cur == "$bucket" ]] || die "R2 is on for $host_name with bucket $cur; '$me setup $host_name --no-r2' first"
   [[ $tunnel == 0 ]] || running || die "$host_name is not serving on this machine; '$me start', then rerun; nothing was changed"
+  local rerun=(setup "$host_name" --r2 --bucket "$bucket") rollback=(-- setup "$host_name" --no-r2)
+  [[ -z $sdef ]] || rerun+=(--storage-default "$sdef")
+  [[ $force != 1 ]] || rerun+=(--force)
+  [[ -z ${4:-} ]] || rerun+=(--alias "$4")
+  [[ -z $alias ]] || rollback=()   # after an alias fold --no-r2 refuses; the rollback is the alias list tenant_die prints
+  migrated_guard   # these two refusals come before the journal: nothing is written for them
+  admin_token_resolve required "setup --r2 and --no-r2 (Workers Scripts Edit, Workers R2 Storage Edit, Workers Routes Edit, Zone Read, DNS Read, Access Organizations Read)"
+  op_begin setup-r2 "${rerun[@]}" ${rollback[@]+"${rollback[@]}"}
+  op_step 1
   sdef="${sdef:-$(cfg storage_default || true)}"; sdef="${sdef:-local}"
   tenant_admin "$bucket"
   [[ -z $alias || $alias == *".$zone_name" ]] || die "--alias $alias is not in zone $zone_name, where the tenant Worker lives; nothing was changed"
 
   # step 2: only an admin token reads the Worker's settings
+  op_step 2
   local first=0 dep_v=0 dep_sha="" dep_team="" dep_pass="" dep_aliases=""
   r2_api GET "/accounts/$acct/workers/scripts/$worker/settings"
   case $cf_code in
@@ -4015,6 +4426,7 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alia
   fi
 
   # step 3, SPEC-007 step 5: a private bucket, empty or holding this host's marker
+  op_step 3
   local bucket_new=0 marker="" marker_etag=""
   r2_api GET "/accounts/$acct/r2/buckets/$bucket"
   case $cf_code in
@@ -4042,6 +4454,7 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alia
   esac
 
   # step 4: the alias's custom domain is its own share Worker on this bucket, or this one's after an earlier fold
+  op_step 4
   local alias_svc=""
   if [[ -n $alias ]]; then
     local aw="share-${alias//./-}"
@@ -4059,6 +4472,7 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alia
   fi
 
   # step 5: no route of another script on this host
+  op_step 5
   tenant_route "$worker"
 
   local team=""   # SPEC-007 step 7: the Access team for gated cloud links
@@ -4071,6 +4485,7 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alia
   fi
 
   # step 6, under the index lock through step 11 so a concurrent add waits: the bucket snapshot against the local index
+  op_step 6
   mkdir -p "$root"
   lock_take index
   local ids id clash=""
@@ -4084,9 +4499,11 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alia
     [[ -z $clash ]] || die "local links $clash share an id with a record in bucket $bucket (a cloud link); rm one of each pair, then rerun; nothing was changed"
   fi
   fold_apps="" fold_late=""
+  op_step 7
   [[ -z $alias || $bucket_new == 1 ]] || alias_scan strict   # step 7: every gated cloud link's app is the alias's (or this host's after a fold)
 
   # writes. A new bucket gets its marker before any pointer, so a die below leaves a bucket that names this host
+  op_step 8
   if [[ $bucket_new == 1 ]]; then
     r2_api POST "/accounts/$acct/r2/buckets" "{\"name\":\"$bucket\"}"
     [[ $cf_code == 200 ]] || die "creating bucket $bucket answered HTTP $cf_code"
@@ -4120,6 +4537,7 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alia
     die "$worker's workers.dev route still reads on; no route exists yet, nothing is exposed; rerun setup"
 
   # step 9: a pointer for every local row; one that holds this origin's pointer already is done
+  op_step 9
   local n=0 ptr_hint=""
   [[ -z $alias ]] || ptr_hint=" (or DELETE the v:2 pointers written so far: an older member sweep cannot read them)"
   for id in $ids; do
@@ -4137,6 +4555,7 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alia
   echo "pointers:   $n written"
 
   # step 10: each folded app gains this host's destinations (AUD kept); Access must enforce there before anything points visitors at it
+  op_step 10
   if [[ -n $fold_apps ]]; then
     alias_dests add || { alias_dests undo || true; die "moving the Access apps to $host_name answered HTTP $cf_code; the added destinations were removed; the route is not attached; rerun the same setup (or DELETE the v:2 pointers written so far)"; }
     local gid gaud
@@ -4149,10 +4568,12 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alia
   fi
 
   # step 11: the config, before the marker and the route, so every later die leaves a state a rerun and the rollback can read
+  op_step 11
   tenant_config "$bucket" "$r2_endpoint" "$sdef" "$alias"
   lock_release index
 
   # step 12: the marker names this host and its alias, written only over the copy read above
+  op_step 12
   if [[ -n $alias ]]; then
     local want; want="{\"v\":1,\"host\":\"$host_name\",\"aliases\":[\"$alias\"]}"
     if [[ "$(jq -c . <<<"${marker:-null}" 2>/dev/null)" != "$want" ]]; then
@@ -4164,6 +4585,7 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alia
   fi
 
   # step 13: the route; fail open at a request limit (a drop to the free plan) keeps machine links up
+  op_step 13
   local body="{\"pattern\":\"$host_name/*\",\"script\":\"$worker\",\"request_limit_fail_open\":true}"
   if [[ -z $route_id ]]; then
     r2_api POST "/zones/$zone_id/workers/routes" "$body"
@@ -4178,6 +4600,7 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alia
   fi
 
   # step 14: the alias's custom domain moves to this Worker in place (the plain PUT refuses a bound name)
+  op_step 14
   if [[ -n $alias && $alias_svc != "$worker" ]]; then
     r2_api_retry PUT "/accounts/$acct/workers/domains" "{\"hostname\":\"$alias\",\"service\":\"$worker\",\"zone_id\":\"$zone_id\",\"environment\":\"production\",\"override_existing_origin\":true}"
     [[ $cf_code == 200 ]] || tenant_die "binding $alias to $worker answered HTTP $cf_code (after up to 3 tries); ${alias_svc:-no Worker} still serves it"
@@ -4185,16 +4608,19 @@ cmd_setup_tenant() { # cmd_setup_tenant <bucket> <storage_default> <force> [alia
   fi
 
   # step 15: both legs, then a probe file through the tunnel leg, then the alias's 301
+  op_step 15
   r2_wait_healthz tenant
   if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then echo "TUNNEL-PROBE" >>"$root/r2-calls.log"
   else live_check 60 "$host_name" || tenant_die "a probe file did not answer through https://$host_name/ three times in a row; the tunnel leg is down"; fi
   [[ -z $alias ]] || alias_wait_301 || tenant_die "https://$alias/healthz did not answer 301 to https://$host_name/healthz three times in a row within ${SHARE_R2_WAIT:-300}s"
 
   # step 16: the folded apps drop the alias's destinations; this profile takes over the alias profile's own shares
+  op_step 16
   if [[ -n $alias ]]; then
     alias_dests drop || die "dropping $alias from the folded Access apps answered HTTP $cf_code; the fold serves; rerun the same setup to finish"
     alias_own_handoff
   fi
+  op_done
   echo "ready:      R2 is on for https://$host_name/ (bucket $bucket, storage default $sdef${alias:+, $alias redirects here}). Store this origin's publisher token: $me api-token"
 }
 
@@ -4213,13 +4639,17 @@ cmd_setup_no_r2() { # cmd_setup_no_r2: the rollback without an alias: the route 
     alias_rollback
     die "$alias redirects here; run the alias rollback above first; nothing was changed"
   fi
+  op_begin no-r2 setup "$host_name" --no-r2
+  op_step 1
   tenant_route "$worker"
   if [[ -n $route_id ]]; then
     r2_api DELETE "/zones/$zone_id/workers/routes/$route_id"
     [[ $cf_code == 200 || $cf_code == 404 ]] || die "deleting the route $host_name/* answered HTTP $cf_code; R2 stays on; rerun"
     echo "route:      $host_name/* removed"
   fi
+  op_step 2
   tenant_config
+  op_done
   echo "ready:      R2 is off for https://$host_name/: the tunnel serves it alone. The bucket, its records, and Worker $worker stay"
 }
 
@@ -4242,6 +4672,7 @@ cmd_setup_r2() { # cmd_setup_r2 <force> <bucket> <tname> <login> <service> <quic
   backend=r2 r2_bucket=$bucket
 
   # steps 1 to 7 only read; every refusal happens here, before the first write
+  admin_token_resolve optional   # B6: a publisher with no token keeps today's guidance block below
   api_token="${CLOUDFLARE_API_TOKEN:-}"
   [[ -n $api_token ]] || { r2_no_token "$bucket" >&2; exit 1; }
   r2_setup_zone
@@ -4454,6 +4885,7 @@ cmd_setup() {
     [[ -z "$(rows | awk -F'\t' '$6 ~ /(^| )access=/')" ]] ||
       die "this not-yet-set-up profile already holds gated shares; under $host_name they would be served with no gate; remove them first ('$me rm <id>', see '$me ls') or run '$me teardown'"
   fi
+  local tunnel_arg="$tunnel_name"
   tunnel_name="${tunnel_name:-share-${host_name//./-}}"
   local other   # two profiles on one hostname or one tunnel name would reuse, then delete, one tunnel
   for other in $(other_cfg hostname); do
@@ -4466,9 +4898,19 @@ cmd_setup() {
   local missing="" c
   for c in caddy cloudflared jq curl; do command -v "$c" >/dev/null || missing="$missing $c"; done
   [[ -z $missing ]] || die "missing:$missing (brew install$missing)"
+  if [[ $token_stdin == 0 ]]; then   # migrate's remote switch writes no journal: its rerun needs stdin; the local migrate journal covers it (B7)
+    local rerun=(setup "$host_name")
+    [[ -z $tunnel_arg ]] || rerun+=(--tunnel-name "$tunnel_arg")
+    [[ $force != 1 ]] || rerun+=(--force)
+    [[ $service == 1 ]] || rerun+=(--no-service)
+    [[ $login != 1 ]] || rerun+=(--login)
+    op_begin setup-tunnel "${rerun[@]}"
+  fi
+  op_step 1
   profile_port
 
   local zone="" zone_name za
+  [[ $login == 1 ]] || admin_token_resolve optional
   if [[ -n ${CLOUDFLARE_API_TOKEN:-} && $login == 0 ]]; then
     auth_api
     za="$(cf_zone)"; read -r zone account zone_name <<<"$za"
@@ -4497,6 +4939,7 @@ cmd_setup() {
     die "$host_name already resolves in public DNS; pick another hostname or rerun with --force"
   fi
 
+  op_step 2
   if [[ -n $tid ]]; then
     echo "tunnel:     reusing $tunnel_name"
   else
@@ -4504,10 +4947,12 @@ cmd_setup() {
     created=1
     echo "tunnel:     created $tunnel_name"
   fi
+  op_step 3
   cf PUT "/accounts/$account/cfd_tunnel/$tid/configurations" \
     "{\"config\":{\"ingress\":[{\"hostname\":\"$host_name\",\"service\":\"http://127.0.0.1:$port\"},{\"service\":\"http_status:404\"}]}}" >/dev/null
   echo "route:      $host_name -> 127.0.0.1:$port"
 
+  op_step 4
   local target="$tid.cfargotunnel.com" body out
   if [[ $auth == api ]]; then
     body="{\"type\":\"CNAME\",\"name\":\"$host_name\",\"content\":\"$target\",\"proxied\":true,\"comment\":\"share tunnel $tunnel_name\"}"
@@ -4531,6 +4976,7 @@ cmd_setup() {
     echo "dns:        CNAME $host_name -> tunnel"
   fi
 
+  op_step 5
   local tok where
   tok="$(cf GET "/accounts/$account/cfd_tunnel/$tid/token" | jq -r .result)"
   if [[ -n $(cfg token_cmd || true) ]]; then
@@ -4539,18 +4985,22 @@ cmd_setup() {
     where="$(token_store "$tok")"; echo "token:      stored in $where"
   fi
   tok=""
+  op_step 6
   write_config "$tid" "$tunnel_name"
 
-  host_ok || { echo "this host ($(this_host)) is not in hosts=$hosts; skipping the service and the live check"; return 0; }
+  op_step 7
+  host_ok || { echo "this host ($(this_host)) is not in hosts=$hosts; skipping the service and the live check"; op_done; return 0; }
   if [[ $service == 1 ]] && { [[ $(uname -s) == Darwin ]] || command -v systemctl >/dev/null; }; then
     svc_install; echo "service:    runs at login ($svc_label)"
   fi
 
+  op_step 8
   local started=0 live=0
   running || { cmd_start >/dev/null 2>&1; [[ $service == 1 ]] || started=1; }
   live_check 60 && live=1
   [[ $started == 1 ]] && cmd_stop >/dev/null
   [[ $live == 1 ]] || die "live check failed: https://$host_name/ does not answer (see $root/serve.log)"
+  op_done
   echo "ready:      https://$host_name/ is live. Next: $me add <file|dir>"
 }
 
@@ -4570,6 +5020,11 @@ cmd_teardown() {
     echo "removed the quick setup (no tunnel, DNS, or token existed); shares in $root stay"
     return 0
   fi
+  if [[ -z $host_name ]] && ops_dead teardown; then   # an earlier teardown died after its config went: every delete before it is done
+    op_begin teardown teardown --yes; op_done
+    echo "teardown: the earlier run had removed the tunnel, the token and the config; nothing is left"
+    return 0
+  fi
   need_host
   local tid; tid="$(cfg tunnel_id || true)"
   [[ -n $tid ]] || die "no tunnel_id in $config"
@@ -4578,6 +5033,8 @@ cmd_teardown() {
     local a; read -rp "Delete the tunnel and DNS record for $host_name? Shares in $root stay. [y/N] " a
     [[ $a == y* || $a == Y* ]] || die "aborted"
   fi
+  op_begin teardown teardown --yes
+  op_step 1
   # a gated share never survives teardown: pub/ and the index stay, so a later setup would serve it with no app
   local gated n_apps
   gated="$(rows | awk -F'\t' '$6 ~ /(^| )access=/ {print $1}')"
@@ -4599,9 +5056,12 @@ cmd_teardown() {
       to_trash "$pub/$raw"; echo "gated:   trashed pub/$raw (malformed index row; its Access app, if any, stays in the dashboard)"
     done
   fi
+  op_step 2
   svc_uninstall
   cmd_stop >/dev/null
+  op_step 3
   local zone za rec rid _zn
+  admin_token_resolve optional
   if [[ -n ${CLOUDFLARE_API_TOKEN:-} ]]; then
     auth_api >/dev/null
     za="$(cf_zone)"; read -r zone account _zn <<<"$za"
@@ -4610,6 +5070,7 @@ cmd_teardown() {
     if [[ -n $rid ]]; then cf DELETE "/zones/$zone/dns_records/$rid" >/dev/null; echo "dns:     deleted $host_name"
     else echo "dns:     no record for $host_name points at this tunnel, left alone"; fi
     # every host share loses its DNS record and ingress rule before the tunnel goes
+    op_step 4
     zone_id="$zone"; zone_name="${zone_name:-$_zn}"; tun_id="$tid"; auth=api
     if [[ -s $index ]]; then
       local _hn _hs _hd _he hopts hfqdn
@@ -4619,6 +5080,7 @@ cmd_teardown() {
       done < <(rows)
     fi
   elif [[ -f $cert ]]; then
+    op_step 4
     cf_token="$(cert_field apiToken)"; account="$(cf_token_account)"
     echo "dns:     the login token cannot delete DNS records. Delete the CNAME $host_name in the Cloudflare dashboard, or rerun with CLOUDFLARE_API_TOKEN."
     if [[ -s $index ]] && rows | awk -F'\t' '$6 ~ /host=/ {f=1} END {exit !f}'; then
@@ -4627,15 +5089,17 @@ cmd_teardown() {
   else
     die "set CLOUDFLARE_API_TOKEN, or run '$me setup $host_name' once to log in again"
   fi
-  cf DELETE "/accounts/$account/cfd_tunnel/$tid/connections" >/dev/null 2>&1 || true
-  cf DELETE "/accounts/$account/cfd_tunnel/$tid" >/dev/null
-  echo "tunnel:  deleted"
+  op_step 5
+  if tunnel_delete "$account" "$tid"; then echo "tunnel:  deleted"; else echo "tunnel:  already deleted"; fi
+  op_step 6
   token_forget; api_token_forget; echo "token:   removed"
   echo "service: removed"
+  op_step 7
   [[ -f $cert ]] && to_trash "$cert"
   rm -f "$config_dir/cert.zone"
   to_trash "$config"; echo "config:  moved to the Trash"
   [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true
+  op_done
 }
 
 cmd_teardown_r2() { # cmd_teardown_r2 [--yes] [--purge]: local by default; --purge also removes every share, the Worker, its domain, and the empty bucket
@@ -4643,6 +5107,11 @@ cmd_teardown_r2() { # cmd_teardown_r2 [--yes] [--purge]: local by default; --pur
   for a in "$@"; do
     case $a in --yes) yes=1 ;; --purge) purge=1 ;; *) die "usage: share teardown [--yes] [--purge]" ;; esac
   done
+  if [[ $purge == 1 && -z $host_name ]] && ops_dead teardown-purge; then   # an earlier purge died after its config went
+    op_begin teardown-purge teardown --yes --purge; op_done
+    echo "teardown: the earlier purge had removed everything up to the config; nothing is left"
+    return 0
+  fi
   need_host
   bucket="$(cfg bucket || true)"
   if [[ $yes == 0 ]]; then
@@ -4651,7 +5120,11 @@ cmd_teardown_r2() { # cmd_teardown_r2 [--yes] [--purge]: local by default; --pur
     else read -rp "Remove this install's r2 setup for $host_name? The bucket and every share stay. [y/N] " a; fi
     [[ $a == y* || $a == Y* ]] || die "aborted"
   fi
-  [[ $purge == 0 ]] || r2_purge "$bucket"
+  if [[ $purge == 1 ]]; then
+    admin_token_resolve required "teardown --purge"   # before the journal: a missing token writes nothing
+    op_begin teardown-purge teardown --yes --purge; op_step 1; r2_purge "$bucket"
+  fi
+  op_step 7
   api_token_forget; echo "token:   removed"
   n="$(pending_count)"
   [[ $n == 0 ]] || echo "access:  $n Access app(s) stay listed in $pending; a later setup of $host_name and '$me prune' with the token removes them"
@@ -4659,27 +5132,39 @@ cmd_teardown_r2() { # cmd_teardown_r2 [--yes] [--purge]: local by default; --pur
   to_trash "$config"; echo "config:  moved to the Trash"
   [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true
   [[ $purge == 1 ]] || echo "kept:    bucket $bucket, the Worker, and every share on $host_name stay for the other publishers; '$me teardown --yes --purge' with the admin token removes them"
+  op_done
 }
 
 r2_purge() { # r2_purge <bucket>: the admin token from the environment; every check before the first delete, then shares, apps, marker, domain, script, bucket
   local bucket=$1 worker="share-${host_name//./-}" dataset="share_${host_name//[.-]/_}" dom_id gated
-  api_token="${CLOUDFLARE_API_TOKEN:-}"
-  [[ -n $api_token ]] || die "teardown --purge reads the admin token from CLOUDFLARE_API_TOKEN only; nothing was changed"
+  admin_token_resolve required "teardown --purge"
+  api_token="$CLOUDFLARE_API_TOKEN"
   r2_setup_zone
   r2_bucket=$bucket r2_endpoint="$(cfg r2_endpoint || true)"
   r2_api GET /user/tokens/verify   # the admin token's own S3 pair, as setup uses it
   r2_key_id="$(jq -r '.result.id // empty' <<<"$cf_body" 2>/dev/null || true)"
   [[ $cf_code == 200 && -n $r2_key_id ]] || die "the token did not verify (HTTP $cf_code); nothing was changed"
   r2_secret="$(printf '%s' "$api_token" | shasum -a 256 | cut -d' ' -f1)"
+  # a rerun after a purge that died: what an earlier run deleted reads as done, never as a refusal (prev = the step it died at)
+  local prev="${op_prev_step:-0}"
+  if [[ $prev -ge 6 ]]; then
+    r2_api GET "/accounts/$acct/r2/buckets/$bucket"
+    if [[ $cf_code == 404 ]]; then echo "bucket:  already deleted by the earlier run"; return 0; fi
+  fi
   r2_api GET "/accounts/$acct/workers/scripts/$worker/settings"
-  [[ $cf_code == 200 ]] || die "reading Worker $worker answered HTTP $cf_code (purge needs the admin token); nothing was changed"
-  jq -e --arg h "$host_name" --arg b "$bucket" '.result.bindings as $bs
-    | ($bs | any(.name == "HOST" and .text == $h)) and ($bs | any(.name == "BUCKET" and .bucket_name == $b))' <<<"$cf_body" >/dev/null ||
-    die "Worker $worker is not share's Worker for $host_name on bucket $bucket (its bindings differ); refused, nothing was changed"
-  ! jq -e '.result.bindings | any(.name == "PASS" and .text == "1")' <<<"$cf_body" >/dev/null ||
-    die "$host_name is a tenant with R2 on: its origin runs '$me setup $host_name --no-r2' first; refused, nothing was changed"
+  if [[ $cf_code == 404 && $prev -ge 5 ]]; then
+    echo "worker:  already deleted by the earlier run"
+  else
+    [[ $cf_code == 200 ]] || die "reading Worker $worker answered HTTP $cf_code (purge needs the admin token); nothing was changed"
+    jq -e --arg h "$host_name" --arg b "$bucket" '.result.bindings as $bs
+      | ($bs | any(.name == "HOST" and .text == $h)) and ($bs | any(.name == "BUCKET" and .bucket_name == $b))' <<<"$cf_body" >/dev/null ||
+      die "Worker $worker is not share's Worker for $host_name on bucket $bucket (its bindings differ); refused, nothing was changed"
+    ! jq -e '.result.bindings | any(.name == "PASS" and .text == "1")' <<<"$cf_body" >/dev/null ||
+      die "$host_name is a tenant with R2 on: its origin runs '$me setup $host_name --no-r2' first; refused, nothing was changed"
+  fi
   r2_call GET share.json
-  if [[ $cf_code != 200 ]] || ! jq -e --arg h "$host_name" '.v == 1 and .host == $h' <<<"$cf_body" >/dev/null 2>&1; then
+  if [[ $cf_code == 404 && $prev -ge 3 ]]; then :   # the earlier run deleted the marker
+  elif [[ $cf_code != 200 ]] || ! jq -e --arg h "$host_name" '.v == 1 and .host == $h' <<<"$cf_body" >/dev/null 2>&1; then
     die "bucket $bucket's share.json does not name $host_name (HTTP $cf_code); refused, nothing was changed"
   fi
   r2_api GET "/accounts/$acct/workers/domains?hostname=$host_name"
@@ -4701,19 +5186,24 @@ r2_purge() { # r2_purge <bucket>: the admin token from the environment; every ch
   [[ -z $gated && ! -s $pending ]] || access_sweep
   r2_purge_apps
   # what no rm reached: records this share cannot read, and uploads no record names
+  op_step 2
   r2_delete_prefix "m/" || die "some m/ keys remain in bucket $bucket; the Worker, domain, and bucket stay; rerun $me teardown --yes --purge"
   r2_delete_prefix "o/" || die "some o/ keys remain in bucket $bucket; the Worker, domain, and bucket stay; rerun $me teardown --yes --purge"
+  op_step 3
   r2_call DELETE share.json
   [[ $cf_code == 204 || $cf_code == 200 || $cf_code == 404 ]] || die "deleting $bucket/share.json answered HTTP $cf_code; the Worker, domain, and bucket stay"
   echo "marker:  deleted $bucket/share.json"
+  op_step 4
   if [[ -n $dom_id ]]; then
     r2_api DELETE "/accounts/$acct/workers/domains/$dom_id"
     [[ $cf_code == 200 ]] || die "removing $host_name from $worker answered HTTP $cf_code; the Worker and bucket stay"
     echo "domain:  removed $host_name"
   fi
+  op_step 5
   r2_api DELETE "/accounts/$acct/workers/scripts/$worker"
-  [[ $cf_code == 200 ]] || die "deleting Worker $worker answered HTTP $cf_code; the bucket stays"
+  [[ $cf_code == 200 || $cf_code == 404 ]] || die "deleting Worker $worker answered HTTP $cf_code; the bucket stays"
   echo "worker:  deleted $worker"
+  op_step 6
   r2_list ""
   if [[ -z $r2_list_out ]]; then
     r2_api DELETE "/accounts/$acct/r2/buckets/$bucket"
@@ -4763,7 +5253,49 @@ Publish snapshots of local files/folders, or proxy a running `localhost` server,
 
 ## Before anything
 
-`share status` shows whether setup ran, whether it is serving, and every share. If setup never ran, stop and tell the user: `share setup --quick` needs no account, or `share setup <hostname>` needs a browser login or `CLOUDFLARE_API_TOKEN`.
+Run `share state` first and read its JSON: `state` (`not_setup`, `stopped`, `serving`), `ready`, `role`, `ops`, and `shares`. It never writes, prunes, or prompts. `share status` is the human view of the same facts; never parse its text. If `state` is `not_setup`, stop and tell the user: `share setup --quick` needs no account, or `share setup <hostname>` needs a browser login or `CLOUDFLARE_API_TOKEN`. Every profile: `share profiles --json`.
+
+`role` is what kind of profile this is:
+
+| `role` | Meaning |
+|---|---|
+| `none` | not set up |
+| `quick` | a quick tunnel: a random `trycloudflare.com` URL, no domain |
+| `origin` | a named tunnel on this machine; `tier` `t0` |
+| `tenant_origin` | the origin of a tenant with R2 on (`bucket=`); `tier` `t1`, or `t2` with members |
+| `r2_profile` | an R2 profile: a Worker serves the links; nothing runs here |
+| `member` | a member of another person's tenant |
+| `migrated` | this profile moved to another machine (`share migrate`); `state` reads `not_setup` and nothing serves here |
+
+`ops` lists multi-step verbs that are running (`alive: true`) or died part way (`alive: false`). A dead op names `rerun` (and `rollback` when it has one); tell the user and ask before running either. Never run them through a shell; the `rerun_argv` array is the exact argument list after `share`.
+
+## Errors
+
+A refusal ends with `share: <message>` on stderr and exit 1. Set `SHARE_ERROR_JSON=1` to also get one last stderr line `{"error":{"code":...,"message":...,"next":...}}`; branch on `code`, never on the message text. `next` is the command that usually fixes it; a `next` marked destructive needs the user's yes first.
+
+| `code` | Meaning |
+|---|---|
+| `not_in_hosts` | this machine is not in `hosts=`, so it does not serve this profile |
+| `already_serving` | a server already runs for this profile |
+| `no_tunnel_token` | the tunnel token is missing; rerun `share setup <hostname>` |
+| `port_busy` | the share port is taken by another process or profile (`share profiles`) |
+| `metrics_port_busy` | the tunnel metrics port (port + 1) is taken |
+| `server_not_started` | the server did not answer within 10 s; `serve.log` says why |
+| `profile_migrated` | this profile moved to another machine; its `next` (`teardown --yes`) is destructive: never run it without the user's yes |
+| `op_running` | another run of the same multi-step verb is alive; wait, then read `share state` |
+| `quick_has_named_tunnel` | `setup --quick` on a profile that has a named tunnel |
+| `tenant_rollback` | `setup --r2` died after its config write; the message names the rollback |
+| `config_value_bad` | a config value holds a line break, or is not one the key takes; nothing was written |
+| `cloud_token_missing` | the menu lists cloud links only with a stored publisher token (`share api-token`) |
+| `admin_token_missing` | an admin verb found neither `CLOUDFLARE_API_TOKEN` nor `admin_token_cmd` |
+| `admin_token_cmd_failed` | `admin_token_cmd` exited non-zero or printed no token |
+| `admin_token_not_admin` | the token cannot read the Worker settings: not an admin token |
+| `minter_token_missing` | a member-token verb found neither `SHARE_MINTER_TOKEN` nor `minter_token_cmd` |
+| `minter_token_cmd_failed` | `minter_token_cmd` exited non-zero or printed no token |
+| `members_present` | reserved: a tenant teardown refused while it has members |
+| `stopped` | serve exit record: `share stop` ended serving |
+| `cloudflared_died` | serve exit record: the tunnel process exited |
+| `caddy_failed` | serve exit record: the web server failed to start or exited |
 
 ## Commands
 
@@ -4781,6 +5313,8 @@ Publish snapshots of local files/folders, or proxy a running `localhost` server,
 | `share start` / `share stop` | Serving on or off |
 | `share --profile <name> <command>` | Run any command against another setup (a second account or hostname); `share profiles` lists them. No flag is the default setup |
 | `share setup <hostname> --backend r2 --bucket <name>` | An R2 profile: a Worker serves links from a private bucket, so they stay up while this machine is off, and several people publish to one hostname. Live shares, `--host`, `start`, and `stop` are refused there; `share rm <id>` unpublishes |
+| `share admin-token --cmd '<command>'` / `--clear` / `--test [--json]` | The command that prints the admin token for `setup --r2`, `--no-r2` and `teardown --purge` (never the token itself); `--test` names what the token can do |
+| `share minter-token --cmd '<command>'` / `--clear` / `--test [--json]` | The command that prints the minter token, which mints member tokens |
 
 ## Rules for agents
 
@@ -4788,12 +5322,39 @@ Publish snapshots of local files/folders, or proxy a running `localhost` server,
 - Live shares expose whatever answers on that port to anyone with the link. Ports below 1024 and share's own ports are refused; do not try to work around that.
 - A shared folder gets a generated file listing unless `--no-index`; check for sensitive names first. Dotfiles and symlinks are never copied.
 - A file whose name is 2-5 digits (e.g. `8080`) reads as a port; use `./8080` to share the file.
-- Links die when the machine sleeps. If a link 404s or the visitor sees Cloudflare 530, run `share status`.
-- In quick mode (`setup --quick`) the `trycloudflare.com` URL is new on every `share start` and every login-service restart: an old link is dead forever, always read the current one from `share status` or the `add` output. `--host` is refused in quick mode.
+- Links die when the machine sleeps. If a link 404s or the visitor sees Cloudflare 530, read `share state`.
+- In quick mode (`setup --quick`) the `trycloudflare.com` URL is new on every `share start` and every login-service restart: an old link is dead forever, always read the current one from `share state` or the `add` output. `--host` is refused in quick mode.
 - `rm`/`hits`/`refresh` accept the pasted link as well as the bare id.
-- A gated link (`--access`) needs the API token first; if `share add --access` prints a "needs a Cloudflare API token" block, run the `share api-token` command it names (or `--cmd` with a token the user already has) and rerun the add. `share rm` of a gated share needs the same token; `share status` shows Access apps waiting for deletion.
+- A gated link (`--access`) needs the API token first; if `share add --access` prints a "needs a Cloudflare API token" block, run the `share api-token` command it names (or `--cmd` with a token the user already has) and rerun the add. `share rm` of a gated share needs the same token; `share state` counts Access apps waiting for deletion in `access_pending`.
 EOF
   [[ -n $d ]] && echo "installed $out"
+}
+
+cmd_state_fn() { # the hidden test verb (unlisted, like r2-rows): one state owner at a time
+  local v n i w
+  case ${1:-} in
+    codes) printf '%s\n' "$code_table" | cut -d'|' -f1 ;;
+    code) code_text "${2:-}" ;;
+    die) shift; die_code "$@" ;;
+    role) printf '%s %s\n' "$role" "${tier:--}" ;;
+    ops) ops_json; echo ;;
+    owner-live) if owner_live "${2:-0}" "${3:-}"; then echo true; else echo false; fi ;;
+    op-run)   # op-run <verb> <n> [rerun args... [-- rollback args...]]: op_begin, n op_steps, op_done; SHARE_OP_PAUSE holds a step
+      v="${2:-}" n="${3:-}"; [[ -n $v && $n =~ ^[0-9]+$ ]] || die "usage: share state-fn op-run <verb> <n> [args... [-- rollback...]]"
+      shift 3
+      if [[ $# -gt 0 ]]; then op_begin "$v" "$@"; else op_begin "$v" state-fn op-run "$v" "$n"; fi
+      for ((i = 1; i <= n; i++)); do op_step "$i"; done
+      op_done ;;
+    config-put)   # config-put <writer|"owned keys"> key=value...: writes the config, so only under the test seam
+      [[ ${SHARE_STATE_FN_WRITE:-} == 1 ]] || die "state-fn config-put writes the config; it runs only with SHARE_STATE_FN_WRITE=1"
+      w="${2:-}"; shift 2 || die "usage: share state-fn config-put <writer> key=value..."
+      case $w in
+        write_config) w=$own_write_config ;; write_config_r2) w=$own_write_config_r2 ;;
+        write_config_quick) w=$own_write_config_quick ;; tenant_config) w=$own_tenant_config ;;
+      esac
+      config_put "$w" "$@" ;;
+    *) die "usage: share state-fn codes|code|die|role|ops|owner-live|op-run|config-put" ;;
+  esac
 }
 
 case "${1:-status}" in
@@ -4808,6 +5369,8 @@ case "${1:-status}" in
   migrate-tunnel-id) cmd_migrate_tunnel_id ;;
   migrate-nonce) cmd_migrate_nonce ;;
   api-token) shift; cmd_api_token "$@" ;;
+  admin-token) shift; token_verb admin "$@" ;;
+  minter-token) shift; token_verb minter "$@" ;;
   ls) cmd_prune listing; cmd_ls ;;
   skill) cmd_skill "${2:-}" ;;
   refresh) cmd_refresh "$(id_of "${2:-}")" ;;
@@ -4822,6 +5385,7 @@ case "${1:-status}" in
   r2-id) rand_id ;;
   r2-own) case ${2:-} in get|put|drop) f="r2_own_$2"; shift 2; "$f" "$@" ;; *) exit 1 ;; esac ;;
   worker-src) worker_js /dev/stdout ;;
+  state-fn) shift; cmd_state_fn "$@" ;;
   start) cmd_start ;;
   stop) cmd_stop ;;
   status) cmd_status ;;

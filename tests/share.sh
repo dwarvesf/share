@@ -1885,10 +1885,10 @@ if [[ -s $main_bin ]]; then
     "$(grep -cE '^(machine|live) +[a-z]+ +by=[a-z0-9.-]+  https://' "$WORK/compat-new/ls.out") $(grep -cE '^live +site +by=' "$WORK/compat-new/ls.out")"
   check "row 1: state rows gain storage, type, by; the top gains r2: false" "machine false" \
     "$(jq -r '([.shares[] | select(.type and .by) | .storage] | unique | join(" ")) + " " + (.r2 | tostring)' "$WORK/compat-new/state.out")"
-  for c in main new; do   # the listing additions are the one allowed difference
+  for c in main new; do   # the listing additions are the one allowed difference, with the groundwork's additive state keys
     sed -i.bak -E 's/^(machine|live|cloud) +[a-z]+ +by=[a-z0-9.-]+  (https:)/\2/' "$WORK/compat-$c/ls.out"
-    jq -S 'del(.r2, .storage_default, .cloud_error, .cloud_more) | .shares |= map(del(.storage, .type, .by))' "$WORK/compat-$c/state.out" >"$WORK/compat-$c/state.tmp" && mv -f "$WORK/compat-$c/state.tmp" "$WORK/compat-$c/state.out"
-    jq -S '.profiles |= map(if .state then .state |= (del(.r2, .storage_default, .cloud_error, .cloud_more) | .shares |= map(del(.storage, .type, .by))) else . end)' "$WORK/compat-$c/profiles.out" >"$WORK/compat-$c/p.tmp" && mv -f "$WORK/compat-$c/p.tmp" "$WORK/compat-$c/profiles.out"
+    jq -S 'del(.r2, .storage_default, .cloud_error, .cloud_more, .codes_v, .role, .tier, .ops) | .shares |= map(del(.storage, .type, .by))' "$WORK/compat-$c/state.out" >"$WORK/compat-$c/state.tmp" && mv -f "$WORK/compat-$c/state.tmp" "$WORK/compat-$c/state.out"
+    jq -S '.profiles |= map(if .state then .state |= (del(.r2, .storage_default, .cloud_error, .cloud_more, .codes_v, .role, .tier, .ops) | .shares |= map(del(.storage, .type, .by))) else . end)' "$WORK/compat-$c/profiles.out" >"$WORK/compat-$c/p.tmp" && mv -f "$WORK/compat-$c/p.tmp" "$WORK/compat-$c/profiles.out"
     # another allowed difference: svc_path (TASK-7b) now walks the caller's own PATH directories in
     # their own order instead of resolving each tool from a fixed list, so a plist's baked PATH value
     # reorders even though the directory set is the same; normalize it like the binary's own path above
@@ -2657,7 +2657,7 @@ rpurge() { # rpurge <label> <message> <cmd...>: exit 1, the message, no write lo
   check "row 15: $1 logged nothing past the reads" "0" "$(grep -cE '^(PUT|DELETE) |^API (PUT|DELETE|POST) |^POST app$|^DELETE app' "$rlog" || true)"
   check "row 15: $1 kept the config and the bucket" "1 $b" "$([[ -e $r2conf ]] && echo 1 || echo 0) $(bsum)"
 }
-G_TOK="" rpurge "--purge with no admin token" "reads the admin token from CLOUDFLARE_API_TOKEN only" tsec r2g teardown --yes --purge
+G_TOK="" rpurge "--purge with no admin token" "teardown --purge needs the admin token: set CLOUDFLARE_API_TOKEN, or store a command that prints it" tsec r2g teardown --yes --purge
 SHARE_R2_DRY_ROLE=deny rpurge "--purge with a publisher token" "purge needs the admin token" tsec r2g teardown --yes --purge
 pscript other.example.test
 rpurge "--purge with a foreign Worker (bindings name another host)" "is not share's Worker for r2x.example.test on bucket ok-bucket" tsec r2g teardown --yes --purge
@@ -3548,7 +3548,7 @@ out=$(printf 'admintoken\n' | TV_TOK="" tv setup ten.example.test --r2 --bucket 
 check "setup --token-stdin: the admin token read from stdin runs setup --r2" "0 1" "$rc $(grep -c '^ready:      R2 is on' <<<"$out")"
 vfresh
 out=$(TV_TOK="" tv setup ten.example.test --r2 --bucket ok-bucket </dev/null 2>&1); rc=$?
-check "setup --token-stdin: without it an empty token is refused" "1 1" "$rc $(grep -c 'read the tenant admin token from CLOUDFLARE_API_TOKEN only' <<<"$out")"
+check "setup --token-stdin: without it an empty token is refused" "1 1" "$rc $(grep -c 'needs the admin token: set CLOUDFLARE_API_TOKEN, or store a command that prints it' <<<"$out")"
 out=$(TV_TOK="" tv setup ten.example.test --r2 --bucket ok-bucket --token-stdin </dev/null 2>&1); rc=$?
 check "setup --token-stdin: an empty stdin is refused before any call" "1 1 0" "$rc $(grep -c -- '--token-stdin read no token' <<<"$out") $(vwrites)"
 
@@ -3872,6 +3872,677 @@ check "setup on a not_setup profile already holding a gated row is refused" "1" 
 check "the refusal names the gated row, not a Cloudflare error" "1" "$(grep -c 'already holds gated shares' <<<"$out")"
 check "the refusal happens before any Cloudflare call" "0" "$(grep -c . "$MW/clogoh")"
 check "the gated row is untouched" "1" "$(grep -c '^aa0001	' "$OH/share/index.tsv")"
+
+echo "=== state groundwork: shared fixtures ==="
+GW="$WORK/gw"; mkdir -p "$GW/cfbin" "$GW/sec" "$GW/trashed"
+gw_this="${h%%.*}"
+GW_BASE=84ebd9a   # the commit the groundwork landed on: CD-01 and CF-02 run its own bin/share beside this one
+GW_OLD="$GW/share-base"
+git -C "$(cd "$(dirname "$SH")/.." && pwd)" show "$GW_BASE:bin/share" >"$GW_OLD" 2>/dev/null; chmod +x "$GW_OLD"
+check "groundwork: git show fetched the base commit's bin/share (the HEAD captures)" "1" "$([[ -s $GW_OLD ]] && ! grep -q die_code "$GW_OLD" && echo 1 || echo 0)"
+gw_wait_step() { # gw_wait_step <root> <verb> <n>: the pid of a run held at step n by SHARE_OP_PAUSE (20 s cap)
+  local f _ pid
+  for _ in $(seq 1 100); do
+    for f in "$1/ops/$2".*.json; do
+      [[ -e $f ]] || continue
+      pid="$(jq -r --argjson n "$3" 'select(.step == $n) | .pid' "$f" 2>/dev/null)"
+      [[ -n $pid ]] && { echo "$pid"; return 0; }
+    done
+    sleep 0.2
+  done
+  return 1
+}
+gw_gone() { local _; for _ in $(seq 1 100); do kill -0 "$1" 2>/dev/null || return 0; sleep 0.1; done; return 1; }   # gw_gone <pid>: wait for it to exit (10 s cap)
+gw_ops() { find "$1/ops" -name '*.json' 2>/dev/null | sed 's|.*/||' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//'; }   # gw_ops <root>: the journal file names, sorted
+gw_dead_pid() { sh -c 'exit 0' & local p=$!; wait "$p"; echo "$p"; }   # a pid that no longer runs
+# a Keychain stand-in that stores values in files (the global stub stores nothing), and Trash into a folder, never the user's
+cat >"$GW/sec/security" <<EOF
+#!/bin/bash
+svc=""; val=""; prev=""; for a in "\$@"; do case \$prev in -s) svc="\$a" ;; -w) val="\$a" ;; esac; prev="\$a"; done
+case \$1 in
+  -i) line="\$(cat)"; svc="\$(sed -n 's/.* -s "\\([^"]*\\)".*/\\1/p' <<<"\$line")"; val="\$(sed -n 's/.* -w "\\([^"]*\\)".*/\\1/p' <<<"\$line")"; [[ -n \$svc ]] && printf '%s' "\$val" >"$GW/sec/kv.\$svc"; exit 0 ;;
+  add-generic-password) printf '%s' "\$val" >"$GW/sec/kv.\$svc"; exit 0 ;;
+  find-generic-password) [[ -f "$GW/sec/kv.\$svc" ]] || exit 44; [[ " \$* " == *" -w "* ]] && cat "$GW/sec/kv.\$svc"; exit 0 ;;
+  delete-generic-password) rm -f "$GW/sec/kv.\$svc"; exit 0 ;;
+esac
+exit 0
+EOF
+# shellcheck disable=SC2016 # literal source for the stub, expanded when it runs
+printf '#!/bin/bash\nmv -f "$1" "%s/$(basename "$1").$$.$RANDOM"\n' "$GW/trashed" >"$GW/cfbin/trash"
+# a cloudflared stand-in: route dns answers as the real one prints it; a run dumps its environment (AT-09), then idles, exits, or answers /ready
+cat >"$GW/cfbin/cloudflared" <<'EOF'
+#!/bin/bash
+[[ -z ${GW_CFD_ENV:-} ]] || env >"$GW_CFD_ENV"
+case " $* " in *" route dns "*) for a; do h=$a; done; echo "2026-11-15T00:00:00Z INF Added CNAME $h which will route to this tunnel"; exit 0 ;; esac
+m=""; prev=""; for a; do [[ $prev == --metrics ]] && m=$a; prev=$a; done
+case ${GW_CFD_MODE:-idle} in
+  exit1s) sleep 1; exit 1 ;;
+  exitnow) exit 1 ;;
+  ready) exec caddy respond --listen "$m" ;;
+  *) exec sleep 600 ;;
+esac
+EOF
+# a stateful fake Cloudflare API: tunnels and DNS records are files under $GWCF, so a rerun meets what an earlier run left
+cat >"$GW/cfbin/curl" <<'EOF'
+#!/bin/bash
+url="" method=GET fmt="" data="" prev=""
+for a in "$@"; do
+  case $prev in -X) method="$a" ;; -w) fmt="$a" ;; --data) data="$a" ;; esac
+  case $a in http*) url="$a" ;; esac
+  prev="$a"
+done
+case "$method $url" in   # the local /ready probe, DNS over HTTPS, and a link fetch need no state
+  "GET http://127.0.0.1:"*/ready) exit 0 ;;
+  "GET https://cloudflare-dns.com/dns-query?"*type=SOA) printf '{"Status":0,"Answer":[{"name":"example.test.","type":6,"data":"ns"}]}'; exit 0 ;;
+  "GET https://cloudflare-dns.com/dns-query?"*) printf '{"Status":0}'; exit 0 ;;
+  "GET https://"*.example.test/*) printf '200'; exit 0 ;;
+esac
+st="${GWCF:?}"; mkdir -p "$st/t" "$st/d"
+echo "$method $url" >>"$st/calls.log"
+code=200 body='{"success":true,"result":[]}' gone='{"success":false,"errors":[{"code":1003,"message":"not found"}]}'
+p="${url#https://api.cloudflare.com/client/v4}"
+qv() { local v="${p#*"$1"=}"; echo "${v%%&*}"; }
+case "$method $p" in
+  "GET /user/tokens/verify") body='{"success":true,"result":{"id":"tok-id","status":"active"}}' ;;
+  "GET /zones?name="*) [[ "$(qv name)" == example.test ]] && body='{"success":true,"result":[{"id":"zone1","account":{"id":"acct1"},"name":"example.test"}]}' ;;
+  "GET /accounts/acct1/cfd_tunnel?"*)
+    n="$(qv name)"; id="$(cat "$st/t/name.$n" 2>/dev/null)"
+    [[ -n $id && ! -f $st/t/$id.deleted ]] && body="{\"success\":true,\"result\":[{\"id\":\"$id\"}]}" ;;
+  "POST /accounts/acct1/cfd_tunnel")
+    c=$(($(cat "$st/t/count" 2>/dev/null || echo 0) + 1)); echo "$c" >"$st/t/count"; id="tid-$c"
+    echo "$id" >"$st/t/name.$(jq -r .name <<<"$data")"; : >"$st/t/$id"; body="{\"success\":true,\"result\":{\"id\":\"$id\"}}" ;;
+  "GET /accounts/acct1/cfd_tunnel/"*/token) body='{"success":true,"result":"GW-TUNNEL-TOKEN"}' ;;
+  "PUT /accounts/acct1/cfd_tunnel/"*/configurations) body='{"success":true,"result":{}}' ;;
+  "DELETE /accounts/acct1/cfd_tunnel/"*/connections) body='{"success":true,"result":null}' ;;
+  "GET /accounts/acct1/cfd_tunnel/"*)
+    id="${p##*/}"
+    if [[ ! -f $st/t/$id ]]; then code=404 body=$gone
+    elif [[ -f $st/t/$id.deleted ]]; then body="{\"success\":true,\"result\":{\"id\":\"$id\",\"deleted_at\":\"2026-11-15T00:00:00Z\"}}"
+    else body="{\"success\":true,\"result\":{\"id\":\"$id\",\"deleted_at\":null}}"; fi ;;
+  "DELETE /accounts/acct1/cfd_tunnel/"*)
+    id="${p##*/}"
+    if [[ -f $st/t/$id && ! -f $st/t/$id.deleted ]]; then : >"$st/t/$id.deleted"; body='{"success":true,"result":{}}'; else code=404 body=$gone; fi ;;
+  "GET /zones/zone1/dns_records?"*)
+    n="$(qv name)"; body="$(find "$st/d" -type f -exec cat {} + 2>/dev/null | jq -sc --arg n "$n" '{success: true, result: [.[] | select(.name == $n)]}')" ;;
+  "POST /zones/zone1/dns_records")
+    c=$(($(cat "$st/d.count" 2>/dev/null || echo 0) + 1)); echo "$c" >"$st/d.count"
+    jq -c --arg id "rec-$c" '{id: $id, type, name, content}' <<<"$data" >"$st/d/rec-$c"; body='{"success":true,"result":{}}' ;;
+  "PUT /zones/zone1/dns_records/"*) jq -c --arg id "${p##*/}" '{id: $id, type, name, content}' <<<"$data" >"$st/d/${p##*/}"; body='{"success":true,"result":{}}' ;;
+  "DELETE /zones/zone1/dns_records/"*)
+    if [[ -f $st/d/${p##*/} ]]; then rm -f "$st/d/${p##*/}"; body='{"success":true,"result":{}}'; else code=404 body=$gone; fi ;;
+esac
+if [[ $fmt == *http_code* ]]; then printf '%s\n%s' "$body" "$code"; else printf '%s' "$body"; fi
+EOF
+chmod +x "$GW/sec/security" "$GW/cfbin/trash" "$GW/cfbin/cloudflared" "$GW/cfbin/curl"
+GU="$GW/tunnel"; GU_HOME="$GU/home"; GU_CF="$GU/cf"; GU_ROOT="$GU_HOME/share"; GU_CONF="$GU_HOME/.config/share/config"
+gwu() { # gwu <verb...>: the default profile of gu.example.test under its own HOME against the fake Cloudflare; SHARE_TUNNEL=0 (caddy only) unless GU_TUNNEL=1
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u CLOUDFLARE_API_TOKEN \
+    HOME="$GU_HOME" PATH="$GW/sec:$GW/cfbin:$PATH" GWCF="$GU_CF" SHARE_TUNNEL="${GU_TUNNEL:-0}" SHARE_PORT="${GU_PORT:-$((base + 320))}" \
+    SHARE_HOSTS="${GU_HOSTS:-$gw_this}" ${GU_TOK+CLOUDFLARE_API_TOKEN="$GU_TOK"} bash "${GU_SH:-$SH}" "$@"
+}
+gu_fresh() { rm -rf "$GU_HOME" "$GU_CF" "$GW/sec"/kv.*; mkdir -p "$GU_HOME" "$GU_CF"; }
+gu_save() { rm -rf "$GU.snap"; mkdir -p "$GU.snap"; cp -R "$GU_HOME" "$GU_CF" "$GU.snap/"; cp "$GW/sec"/kv.* "$GU.snap/" 2>/dev/null; return 0; }
+gu_restore() { gu_fresh; rm -rf "$GU_HOME" "$GU_CF"; cp -R "$GU.snap/home" "$GU_HOME"; cp -R "$GU.snap/cf" "$GU_CF"; cp "$GU.snap"/kv.* "$GW/sec/" 2>/dev/null; return 0; }
+gu_happy() { # 1 when the origin is set up as a clean setup leaves it: the config, its tunnel, one DNS record pointing at it, an empty ops/
+  local tid; tid="$(sed -n 's/^tunnel_id=//p' "$GU_CONF" 2>/dev/null)"
+  [[ -n $tid && -f $GU_CF/t/$tid && ! -f $GU_CF/t/$tid.deleted && "$(cat "$GU_CF"/d/* 2>/dev/null | jq -s --arg t "$tid.cfargotunnel.com" '[.[] | select(.content == $t)] | length')" == 1 &&
+    -z "$(gw_ops "$GU_ROOT")" ]] && echo 1 || echo 0
+}
+gu_torn() { # 1 when teardown finished: no config, every tunnel deleted, no DNS record, an empty ops/
+  [[ ! -f $GU_CONF && -z "$(ls "$GU_CF/d" 2>/dev/null)" && -z "$(gw_ops "$GU_ROOT")" ]] || { echo 0; return; }
+  local t; for t in "$GU_CF"/t/tid-*; do [[ $t == *.deleted || -f $t.deleted ]] || { echo 0; return; }; done; echo 1
+}
+GT="$GW/tenant"; GT_HOME="$GT/home"; GT_DRY="$GT/bucket"; GT_ROOT="$GT_HOME/share/profiles/ten"; GT_CONF="$GT_HOME/.config/share/profiles/ten/config"
+gwt() { # gwt <verb...>: the tunnel origin of ten.example.test with R2 and Access dry; the admin token from CLOUDFLARE_API_TOKEN unless GT_TOK is set
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u CLOUDFLARE_API_TOKEN \
+    HOME="$GT_HOME" PATH="$GW/cfbin:$PATH" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$GT_DRY" SHARE_R2_TOKEN=drytoken SHARE_ACCESS_DRY=1 SHARE_ACCESS_POLL=0 \
+    SHARE_R2_WAIT=2 SHARE_HOSTS="$gw_this" CLOUDFLARE_API_TOKEN="${GT_TOK-admintoken}" bash "${GT_SH:-$SH}" --profile ten "$@"
+}
+gt_fresh() { # the origin with one local row and R2 off; the bucket exists with its marker
+  rm -rf "$GT_HOME" "$GT_DRY"; mkdir -p "${GT_CONF%/*}" "$GT_DRY/.cf" "$GT_ROOT/pub/0c0001"
+  printf 'hostname=ten.example.test\ntunnel_id=tid-ten\ntunnel_name=share-ten-example-test\nauth=api\nhosts=%s\nport=%s\n' "$gw_this" $((base + 330)) >"$GT_CONF"
+  printf 'x\n' >"$GT_ROOT/pub/0c0001/x.txt"; printf '0c0001\tx.txt\t/src/x.txt\t2026-10-01\t0\t\n' >"$GT_ROOT/index.tsv"
+  : >"$GT_DRY/.cf/bucket"; printf '{"v":1,"host":"ten.example.test"}\n' >"$GT_DRY/share.json"
+}
+gt_on() { # 1 when R2 is on as a clean setup --r2 leaves it: the four keys, the route, the row's pointer, an empty ops/
+  [[ "$(grep -c '^bucket=ok-bucket$' "$GT_CONF" 2>/dev/null)" == 1 && -f $GT_DRY/m/0c0001 && -z "$(gw_ops "$GT_ROOT")" ]] &&
+    jq -e 'any(.[]; .pattern == "ten.example.test/*")' "$GT_DRY/.cf/routes.json" >/dev/null 2>&1 && echo 1 || echo 0
+}
+gt_off() { # 1 when R2 is off as a clean --no-r2 leaves it: no tenant key, no route, an empty ops/
+  [[ "$(grep -cE '^(bucket|r2_endpoint|storage_default|aliases)=' "$GT_CONF" 2>/dev/null)" == 0 && "$(jq length "$GT_DRY/.cf/routes.json" 2>/dev/null)" == 0 &&
+    -z "$(gw_ops "$GT_ROOT")" ]] && echo 1 || echo 0
+}
+GP="$GW/purge"; GP_HOME="$GP/home"; GP_DRY="$GP/bucket"; GP_ROOT="$GP_HOME/share/profiles/pg"; GP_CONF="$GP_HOME/.config/share/profiles/pg/config"
+gwp() { # gwp <verb...>: the r2 profile pg.example.test on a dry bucket; the admin token from CLOUDFLARE_API_TOKEN, the publisher from SHARE_R2_TOKEN
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u CLOUDFLARE_API_TOKEN \
+    HOME="$GP_HOME" PATH="$GW/cfbin:$PATH" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$GP_DRY" SHARE_R2_TOKEN=drytoken SHARE_ACCESS_DRY=1 SHARE_ACCESS_POLL=0 \
+    SHARE_R2_WAIT=2 ${GP_TOK+CLOUDFLARE_API_TOKEN="$GP_TOK"} bash "${GP_SH:-$SH}" --profile pg "$@"
+}
+printf 'gw\n' >"$GW/f.txt"
+echo "=== state groundwork: G1 ==="
+GC="$GW/codes"
+gc_fx() { # gc_fx <config line>...: a fresh profile root and config at the one path both scripts use, so a path in a message matches
+  rm -rf "$GC"; mkdir -p "$GC/root" "$GC/config"
+  [[ $# == 0 ]] || printf '%s\n' "$@" >"$GC/config/config"
+}
+gc_run() { env -u SHARE_HOSTNAME -u SHARE_HOSTS -u SHARE_PORT -u CLOUDFLARE_API_TOKEN SHARE_ROOT="$GC/root" SHARE_CONFIG_DIR="$GC/config" ${GCE[@]+"${GCE[@]}"} bash "$@"; }
+gc_guard() { # gc_guard <label> <code> <verb...>: GCE (env) and GCX (config lines) for both runs; HEAD's stderr and exit equal the new ones (CD-01); with SHARE_ERROR_JSON=1 the same line, then the code, last (CD-02)
+  local label=$1 code=$2 o n j orc nrc jrc; shift 2
+  gc_fx ${GCX[@]+"${GCX[@]}"}; o="$(gc_run "$GW_OLD" "$@" 2>&1 >/dev/null)"; orc=$?
+  gc_fx ${GCX[@]+"${GCX[@]}"}; n="$(gc_run "$SH" "$@" 2>&1 >/dev/null)"; nrc=$?
+  gc_fx ${GCX[@]+"${GCX[@]}"}; j="$(SHARE_ERROR_JSON=1 gc_run "$SH" "$@" 2>&1 >/dev/null)"; jrc=$?
+  check "CD-01 $label: stderr and exit byte-identical to HEAD's" "$orc|$o" "$nrc|$n"
+  check "CD-02 $label: exit 1, the human line, then one JSON line with the code" "1|$n|$code" "$jrc|$(sed '$d' <<<"$j")|$(tail -1 <<<"$j" | jq -r .error.code 2>/dev/null)"
+}
+GCX=("hostname=gc.example.test" "tunnel_id=tid-gc" "port=$((base + 300))")
+GCE=(SHARE_HOSTS=not-this-host SHARE_TUNNEL=0); gc_guard "start outside hosts=" not_in_hosts start
+gc_guard "serve outside hosts=" not_in_hosts serve
+gc_guard "service install outside hosts=" not_in_hosts service install
+GCE=(SHARE_HOSTS="$gw_this" SHARE_TUNNEL=1); gc_guard "serve with no tunnel token" no_tunnel_token serve
+GCE=(SHARE_HOSTS="$gw_this" SHARE_TUNNEL=0 SHARE_PORT="$base"); gc_guard "serve on a busy port" port_busy serve
+GCX=("hostname=gc.example.test" "tunnel_id=tid-gc" "token_cmd=echo gctok")
+GCE=(SHARE_HOSTS="$gw_this" SHARE_TUNNEL=1 SHARE_PORT="$((base - 1))"); gc_guard "serve on a busy metrics port" metrics_port_busy serve
+GCX=("hostname=gc.example.test" "tunnel_id=tid-gc")
+GCE=(SHARE_HOSTS="$gw_this" SHARE_TUNNEL=0 SHARE_PORT="$base"); gc_guard "start whose serve never answers" server_not_started start
+GCE=(SHARE_TUNNEL=0); gc_guard "setup --quick on a named tunnel" quick_has_named_tunnel setup --quick
+# shellcheck disable=SC2016 # the $ is the literal source line the mutation matches
+sed 's/^  if \[\[ \${SHARE_ERROR_JSON:-} == 1 \]\]; then$/  if true; then/' "$SH" >"$GW/share-json-always"
+GCX=("hostname=gc.example.test" "tunnel_id=tid-gc"); GCE=(SHARE_HOSTS=not-this-host SHARE_TUNNEL=0)
+gc_fx "${GCX[@]}"; o="$(gc_run "$GW_OLD" start 2>&1 >/dev/null)"; gc_fx "${GCX[@]}"; n="$(gc_run "$GW/share-json-always" start 2>&1 >/dev/null)"
+check "negative control NC-G1: a JSON line printed without SHARE_ERROR_JSON breaks CD-01 (stderr differs from HEAD's)" "1 2" "$([[ $o != "$n" ]] && echo 1 || echo 0) $(grep -c . <<<"$n")"
+bash "$SH" start >/dev/null 2>&1   # the suite's own server serves here: serve again is the already-serving guard
+rec0="$(cat "$SHARE_ROOT/.serve-exit" 2>/dev/null || echo none)"
+o="$(bash "$GW_OLD" serve 2>&1 >/dev/null)"; orc=$?; n="$(bash "$SH" serve 2>&1 >/dev/null)"; nrc=$?; j="$(SHARE_ERROR_JSON=1 bash "$SH" serve 2>&1 >/dev/null)"; jrc=$?
+check "CD-01 serve while serving: stderr and exit byte-identical to HEAD's" "$orc|$o" "$nrc|$n"
+check "CD-02 serve while serving: the human line, then already_serving" "1|$n|already_serving" "$jrc|$(sed '$d' <<<"$j")|$(tail -1 <<<"$j" | jq -r .error.code 2>/dev/null)"
+check "CD-01 the already-serving refusal leaves the running server's exit record alone" "$rec0" "$(cat "$SHARE_ROOT/.serve-exit" 2>/dev/null || echo none)"
+msg=$'quote " back \\ tab\tend'
+j="$(SHARE_ERROR_JSON=1 bash "$SH" state-fn die not_in_hosts "$msg" "next step" 2>&1)"; rc=$?
+check "CD-03 a message holding a quote, a backslash and a tab: exit 1, the JSON line parses to the same text" "1|$msg|next step" "$rc|$(tail -1 <<<"$j" | jq -r .error.message)|$(tail -1 <<<"$j" | jq -r .error.next)"
+out="$(bash "$SH" state-fn die no_such_code "an unknown code" 2>&1)"; rc=$?
+check "an unknown code still dies with exit 1 and its line" "1|share: an unknown code" "$rc|$out"
+gc_listed() { # gc_listed <script>: 0 when every literal code a die_code call names is in that script's state-fn codes
+  local codes missing; codes="$(bash "$1" state-fn codes)"
+  missing="$(grep -oE 'die_code [a-z_]+' "$1" | awk '{print $2}' | sort -u | while read -r c; do grep -qx "$c" <<<"$codes" || echo "$c"; done)"
+  [[ -z $missing ]]
+}
+check "every die_code in bin/share names a code that state-fn codes lists" "0" "$(gc_listed "$SH"; echo $?)"
+sed 's/^cmd_skill() {/gc_x() { die_code unlisted_code "x"; }\ncmd_skill() {/' "$SH" >"$GW/share-unlisted"
+check "negative control: a die_code with an unlisted code fails that check" "1" "$(gc_listed "$GW/share-unlisted"; echo $?)"
+gc_fx; GCE=(SHARE_TUNNEL=0); out="$(gc_run "$SH" state)"
+check "state: codes_v 1, no cloud_error_code without a cloud error" "1 false" "$(jq -r '"\(.codes_v) \(has("cloud_error_code"))"' <<<"$out")"
+# CD-06: a die inside list_bucket's subshell: cloud_error keeps the human text, the code lands beside it
+gc_fx "backend=r2" "hostname=cd6.example.test" "zone=example.test" "bucket=ok-bucket" "port=r2" "r2_endpoint=https://acct-dry.r2.cloudflarestorage.com"
+GCE=(SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$GC/dry")
+out="$(SHARE_ERROR_JSON=1 gc_run "$SH" state 2>/dev/null)"
+check "CD-06 SHARE_ERROR_JSON=1: cloud_error is the human text, cloud_error_code the code" "the menu reads cloud links only with a stored token: share api-token|cloud_token_missing" \
+  "$(jq -r '"\(.cloud_error)|\(.cloud_error_code)"' <<<"$out")"
+out="$(gc_run "$SH" state 2>/dev/null)"
+check "CD-06 without it: the same cloud_error, no code" "the menu reads cloud links only with a stored token: share api-token|false" "$(jq -r '"\(.cloud_error)|\(has("cloud_error_code"))"' <<<"$out")"
+GCE=()
+
+echo "=== state groundwork: G1b ==="
+GS="$GW/serve"; GS_PORT=$((base + 310))
+gs_fx() { rm -rf "$GS"; mkdir -p "$GS/root" "$GS/config" "$GS/bin"; printf '%s\n' "hostname=gs.example.test" "tunnel_id=tid-gs" "token_cmd=echo gstok" >"$GS/config/config"; }
+gs() { env -u SHARE_HOSTNAME SHARE_ROOT="$GS/root" SHARE_CONFIG_DIR="$GS/config" SHARE_HOSTS="$gw_this" SHARE_PORT="$GS_PORT" PATH="$GW/cfbin:$PATH" "$@"; }
+gs_code() { jq -r .code "$GS/root/.serve-exit" 2>/dev/null || echo none; }
+gs_wait_up() { local _; for _ in $(seq 1 50); do [[ -f $GS/root/serve.pid ]] && curl -s -o /dev/null "http://127.0.0.1:$GS_PORT/" && return 0; sleep 0.1; done; return 1; }
+gs_fx; chmod 555 "$GS/root"
+out="$(gs env SHARE_TUNNEL=0 SHARE_HOSTS=nope bash "$SH" serve 2>&1 >/dev/null)"; rc=$?
+chmod 755 "$GS/root"
+check "CD-04 a read-only root: the die prints its one line and exits 1; no record, no second error" "1 1 0" "$rc $(grep -c . <<<"$out") $([[ -e $GS/root/.serve-exit ]] && echo 1 || echo 0)"
+gs_cd05() { # gs_cd05 <script>: serve with an exported SHARE_EXIT_FILE and a prune loop of 1 s whose prune dies; prints the record serve holds after 3 s
+  gs_fx
+  (gs env SHARE_TUNNEL=0 SHARE_EXIT_FILE="$GS/root/.serve-exit" SHARE_PRUNE_EVERY=1 SHARE_PRUNE_DIE_CODE=cloudflared_died bash "$1" serve >/dev/null 2>&1 &)
+  gs_wait_up; sleep 3
+  gs_code
+  gs bash "$SH" stop >/dev/null 2>&1
+}
+check "CD-05 the hourly prune dies while serve runs: serve's record stays unwritten" "none" "$(gs_cd05 "$SH")"
+check "CD-05 the prune did die with its code (serve.log)" "1" "$([[ $(grep -c 'prune died' "$GS/root/serve.log") -ge 1 ]] && echo 1 || echo 0)"
+check "stop records stopped after the serve pid is gone" "stopped" "$(gs_code)"
+sed 's/(unset SHARE_EXIT_FILE; while sleep/(while sleep/' "$SH" >"$GW/share-no-unset"
+check "negative control: without the loop's unset, the prune's code lands in serve's record" "cloudflared_died" "$(gs_cd05 "$GW/share-no-unset")"
+gs_fx
+gs env SHARE_TUNNEL=1 GW_CFD_MODE=exit1s bash "$SH" serve >/dev/null 2>&1; rc=$?
+check "CD-07 a cloudflared that exits after 1 s: serve exits non-zero and records cloudflared_died" "1 cloudflared_died" "$([[ $rc != 0 ]] && echo 1 || echo 0) $(gs_code)"
+at1="$(jq -r .at "$GS/root/.serve-exit")"; sleep 1
+gs env SHARE_TUNNEL=1 GW_CFD_MODE=exitnow bash "$SH" serve >/dev/null 2>&1
+check "CD-07 a second serve whose cloudflared exits before /ready keeps the reason (rewritten, never cleared)" "cloudflared_died 1" "$(gs_code) $([[ $(jq -r .at "$GS/root/.serve-exit") -gt $at1 ]] && echo 1 || echo 0)"
+(gs env SHARE_TUNNEL=1 GW_CFD_MODE=ready bash "$SH" serve >/dev/null 2>&1 &)
+for _ in $(seq 1 50); do [[ -e $GS/root/.serve-exit ]] || break; sleep 0.1; done
+check "CD-07 a serve whose /ready answers removes the stale record" "none" "$(gs_code)"
+gs bash "$SH" stop >/dev/null 2>&1
+check "CD-07 then stop records stopped" "stopped" "$(gs_code)"
+echo "=== state groundwork: G2a ==="
+GA="$GW/journal"; GA_ROOT="$GA/root"; mkdir -p "$GA_ROOT" "$GA/config"
+ga() { env -u SHARE_HOSTNAME SHARE_ROOT="$GA_ROOT" SHARE_CONFIG_DIR="$GA/config" SHARE_TUNNEL=0 bash "${GA_SH:-$SH}" "$@"; }
+ga_hold() { # ga_hold <verb> <step> <of> [args...]: an op-run held at <step> in the background; prints its pid
+  local v=$1 n=$2 of=$3; shift 3
+  (SHARE_OP_PAUSE="$v:$n" ga state-fn op-run "$v" "$of" "$@" >/dev/null 2>&1 &)
+  gw_wait_step "$GA_ROOT" "$v" "$n"
+}
+ga_release() { : >"$GA_ROOT/.op-release-$1-$2"; }
+ga_journal() { # ga_journal <verb> <pid> <start> [step]: a hand-written v1 journal file
+  mkdir -p "$GA_ROOT/ops"
+  jq -nc --arg v "$1" --argjson pid "$2" --arg st "$3" --argjson n "${4:-4}" \
+    '{v: 1, verb: $v, step: $n, of: 16, name: "alias-domain", pid: $pid, start: $st, started: 0, rerun_argv: ["setup"], id: null, rerun: "share setup"}' >"$GA_ROOT/ops/$1.$2.json"
+}
+out="$(ga state-fn op-run setup-r2 3)"; rc=$?
+check "JN-01 a clean run exits 0 and leaves ops/ empty" "0|" "$rc|$(gw_ops "$GA_ROOT")"
+pid="$(ga_hold setup-r2 3 5 setup ga.example.test --r2 --bucket b -- setup ga.example.test --no-r2)"
+kill -9 "$pid" 2>/dev/null; gw_gone "$pid"
+check "JN-02 kill -9 at step 3: the file names step 3 (bucket)" "3 bucket" "$(jq -r '"\(.step) \(.name)"' "$GA_ROOT/ops/setup-r2.$pid.json" 2>/dev/null)"
+check "JN-02 state.ops[0]: the verb, step 3 of 16, not alive, rerun and rollback" "setup-r2 3 16 false share setup ga.example.test --r2 --bucket b|share setup ga.example.test --no-r2" \
+  "$(ga state | jq -r '.ops[0] | "\(.verb) \(.step) \(.of) \(.alive) \(.rerun)|\(.rollback)"')"
+check "JN-02 status prints the dead op with its rerun and rollback" "1" \
+  "$(ga status | grep -c '^setup-r2 stopped at step 3 of 16 (bucket); rerun: share setup ga.example.test --r2 --bucket b; or roll back: share setup ga.example.test --no-r2$')"
+out="$(ga state-fn op-run setup-r2 5)"; rc=$?
+check "JN-03 the rerun names the dead step, continues, and ends with an empty ops/" "0|1|" "$rc|$(grep -c '^previous setup-r2 died at step 3 (bucket); continuing$' <<<"$out")|$(gw_ops "$GA_ROOT")"
+pid="$(ga_hold setup-r2 2 4)"
+out="$(SHARE_ERROR_JSON=1 ga state-fn op-run setup-r2 1 2>&1)"; rc=$?
+check "JN-04 a second run while the first is alive is refused op_running, naming its pid" "1|op_running|1" \
+  "$rc|$(tail -1 <<<"$out" | jq -r .error.code)|$(sed '$d' <<<"$out" | grep -c "already running (pid $pid, step 2 of 16)")"
+check "JN-04 the first run is untouched: its file at step 2, still alive" "2 true" "$(jq -r .step "$GA_ROOT/ops/setup-r2.$pid.json") $(ga state | jq -r '.ops[0].alive')"
+ga_release setup-r2 2; gw_gone "$pid"
+check "JN-04 released, the first run finishes and clears its file" "" "$(gw_ops "$GA_ROOT")"
+# JN-05: the pid is alive and a share process (a held op-run), but the start time is not its own: a reused pid
+hp="$(ga_hold demo 1 2)"
+ga_journal setup-r2 "$hp" "Mon Jan  1 00:00:00 2001"
+out="$(ga state-fn op-run setup-r2 1 2>&1)"; rc=$?
+check "JN-05 a journal whose pid the OS reused reads dead: no op_running, reported, removed" "0|1|demo.$hp.json" "$rc|$(grep -c '^previous setup-r2 died at step 4 (alias-domain); continuing$' <<<"$out")|$(gw_ops "$GA_ROOT")"
+# shellcheck disable=SC2016 # the $ signs are the literal source line the mutation matches
+sed 's/^  \[\[ "\$(proc_start "\$1")" != "\$2" \]\] || return 0$/  return 0/' "$SH" >"$GW/share-pid-only"
+ga_journal setup-r2 "$hp" "Mon Jan  1 00:00:00 2001"
+out="$(SHARE_ERROR_JSON=1 GA_SH="$GW/share-pid-only" ga state-fn op-run setup-r2 1 2>&1)"; rc=$?
+check "negative control NC-G2: liveness by pid alone refuses the reused pid with op_running" "1 op_running" "$rc $(tail -1 <<<"$out" | jq -r .error.code 2>/dev/null)"
+ga_release demo 1; gw_gone "$hp"; rm -f "$GA_ROOT/ops/"*.json
+# JN-06: a dead setup-r2 file whose pid now runs a live share teardown: dead for setup-r2, the teardown's own file untouched
+pid="$(ga_hold teardown 2 3)"
+ga_journal setup-r2 "$pid" "Mon Jan  1 00:00:00 2001"
+out="$(ga state-fn op-run setup-r2 1 2>&1)"; rc=$?
+check "JN-06 the pid reused by another verb: setup-r2 runs; only the teardown's own file remains, alive" "0|teardown.$pid.json|true" \
+  "$rc|$(gw_ops "$GA_ROOT")|$(ga state | jq -r '.ops[0].alive')"
+ga_release teardown 2; gw_gone "$pid"
+mkdir -p "$GA_ROOT/ops"; printf '{"v":1,"verb":"setup-r2","step":' >"$GA_ROOT/ops/setup-r2.999991.json"; printf '{"v":2,"verb":"x"}\n' >"$GA_ROOT/ops/teardown.999992.json"
+out="$(ga state)"; rc=$?
+check "JN-07 a truncated file and an unknown v list as {verb:\"?\", alive:false}; state never fails" "0 2 true" "$rc $(jq '.ops | length' <<<"$out") $(jq '[.ops[] | . == {verb: "?", alive: false}] | all' <<<"$out")"
+ga state-fn op-run setup-r2 1 >/dev/null 2>&1
+check "JN-07 the next run of that verb removes its unreadable file" "teardown.999992.json" "$(gw_ops "$GA_ROOT")"
+rm -f "$GA_ROOT/ops/"*.json
+err="$(SHARE_PROGRESS=1 ga state-fn op-run setup-r2 3 2>&1 >/dev/null)"
+check "JN-09 SHARE_PROGRESS=1: one progress line per step, in order, none starting 'share: '" "3|1:alias:16 2:worker:16 3:bucket:16|0" \
+  "$(grep -c . <<<"$err")|$(jq -r '.progress | "\(.step):\(.name):\(.of)"' <<<"$err" | tr '\n' ' ' | sed 's/ $//')|$(grep -c '^share: ' <<<"$err")"
+err="$(ga state-fn op-run setup-r2 3 2>&1 >/dev/null)"
+check "JN-09 unset: stderr empty, as it is today" "" "$err"
+# JN-12: a live journal written under one locale and zone reads alive under another
+gl=""; for l in fr_FR.UTF-8 de_DE.UTF-8; do [[ -z $gl && $(locale -a 2>/dev/null | grep -cx "$l") -ge 1 ]] && gl=$l; done   # grep -c reads it all: a grep -q exit would SIGPIPE locale under pipefail
+check "JN-12 the zone changes raw ps lstart output (the row is never vacuous)" "1" "$([[ "$(LC_ALL=C TZ=Asia/Tokyo ps -o lstart= -p $$)" != "$(LC_ALL=C TZ=America/New_York ps -o lstart= -p $$)" ]] && echo 1 || echo 0)"
+if [[ -n $gl ]]; then
+  check "JN-12 the locale $gl changes raw ps lstart output" "1" "$([[ "$(LC_ALL=$gl TZ=UTC ps -o lstart= -p $$)" != "$(LC_ALL=C TZ=UTC ps -o lstart= -p $$)" ]] && echo 1 || echo 0)"
+else
+  echo "  SKIP  JN-12 locale half: neither fr_FR.UTF-8 nor de_DE.UTF-8 is installed; the zone half runs"
+fi
+(LC_ALL="${gl:-C}" TZ=Asia/Tokyo SHARE_OP_PAUSE=teardown:2 ga state-fn op-run teardown 3 >/dev/null 2>&1 &)
+pid="$(gw_wait_step "$GA_ROOT" teardown 2)"
+check "JN-12 read under LC_ALL=C TZ=America/New_York: alive" "true" "$(LC_ALL=C TZ=America/New_York ga state | jq -r '.ops[0].alive')"
+out="$(LC_ALL=C TZ=America/New_York SHARE_ERROR_JSON=1 ga state-fn op-run teardown 1 2>&1)"; rc=$?
+check "JN-12 a second run there is refused op_running" "1 op_running" "$rc $(tail -1 <<<"$out" | jq -r .error.code 2>/dev/null)"
+ga_release teardown 2; gw_gone "$pid"
+# JN-13: a dead journal whose rerun_argv holds ; $(...) and a newline: shown quoted, never run
+nasty=$'l1\nl2'; touched="$GA/touched"
+pid="$(ga_hold setup-r2 2 3 setup 'a;b' "\$(touch $touched)" "$nasty")"
+kill -9 "$pid" 2>/dev/null; gw_gone "$pid"
+want=share; for a in setup 'a;b' "\$(touch $touched)" "$nasty"; do printf -v q '%q' "$a"; want="$want $q"; done
+check "JN-13 rerun is each argument through printf %q; rerun_argv is the exact array" "$want|[\"setup\",\"a;b\",\"\$(touch $touched)\",\"l1\\nl2\"]" \
+  "$(ga state | jq -r '.ops[0] | "\(.rerun)|\(.rerun_argv | tojson)"')"
+ga status >/dev/null 2>&1
+check "JN-13 state and status ran nothing from it" "0" "$([[ -e $touched ]] && echo 1 || echo 0)"
+rm -f "$GA_ROOT/ops/"*.json
+# JN-15: a live journal, and a pending line, whose start is in the unpinned format a pre-upgrade CLI wrote in this same environment
+pid="$(ga_hold demo 1 2)"
+raw="$(TZ=Asia/Tokyo ps -o lstart= -p "$pid" | sed 's/^ *//; s/ *$//')"
+check "JN-15 the unpinned format differs from the pinned one here (never vacuous)" "1" "$([[ $raw != "$(LC_ALL=C TZ=UTC0 ps -o lstart= -p "$pid" | sed 's/^ *//; s/ *$//')" ]] && echo 1 || echo 0)"
+ga_journal teardown "$pid" "$raw" 1
+check "JN-15 the unpinned journal reads alive in the environment that wrote it" "true" "$(TZ=Asia/Tokyo ga state | jq -r '[.ops[] | select(.verb == "teardown")][0].alive')"
+out="$(TZ=Asia/Tokyo SHARE_ERROR_JSON=1 ga state-fn op-run teardown 1 2>&1)"; rc=$?
+check "JN-15 a second run is refused op_running" "1 op_running" "$rc $(tail -1 <<<"$out" | jq -r .error.code 2>/dev/null)"
+check "JN-15 a pending line's owner in the unpinned format reads alive (owner_live)" "true" "$(TZ=Asia/Tokyo ga state-fn owner-live "$pid" "$raw")"
+# state writes nothing with a live and a dead journal present
+ga_journal setup-r2 "$(gw_dead_pid)" "Mon Jan  1 00:00:00 2001"
+touch "$GA/marker"; sleep 1.1; ga state >/dev/null
+check "state writes nothing with a live and a dead journal present" "" "$(find "$GA_ROOT" "$GA/config" -newer "$GA/marker" 2>/dev/null)"
+ga_release demo 1; gw_gone "$pid"; rm -f "$GA_ROOT/ops/"*.json
+echo "=== state groundwork: G2b ==="
+gt_kill_at() { # gt_kill_at <verb> <n> <signal> <setup args...>: a gwt run held at step n, then the signal; prints the pid
+  local v=$1 n=$2 sig=$3 pid; shift 3
+  (SHARE_OP_PAUSE="$v:$n" gwt "$@" >/dev/null 2>&1 &)
+  pid="$(gw_wait_step "$GT_ROOT" "$v" "$n")" || return 1
+  kill "-$sig" "$pid" 2>/dev/null; gw_gone "$pid"; echo "$pid"
+}
+bad=""
+for n in $(seq 1 16); do
+  gt_fresh
+  gt_kill_at setup-r2 "$n" 9 setup ten.example.test --r2 --bucket ok-bucket >/dev/null || { bad="$bad $n:held"; continue; }
+  [[ "$(jq -r .step "$GT_ROOT"/ops/setup-r2.*.json 2>/dev/null)" == "$n" ]] || bad="$bad $n:file"
+  out="$(gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1)"; rc=$?
+  [[ $rc == 0 && $(grep -c "^previous setup-r2 died at step $n (" <<<"$out") == 1 && $(gt_on) == 1 ]] || bad="$bad $n:rerun"
+done
+check "G2b die-point loop: setup-r2 killed at each of its 16 steps, the rerun reports it and converges with an empty ops/" "" "$bad"
+gt_fresh; gwt setup ten.example.test --r2 --bucket ok-bucket >/dev/null 2>&1
+rm -rf "$GT.on"; mkdir -p "$GT.on"; cp -R "$GT_HOME" "$GT_DRY" "$GT.on/"
+gt_restore_on() { rm -rf "$GT_HOME" "$GT_DRY"; cp -R "$GT.on/home" "$GT_HOME"; cp -R "$GT.on/bucket" "$GT_DRY"; }
+bad=""
+for n in 1 2; do
+  gt_restore_on
+  gt_kill_at no-r2 "$n" 9 setup ten.example.test --no-r2 >/dev/null || { bad="$bad $n:held"; continue; }
+  out="$(gwt setup ten.example.test --no-r2 2>&1)"; rc=$?
+  [[ $rc == 0 && $(grep -c "^previous no-r2 died at step $n (" <<<"$out") == 1 && $(gt_off) == 1 ]] || bad="$bad $n:rerun"
+done
+check "G2b die-point loop: --no-r2 killed at each of its 2 steps converges on rerun with an empty ops/" "" "$bad"
+# JN-08: SIGTERM (the Share Bar's Stop) at step 9, inside the index lock
+gt_fresh; pid="$(gt_kill_at setup-r2 9 TERM setup ten.example.test --r2 --bucket ok-bucket)"
+check "JN-08 SIGTERM at step 9: the traps released every lock; the file stays at step 9" "0 9" "$(find "$GT_ROOT" -maxdepth 1 -name '.lock-*' | grep -c .) $(jq -r .step "$GT_ROOT/ops/setup-r2.$pid.json")"
+check "JN-08 state.ops[0]: not alive, with rerun and rollback" "false|share --profile ten setup ten.example.test --r2 --bucket ok-bucket|share --profile ten setup ten.example.test --no-r2" \
+  "$(gwt state 2>/dev/null | jq -r '.ops[0] | "\(.alive)|\(.rerun)|\(.rollback)"')"
+out="$(gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1)"; rc=$?
+check "JN-08 the rerun continues and converges" "0 1" "$rc $(gt_on)"
+# DP-G-01 and the After state: killed between the config (11) and the route (13), and at the route itself
+for n in 12 13; do
+  gt_fresh; gt_kill_at setup-r2 "$n" 9 setup ten.example.test --r2 --bucket ok-bucket >/dev/null
+  nm="$(gwt status 2>/dev/null | grep '^setup-r2 stopped')"
+  check "DP-G-01 status names step $n and both the rerun and the --no-r2 rollback" \
+    "setup-r2 stopped at step $n of 16 ($([[ $n == 12 ]] && echo marker || echo route)); rerun: share --profile ten setup ten.example.test --r2 --bucket ok-bucket; or roll back: share --profile ten setup ten.example.test --no-r2" "$nm"
+done
+out="$(gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1)"; rc=$?
+check "DP-G-01 the rerun converges" "0 1 1" "$rc $(grep -c '^previous setup-r2 died at step 13 (route); continuing$' <<<"$out") $(gt_on)"
+# JN-11: setup-r2 killed at step 13, then --no-r2 succeeds: the dead journal goes with it
+gt_fresh; gt_kill_at setup-r2 13 9 setup ten.example.test --r2 --bucket ok-bucket >/dev/null
+out="$(gwt setup ten.example.test --no-r2 2>&1)"; rc=$?
+check "JN-11 --no-r2 after a dead setup-r2: exit 0, ops/ empty, state.ops [], no dead-op line" "0||[]|0" \
+  "$rc|$(gw_ops "$GT_ROOT")|$(gwt state 2>/dev/null | jq -c .ops)|$(gwt status 2>/dev/null | grep -c 'stopped at step')"
+# tenant_rollback: a die after the config write, against HEAD's own bin/share
+gt_fresh; o="$(SHARE_R2_DRY_FAIL='API POST /zones/*/workers/routes' GT_SH="$GW_OLD" gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1 >/dev/null)"; orc=$?
+gt_fresh; n="$(SHARE_R2_DRY_FAIL='API POST /zones/*/workers/routes' gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1 >/dev/null)"; nrc=$?
+gt_fresh; j="$(SHARE_ERROR_JSON=1 SHARE_R2_DRY_FAIL='API POST /zones/*/workers/routes' gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1 >/dev/null)"; jrc=$?
+check "CD-01 setup --r2 dying at the route: stderr and exit byte-identical to HEAD's" "$orc|$o" "$nrc|$n"
+check "CD-02 the same with SHARE_ERROR_JSON=1: the human lines, then tenant_rollback" "1|$n|tenant_rollback" "$jrc|$(sed '$d' <<<"$j")|$(tail -1 <<<"$j" | jq -r .error.code 2>/dev/null)"
+check "JN-01 on the wired verb: a clean setup --r2 leaves ops/ empty" "0|" "$(gt_fresh; gwt setup ten.example.test --r2 --bucket ok-bucket >/dev/null 2>&1; echo "$?|$(gw_ops "$GT_ROOT")")"
+awk '{ if (NR > 1 && !(prev ~ /^  op_done$/ && $0 ~ /ready:      R2 is on/)) print prev; prev = $0 } END { print prev }' "$SH" >"$GW/share-no-op-done"
+check "negative control NC-G6: without op_done a clean setup --r2 leaves its journal in ops/" "0|1" \
+  "$(gt_fresh; GT_SH="$GW/share-no-op-done" gwt setup ten.example.test --r2 --bucket ok-bucket >/dev/null 2>&1; echo "$?|$(gw_ops "$GT_ROOT" | grep -c '^setup-r2\.')")"
+
+echo "=== state groundwork: G2c ==="
+gu_kill_at() { # gu_kill_at <verb> <n> <args...>: a gwu run held at step n, then kill -9; prints the pid
+  local v=$1 n=$2 pid; shift 2
+  (SHARE_OP_PAUSE="$v:$n" gwu "$@" >/dev/null 2>&1 &)
+  pid="$(gw_wait_step "$GU_ROOT" "$v" "$n")" || return 1
+  kill -9 "$pid" 2>/dev/null; gw_gone "$pid"; echo "$pid"
+}
+GU_TOK=cftoken
+bad=""
+for n in $(seq 1 8); do
+  gu_fresh
+  gu_kill_at setup-tunnel "$n" setup gu.example.test --no-service >/dev/null || { bad="$bad $n:held"; continue; }
+  out="$(gwu setup gu.example.test --no-service 2>&1)"; rc=$?
+  [[ $rc == 0 && $(grep -c "^previous setup-tunnel died at step $n (" <<<"$out") == 1 && $(gu_happy) == 1 ]] || bad="$bad $n:rerun($rc)"
+done
+check "G2c die-point loop: setup <host> killed at each of its 8 steps converges on rerun with an empty ops/" "" "$bad"
+gu_fresh; gwu setup gu.example.test --no-service >/dev/null 2>&1; gu_save
+err="$(SHARE_PROGRESS=1 gwu setup gu.example.test --no-service 2>&1 >/dev/null | grep '^{"progress"')"
+check "G2c SHARE_PROGRESS=1 setup prints one progress line per op_steps_setup-tunnel row, in order, of = the row count" \
+  "1:auth:8 2:tunnel:8 3:route:8 4:dns:8 5:token:8 6:config:8 7:service:8 8:live:8" "$(jq -r '.progress | "\(.step):\(.name):\(.of)"' <<<"$err" | tr '\n' ' ' | sed 's/ $//')"
+bad=""
+for n in $(seq 1 7); do
+  gu_restore
+  gu_kill_at teardown "$n" teardown --yes >/dev/null || { bad="$bad $n:held"; continue; }
+  out="$(gwu teardown --yes 2>&1)"; rc=$?
+  [[ $rc == 0 && $(grep -c "^previous teardown died at step $n (" <<<"$out") == 1 && $(gu_torn) == 1 ]] || bad="$bad $n:rerun($rc)"
+  [[ $n != 6 ]] || td01="$out"
+done
+check "G2c die-point loop: teardown killed at each of its 7 steps converges on rerun with no config and an empty ops/" "" "$bad"
+check "TD-01 killed after the tunnel DELETE: the rerun reads the tunnel as gone and goes on" "1" "$(grep -c '^tunnel:  already deleted$' <<<"$td01")"
+gu_restore; gu_kill_at teardown 7 teardown --yes >/dev/null; mv "$GU_CONF" "$GW/trashed/config.td"   # it died just after the config went
+out="$(gwu teardown --yes 2>&1)"; rc=$?
+check "TD-01 a dead teardown journal with no config left counts as done" "0 1 1" "$rc $(grep -c 'nothing is left' <<<"$out") $(gu_torn)"
+gu_restore; (SHARE_OP_PAUSE=teardown:3 gwu teardown --yes >/dev/null 2>&1 &); pid="$(gw_wait_step "$GU_ROOT" teardown 3)"
+check "JN-10 a verb with no rollback: neither the file nor state.ops carries one" "false false" \
+  "$(jq 'has("rollback_argv")' "$GU_ROOT/ops/teardown.$pid.json") $(gwu state 2>/dev/null | jq '.ops[0] | has("rollback")')"
+kill -9 "$pid"; gw_gone "$pid"
+out="$(gwu setup gu.example.test --no-service 2>&1)"; rc=$?
+check "JN-14a a dead teardown journal, then setup <host> succeeds: ops/ empty" "0|" "$rc|$(gw_ops "$GU_ROOT")"
+gu_restore; gu_kill_at teardown 2 teardown --yes >/dev/null; dp="$(gw_dead_pid)"
+jq -nc --argjson p "$dp" '{v: 1, verb: "add", step: 2, of: 3, name: "row", pid: $p, start: "x", started: 0, rerun_argv: ["add"], id: "0d0001", rerun: "share add"}' >"$GU_ROOT/ops/add.$dp.json"
+out="$(gwu setup gu.example.test --no-service 2>&1)"; rc=$?
+check "JN-14b the same with a dead add journal: only the add file remains, for prune" "0|add.$dp.json" "$rc|$(gw_ops "$GU_ROOT")"
+rm -f "$GU_ROOT/ops/add.$dp.json"
+# teardown --purge on an r2 profile
+rm -rf "$GP_HOME" "$GP_DRY"; mkdir -p "$GP_HOME" "$GP_DRY"
+GP_TOK=admintoken gwp setup pg.example.test --backend r2 --bucket ok-bucket >/dev/null 2>&1
+SHARE_TEST_IDS=0e0001 gwp add "$GW/f.txt" >/dev/null 2>&1   # one link: a purge of two dies at the second rm on the base commit too (a separate defect)
+check "teardown-purge fixture: an r2 profile with a cloud link" "1 1" "$(find "$GP_DRY/m" -type f | grep -c .) $([[ -f $GP_DRY/.cf/script.json ]] && echo 1 || echo 0)"
+rm -rf "$GP.snap"; mkdir -p "$GP.snap"; cp -R "$GP_HOME" "$GP_DRY" "$GP.snap/"
+gp_restore() { rm -rf "$GP_HOME" "$GP_DRY"; cp -R "$GP.snap/home" "$GP_HOME"; cp -R "$GP.snap/bucket" "$GP_DRY"; }
+gp_gone() { # 1 when the purge finished: no record, upload, marker, domain, Worker, bucket, config; an empty ops/
+  [[ -z "$(find "$GP_DRY/m" "$GP_DRY/o" -type f 2>/dev/null)" && ! -e $GP_DRY/share.json && ! -e $GP_DRY/.cf/domain.json && ! -e $GP_DRY/.cf/script.json &&
+    ! -e $GP_DRY/.cf/bucket && ! -e $GP_CONF && -z "$(gw_ops "$GP_ROOT")" ]] && echo 1 || echo 0
+}
+bad=""
+for n in $(seq 1 7); do
+  gp_restore
+  (SHARE_OP_PAUSE="teardown-purge:$n" GP_TOK=admintoken gwp teardown --yes --purge >/dev/null 2>&1 &)
+  pid="$(gw_wait_step "$GP_ROOT" teardown-purge "$n")" || { bad="$bad $n:held"; continue; }
+  kill -9 "$pid"; gw_gone "$pid"
+  out="$(GP_TOK=admintoken gwp teardown --yes --purge 2>&1)"; rc=$?
+  [[ $rc == 0 && $(grep -c "^previous teardown-purge died at step $n (" <<<"$out") == 1 && $(gp_gone) == 1 ]] || bad="$bad $n:rerun($rc)"
+done
+check "G2c die-point loop: teardown --purge killed at each of its 7 steps converges on rerun" "" "$bad"
+# migrate, its loop under /bin/bash 3.2 (a rerun after the rows moved has an empty id list)
+gm() { # gm <A HOME> <B HOME> <curl log> <verb...>: mig_a, with bin/share run by /bin/bash
+  local ahome=$1 bhome=$2 clog=$3; shift 3
+  env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS -u SHARE_TUNNEL \
+    HOME="$ahome" PATH="$MW/stubsvc:$MW/remotebin:$PATH" CURL_LOG="$clog" CLOUDFLARE_API_TOKEN=migtoken \
+    MIG_B_HOME="$bhome" MIG_CURL_LOG="$clog" SHARE_MIGRATE_SSH="$MW/mssh" /bin/bash "$SH" "$@"
+}
+bad=""
+for n in $(seq 1 7); do
+  AH="$MW/gwA$n"; BH="$MW/gwB$n"; rm -rf "$AH" "$BH"; mkdir -p "$AH" "$BH/.config/share"
+  mig_fixture "$AH"; printf 'hosts=nobody\nport=%s\n' $((base + 340)) >"$BH/.config/share/config"
+  (SHARE_OP_PAUSE="migrate:$n" gm "$AH" "$BH" "$MW/gwclog" migrate --to gm-target --remote-bin "$MW/remotebin" --yes >/dev/null 2>&1 &)
+  pid="$(gw_wait_step "$AH/share" migrate "$n")" || { bad="$bad $n:held"; continue; }
+  kill -9 "$pid"; gw_gone "$pid"
+  out="$(gm "$AH" "$BH" "$MW/gwclog" migrate --to gm-target --remote-bin "$MW/remotebin" --yes 2>&1)"; rc=$?
+  [[ $rc == 0 && $(grep -c "^previous migrate died at step $n (" <<<"$out") == 1 && "$(cut -f1 "$AH/share/index.migrated" 2>/dev/null | sort -u | tr '\n' ' ')" == "1a0001 1a0002 $GATEDID " &&
+    -z "$(gw_ops "$AH/share")" && "$(sed -n 's/^migrated=//p' "$AH/.config/share/config")" == gm-target ]] || bad="$bad $n:rerun($rc)"
+done
+check "G2c die-point loop: migrate killed at each of its 7 steps converges on rerun under /bin/bash 3.2" "" "$bad"
+echo "=== state groundwork: G3 ==="
+GR="$GW/role"
+gr() { # gr <dir> <verb...>: a fixture profile under its own HOME, R2 dry, hosts= naming no machine
+  local d=$1; shift
+  env -u SHARE_HOSTNAME -u CLOUDFLARE_API_TOKEN HOME="$d" SHARE_ROOT="$d/root" SHARE_CONFIG_DIR="$d/config" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$d/dry" \
+    SHARE_HOSTS=nobody bash "${GR_SH:-$SH}" "$@"
+}
+gr_fx() { local d="$GR/$1"; shift; rm -rf "$d"; mkdir -p "$d/root" "$d/config" "$d/dry"; [[ $# == 0 ]] || printf '%s\n' "$@" >"$d/config/config"; echo "$d"; }
+gr_row() { gr "$1" state 2>/dev/null | jq -r '"\(.role) \(.state) \(.tier // "-")"'; }
+r2keys=("zone=example.test" "bucket=ok-bucket" "port=r2" "r2_endpoint=https://acct-dry.r2.cloudflarestorage.com")
+check "RL-01 member" "member serving -" "$(gr_row "$(gr_fx member backend=r2 role=member member_id=m-an-aaaaaaa1 hostname=mem.example.test "${r2keys[@]}")")"
+check "RL-02 migrated (the migrated= key)" "migrated not_setup -" "$(gr_row "$(gr_fx migrated hostname=mig.example.test tunnel_id=tid-m tunnel_name=t migrated=host-b)")"
+d="$(gr_fx moved hostname=old.example.test tunnel_id=tid-o tunnel_name=t)"; printf '1a0001\tone.txt\t/x\t2026-09-01\t0\t\n' >"$d/root/index.migrated"
+check "RL-02 migrated before G3 (index.migrated, tunnel_id, no token_cmd, no stored token)" "migrated not_setup -" "$(gr_row "$d")"
+check "RL-03 r2_profile" "r2_profile serving -" "$(gr_row "$(gr_fx r2p backend=r2 hostname=r2p.example.test "${r2keys[@]}")")"
+check "RL-04 quick" "quick stopped -" "$(gr_row "$(gr_fx quick mode=quick hosts=nobody port=$((base + 350)))")"
+check "RL-05 tenant_origin, tier t1" "tenant_origin stopped t1" "$(gr_row "$(gr_fx tenant hostname=t.example.test tunnel_id=tid-t bucket=ok-bucket)")"
+check "RL-05 tenant_origin with members=on, tier t2" "tenant_origin stopped t2" "$(gr_row "$(gr_fx tenant2 hostname=t.example.test tunnel_id=tid-t bucket=ok-bucket members=on)")"
+check "RL-06 origin, tier t0" "origin stopped t0" "$(gr_row "$(gr_fx origin hostname=o.example.test tunnel_id=tid-o)")"
+check "RL-07 none" "none not_setup -" "$(gr_row "$(gr_fx none)")"
+gr migrated state >"$GW/state-migrated.json" 2>/dev/null
+check "CP-01 state_schema_ok passes on a migrated HOME with state not_setup" "0" "$(state_schema_ok "$GW/state-migrated.json" not_setup; echo $?)"
+check "status names the moved profile" "1 1" "$(gr "$GR/migrated" status 2>/dev/null | grep -c '^role: moved to another machine$') $(gr "$GR/migrated" status 2>/dev/null | grep -c 'moved to host-b; nothing serves here')"
+sed 's/^  if \[\[ \$c_role == member \&\& -n \$c_mid \]\]; then role=member$/  if [[ -n $c_tid \&\& -z $c_bucket ]]; then role=origin\n  elif [[ $c_role == member \&\& -n $c_mid ]]; then role=member/' "$SH" >"$GW/share-origin-first"
+check "negative control NC-G3: origin before migrated reads the moved profile as stopped" "origin stopped t0" "$(GR_SH="$GW/share-origin-first" gr_row "$GR/moved")"
+mkdir -p "$GW/rl-src"; printf 'x\n' >"$GW/rl-src/f.txt"
+bad=""
+for v in start serve "service install" "add $GW/rl-src/f.txt"; do
+  d="$(gr_fx rl08 hostname=mig.example.test tunnel_id=tid-m tunnel_name=t migrated=host-b)"; touch "$GR/rl08.marker"; sleep 1.1
+  # shellcheck disable=SC2086 # $v is a verb and its argument on purpose
+  out="$(SHARE_ERROR_JSON=1 gr "$d" $v 2>&1)"; rc=$?
+  [[ $rc == 1 && $(tail -1 <<<"$out" | jq -r .error.code 2>/dev/null) == profile_migrated && $(tail -1 <<<"$out" | jq -r .error.next) == "share teardown --yes" &&
+    -z "$(find "$d" -newer "$GR/rl08.marker" ! -name .serve-exit ! -path "$d/root" 2>/dev/null)" ]] || bad="$bad [$v]"   # root's own mtime moves with serve's exit record
+done
+check "RL-08 start, serve, service install, add on a migrated profile: refused profile_migrated before any write" "" "$bad"
+d="$(gr_fx rl09 hostname=o.example.test tunnel_id=tid-o tunnel_name=t "token_cmd=echo tok")"; printf '1a0001\tone.txt\t/x\t2026-09-01\t0\t\n' >"$d/root/index.migrated"
+out="$(SHARE_ERROR_JSON=1 gr "$d" start 2>&1)"
+check "RL-09 a token_cmd origin with a leftover index.migrated: origin, and start is not refused as migrated" "origin|not_in_hosts" "$(gr "$d" state | jq -r .role)|$(tail -1 <<<"$out" | jq -r .error.code)"
+gu_restore; SHARE_STATE_FN_WRITE=1 gwu state-fn config-put migrated migrated=gu-target >/dev/null
+out="$(SHARE_ERROR_JSON=1 gwu start 2>&1)"
+check "RL-10 after migrated= is written: role migrated, start refused" "migrated|profile_migrated" "$(gwu state | jq -r .role)|$(tail -1 <<<"$out" | jq -r .error.code)"
+out="$(gwu setup gu.example.test --no-service 2>&1)"; rc=$?
+check "RL-10 setup <host> again: exit 0, live, migrated= dropped, role origin" "0 1 0 origin" "$rc $(grep -c '^ready:' <<<"$out") $(grep -c '^migrated=' "$GU_CONF") $(gwu state | jq -r .role)"
+AH="$MW/gwA7"; BH="$MW/gwB7"
+out="$(SHARE_ERROR_JSON=1 gm "$AH" "$BH" "$MW/gwclog" start 2>&1)"
+check "after migrate the old origin reads not_setup, role migrated, and start refuses profile_migrated" "not_setup migrated|profile_migrated" \
+  "$(gm "$AH" "$BH" "$MW/gwclog" state 2>/dev/null | jq -r '"\(.state) \(.role)"')|$(tail -1 <<<"$out" | jq -r .error.code)"
+
+echo "=== state groundwork: G4 ==="
+gu_restore
+{ sed -n '1,2p' "$GU_CONF"; echo ttl=7d; sed -n '3,4p' "$GU_CONF"; echo r2_token_cmd=x; sed -n '5,$p' "$GU_CONF"; echo r2_key_id=y; echo x_future=1; } >"$GU_CONF.new"; mv "$GU_CONF.new" "$GU_CONF"
+before="$(grep -nE '^(ttl|r2_token_cmd|r2_key_id|x_future)=' "$GU_CONF")"
+gwu setup gu.example.test --no-service >/dev/null 2>&1; rc=$?
+check "CF-01 setup <host> rerun keeps ttl=, r2_token_cmd=, r2_key_id=, x_future= byte for byte, in place" "0|$before" "$rc|$(grep -nE '^(ttl|r2_token_cmd|r2_key_id|x_future)=' "$GU_CONF")"
+sed 's/^        print }$/        next }/' "$SH" >"$GW/share-drop-unowned"
+gu_restore; printf 'x_future=1\n' >>"$GU_CONF"; GU_SH="$GW/share-drop-unowned" gwu setup gu.example.test --no-service >/dev/null 2>&1
+check "negative control NC-G4: a writer that drops unowned keys loses x_future=1" "0" "$(grep -c '^x_future=1$' "$GU_CONF")"
+cf02() { # cf02 <label> <fixture fn> <conf> <run fn>: HEAD's writer and this one, each on a fresh fixture, leave byte-identical configs
+  local a b
+  "$2"; RUN_SH="$GW_OLD" "$4" >/dev/null 2>&1; a="$(cat "$3" 2>/dev/null)"
+  "$2"; RUN_SH="$SH" "$4" >/dev/null 2>&1; b="$(cat "$3" 2>/dev/null)"
+  check "CF-02 $1: the config is byte-identical to HEAD's writer" "1|$a" "$([[ -n $a ]] && echo 1 || echo 0)|$b"
+}
+gu_restore_api() { gu_restore; printf 'api_token_cmd=echo t\n' >>"$GU_CONF"; }
+cf_setup() { GU_SH="$RUN_SH" gwu setup gu.example.test --no-service; }
+cf02 "write_config (setup <host> rerun)" gu_restore_api "$GU_CONF" cf_setup
+cf_quick() { GU_SH="$RUN_SH" GU_HOSTS=nobody gwu setup --quick --no-service; }
+cf02 "write_config_quick (setup --quick)" gu_fresh "$GU_CONF" cf_quick
+cf_r2on() { GT_SH="$RUN_SH" gwt setup ten.example.test --r2 --bucket ok-bucket; }
+cf02 "tenant_config (setup --r2)" gt_fresh "$GT_CONF" cf_r2on
+cf_r2off() { GT_SH="$RUN_SH" gwt setup ten.example.test --no-r2; }
+cf02 "tenant_config (--no-r2)" gt_restore_on "$GT_CONF" cf_r2off
+cf_api() { SHARE_ACCESS_DRY=1 GT_SH="$RUN_SH" gwt api-token --cmd 'echo t'; }
+cf02 "api-token --cmd" gt_fresh "$GT_CONF" cf_api
+gp_fresh() { rm -rf "$GP_HOME" "$GP_DRY"; mkdir -p "$GP_HOME" "$GP_DRY"; }
+cf_r2p() { GP_SH="$RUN_SH" GP_TOK=admintoken gwp setup pg.example.test --backend r2 --bucket ok-bucket; }
+cf02 "write_config_r2 (setup --backend r2)" gp_fresh "$GP_CONF" cf_r2p
+GF="$GW/cfput"; mkdir -p "$GF/root" "$GF/config"; gf_conf="$GF/config/config"
+gf() { env -u SHARE_HOSTNAME SHARE_ROOT="$GF/root" SHARE_CONFIG_DIR="$GF/config" SHARE_STATE_FN_WRITE=1 bash "$SH" state-fn config-put "$@"; }
+printf 'hostname=a.example.test\nport=1\nx=1\nport=2\n' >"$gf_conf"; gf port port=9
+check "CF-03 a duplicate port=: the first rewritten in place, the second dropped" "hostname=a.example.test|port=9|x=1|" "$(tr '\n' '|' <"$gf_conf")"
+gt_fresh; printf 'members=on\n' >>"$GT_CONF"; SHARE_ACCESS_DRY=1 gwt api-token --cmd 'echo t' >/dev/null 2>&1
+check "CF-04 api-token --cmd keeps members=on" "1 1" "$(grep -c '^members=on$' "$GT_CONF") $(grep -c '^api_token_cmd=echo t$' "$GT_CONF")"
+printf 'mode=quick\nhosts=h\nport=1\n' >"$gf_conf"; gf write_config hostname=q.example.test tunnel_id=t tunnel_name=n auth=api hosts=h port=1
+check "CF-05 a quick profile turned named drops mode= (any order)" "0 1 1" "$(grep -c '^mode=' "$gf_conf") $(grep -c '^tunnel_id=t$' "$gf_conf") $(grep -c '^hosts=h$' "$gf_conf")"
+gf auth 'auth=a=b c  d'
+check "CF-06 a value holding = and spaces is written verbatim" "auth=a=b c  d" "$(grep '^auth=' "$gf_conf")"
+c0="$(cksum <"$gf_conf")"; chmod 555 "$GF/config"; out="$(gf port port=5 2>&1)"; rc=$?; chmod 755 "$GF/config"
+check "CF-07 an unwritable config dir: dies, the config untouched, no tmp left" "1|$c0|0" "$rc|$(cksum <"$gf_conf")|$(find "$GF/config" -name '.config.*' | grep -c .)"
+c0="$(cksum <"$gf_conf")"; out="$(SHARE_ERROR_JSON=1 env -u SHARE_HOSTNAME SHARE_ROOT="$GF/root" SHARE_CONFIG_DIR="$GF/config" bash "$SH" admin-token --cmd $'x\ntoken_cmd=y' 2>&1)"; rc=$?
+check "CF-08 admin-token --cmd with a newline dies config_value_bad, the config untouched" "1|config_value_bad|$c0" "$rc|$(tail -1 <<<"$out" | jq -r .error.code)|$(cksum <"$gf_conf")"
+out="$(SHARE_ERROR_JSON=1 gf port $'port=7\r' 2>&1)"; rc=$?
+check "CF-08 a value ending in a carriage return dies config_value_bad, the config untouched" "1|config_value_bad|$c0" "$rc|$(tail -1 <<<"$out" | jq -r .error.code)|$(cksum <"$gf_conf")"
+printf 'hostname=a.example.test\nx_last=1' >"$gf_conf"; chmod 600 "$gf_conf"; gf port port=2
+check "CF-08 a last line with no newline is kept; the file mode is kept" "1 1 1" "$(grep -c '^x_last=1$' "$gf_conf") $(grep -c '^port=2$' "$gf_conf") $(find "$gf_conf" -perm 600 | grep -c .)"
+out="$(env -u SHARE_HOSTNAME SHARE_ROOT="$GF/root" SHARE_CONFIG_DIR="$GF/config" bash "$SH" state-fn config-put port port=3 2>&1)"; rc=$?
+check "state-fn config-put writes only under its test seam" "1 1" "$rc $(grep -c 'SHARE_STATE_FN_WRITE=1' <<<"$out")"
+
+echo "=== state groundwork: G13 ==="
+GK="$GW/keys"; mkdir -p "$GK"; : >"$GK/all-out"
+printf '#!/bin/bash\necho run >>"%s/mark"\necho gwadmintok0001\n' "$GK" >"$GK/admin-ok"
+printf '#!/bin/bash\necho run >>"%s/mark"\necho gwmintertok0002\n' "$GK" >"$GK/minter-ok"
+printf '#!/bin/bash\necho run >>"%s/mark"\nexit 1\n' "$GK" >"$GK/fail"
+printf '#!/bin/bash\necho OUTTEXT-gw\necho ERRTEXT-gw >&2\nexit 3\n' >"$GK/exit3"
+chmod +x "$GK/admin-ok" "$GK/minter-ok" "$GK/fail" "$GK/exit3"
+gk_marks() { grep -c . "$GK/mark" 2>/dev/null || echo 0; }
+gk_keep() { printf '%s\n' "$1" >>"$GK/all-out"; }
+gt_writes() { grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$GT_ROOT/r2-calls.log" 2>/dev/null || echo 0; }
+gt_fresh; printf 'admin_token_cmd=%s\n' "$GK/fail" >>"$GT_CONF"; rm -f "$GK/mark"
+out="$(gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1)"; rc=$?; gk_keep "$out"
+check "AT-01 CLOUDFLARE_API_TOKEN wins: setup --r2 exits 0 and admin_token_cmd never runs" "0 0" "$rc $(gk_marks)"
+gt_fresh; printf 'admin_token_cmd=%s\n' "$GK/admin-ok" >>"$GT_CONF"; rm -f "$GK/mark"
+out="$(GT_TOK='' gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1)"; rc=$?; gk_keep "$out"
+check "AT-02 only admin_token_cmd: setup --r2 exits 0, the command ran once" "0 1 1" "$rc $(gk_marks) $(gt_on)"
+cat "$GT_ROOT/r2-calls.log" "$GT_CONF" >>"$GK/all-out" 2>/dev/null
+gt_fresh; printf 'admin_token_cmd=%s\n' "$GK/exit3" >>"$GT_CONF"; c0="$(cksum <"$GT_CONF")"
+out="$(SHARE_ERROR_JSON=1 GT_TOK='' gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1)"; rc=$?; gk_keep "$out"
+check "AT-03 the command exits 3: admin_token_cmd_failed naming exit 3, neither stream shown, nothing written" "1|admin_token_cmd_failed|1|0|0|0|$c0" \
+  "$rc|$(tail -1 <<<"$out" | jq -r .error.code)|$(sed '$d' <<<"$out" | grep -c 'exited 3')|$(grep -c 'OUTTEXT-gw\|ERRTEXT-gw' <<<"$out")|$(gt_writes)|$(gw_ops "$GT_ROOT" | grep -c .)|$(cksum <"$GT_CONF")"
+bad=""
+gk_missing() { # gk_missing <label> <expected next> <out> <rc>: admin_token_missing with that next, exit 1
+  [[ $4 == 1 && $(tail -1 <<<"$3" | jq -r .error.code) == admin_token_missing && $(tail -1 <<<"$3" | jq -r .error.next) == "$2" ]] || bad="$bad [$1]"
+}
+gt_fresh; c0="$(cksum <"$GT_CONF")"; out="$(SHARE_ERROR_JSON=1 GT_TOK='' gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1)"; rc=$?
+gk_missing "setup --r2" "share --profile ten admin-token --cmd '<command>'" "$out" "$rc"; [[ $(gt_writes) == 0 && "$(cksum <"$GT_CONF")" == "$c0" ]] || bad="$bad [--r2 wrote]"
+gt_restore_on; c0="$(cksum <"$GT_CONF")"; out="$(SHARE_ERROR_JSON=1 GT_TOK='' gwt setup ten.example.test --no-r2 2>&1)"; rc=$?
+gk_missing "--no-r2" "share --profile ten admin-token --cmd '<command>'" "$out" "$rc"; [[ "$(cksum <"$GT_CONF")" == "$c0" ]] || bad="$bad [--no-r2 wrote]"
+gp_restore; out="$(SHARE_ERROR_JSON=1 gwp teardown --yes --purge 2>&1)"; rc=$?
+gk_missing "teardown --purge" "share --profile pg admin-token --cmd '<command>'" "$out" "$rc"; [[ -f $GP_DRY/.cf/script.json && -f $GP_CONF ]] || bad="$bad [--purge deleted]"
+check "AT-04 no admin token source: setup --r2, --no-r2, teardown --purge die admin_token_missing before any write" "" "$bad"
+gt_fresh; printf 'admin_token_cmd=%s\nminter_token_cmd=%s\n' "$GK/fail" "$GK/fail" >>"$GT_CONF"; rm -f "$GK/mark"
+for v in ls "add $GW/f.txt" prune state status "profiles --json"; do
+  # shellcheck disable=SC2086 # $v is a verb and its argument on purpose
+  GT_TOK='' SHARE_TEST_IDS=0f0001 gwt $v >/dev/null 2>&1
+done
+gwt stop >/dev/null 2>&1
+check "AT-05 and AT-12: ls, add, prune, state, status, profiles --json never run admin_token_cmd or minter_token_cmd" "0" "$(gk_marks)"
+gt_fresh; : >"$GT_ROOT/r2-calls.log"
+out="$(SHARE_R2_DRY_BUCKETS=ok-bucket gwt admin-token --test --json 2>&1)"; rc=$?; gk_keep "$out"
+check "AT-06 admin-token --test --json with an admin token: every capability true" "0|{\"source\":\"env\",\"can\":{\"workers\":true,\"tunnels\":true,\"dns\":true,\"r2\":true,\"connectivity\":true}}" "$rc|$out"
+check "AT-06 one read per capability: the five probes in the call log" "1 1 1 1 1" "$(for p in '/workers/scripts/share-ten-example-test/settings$' '/cfd_tunnel?' '/dns_records?' '/r2/buckets$' '/connectivity/directory/services?'; do grep -c "^API GET .*$p" "$GT_ROOT/r2-calls.log"; done | tr '\n' ' ' | sed 's/ $//')"
+out="$(SHARE_ERROR_JSON=1 SHARE_R2_DRY_ROLE=deny gwt admin-token --test --json 2>&1)"; rc=$?; gk_keep "$out"
+check "AT-06 a publisher token dies admin_token_not_admin; neither run prints the token" "1|admin_token_not_admin|0" "$rc|$(tail -1 <<<"$out" | jq -r .error.code)|$(grep -c admintoken "$GK/all-out")"
+gt_fresh; printf 'ttl=7d\nmembers=on\n' >>"$GT_CONF"; before="$(grep -nE '^(ttl|members)=' "$GT_CONF")"
+gwt admin-token --cmd 'x' >/dev/null; a1="$(grep -c '^admin_token_cmd=x$' "$GT_CONF")"; gwt admin-token --clear >/dev/null
+check "AT-07 admin-token --cmd then --clear: ttl= and members= kept in place; the key written, then dropped" "$before|1|0" "$(grep -nE '^(ttl|members)=' "$GT_CONF")|$a1|$(grep -c '^admin_token_cmd=' "$GT_CONF")"
+gu_fresh; mkdir -p "${GU_CONF%/*}"
+{ echo '-----BEGIN ARGO TUNNEL TOKEN-----'; printf '{"zoneID":"zone1","accountID":"acct1","apiToken":"certtok"}' | base64; echo '-----END ARGO TUNNEL TOKEN-----'; } >"${GU_CONF%/*}/cert.pem"
+echo example.test >"${GU_CONF%/*}/cert.zone"
+out1="$(GU_TOK='' gwu setup gu.example.test --no-service 2>&1)"; rc1=$?
+out2="$(GU_TOK='' gwu teardown --yes 2>&1)"; rc2=$?
+gu_fresh; out3="$(GU_TOK='' GU_HOSTS=nobody gwu setup --quick --no-service 2>&1)"; rc3=$?
+check "AT-08 neither source: setup <host> (login cert), tunnel teardown, setup --quick proceed as today" "0 0 0 0" "$rc1 $rc2 $rc3 $(grep -c admin_token_missing <<<"$out1$out2$out3")"
+gu_fresh; mkdir -p "${GU_CONF%/*}"; printf 'admin_token_cmd=%s\n' "$GK/admin-ok" >"$GU_CONF"; rm -f "$GK/cfd.env"
+out="$(unset GU_TOK; GU_TUNNEL=1 GU_PORT=$((base + 322)) GW_CFD_ENV="$GK/cfd.env" gwu setup gu.example.test --no-service 2>&1)"; rc=$?; gk_keep "$out"
+check "AT-09 setup <host> with only admin_token_cmd: cloudflared's environment has no CLOUDFLARE_API_TOKEN and no token value" "0 1 0 0" \
+  "$rc $([[ -s $GK/cfd.env ]] && echo 1 || echo 0) $(grep -c '^CLOUDFLARE_API_TOKEN=' "$GK/cfd.env") $(grep -c gwadmintok0001 "$GK/cfd.env")"
+gt_fresh; printf 'minter_token_cmd=%s\n' "$GK/fail" >>"$GT_CONF"; rm -f "$GK/mark"
+out="$(SHARE_MINTER_TOKEN=envmint gwt minter-token --test 2>&1)"; rc=$?; gk_keep "$out"
+check "AT-10 SHARE_MINTER_TOKEN wins: minter-token --test runs, the command never does" "0 0" "$rc $(gk_marks)"
+gt_fresh; printf 'minter_token_cmd=%s\n' "$GK/minter-ok" >>"$GT_CONF"; rm -f "$GK/mark"
+out="$(gwt minter-token --test --json 2>&1)"; rc=$?; gk_keep "$out"
+check "AT-11 only minter_token_cmd: --test --json runs it once and lists tokens" "0|{\"source\":\"cmd\",\"can\":{\"list_tokens\":true}}|1" "$rc|$out|$(gk_marks)"
+cat "$GT_ROOT/r2-calls.log" >>"$GK/all-out" 2>/dev/null
+gt_fresh; printf 'minter_token_cmd=%s\n' "$GK/exit3" >>"$GT_CONF"
+out="$(SHARE_ERROR_JSON=1 gwt minter-token --test 2>&1)"; rc=$?; gk_keep "$out"
+check "AT-11 the command exits 3: minter_token_cmd_failed naming exit 3, neither stream shown" "1|minter_token_cmd_failed|1|0" "$rc|$(tail -1 <<<"$out" | jq -r .error.code)|$(sed '$d' <<<"$out" | grep -c 'exited 3')|$(grep -c 'OUTTEXT-gw\|ERRTEXT-gw' <<<"$out")"
+gt_fresh; out="$(SHARE_ERROR_JSON=1 gwt minter-token --test 2>&1)"; rc=$?
+check "AT-12 neither source: minter_token_missing with its next" "1|minter_token_missing|share --profile ten minter-token --cmd '<command>'" "$rc|$(tail -1 <<<"$out" | jq -r .error.code)|$(tail -1 <<<"$out" | jq -r .error.next)"
+gt_fresh; printf 'minter_token_cmd=%s\n' "$GK/fail" >>"$GT_CONF"; rm -f "$GK/mark"; gwt admin-token --test >/dev/null 2>&1
+check "AT-12 admin-token --test never runs minter_token_cmd" "0" "$(gk_marks)"
+gt_fresh; printf 'ttl=7d\nadmin_token_cmd=y\n' >>"$GT_CONF"; before="$(grep -nE '^(ttl|admin_token_cmd)=' "$GT_CONF")"
+gwt minter-token --cmd 'x' >/dev/null; a1="$(grep -c '^minter_token_cmd=x$' "$GT_CONF")"; gwt minter-token --clear >/dev/null; c0="$(cksum <"$GT_CONF")"
+out="$(SHARE_ERROR_JSON=1 gwt minter-token --cmd $'x\ny' 2>&1)"; rc=$?
+check "AT-13 minter-token --cmd, --clear, then a newline: lines kept, written, dropped, refused untouched" "$before|1|0|1|config_value_bad|$c0" \
+  "$(grep -nE '^(ttl|admin_token_cmd)=' "$GT_CONF")|$a1|$(grep -c '^minter_token_cmd=' "$GT_CONF")|$rc|$(tail -1 <<<"$out" | jq -r .error.code)|$(cksum <"$GT_CONF")"
+check "Q-SEC-7 no fixture token value in any captured output, call log, config or journal" "0 0" "$(grep -c gwadmintok0001 "$GK/all-out") $(grep -c gwmintertok0002 "$GK/all-out")"
+check "--help lists admin-token and minter-token" "1 1" "$(bash "$SH" --help | grep -c "share admin-token --cmd '<command>' | --clear | --test") $(bash "$SH" --help | grep -c "share minter-token --cmd '<command>' | --clear | --test")"
+
+echo "=== state groundwork: G5 ==="
+check "skill names share state first" "\`share state\`" "$(bash "$SH" skill | awk '/^## Before anything/ {f = 1; next} f && match($0, /`share [a-z-]+`/) {print substr($0, RSTART, RLENGTH); exit}')"
+gk_skill_ok() { local c sk; sk="$(bash "$1" skill)"; for c in $(bash "$1" state-fn codes); do grep -qF "\`$c\`" <<<"$sk" || return 1; done; return 0; }
+check "every code in share state-fn codes appears in the skill" "0" "$(gk_skill_ok "$SH"; echo $?)"
+sed 's/^caddy_failed|/brand_new_code|added to code_text only|share status\ncaddy_failed|/' "$SH" >"$GW/share-new-code"
+check "negative control NC-G5: a code added to code_text with no skill line fails the check" "1|1" "$(bash "$GW/share-new-code" state-fn codes | grep -c '^brand_new_code$')|$(gk_skill_ok "$GW/share-new-code"; echo $?)"
+# shellcheck disable=SC2016 # the backticks are the skill's own markdown
+check "skill lists every role" "7" "$(bash "$SH" skill | grep -cE '^\| `(none|quick|origin|tenant_origin|r2_profile|member|migrated)` \|')"
 
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then
