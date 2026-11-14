@@ -16,11 +16,46 @@ Run 2026-11-15 on the Mac Mini, Caddy from Homebrew, node 24.
 
 Command: `PATH="<shim>:$PATH" SHARE_TEST_PORT_BASE=22500 /bin/bash tests/share.sh`
 Exit: 1
+Output (the compat rows, a sample of the `mm` rows, and every failure):
+
+```
+  ok    row 1: the Caddyfile changes only by listed rows, the 404 catch-all and X-Share-Served
+  ok    row 1: every artifact byte-identical but the listing additions
+  ok    mm OT-19: share version equals the newest CHANGELOG heading
+  ok    mm SV-01: unlisted bytes answer 404
+  ok    mm SV-01: the CLI's own probe files at the pub root still answer (live_check, migrate)
+  ok    mm DY-01: a setup --r2 rerun after a CLI bump keeps both bindings, MEMBERS and PAUSED
+  ok    mm DY-05: a deploy whose nonce never serves waits, then dies naming the rerun
+  ok    mm TN-10: a setup <host> rerun keeps the four member lines byte for byte, in place
+  FAIL  no orphaned prune sleeps: expected '0', got '1'
+1/1456 FAILED
+```
+
+Command: `ps -o pid,ppid,lstart,command -p 99613; kill 99613; ps -eo ppid,command | awk '$1==1 && $2=="sleep" && $3=="3600"' | grep -c .`
+Exit: 0
+Output:
+
+```
+  PID  PPID STARTED                      COMMAND
+99613     1 Sun Nov 15 02:23:24 2026     sleep 3600
+orphaned prune sleeps now: 0
+```
+Verdict: PASS (the orphan predates run 3; it was the builder's scratch serve, not a suite process)
+
 Verdict: pass for this change. The only failing check, `no orphaned prune sleeps`, counts every orphaned `sleep 3600` on the machine. It found one started at 02:23:24, before this run, by a scratch Caddy probe of the builder's (a serve whose parent the builder killed). That process was removed and the same check expression then counted 0. Every `mm` row, both SPEC-008 compat row 1 checks, and every other section passed.
 
 Command: `node tests/worker.mjs`
 Exit: 0
-Verdict: pass (SV-10 to SV-24, SV-26 to SV-28, FG-12, OC-05, OT-07, OT-13, OT-18, the redeem rows, and SV-26's sweep: every one of 185+ answers carries a named row, every Worker 404 has the one body, no header names a row).
+Output:
+
+```
+  ok    v5 SV-26: every Worker 404 answers the one body
+  ok    v5 SV-26: no response header names the row
+  ok    v5 SV-26: the 404 body is the spec's
+PASS
+```
+
+Verdict: PASS (SV-10 to SV-24, SV-26 to SV-28, FG-12, OC-05, OT-07, OT-13, OT-18, the redeem rows, and SV-26's sweep: every one of 185+ answers carries a named row, every Worker 404 has the one body, no header names a row).
 
 Command: `bash tests/share.sh` section `=== members: phase 0 ... ===`
 Exit: (inside the full run above)
