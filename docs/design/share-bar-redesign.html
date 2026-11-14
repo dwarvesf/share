@@ -291,13 +291,50 @@ select,.tf{font:var(--fs-body) var(--sys);color:var(--label);background:var(--fi
 .row.up .nm{color:var(--label)}
 .prog{position:relative;width:44px;height:4px;border-radius:2px;background:var(--hover);overflow:hidden;flex:none;margin-right:8px}
 .prog i{position:absolute;inset:0 auto 0 0;background:var(--state-info);border-radius:2px;transition:width .3s}
+/* r8: quick look, drag, tenant groups, hotkey */
+.desk{position:relative}
+#qlhost{position:absolute;inset:28px 0 0 0;display:flex;align-items:center;justify-content:center;padding:24px 16px;z-index:20;background:rgba(0,0,0,.42);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)}
+.qlp{width:min(560px,calc(100% - 32px));border-radius:12px;background:var(--win);box-shadow:0 0 0 .5px rgba(0,0,0,.25),0 30px 80px rgba(0,0,0,.4);overflow:hidden}
+.qlh{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--sep)}
+.qln{flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center}
+.qlb{height:300px;display:flex;align-items:center;justify-content:center;background:rgba(var(--p-ink-a),.04)}
+.qlf{display:flex;flex-direction:column;gap:2px;padding:10px 14px;font-size:var(--fs-meta);color:var(--label-2)}
+.qlf .mono{color:var(--label);font-size:var(--fs-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qd .pg{width:200px;height:260px;background:#fff;border-radius:3px;box-shadow:0 2px 10px rgba(0,0,0,.18);padding:22px 20px;display:flex;flex-direction:column;gap:9px}
+.qd b{display:block;height:12px;width:70%;background:#2a2a2e;border-radius:2px}
+.qd p,.qp p{margin:0;height:6px;background:#d6d6db;border-radius:2px}
+.qd p.s,.qp p.s{width:60%}
+.qd .blk{height:60px;background:#e8e8ec;border-radius:3px}
+.qv{width:440px;height:248px;background:#111;border-radius:6px;position:relative;display:flex;align-items:center;justify-content:center}
+.qplay{width:0;height:0;border-left:26px solid rgba(255,255,255,.9);border-top:16px solid transparent;border-bottom:16px solid transparent;margin-left:6px}
+.qbar{position:absolute;left:14px;right:14px;bottom:12px;height:3px;background:rgba(255,255,255,.25);border-radius:2px}
+.qbar i{position:absolute;inset:0 auto 0 0;background:#fff;border-radius:2px}
+.qf{width:300px;background:var(--field);border:1px solid var(--sep);border-radius:8px;padding:6px}
+.qf div{display:flex;align-items:center;gap:8px;padding:5px 6px;font-size:var(--fs-body)}
+.qf svg{width:15px;height:15px;color:var(--label-2)}
+.qi{width:420px;height:250px;border-radius:6px;background:linear-gradient(135deg,#f6d365,#fda085 45%,#a1c4fd)}
+.qp{width:440px;height:260px;background:#fff;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.18);overflow:hidden}
+.qpbar{height:22px;background:#ececf0;display:flex;gap:5px;align-items:center;padding:0 8px}
+.qpbar i{width:8px;height:8px;border-radius:50%;background:#c9c9cf}
+.qpbody{padding:18px;display:flex;flex-direction:column;gap:9px}
+.qpbody b{display:block;height:14px;width:55%;background:#2a2a2e;border-radius:2px}
+.qpimg{height:90px;background:#e8e8ec;border-radius:4px}
+.ql-live{display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--label-2);text-align:center;max-width:280px}
+.ql-live svg{width:34px;height:34px;color:var(--state-info)}
+.ql-live b{color:var(--label);font-size:var(--fs-title)}
+.ihead{display:flex;align-items:center;gap:8px;padding:10px 16px 2px;font-size:var(--fs-meta);color:var(--label-2)}
+.ihead .mono{font-size:var(--fs-meta);color:var(--label);font-weight:600}
+.ihead .cur{font-size:10px;padding:0 5px;border-radius:3px;background:rgba(var(--p-ink-a),.07)}
+.kb2{font:500 10.5px var(--sys);color:var(--label-3);border:1px solid rgba(var(--p-ink-a),.14);border-radius:4px;padding:0 4px;flex:none}
+.row[draggable="true"]{cursor:grab}
+.row[draggable="true"]:active{cursor:grabbing}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 
 <div class="wrap">
   <header>
-    <h1>Share Bar, revision 6: menu polish</h1>
-    <p class="lede">The menu shows your recent links and nothing else. Team status, members and machines move to Settings. A single line at the bottom appears only when something needs a hand. Built for a team of ten or more. Revision 5 rebuilds Members and Tenants on the pattern real team tools use (a row menu instead of a button bar, a source list instead of a table) and was checked in 20 screenshotted states, light, dark and narrow. Every button runs its real workflow: open Settings and try Tenants and Members, right-click a link, or pick First run.</p>
+    <h1>Share Bar, revision 7: Quick Look and friends</h1>
+    <p class="lede">The menu shows your recent links and nothing else. Team status, members and machines move to Settings. A single line at the bottom appears only when something needs a hand. Built for a team of ten or more. Revision 7 adds Quick Look (focus a link, press Space), dragging a link out of the menu, tenant groups in Needs a look, view counts on cloud links, and Control-Option-S to search. Revision 5 rebuilt Members and Tenants on the pattern real team tools use (a row menu instead of a button bar, a source list instead of a table) and was checked in 20 screenshotted states, light, dark and narrow. Every button runs its real workflow: open Settings and try Tenants and Members, right-click a link, or pick First run.</p>
   </header>
 
   <section aria-label="Prototype">
@@ -324,6 +361,7 @@ select,.tf{font:var(--fs-body) var(--sys);color:var(--label);background:var(--fi
         <span aria-hidden="true">Sat 09:20</span>
       </div>
       <div class="deskbody">
+        <div id="qlhost" hidden></div>
         <div class="pop mac" id="pop" role="dialog" aria-label="Share Bar"></div>
         <div class="win mac" id="win" role="dialog" aria-label="Share Bar Settings"></div>
       </div>
@@ -434,6 +472,7 @@ const IC = {
   globe:'<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/>', people:'<circle cx="6" cy="5.5" r="2.3"/><path d="M1.8 13.5c.5-2.5 2.2-3.8 4.2-3.8s3.7 1.3 4.2 3.8"/><circle cx="11.3" cy="6" r="1.8"/><path d="M10.5 9.8c1.9.1 3.3 1.3 3.7 3.7"/>',
   wrench:'<path d="M10.5 2.5a3 3 0 0 0-3 4l-5 5 2 2 5-5a3 3 0 0 0 4-3l-1.8 1.3-1.7-.5-.5-1.7z"/>', check:'<path d="M3.5 8.5l3 3 6-6.5"/>',
   ext:'<path d="M9 2.5h4.5V7M13.5 2.5L7.5 8.5M12 9.5V13a.5.5 0 0 1-.5.5h-8A.5.5 0 0 1 3 13V5a.5.5 0 0 1 .5-.5H7"/>',
+  x2:'<path d="M4 4l8 8M12 4l-8 8"/>',
   more:'<circle cx="3.5" cy="8" r="1.1" fill="currentColor"/><circle cx="8" cy="8" r="1.1" fill="currentColor"/><circle cx="12.5" cy="8" r="1.1" fill="currentColor"/>',
   key:'<circle cx="5" cy="10" r="2.5"/><path d="M7 8.5L13 2.5M11 4.5l1.5 1.5M9.5 6l1.2 1.2"/>', stop:'<rect x="4" y="4" width="8" height="8" rx="1"/>', redo:'<path d="M12.5 6.5A5 5 0 1 0 13 9"/><path d="M13 3v3.5H9.5"/>'
 };
@@ -447,15 +486,15 @@ const TEAM_LINKS = [
   {t:'doc',n:'q4-pitch-deck.pdf',who:'You',where:'this Mac',exp:'6d',ago:'1h',id:'c4e211'},
   {t:'video',n:'playdate-uat-run.mov',who:'An',where:"An's MacBook",exp:'3d',ago:'2h',id:'7f3a21',state:'offline'},
   {t:'page',n:'press-kit.html',who:'You',where:'this Mac',exp:'21d',ago:'3h',id:'a19f03'},
-  {t:'image',n:'hero-v4.png',who:'Linh',where:'cloud',exp:'7d',ago:'4h',id:'91fe20'},
+  {t:'image',n:'hero-v4.png',who:'Linh',where:'cloud',exp:'7d',ago:'4h',id:'91fe20',views:3},
   {t:'live',n:'localhost:3000',who:'Bình',where:"Bình's server",exp:'live',ago:'5h',id:'91ac4e'},
   {t:'page',n:'landing-draft.html',who:'Dũng',where:"Dũng's iMac",exp:'2d',ago:'yesterday',id:'e04b9c',state:'paused'},
-  {t:'video',n:'hermes-demo-45s.mp4',who:'You',where:'cloud',exp:'30d',ago:'yesterday',id:'f1d7e2'},
+  {t:'video',n:'hermes-demo-45s.mp4',who:'You',where:'cloud',exp:'30d',ago:'yesterday',id:'f1d7e2',views:12},
   {t:'doc',n:'invoice-2026-10.pdf',who:'You',where:'cloud',exp:'expired',ago:'9d',id:'b2c3d4',state:'expired'},
   {t:'doc',n:'bao-cao-thang-10.pdf',who:'An',where:"An's MacBook",exp:'6d',ago:'2d',id:'2be8d0',state:'offline'},
-  {t:'doc',n:'contract-draft-v2.pdf',who:'Khoa',where:'cloud',exp:'14d',ago:'2d',id:'3c8d11'},
+  {t:'doc',n:'contract-draft-v2.pdf',who:'Khoa',where:'cloud',exp:'14d',ago:'2d',id:'3c8d11',views:1},
   {t:'folder',n:'brand-assets',who:'Minh',where:"Minh's Mac Studio",exp:'never',ago:'3d',id:'7a2b90'},
-  {t:'image',n:'moodboard.png',who:'Phúc',where:'cloud',exp:'5d',ago:'4d',id:'d4e5f6'}
+  {t:'image',n:'moodboard.png',who:'Phúc',where:'cloud',exp:'5d',ago:'4d',id:'d4e5f6',views:0}
 ];
 const mkMembers = () => [
   {n:'An',st:'active',pres:'off',seen:'offline 2h',links:2,mach:"An's MacBook"},
@@ -503,16 +542,16 @@ const isAdmin = () => TEN[cur].some(t=>t.role==='Admin');
 function issues(){
   const out=[], ts=TEN[cur];
   ts.forEach((t,i)=>{
-    if (t.op) out.push({i:'redo',t:`${t.op.verb} stopped at step ${t.op.step} of ${t.op.of} (${t.op.name})`,s:t.h,act:'Resume',fn:()=>resumeOp(i)});
-    if (t.phase==='failed') out.push({i:'stop',t:`This Mac stopped serving ${t.h}`,s:t.reason,act:'Start',fn:()=>startServe(i)});
-    if (/expires in [0-9]d/.test(t.token)) out.push({i:'key',t:'Your key expires in 6 days',s:t.h+': ask the admin to renew it',act:'Copy request',fn:()=>toast('Copied a renew request for your admin.')});
+    if (t.op) out.push({h:t.h,i:'redo',t:`Setup stopped at step ${t.op.step} of ${t.op.of}`,s:'The route step did not finish',act:'Resume',fn:()=>resumeOp(i)});
+    if (t.phase==='failed') out.push({h:t.h,i:'stop',t:'This Mac stopped serving',s:t.reason[0].toUpperCase()+t.reason.slice(1),act:'Start',fn:()=>startServe(i)});
+    if (/expires in [0-9]d/.test(t.token)) out.push({h:t.h,i:'key',t:'Your key expires in 6 days',s:'Ask the admin to renew it',act:'Copy request',fn:()=>toast('Copied a renew request for your admin.')});
   });
   if (cur==='admin'){
     const m = n => MEMBERS.find(x=>x.n===n);
-    if (m('An') && m('An').pres==='off' && m('An').st!=='removed') out.push({i:'moon',t:"An's MacBook is offline",s:'2 links answer 503 until it is back',act:'Open',fn:()=>openMember('An')});
-    if (m('Dũng') && m('Dũng').st==='paused') out.push({i:'pause',t:'Dũng is paused',s:'1 link answers 503',act:'Resume',fn:()=>memberVerb('Dũng','resume')});
-    if (m('Hà') && m('Hà').st==='left') out.push({i:'exit',t:'Hà left',s:'remove to close the tunnel and token',act:'Remove',fn:()=>memberVerb('Hà','rm')});
-    if (m('Minh') && m('Minh').st==='pausing') out.push({i:'redo',t:'Pausing Minh stopped at step 2',s:'the lease is stale since 14:02',act:'Finish',fn:()=>memberVerb('Minh','finish')});
+    if (m('An') && m('An').pres==='off' && m('An').st!=='removed') out.push({h:'s.console.so',i:'moon',t:"An's MacBook is offline",s:'2 links answer 503 until it is back',act:'Open',fn:()=>openMember('An')});
+    if (m('Dũng') && m('Dũng').st==='paused') out.push({h:'s.console.so',i:'pause',t:'Dũng is paused',s:'1 link answers 503',act:'Resume',fn:()=>memberVerb('Dũng','resume')});
+    if (m('Hà') && m('Hà').st==='left') out.push({h:'s.console.so',i:'exit',t:'Hà left',s:'remove to close the tunnel and token',act:'Remove',fn:()=>memberVerb('Hà','rm')});
+    if (m('Minh') && m('Minh').st==='pausing') out.push({h:'s.console.so',i:'redo',t:'Pausing Minh stopped at step 2',s:'the lease is stale since 14:02',act:'Finish',fn:()=>memberVerb('Minh','finish')});
   }
   return out;
 }
@@ -530,13 +569,16 @@ function renderPop(){
   } else if (view==='issues'){
     h+=`<div class="back"><button class="ib" id="backbtn" aria-label="Back to links">${svg('chevl')}</button><b>Needs a look</b></div><div class="list" style="padding-top:6px">`;
     if (!iss.length) h+=`<div class="empty">Nothing needs a look.</div>`;
-    iss.forEach((x,i)=>{ h+=`<div class="irow">${svg(x.i,'g')}<span class="tx">${esc(x.t)}<small>${esc(x.s)}</small></span><button class="btn" id="ia-${i}">${esc(x.act)}</button></div>`; });
+    const curH = ts[Math.min(tIdx,ts.length-1)].h;
+    const hosts = [...new Set([curH, ...iss.map(x=>x.h)])].filter(hh=>iss.some(x=>x.h===hh));
+    hosts.forEach(hh=>{ h+=`<div class="ihead"><span class="mono">${esc(hh)}</span>${hh===curH?'<span class="cur">current</span>':''}</div>`;
+      iss.forEach((x,i)=>{ if (x.h!==hh) return; h+=`<div class="irow">${svg(x.i,'g')}<span class="tx">${esc(x.t)}<small>${esc(x.s)}</small></span><button class="btn" id="ia-${i}">${esc(x.act)}</button></div>`; }); });
     h+=`</div>`;
   } else {
     const t=ts[Math.min(tIdx,ts.length-1)];
     h+=`<div class="ph"><button class="tenant" id="tenantbtn" aria-haspopup="menu" aria-expanded="${tmenu}"><span>${esc(t.h)}</span>${ts.length>1?svg('chevd'):''}</button><span class="grow"></span><button class="ib" id="addbtn" aria-label="Share a file">${svg('plus')}</button><button class="ib" id="gearbtn" aria-label="Settings">${svg('gear')}</button></div>`;
     if (tmenu) h+=`<div class="tmenu" role="menu">${ts.map((x,i)=>`<button role="menuitem" id="tm-${i}"><span class="ck">${i===tIdx?svg('check'):''}</span>${esc(x.h)}<span class="tm">${x.role}</span></button>`).join('')}<hr><button role="menuitem" id="tm-manage"><span class="ck"></span>Manage tenants…</button></div>`;
-    h+=`<div class="search">${svg('search')}<input id="q" placeholder="Search links" value="${esc(q)}" aria-label="Search links"></div>`;
+    h+=`<div class="search">${svg('search')}<input id="q" placeholder="Search links" value="${esc(q)}" aria-label="Search links" aria-keyshortcuts="Control+Alt+S">${q?'':'<kbd class="kb2" aria-hidden="true">⌃⌥S</kbd>'}</div>`;
     const showScope = links.some(l=>l.who!=='You');
     if (showScope) h+=`<div class="scope" role="group" aria-label="Whose links"><button id="sc-mine" aria-pressed="${scope==='mine'}">Mine</button><button id="sc-team" aria-pressed="${scope==='team'}">Team</button></div>`;
     let rows = links.filter(l => l.state!=='expired').filter(l => (scope==='team' || !showScope) ? true : l.who==='You');
@@ -548,8 +590,8 @@ function renderPop(){
     rows.forEach(l=>{
       const st=l.state||null;
       const word = st==='offline'?'offline':st==='paused'?'paused':st==='expired'?'expired':st==='revoked'?'removed by admin':null;
-      const meta = [scope==='team'&&showScope ? l.who : null, l.where, word || (l.exp==='never'?null:l.exp==='live'?'live server':l.exp+' left')].filter(Boolean).join(' · ');
-      h+=`<div class="row ${st?'dim':''} ${flashId===l.id?'flash':''}" role="listitem" tabindex="0" id="r-${l.id}" data-id="${l.id}" aria-label="${esc(l.n+', '+meta)}"><span class="ti">${svg(l.t)}</span><span class="tx"><span class="nm">${esc(l.n)}</span><span class="mt">${esc(meta)}</span></span><span class="ago">${esc(l.ago)}</span><button class="ib rmore" tabindex="-1" aria-label="More for ${esc(l.n)}" data-id="${l.id}">${svg('more')}</button></div>`;
+      const meta = [scope==='team'&&showScope ? l.who : null, l.where, word || (l.exp==='never'?null:l.exp==='live'?'live server':l.exp+' left'), (l.views!=null && !word) ? (l.views===1?'1 view':l.views+' views') : null].filter(Boolean).join(' · ');
+      h+=`<div class="row ${st?'dim':''} ${flashId===l.id?'flash':''}" role="listitem" tabindex="0" draggable="${st==='expired'||st==='revoked'?'false':'true'}" id="r-${l.id}" data-id="${l.id}" aria-label="${esc(l.n+', '+meta)}"><span class="ti">${svg(l.t)}</span><span class="tx"><span class="nm">${esc(l.n)}</span><span class="mt">${esc(meta)}</span></span><span class="ago">${esc(l.ago)}</span><button class="ib rmore" tabindex="-1" aria-label="More for ${esc(l.n)}" data-id="${l.id}">${svg('more')}</button></div>`;
     });
     if (total>8) h+=`<button class="more" id="showall">Show all ${total} links…</button>`;
     h+=`</div><div class="pf">`;
@@ -568,6 +610,28 @@ function renderPop(){
 }
 let uploading=null;
 function publishDemo(name){ uploading={n:name,p:0}; renderPop(); const t=setInterval(()=>{ uploading.p+=25; if (uploading.p>=100){ clearInterval(t); uploading=null; SCN_LINKS[cur].unshift({t:'doc',n:name,who:'You',where:'this Mac',exp:'7d',ago:'now',id:'aa'+Math.random().toString(16).slice(2,6)}); flashId=SCN_LINKS[cur][0].id; toast('Link copied: '+name); setTimeout(()=>{flashId=null;renderPop();},1200); return; } renderPop(); },450); }
+let internalDrag=false, dragHint=null, ql=null;
+function linkURL(l){ const t=TEN[cur][Math.min(tIdx,TEN[cur].length-1)]; return 'https://'+(t?t.h:'s.example.com')+'/'+l.id+'/'+encodeURIComponent(l.n); }
+function renderFootOnly(){ const f=pop.querySelector('.pf'); if (f && dragHint) f.innerHTML=`<span class="fstatus" role="status">${svg('drop')}<span>Drop to paste the link to ${esc(dragHint)}</span></span>`; }
+function qlPreview(l){
+  if (l.t==='video') return `<div class="qv"><div class="qplay"></div><div class="qbar"><i style="width:34%"></i></div></div>`;
+  if (l.t==='folder') return `<div class="qf">${['index.html','scenes/','readme.md','demo-1.mp4','demo-2.mp4'].map(n=>`<div>${svg(n.endsWith('/')?'folder':n.endsWith('.mp4')?'video':'doc')}<span>${n}</span></div>`).join('')}</div>`;
+  if (l.t==='image') return `<div class="qi"></div>`;
+  if (l.t==='page') return `<div class="qp"><div class="qpbar"><i></i><i></i><i></i></div><div class="qpbody"><b></b><p></p><p></p><p class="s"></p><div class="qpimg"></div></div></div>`;
+  if (l.t==='live') return `<div class="ql-live">${svg('live')}<b>Live server</b><span>Visitors see whatever answers on localhost:3000 right now.</span></div>`;
+  return `<div class="qd"><div class="pg"><b></b><p></p><p></p><p></p><p class="s"></p><div class="blk"></div><p></p><p class="s"></p></div></div>`;
+}
+function renderQL(){
+  const el=document.getElementById('qlhost'); if (!el) return;
+  if (!ql){ el.innerHTML=''; el.hidden=true; return; }
+  const l=linkById(ql); el.hidden=false;
+  const meta=[l.who==='You'?'You':l.who, l.where, l.exp==='never'?'never expires':l.exp==='live'?'live server':l.exp+' left', l.views!=null?(l.views===1?'1 view':l.views+' views'):null].filter(Boolean).join(' · ');
+  el.innerHTML=`<div class="qlp mac ${pop.classList.contains('dark')?'dark':''}" role="dialog" aria-label="Quick Look: ${esc(l.n)}"><div class="qlh"><button class="ib" id="ql-x" aria-label="Close">${svg('x2')}</button><span class="qln">${esc(l.n)}</span><button class="btn" id="ql-open">Open in browser</button><button class="btn prim" id="ql-copy">Copy link</button></div><div class="qlb">${qlPreview(l)}</div><div class="qlf"><span class="mono">${esc(linkURL(l))}</span><span>${esc(meta)}</span></div></div>`;
+  document.getElementById('ql-x').onclick=()=>{ const id=ql; ql=null; renderQL(); document.getElementById('r-'+id)?.focus(); };
+  document.getElementById('ql-copy').onclick=()=>{ const id=ql; ql=null; renderQL(); copyRow(id); };
+  document.getElementById('ql-open').onclick=()=>{ ql=null; renderQL(); toast('Opened '+l.n+' in your browser.'); };
+  document.getElementById('ql-copy').focus();
+}
 function linkById(id){ return SCN_LINKS[cur].find(l=>l.id===id); }
 function ctxHTML(c){
   const l=linkById(c.id), own=l.who==='You', dead=l.state==='expired'||l.state==='revoked';
@@ -614,7 +678,10 @@ function bindPop(iss){
   pop.querySelectorAll('.row').forEach(r=>{
     r.onclick=e=>{ if (e.target.closest('.rmore')){ e.stopPropagation(); ctx={id:r.dataset.id,y:r.offsetTop+r.offsetHeight-4+(pop.querySelector('.list')?.offsetTop||0)-(pop.querySelector('.list')?.scrollTop||0)}; renderPop(); pop.querySelector('.ctx button')?.focus(); return; } copyRow(r.dataset.id); };
     r.oncontextmenu=e=>{ e.preventDefault(); ctx={id:r.dataset.id,y:r.offsetTop+r.offsetHeight-4+ (pop.querySelector('.list')?.offsetTop||0) - (pop.querySelector('.list')?.scrollTop||0)}; renderPop(); pop.querySelector('.ctx button')?.focus(); };
+    r.ondragstart=e=>{ const l=linkById(r.dataset.id); const url=linkURL(l); internalDrag=true; e.dataTransfer.setData('text/uri-list',url); e.dataTransfer.setData('text/plain',url); e.dataTransfer.effectAllowed='copy'; dragHint=l.n; renderFootOnly(); };
+    r.ondragend=()=>{ internalDrag=false; dragHint=null; renderPop(); };
     r.onkeydown=e=>{
+      if (e.key===' '){ e.preventDefault(); ql=r.dataset.id; renderQL(); return; }
       if (e.key==='Enter'){ e.preventDefault(); copyRow(r.dataset.id); }
       if (e.key==='ContextMenu' || (e.shiftKey && e.key==='F10')){ e.preventDefault(); r.oncontextmenu(e); }
       if (e.key==='Backspace'||e.key==='Delete'){ e.preventDefault(); const l=linkById(r.dataset.id); toast(l.who==='You'?'Removed '+l.n+'. The link stops answering.':'Revoked '+l.n+'. The file stays on '+l.where+'.', true); }
@@ -852,10 +919,10 @@ document.querySelectorAll('#scn button').forEach(b=>b.onclick=()=>{ cur=b.datase
 document.querySelectorAll('#appearance button').forEach(b=>b.onclick=()=>{ appearance=b.dataset.a; document.querySelectorAll('#appearance button').forEach(x=>x.setAttribute('aria-pressed',String(x===b))); applyAppearance(); });
 document.getElementById('dragbtn').onclick=e=>{ dragging=!dragging; e.currentTarget.setAttribute('aria-pressed',String(dragging)); renderPop(); };
 const desk=document.getElementById('desk');
-desk.addEventListener('dragover',e=>{ e.preventDefault(); if(!dragging){dragging=true;renderPop();} });
+desk.addEventListener('dragover',e=>{ if (internalDrag) return; e.preventDefault(); if(!dragging){dragging=true;renderPop();} });
 desk.addEventListener('dragleave',e=>{ if(!desk.contains(e.relatedTarget)){dragging=false;renderPop();} });
-desk.addEventListener('drop',e=>{ e.preventDefault(); dragging=false; toast('Sharing '+(e.dataTransfer.files[0]?.name||'the file')+'. The link is copied when it is ready.'); });
-document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='z'&&toastUndo&&toastMsg){ e.preventDefault(); toast('Undone. Nothing changed.'); } if(e.key==='Escape'&&(tmenu||ctx)){ tmenu=false; ctx=null; renderPop(); } });
+desk.addEventListener('drop',e=>{ if (internalDrag) return; e.preventDefault(); dragging=false; toast('Sharing '+(e.dataTransfer.files[0]?.name||'the file')+'. The link is copied when it is ready.'); });
+document.addEventListener('keydown',e=>{ if(e.ctrlKey&&e.altKey&&e.code==='KeyS'){ e.preventDefault(); view='list'; ctx=null; tmenu=false; renderPop(); document.getElementById('q')?.focus(); return; } if(ql&&(e.key==='Escape'||e.key===' ')&&!e.target.closest('input')){ e.preventDefault(); const id=ql; ql=null; renderQL(); document.getElementById('r-'+id)?.focus(); return; } if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='z'&&toastUndo&&toastMsg){ e.preventDefault(); toast('Undone. Nothing changed.'); } if(e.key==='Escape'&&(tmenu||ctx)){ tmenu=false; ctx=null; renderPop(); } });
 document.addEventListener('click',e=>{ if(memberMenu && !e.target.closest('.kmenu2') && !e.target.closest('.kb')){ memberMenu=null; renderWin(); } if((tmenu||ctx) && !e.target.closest('.tmenu') && !e.target.closest('.ctx') && !e.target.closest('#tenantbtn')){ tmenu=false; ctx=null; renderPop(); } });
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change',applyAppearance);
 new MutationObserver(applyAppearance).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
