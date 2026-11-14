@@ -4924,19 +4924,26 @@ r2_deploy() { # r2_deploy <worker> <team> <dataset> <first>: one multipart PUT; 
   [[ $4 == 1 ]] && salt="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
   r2_deploy_nonce="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"   # DEPLOY: /healthz echoes it, so the wait below proves this deploy is the one serving
   if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then
-    r2_api PUT "/accounts/$acct/workers/scripts/$worker"
+    r2_api_retry PUT "/accounts/$acct/workers/scripts/$worker"   # a deploy is a whole-script PUT, so a 5xx retry is safe (OT-08)
+    [[ $cf_code == 200 ]] || die "deploying Worker $worker answered HTTP $cf_code; the bucket and marker stay, rerun setup"
     # the settings a real GET answers: every binding, the secret without its value
     r2_deploy_meta "$team" "$dataset" "$salt" | jq -c '{bindings: ([.bindings[] | select(.type != "secret_text")] + [{type: "secret_text", name: "SALT"}])}' \
       >"${SHARE_R2_DRY_DIR:-$root/r2-dry}/.cf/script.json"
     return 0
   fi
   worker_js "$root/worker.js"
-  out="$(curl -sS --max-time 120 -w '\n%{http_code}' -X PUT "$api/accounts/$acct/workers/scripts/$worker" \
-    -H @<(printf 'Authorization: Bearer %s\n' "$api_token") \
-    -F 'metadata=<-;type=application/json' -F "share.js=@$root/worker.js;filename=share.js;type=application/javascript+module" \
-    < <(r2_deploy_meta "$team" "$dataset" "$salt") 2>/dev/null)" || true
+  local try nap="${SHARE_CF_RETRY_SLEEP:-2}"
+  for try in 1 2 3; do   # a deploy is a whole-script PUT, so a 5xx retry is safe (OT-08)
+    out="$(curl -sS --max-time 120 -w '\n%{http_code}' -X PUT "$api/accounts/$acct/workers/scripts/$worker" \
+      -H @<(printf 'Authorization: Bearer %s\n' "$api_token") \
+      -F 'metadata=<-;type=application/json' -F "share.js=@$root/worker.js;filename=share.js;type=application/javascript+module" \
+      < <(r2_deploy_meta "$team" "$dataset" "$salt") 2>/dev/null)" || true
+    cf_code="${out##*$'\n'}"   # the part's filename is the module name Cloudflare resolves main_module against
+    [[ $cf_code == 5?? && $try -lt 3 ]] || break
+    echo "share: Cloudflare answered HTTP $cf_code to the Worker deploy; retrying in ${nap}s (try $try of 3)" >&2
+    sleep "$nap"; nap=$((nap * 2))
+  done
   rm -f "$root/worker.js"
-  cf_code="${out##*$'\n'}"   # the part's filename is the module name Cloudflare resolves main_module against
   [[ $cf_code == 200 ]] || die "deploying Worker $worker answered HTTP $cf_code ($(jq -r '[.errors[]?.message] | join("; ")' <<<"${out%$'\n'*}" 2>/dev/null | head -c 300)); the bucket and marker stay, rerun setup"
 }
 
@@ -6650,13 +6657,14 @@ mb_report() { # the per-member report member ls prints and member sync acts on: 
       fi
       svc="$(awk -F'\t' -v p="share-${host_name//./-}-$sx" '$1 == p || index($1, p "-r") == 1 {n++} END {print n + 0}' <<<"$ms_list")"
     fi
-    ml_json="$(jq -c --argjson r "$rec" --arg sx "$sx" --argjson paused "$paused" --argjson b "$binds" --argjson now "$now" \
+    local ofn; ofn="$(op_steps "member-$(mb_ing_verb "$(jq -r .status <<<"$rec")")" | grep -c . || true)"; [[ $(jq -r .status <<<"$rec") != joining ]] || ofn="$(op_steps join | grep -c .)"
+    ml_json="$(jq -c --argjson r "$rec" --arg sx "$sx" --argjson paused "$paused" --argjson b "$binds" --argjson now "$now" --argjson of "${ofn:-0}" \
       --argjson conns "$conns" --argjson svc "$svc" --arg tunnel "$([[ -n $ob_id ]] && echo "$tname")" --argjson lease "${lease_cur:-null}" --arg live "$(lease_live && echo 1 || echo 0)" \
       --argjson lm "${lease_lm:-0}" --arg tu "$(jq -r '.token_unreachable_until // ""' <<<"$rec")" --argjson tue "$(mb_epoch "$(jq -r '.token_unreachable_until // ""' <<<"$rec")" | sed 's/^$/0/')" '
       ($b | any(.name == "M_" + $sx)) as $bound | ($paused | index($sx) != null) as $isp
       | ($r.status) as $st | ($st == "invited" and (($r.invite.expires // 0) < $now)) as $expired
       | ($lease != null and ($lease.member // "") == $r.member_id) as $mine
-      | . + [{member_id: $r.member_id, name: $r.name, mode: $r.mode, status: $st, expired: $expired, step: ($r.step // null), step_name: ($r.step_name // null),
+      | . + [{member_id: $r.member_id, name: $r.name, mode: $r.mode, status: $st, expired: $expired, step: ($r.step // null), of: (if $of > 0 then $of else null end), step_name: ($r.step_name // null),
           lease: (if $mine then {holder: $lease.holder, verb: $lease.verb, step: $lease.step, live: ($live == "1"), since: $lm} else null end),
           deploy: {bound: $bound, paused: $isp}, account: {tunnel: (if $tunnel == "" then null else $tunnel end), connectors: $conns, services: $svc},
           token_expires: ($r.token.expires_on // null), invite_expires: ($r.invite.expires // null), prev_status: ($r.prev_status // null),
@@ -6701,7 +6709,7 @@ cmd_member_ls() {
   [[ $ml_json != "[]" ]] || { echo "no members on $host_name"; return 0; }
   jq -r --argjson now "$(date +%s)" --arg host "$host_name" '.[] |
     "\(.name): \(if .expired then "expired" else .status end)"
-      + (if .step != null and (.status | endswith("ing")) then ", step \(.step) (\(.step_name // "?"))" else "" end)
+      + (if .step != null and (.status | endswith("ing")) then ", step \(.step)\(if .of != null then " of \(.of)" else "" end) (\(.step_name // "?"))" else "" end)
       + (if .lease != null then ", lease held by \(.lease.holder)" + (if .lease.live then " (live)" else " (stale since \(.lease.since | strftime("%Y-%m-%dT%H:%M:%SZ")); rerun: share member \(.lease.verb) \(.name))" end)
          elif (.status | endswith("ing")) and .status != "joining" then " (no lease; rerun: share member \(if .status == "adding" then "add" elif .status == "removing" then "rm" else (.status | rtrimstr("ing")) end) \(.name))" else "" end)
       + "\n    id=\(.member_id)  mode=\(.mode // "?")"
