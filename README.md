@@ -83,6 +83,8 @@ share setup s.example.com   # one-time: tunnel, DNS, login service (--quick: no 
 share add <file|dir|port>   # publish, print + copy the link
 share add ... --access <rule>   # a login gate on this link: email:a@x,b@y | domain:example.com | group:<name>
 share api-token             # once per profile, the Cloudflare API token --access needs (--cmd '<command>' | --check)
+share admin-token --cmd '<command>'   # the command that prints the admin token for setup --r2, --no-r2, --purge (--clear | --test)
+share minter-token --cmd '<command>'  # the command that prints the token that mints member tokens (--clear | --test)
 share ls                    # shares with link, size, source, expiry
 share refresh <id|link>     # re-copy from source under the same link
 share rm <id|link>          # unpublish (copy goes to Trash)

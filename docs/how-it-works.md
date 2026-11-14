@@ -63,11 +63,15 @@ The launchd agent's first program argument is the `share` script itself, so the 
 ├── access.log              caddy JSON log, read by `share hits`
 ├── serve.pid  serve.log  caddy.log  cloudflared.log
 ├── quick.url               quick mode only: the trycloudflare fqdn cloudflared printed last start
+├── ops/<verb>.<pid>.json   the step journal of a running or dead multi-step verb (see `share state`)
+├── .serve-exit             why the last serve ended: {"code", "at"}
+├── index.migrated  migrated/   after `migrate`: the moved rows and their trees
 ├── md-links.lua            pandoc filter that rewrites .md links to .html
 └── md-style.html           the reading stylesheet, shared by renders and generated indexes
 
 ~/.config/share/            SHARE_CONFIG_DIR
-├── config                  key=value, written by setup; `api_token_cmd=` from `share api-token --cmd`
+├── config                  key=value, written by setup; `api_token_cmd=`, `admin_token_cmd=`, `minter_token_cmd=`
+│                           from their verbs; `migrated=<target>` after `migrate`. A writer keeps every key it does not own
 ├── tunnel-token            Linux only, mode 600 (macOS uses the Keychain)
 ├── api-token               Linux only, mode 600, from `share api-token` (macOS: Keychain item `share-api:<host>`)
 ├── cert.pem                browser-login path only, mode 600
@@ -538,7 +542,7 @@ The multi-step verbs (`setup <host>`, `setup --r2`, `--no-r2`, tunnel `teardown`
 
 `serve` records why it ended in `$root/.serve-exit` (`{"code":...,"at":...}`): its own refusal's code, `cloudflared_died` or `caddy_failed` when a child exits, and `stopped` from `share stop`. A serve removes a stale record only once it answers, so a crash loop under launchd keeps its reason.
 
-The admin token for `setup --r2`, `--no-r2` and `teardown --purge` comes from `CLOUDFLARE_API_TOKEN`, else from `admin_token_cmd` in the profile config (`share admin-token --cmd '<command>'`): a command that prints it, run once per process and never stored or exported, so the serve daemon never holds it. `minter_token_cmd` (`share minter-token`) works the same for the token that mints member tokens. Config writers rewrite only the keys they own and keep every other line byte for byte, in place.
+The admin token for `setup --r2`, `--no-r2` and `teardown --purge` comes from `CLOUDFLARE_API_TOKEN`, else from `admin_token_cmd` in the profile config (`share admin-token --cmd '<command>'`): a command that prints it, run once per process and never stored or exported, so the serve daemon never holds a token that came from the command. `setup <host>`, tunnel `teardown`, `migrate` and `setup --backend r2` also run the command when it is set and the variable is not. `minter_token_cmd` (`share minter-token`) works the same for the token that mints member tokens. Config writers rewrite only the keys they own and keep every other line byte for byte, in place.
 
 ## Why each choice
 
