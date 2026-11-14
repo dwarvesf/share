@@ -5,311 +5,345 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
 <style>
-/* Layout: a review page. Left, a mock macOS desktop with the menu bar and the popover; right, scenario controls and the round notes. Below: the state sheet, calls for review, references. */
+/* Layout: review page. Top: a mock desktop with the menu bar popover (left) and the Settings window (right). Below: what changed, references, calls. */
 :root{
   --page:#eef0f3; --panel:#ffffff; --ink:#1b1f24; --ink-2:#555e69; --rule:#d9dde3; --accent:#0a62e0;
-  --desk-1:#7b8796; --desk-2:#5f6b79;
+  --desk-1:#8592a1; --desk-2:#64707e;
   --page-display:"Geist",-apple-system,"Helvetica Neue",Arial,sans-serif;
   --page-mono:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace;
 }
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){color-scheme:dark;--page:#121418;--panel:#1b1e23;--ink:#e7eaee;--ink-2:#a0a9b4;--rule:#2c3138;--accent:#5aa2ff;--desk-1:#2a3440;--desk-2:#1d252e;}
-}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){color-scheme:dark;--page:#121418;--panel:#1b1e23;--ink:#e7eaee;--ink-2:#a0a9b4;--rule:#2c3138;--accent:#5aa2ff;--desk-1:#2a3440;--desk-2:#1d252e;}}
 :root[data-theme="dark"]{color-scheme:dark;--page:#121418;--panel:#1b1e23;--ink:#e7eaee;--ink-2:#a0a9b4;--rule:#2c3138;--accent:#5aa2ff;--desk-1:#2a3440;--desk-2:#1d252e;}
 *{box-sizing:border-box}
 body{margin:0;background:var(--page);color:var(--ink);font:400 15px/1.55 var(--page-display);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
-.wrap{max-width:1180px;margin:0 auto;padding-block:36px 72px;display:grid;gap:40px}
+.wrap{max-width:1240px;margin:0 auto;padding-block:36px 72px;display:grid;gap:40px}
 h1{font:600 34px/1.1 var(--page-display);letter-spacing:-.015em;margin:0 0 10px;text-wrap:balance}
 h2{font:600 21px/1.2 var(--page-display);margin:0 0 12px;text-wrap:balance}
-h3{font:600 15px/1.3 var(--page-display);margin:0 0 10px}
-p{margin:0 0 10px;max-width:68ch}
+p{margin:0 0 10px;max-width:70ch}
 code{font:500 .88em var(--page-mono)}
 a{color:var(--accent)}
 .lede{color:var(--ink-2);font-size:17px}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.stage{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:24px;align-items:start}
-@media (max-width:900px){.stage{grid-template-columns:minmax(0,1fr)}}
-.desk{border-radius:12px;overflow:hidden;background:linear-gradient(160deg,var(--desk-1),var(--desk-2));border:1px solid var(--rule);padding-bottom:24px}
-.menubar{height:28px;display:flex;align-items:center;justify-content:flex-end;gap:14px;padding:0 14px;background:rgba(255,255,255,.6);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);font:500 13px -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;color:#1b1f24}
+.controls{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;margin-bottom:12px;font-size:14px;color:var(--ink-2)}
+.segs{display:inline-flex;gap:4px;flex-wrap:wrap}
+.segs button{border:1px solid var(--rule);background:var(--panel);color:var(--ink);font:500 13px var(--page-display);padding:5px 10px;border-radius:7px;cursor:pointer}
+.segs button[aria-pressed="true"]{background:var(--ink);color:var(--page);border-color:var(--ink)}
+.desk{border-radius:12px;overflow:hidden;background:linear-gradient(160deg,var(--desk-1),var(--desk-2));border:1px solid var(--rule)}
+.menubar{height:28px;display:flex;align-items:center;justify-content:flex-end;gap:14px;padding:0 14px;background:rgba(255,255,255,.6);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);font:500 13px -apple-system,BlinkMacSystemFont,sans-serif;color:#1b1f24}
 .desk.dark-desk .menubar{background:rgba(30,32,36,.65);color:#eceef1}
 .sbicon{display:inline-flex;align-items:center;gap:3px;height:22px;padding:0 5px;border-radius:5px;background:rgba(0,0,0,.12)}
 .desk.dark-desk .sbicon{background:rgba(255,255,255,.18)}
 .sbicon svg{width:16px;height:16px}
-.sbicon b{font:600 11px -apple-system,sans-serif}
-.poparea{display:flex;justify-content:flex-end;padding:6px 18px 0}
-@media (max-width:520px){.poparea{justify-content:center;padding-inline:8px}}
+.sbicon i{width:6px;height:6px;border-radius:50%;background:#ff9500}
+.deskbody{display:flex;flex-direction:row-reverse;flex-wrap:wrap;justify-content:flex-start;gap:24px;padding:6px 18px 24px;align-items:flex-start}
+@media (max-width:520px){.deskbody{justify-content:center;padding-inline:8px}}
 
-/* ---------- popover: primitive, semantic, component tiers ---------- */
-.pop{
-  /* primitive (light) */
-  --p-white:#ffffff; --p-label:#1d1d1f; --p-label-2:#5f5f64; --p-label-3:#7a7a80; --p-glass:rgba(246,246,248,.94);
-  --p-orange:#ff9500; --p-orange-ink:#8a4b00; --p-red:#ff3b30; --p-red-ink:#a3190f; --p-gray:#8e8e93; --p-gray-ink:#4a4a4f;
-  --p-blue:#0060df; --p-blue-ink:#0050b8; --p-green:#28a745; --p-green-ink:#17692d; --p-ink-a:0,0,0;
-  /* semantic */
-  --bg:var(--p-glass); --label:var(--p-label); --label-2:var(--p-label-2); --label-3:var(--p-label-3); --label-dim:#66666b;
-  --sep:rgba(var(--p-ink-a),.09); --hover:rgba(var(--p-ink-a),.06); --press:rgba(var(--p-ink-a),.10);
-  --state-attention:var(--p-orange); --state-attention-ink:var(--p-orange-ink);
-  --state-error:var(--p-red); --state-error-ink:var(--p-red-ink);
-  --state-quiet:var(--p-gray); --state-quiet-ink:var(--p-gray-ink);
-  --state-info:var(--p-blue); --state-info-ink:var(--p-blue-ink);
-  --state-ok:var(--p-green); --focus:var(--p-blue); --chip-a:14%;
-  /* component */
-  --chip-quiet-bg:color-mix(in srgb,var(--state-quiet) var(--chip-a),transparent);
-  --chip-attention-bg:color-mix(in srgb,var(--state-attention) var(--chip-a),transparent);
-  --chip-error-bg:color-mix(in srgb,var(--state-error) var(--chip-a),transparent);
-  --chip-info-bg:color-mix(in srgb,var(--state-info) var(--chip-a),transparent);
-  --origin-mark-bg:rgba(var(--p-ink-a),.12);
-  --strip-bg:color-mix(in srgb,var(--state-attention) 9%,transparent);
+/* ===== native-ish tokens shared by popover and settings window ===== */
+.mac{
+  --p-ink-a:0,0,0;
+  --bg:rgba(246,246,248,.95); --win:#f5f5f7; --field:#ffffff;
+  --label:#1d1d1f; --label-2:#5f5f64; --label-3:#7a7a80; --label-dim:#66666b;
+  --sep:rgba(var(--p-ink-a),.09); --hover:rgba(var(--p-ink-a),.06); --press:rgba(var(--p-ink-a),.10); --sel:rgba(var(--p-ink-a),.08);
+  --state-attention:#ff9500; --state-attention-ink:#8a4b00; --state-error-ink:#a3190f; --state-quiet:#8e8e93; --state-quiet-ink:#4a4a4f;
+  --state-info:#0060df; --state-info-ink:#0050b8; --state-ok:#28a745; --focus:#0060df; --chip-a:14%;
   --toast-bg:rgba(30,30,32,.95); --toast-fg:#f5f5f7; --toast-action:#8cc4ff;
   --fs-title:15px; --fs-body:13px; --fs-mono:12px; --fs-meta:11px;
   --sys:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif; --mono:ui-monospace,"SF Mono",Menlo,monospace;
-  width:380px;max-width:100%;max-height:640px;display:flex;flex-direction:column;border-radius:12px;background:var(--bg);
-  backdrop-filter:blur(30px) saturate(1.6);-webkit-backdrop-filter:blur(30px) saturate(1.6);
-  box-shadow:0 0 0 .5px rgba(0,0,0,.18),0 18px 50px rgba(0,0,0,.28);color:var(--label);font:400 var(--fs-body)/1.35 var(--sys);position:relative;overflow:hidden}
-.pop.dark{ /* dark overrides the semantic tier only */
-  color-scheme:dark;
-  --bg:rgba(38,38,42,.93); --label:#f5f5f7; --label-2:#b0b0b6; --label-3:#8a8a8f; --label-dim:#9a9aa0; --p-ink-a:255,255,255;
-  --state-attention:#ff9f0a; --state-attention-ink:#ffc266; --state-error:#ff453a; --state-error-ink:#ff9a93;
-  --state-quiet:#98989d; --state-quiet-ink:#d1d1d6; --state-info:#0a6fe0; --state-info-ink:#8cc4ff; --state-ok:#30d158; --focus:#4c9bff; --chip-a:24%;
-  --toast-bg:rgba(240,240,242,.97); --toast-fg:#1d1d1f; --toast-action:#0050b8;}
-
-.top{display:flex;align-items:center;gap:8px;padding:12px}
-.top .sym{width:20px;height:20px;flex:none}
-.top .ttl{flex:1;min-width:0;font:600 var(--fs-title)/1.25 var(--sys)}
-.btn{border:1px solid rgba(var(--p-ink-a),.18);background:transparent;color:var(--label);font:500 var(--fs-meta) var(--sys);border-radius:6px;padding:4px 8px;cursor:pointer;white-space:nowrap}
-.btn:hover{background:var(--hover)}
-.ib{border:0;background:transparent;color:var(--label-2);width:24px;height:24px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex:none}
+  color:var(--label);font:400 var(--fs-body)/1.35 var(--sys)}
+.mac.dark{color-scheme:dark;--p-ink-a:255,255,255;--bg:rgba(38,38,42,.94);--win:#26262a;--field:#1e1e21;
+  --label:#f5f5f7;--label-2:#b0b0b6;--label-3:#8a8a8f;--label-dim:#9a9aa0;
+  --state-attention:#ff9f0a;--state-attention-ink:#ffc266;--state-error-ink:#ff9a93;--state-quiet:#98989d;--state-quiet-ink:#d1d1d6;
+  --state-info:#0a6fe0;--state-info-ink:#8cc4ff;--state-ok:#30d158;--focus:#4c9bff;--chip-a:24%;
+  --toast-bg:rgba(240,240,242,.97);--toast-fg:#1d1d1f;--toast-action:#0050b8}
+.mac :focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
+.ib{border:0;background:transparent;color:var(--label-2);width:26px;height:26px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex:none}
 .ib:hover{background:var(--hover);color:var(--label)}
-.ib svg{width:15px;height:15px}
-.pop :focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
-
-.strip{margin:0 8px 8px;border-radius:6px;background:var(--strip-bg);padding:4px}
-.srow{display:flex;align-items:center;gap:8px;min-height:28px;padding:0 4px 0 8px;border-radius:4px;cursor:pointer;border:0;background:transparent;color:var(--label);font:inherit;width:100%;text-align:left}
-.srow:hover{background:var(--hover)}
-.srow svg{width:14px;height:14px;color:var(--state-attention-ink);flex:none}
-.srow .st{flex:1;min-width:0}
-.srow .st small{color:var(--label-2);font-size:var(--fs-meta)}
-
-.seg{display:flex;background:var(--hover);border-radius:6px;padding:2px;gap:2px;margin:0 12px 8px}
-.seg button{flex:1;min-width:0;border:0;background:transparent;color:var(--label);font:500 var(--fs-mono) var(--mono);padding:4px 6px;border-radius:4px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:4px}
-.seg button span.h{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl}
-.seg button[aria-selected="true"]{background:var(--bg);box-shadow:0 0 0 .5px var(--sep),0 1px 2px rgba(0,0,0,.14)}
-.pop.dark .seg button[aria-selected="true"]{background:rgba(255,255,255,.16)}
-.seg .cnt{display:inline-flex;align-items:center;gap:2px;font:600 var(--fs-meta) var(--sys);color:var(--state-attention-ink);flex:none}
-.seg .cnt svg{width:11px;height:11px}
-
-.route{display:flex;align-items:center;flex-wrap:wrap;gap:4px 6px;padding:0 12px 8px;row-gap:2px;font:var(--fs-mono)/1.4 var(--mono);color:var(--label-2)}
-.route .host{color:var(--label);font-weight:600}
-.route .arw{color:var(--label-3)}
-.route .o{color:var(--label)}
-.route .o.off{color:var(--label-dim)}
-.route .o.warn{color:var(--label-dim)}
-.route .role{margin-left:auto;font:500 var(--fs-meta) var(--sys);color:var(--label-2);white-space:nowrap}
-.route .o{white-space:nowrap}
-
-.scroll{overflow-y:auto;border-top:1px solid var(--sep);flex:1;min-height:0;position:relative}
-.grp{display:flex;align-items:center;gap:8px;padding:12px 12px 4px;font:600 var(--fs-meta)/1.3 var(--sys);color:var(--label)}
-.grp .via{color:var(--label-2);font-weight:500}
-.grp .chip{margin-left:auto}
-.om{display:inline-flex;align-items:center;justify-content:center;flex:none;width:20px;height:20px;border-radius:4px;font:600 var(--fs-meta) var(--sys)}
-.om svg{width:12px;height:12px}
-.om.mac{background:var(--label);color:var(--bg)}
-.pop.dark .om.mac{color:#26262a}
-.om.mem{border:1.5px solid var(--label-2);color:var(--label)}
-.om.cloud{border:1.5px dashed var(--label-2);color:var(--label-2)}
-.row{display:flex;align-items:center;gap:8px;height:28px;margin:0 8px;padding:0 4px 0 8px;border-radius:6px;cursor:pointer;position:relative}
-.row:hover{background:var(--hover)}
-.row:active{background:var(--press)}
-.row .tg{width:15px;height:15px;color:var(--label-2);flex:none}
-.row .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.row .tr{width:40px;text-align:right;font:var(--fs-mono) var(--mono);color:var(--label-2);flex:none;font-variant-numeric:tabular-nums}
-.row .ib.copy{opacity:.4}
-.row:hover .ib.copy,.row:focus-visible .ib.copy{opacity:1}
-.row.dim .nm,.row.dim .tg{color:var(--label-dim)}
-.row.struck .nm{text-decoration:line-through;color:var(--label-2)}
-.row.flash::after{content:"Copied";position:absolute;right:36px;font:600 var(--fs-meta) var(--sys);color:var(--state-ok);background:var(--bg);padding:0 4px}
+.ib svg{width:16px;height:16px}
+.btn{border:1px solid rgba(var(--p-ink-a),.18);background:var(--field);color:var(--label);font:500 var(--fs-body) var(--sys);border-radius:6px;padding:3px 10px;cursor:pointer;white-space:nowrap}
+.btn:hover{background:var(--hover)}
+.btn.prim{background:var(--state-info);border-color:var(--state-info);color:#fff}
+.btn.danger{color:var(--state-error-ink)}
 .chip{display:inline-flex;align-items:center;gap:4px;font:500 var(--fs-meta) var(--sys);padding:2px 6px 2px 4px;border-radius:4px;white-space:nowrap;flex:none}
 .chip svg{width:11px;height:11px}
-.chip.quiet{background:var(--chip-quiet-bg);color:var(--state-quiet-ink)}
-.chip.attention{background:var(--chip-attention-bg);color:var(--state-attention-ink)}
-.chip.error{background:var(--chip-error-bg);color:var(--state-error-ink)}
-.chip.info{background:var(--chip-info-bg);color:var(--state-info-ink)}
-.prog{position:relative;width:40px;height:4px;border-radius:2px;background:var(--hover);overflow:hidden;flex:none}
-.prog i{position:absolute;inset:0 auto 0 0;background:var(--state-info);border-radius:2px}
+.chip.quiet{background:color-mix(in srgb,var(--state-quiet) var(--chip-a),transparent);color:var(--state-quiet-ink)}
+.chip.info{background:color-mix(in srgb,var(--state-info) var(--chip-a),transparent);color:var(--state-info-ink)}
+.chip.attention{background:color-mix(in srgb,var(--state-attention) var(--chip-a),transparent);color:var(--state-attention-ink)}
 
-.mhead{display:flex;align-items:center;gap:8px;margin:8px 8px 0;padding:0 4px 0 8px;height:32px;border-radius:6px;cursor:pointer;border:0;background:transparent;width:calc(100% - 16px);color:var(--label);font:600 var(--fs-meta) var(--sys);text-align:left;border-top:1px solid var(--sep)}
-.mhead:hover{background:var(--hover)}
-.mhead .sum{flex:1;color:var(--label-2);font-weight:500}
-.mhead svg{width:11px;height:11px;color:var(--label-2);transition:transform .15s}
-.mhead[aria-expanded="true"] svg{transform:rotate(90deg)}
-.mrow{display:flex;align-items:center;gap:8px;height:32px;margin:0 8px;padding:0 4px 0 8px;border-radius:6px;position:relative}
-.mrow:hover{background:var(--hover)}
-.mrow .mn{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.2}
-.mrow .mn small{color:var(--label-2);font-size:var(--fs-meta)}
-.pres{width:8px;height:8px;border-radius:50%;flex:none}
-.pres.on{background:var(--state-ok)}
-.pres.off{border:1.5px solid var(--label-3)}
-.mrow .tr{width:40px;text-align:right;font:var(--fs-mono) var(--mono);color:var(--label-2);flex:none}
-.kmenu{position:absolute;right:32px;top:28px;z-index:5;background:var(--bg);border-radius:6px;box-shadow:0 0 0 .5px rgba(0,0,0,.2),0 10px 30px rgba(0,0,0,.25);padding:4px;min-width:180px;backdrop-filter:blur(30px);-webkit-backdrop-filter:blur(30px)}
-.kmenu button{display:block;width:100%;text-align:left;border:0;background:transparent;color:var(--label);font:400 var(--fs-body) var(--sys);padding:4px 8px;border-radius:4px;cursor:pointer}
-.kmenu button:hover,.kmenu button:focus-visible{background:var(--state-info);color:#fff;outline:none}
-.kmenu hr{border:0;border-top:1px solid var(--sep);margin:4px 2px}
-.kmenu .danger{color:var(--state-error-ink)}
-.foot{border-top:1px solid var(--sep);padding:8px 12px;color:var(--label-2);font-size:var(--fs-meta)}
-.foot code{font:var(--fs-meta) var(--mono)}
-.droplay{position:absolute;inset:8px;border:2px dashed var(--focus);border-radius:8px;background:color-mix(in srgb,var(--bg) 85%,var(--focus));display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;text-align:center;padding:16px;z-index:4}
-.droplay svg{width:24px;height:24px;color:var(--focus)}
-.droplay b{font:600 var(--fs-body) var(--sys)}
-.droplay small{color:var(--label-2);font-size:var(--fs-meta)}
-.toast{margin:0 8px 8px;background:var(--toast-bg);color:var(--toast-fg);border-radius:6px;padding:8px 12px;font-size:var(--fs-body);display:flex;gap:8px;align-items:center}
-.toast .tt{flex:1;min-width:0}
+/* ===== popover ===== */
+.pop{width:340px;max-width:100%;border-radius:12px;background:var(--bg);backdrop-filter:blur(30px) saturate(1.6);-webkit-backdrop-filter:blur(30px) saturate(1.6);box-shadow:0 0 0 .5px rgba(0,0,0,.18),0 18px 50px rgba(0,0,0,.28);overflow:hidden;position:relative;display:flex;flex-direction:column}
+.ph{display:flex;align-items:center;gap:4px;padding:8px 8px 6px 10px}
+.tenant{display:inline-flex;align-items:center;gap:4px;border:0;background:transparent;color:var(--label);font:600 var(--fs-title) var(--sys);padding:3px 6px;border-radius:6px;cursor:pointer;min-width:0;flex:1;justify-content:flex-start}
+.tenant:hover{background:var(--hover)}
+.tenant span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tenant svg{width:10px;height:10px;color:var(--label-2);flex:none}
+.tmenu{position:absolute;left:10px;top:40px;z-index:6;background:var(--bg);border-radius:8px;box-shadow:0 0 0 .5px rgba(0,0,0,.2),0 10px 30px rgba(0,0,0,.25);padding:4px;min-width:230px;backdrop-filter:blur(30px);-webkit-backdrop-filter:blur(30px)}
+.tmenu button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:0;background:transparent;color:var(--label);font:400 var(--fs-body) var(--sys);padding:5px 8px;border-radius:4px;cursor:pointer}
+.tmenu button:hover,.tmenu button:focus-visible{background:var(--state-info);color:#fff;outline:none}
+.tmenu button:hover .tm,.tmenu button:focus-visible .tm{color:#fff}
+.tmenu .ck{width:14px;flex:none}
+.tmenu .tm{margin-left:auto;font-size:var(--fs-meta);color:var(--label-2)}
+.tmenu hr{border:0;border-top:1px solid var(--sep);margin:4px}
+.search{margin:0 10px 8px;display:flex;align-items:center;gap:6px;background:var(--hover);border-radius:7px;padding:0 8px;height:28px}
+.search svg{width:13px;height:13px;color:var(--label-2);flex:none}
+.search input{flex:1;min-width:0;border:0;background:transparent;color:var(--label);font:var(--fs-body) var(--sys);outline:none}
+.search input::placeholder{color:var(--label-3)}
+.scope{display:flex;margin:0 10px 6px;background:var(--hover);border-radius:7px;padding:2px;gap:2px}
+.scope button{flex:1;border:0;background:transparent;color:var(--label);font:500 var(--fs-meta) var(--sys);padding:4px;border-radius:5px;cursor:pointer}
+.scope button[aria-pressed="true"]{background:var(--bg);box-shadow:0 0 0 .5px var(--sep),0 1px 2px rgba(0,0,0,.14)}
+.mac.dark .scope button[aria-pressed="true"]{background:rgba(255,255,255,.16)}
+.list{max-height:360px;overflow-y:auto;padding:2px 0 6px}
+.sect{padding:8px 16px 2px;font:600 var(--fs-meta) var(--sys);color:var(--label-2)}
+.row{display:flex;align-items:center;gap:10px;min-height:40px;margin:0 6px;padding:4px 6px 4px 10px;border-radius:7px;cursor:pointer;position:relative}
+.row:hover{background:var(--hover)}
+.row .ti{width:28px;height:28px;border-radius:6px;background:rgba(var(--p-ink-a),.06);display:inline-flex;align-items:center;justify-content:center;flex:none;color:var(--label-2)}
+.row .ti svg{width:15px;height:15px}
+.row .tx{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.25}
+.row .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .mt{font-size:var(--fs-meta);color:var(--label-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row.dim .nm{color:var(--label-dim)}
+.row .ib.copy{opacity:0}
+.row:hover .ib.copy,.row:focus-visible .ib.copy{opacity:1}
+.row.flash::after{content:"Copied";position:absolute;right:40px;font:600 var(--fs-meta) var(--sys);color:var(--state-ok);background:var(--bg);padding:0 4px}
+.empty{padding:28px 20px;text-align:center;color:var(--label-2)}
+.more{display:block;margin:2px 16px 4px;font-size:var(--fs-meta);color:var(--label-2);background:none;border:0;cursor:pointer;padding:0}
+.more:hover{color:var(--label)}
+.pf{display:flex;align-items:center;gap:6px;border-top:1px solid var(--sep);padding:6px 6px 6px 10px}
+.pf .issue{display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;color:var(--state-attention-ink);font:500 var(--fs-body) var(--sys);padding:4px 6px;border-radius:6px;cursor:pointer}
+.pf .issue:hover{background:var(--hover)}
+.pf .issue svg{width:14px;height:14px}
+.pf .ok{display:inline-flex;align-items:center;gap:6px;color:var(--label-2);font-size:var(--fs-meta);padding:4px 6px}
+.pf .ok i{width:7px;height:7px;border-radius:50%;background:var(--state-ok)}
+.pf .sp{flex:1}
+.back{display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid var(--sep)}
+.back b{font:600 var(--fs-title) var(--sys);flex:1}
+.irow{display:flex;align-items:center;gap:10px;margin:0 6px;padding:8px 6px 8px 10px;border-radius:7px}
+.irow:hover{background:var(--hover)}
+.irow svg.g{width:16px;height:16px;color:var(--state-attention-ink);flex:none}
+.irow .tx{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.3}
+.irow .tx small{color:var(--label-2);font-size:var(--fs-meta)}
+.drag{position:absolute;inset:8px;border:2px dashed var(--focus);border-radius:10px;background:color-mix(in srgb,var(--bg) 85%,var(--focus));display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;text-align:center;padding:16px;z-index:4}
+.drag svg{width:24px;height:24px;color:var(--focus)}
+.drag small{color:var(--label-2);font-size:var(--fs-meta)}
+.toast{margin:0 8px 8px;background:var(--toast-bg);color:var(--toast-fg);border-radius:7px;padding:8px 12px;display:flex;gap:8px;align-items:center}
+.toast span{flex:1;min-width:0}
 .toast button{border:0;background:transparent;color:var(--toast-action);font:600 var(--fs-body) var(--sys);cursor:pointer}
-@media (prefers-reduced-motion:reduce){.mhead svg{transition:none}}
 
-/* controls and sheet */
-.side{display:grid;gap:18px}
+/* ===== settings window ===== */
+.win{width:620px;max-width:100%;border-radius:11px;background:var(--win);box-shadow:0 0 0 .5px rgba(0,0,0,.22),0 22px 60px rgba(0,0,0,.32);overflow:hidden}
+.tb{display:flex;align-items:center;justify-content:center;position:relative;padding:8px 10px 6px;border-bottom:1px solid var(--sep);flex-wrap:wrap;gap:2px}
+.lights{position:absolute;left:12px;top:12px;display:flex;gap:7px}
+.lights i{width:12px;height:12px;border-radius:50%;background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+.wtitle{width:100%;text-align:center;font:600 var(--fs-body) var(--sys);color:var(--label-2);margin-bottom:4px}
+.tab{display:flex;flex-direction:column;align-items:center;gap:2px;border:0;background:transparent;color:var(--label-2);font:500 var(--fs-meta) var(--sys);padding:4px 10px;border-radius:6px;cursor:pointer;min-width:66px}
+.tab svg{width:20px;height:20px}
+.tab[aria-selected="true"]{background:var(--sel);color:var(--state-info-ink)}
+.tab:hover{color:var(--label)}
+.pane{padding:18px 24px 22px;min-height:360px}
+.form{display:grid;grid-template-columns:170px 1fr;gap:14px 16px;align-items:start}
+@media (max-width:560px){.form{grid-template-columns:1fr;gap:4px 0}.form .lab{margin-top:10px}}
+.lab{text-align:right;color:var(--label);padding-top:3px}
+@media (max-width:560px){.lab{text-align:left}}
+.ctl{display:flex;flex-direction:column;gap:6px}
+.ctl small{color:var(--label-2);font-size:var(--fs-meta)}
+.ctl label{display:flex;align-items:center;gap:7px;cursor:pointer}
+.ctl input[type=checkbox],.ctl input[type=radio]{accent-color:var(--state-info);margin:0}
+select,.tf{font:var(--fs-body) var(--sys);color:var(--label);background:var(--field);border:1px solid rgba(var(--p-ink-a),.18);border-radius:6px;padding:3px 8px;width:max-content;max-width:100%}
+.tf{width:100%;font-family:var(--mono);font-size:var(--fs-mono)}
+.hr{grid-column:1/-1;border-top:1px solid var(--sep);margin:2px 0}
+.tbl{width:100%;border-collapse:collapse;font:inherit}
+.tbl td.mono{white-space:nowrap}
+.tbl .chip{padding:1px 3px;vertical-align:1px}
+.tbl th{text-align:left;font:500 var(--fs-meta) var(--sys);color:var(--label-2);padding:4px 8px;border-bottom:1px solid var(--sep)}
+.tbl td{padding:6px 8px;border-bottom:1px solid var(--sep);vertical-align:middle}
+.tbl tr.sel td{background:var(--sel)}
+.tbl tr{cursor:pointer}
+.mono{font-family:var(--mono);font-size:var(--fs-mono)}
+.tblwrap{border:1px solid var(--sep);border-radius:7px;background:var(--field);max-height:250px;overflow:auto}
+.pm{display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap}
+.pm .sp{flex:1}
+.pres{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:1px}
+.pres.on{background:var(--state-ok)} .pres.off{border:1.5px solid var(--label-3)}
+.filter{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+.filter .tf{width:200px}
+
+/* page sections */
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px}
 .card{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:16px}
-.opts{display:grid;gap:6px}
-.opt{display:block;padding:8px 10px;border-radius:8px;border:1px solid var(--rule);cursor:pointer;background:transparent;color:var(--ink);text-align:left;font:inherit;width:100%}
-.opt[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
-.opt b{font-weight:600;display:block;font-size:14px}
-.opt span{color:var(--ink-2);font-size:13px}
-.segs{display:flex;gap:6px;flex-wrap:wrap}
-.segs button{border:1px solid var(--rule);background:transparent;color:var(--ink);font:500 13px var(--page-display);padding:5px 10px;border-radius:7px;cursor:pointer}
-.segs button[aria-pressed="true"]{background:var(--ink);color:var(--page);border-color:var(--ink)}
-.side ul{margin:0;padding-left:18px;display:grid;gap:6px;font-size:14px}
-.sheet{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:20px}
-.statetbl{width:100%;border-collapse:collapse;font-size:14px}
-.statetbl th{text-align:left;font:500 12px var(--page-display);color:var(--ink-2);border-bottom:1px solid var(--ink-2);padding:6px 10px 6px 0}
-.statetbl td{padding:8px 10px 8px 0;border-bottom:1px solid var(--rule);vertical-align:middle}
-.statetbl .pop{width:auto;max-height:none;display:inline-flex;box-shadow:none;background:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;border-radius:0;overflow:visible}
-.tablewrap{overflow-x:auto}
+.card h3{font:600 15px var(--page-display);margin:0 0 8px}
+.card ul{margin:0;padding-left:18px;display:grid;gap:6px;font-size:14px}
+.imap{width:100%;border-collapse:collapse;font-size:14px;min-width:640px}.imap th{text-align:left;font:500 12px var(--page-display);color:var(--ink-2);border-bottom:1px solid var(--ink-2);padding:6px 10px 6px 0}.imap td{padding:8px 10px 8px 0;border-bottom:1px solid var(--rule);vertical-align:top}
+.refs{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;font-size:14px}
+.refs a,.refs div{display:block;padding:10px 12px;background:var(--panel);border:1px solid var(--rule);border-radius:8px;text-decoration:none;color:var(--ink)}
+.refs span{display:block;color:var(--ink-2);font-size:13px}
 .calls{display:grid;gap:12px;counter-reset:c}
 .call{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 16px;display:grid;grid-template-columns:28px 1fr;gap:10px}
 .call::before{counter-increment:c;content:counter(c);font:600 13px var(--page-mono);color:var(--accent);padding-top:2px}
 .call p{margin:0}
-.scores{width:100%;border-collapse:collapse;font-size:14px}
-.scores td,.scores th{padding:6px 10px 6px 0;border-bottom:1px solid var(--rule);text-align:left;font-variant-numeric:tabular-nums}
-.scores th{font:500 12px var(--page-display);color:var(--ink-2)}
-.refs{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;font-size:14px}
-.refs a{display:block;padding:10px 12px;background:var(--panel);border:1px solid var(--rule);border-radius:8px;text-decoration:none;color:var(--ink)}
-.refs a span{display:block;color:var(--ink-2);font-size:13px}
+/* r4: tenants detail, sheets, context menu, first run */
+.win{position:relative}
+.tsplit{display:grid;grid-template-columns:200px 1fr;gap:18px}
+@media (max-width:560px){.tsplit{grid-template-columns:1fr}}
+.detail h4{margin:0 0 10px;font:600 var(--fs-title) var(--mono)}
+.detail dl{display:grid;grid-template-columns:110px 1fr;gap:6px 10px;margin:0 0 6px}
+.detail dt{color:var(--label-2);text-align:right}
+.detail dd{margin:0}
+.detail dd.att{color:var(--state-attention-ink)}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.btn.dangerf{background:#d70015;border-color:#d70015;color:#fff}
+.why{font-size:var(--fs-meta);color:var(--label-2);margin:8px 0 0}
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.18);z-index:8}
+.sheet{position:absolute;left:50%;top:44px;transform:translateX(-50%);width:min(420px,calc(100% - 24px));background:var(--win);border-radius:0 0 10px 10px;box-shadow:0 12px 40px rgba(0,0,0,.35),0 0 0 .5px rgba(0,0,0,.2);padding:16px 18px 14px;z-index:9;display:flex;flex-direction:column;gap:10px}
+.sheet h4{margin:0;font:600 var(--fs-title) var(--sys)}
+.sheet .sm{margin:0;font-size:var(--fs-meta);color:var(--label-2);max-width:none}
+.sheet .fl{display:flex;flex-direction:column;gap:4px;font-size:var(--fs-meta);color:var(--label-2)}
+.sheet .fl.chk{flex-direction:row;align-items:center;gap:6px;color:var(--label)}
+.sheet .fl select{width:100%}
+.seg2{display:flex;background:var(--hover);border-radius:7px;padding:2px;gap:2px}
+.seg2 button{flex:1;border:0;background:transparent;color:var(--label);font:500 var(--fs-body) var(--sys);padding:5px;border-radius:5px;cursor:pointer}
+.seg2 button[aria-pressed="true"]{background:var(--field);box-shadow:0 0 0 .5px var(--sep),0 1px 2px rgba(0,0,0,.14)}
+.steps{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.steps li{display:flex;align-items:center;gap:8px;color:var(--label-3)}
+.steps li svg{width:13px;height:13px;color:var(--state-ok)}
+.steps li.done{color:var(--label-2)} .steps li.now{color:var(--label);font-weight:600}
+.steps .dot{width:7px;height:7px;border-radius:50%;border:1.5px solid var(--label-3);margin:0 3px}
+.spin{display:inline-block;width:12px;height:12px;border-radius:50%;border:2px solid var(--sep);border-top-color:var(--focus);animation:sp 0.8s linear infinite;margin-right:6px;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.code{background:var(--field);border:1px solid var(--sep);border-radius:7px;padding:10px;text-align:center;font-size:15px;letter-spacing:.04em;user-select:all}
+.ctx{position:absolute;left:40px;z-index:7;background:var(--bg);border-radius:8px;box-shadow:0 0 0 .5px rgba(0,0,0,.2),0 10px 30px rgba(0,0,0,.25);padding:4px;min-width:200px;backdrop-filter:blur(30px);-webkit-backdrop-filter:blur(30px)}
+.ctx button{display:block;width:100%;text-align:left;border:0;background:transparent;color:var(--label);font:400 var(--fs-body) var(--sys);padding:4px 8px;border-radius:4px;cursor:pointer}
+.ctx button:hover,.ctx button:focus-visible{background:var(--state-info);color:#fff;outline:none}
+.ctx button.danger{color:var(--state-error-ink)}
+.ctx button.danger:hover,.ctx button.danger:focus-visible{color:#fff}
+.ctx hr{border:0;border-top:1px solid var(--sep);margin:4px}
+.pf .hint{font-size:var(--fs-meta);color:var(--label-3);padding-right:6px}
+.first{padding:6px 14px 16px;display:flex;flex-direction:column;gap:8px}
+.first p{margin:0 0 4px;color:var(--label-2)}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 
 <div class="wrap">
   <header>
-    <h1>Share Bar, redesigned for members</h1>
-    <p class="lede">The menu bar client for <code>share</code>, rebuilt as a popover. One line says whether anything needs a hand; a route line shows which machines serve this hostname; every link sits under the machine that holds it. Revision 2, after two rounds of the kit's six-lens critique.</p>
+    <h1>Share Bar, revision 4: every control mapped</h1>
+    <p class="lede">The menu shows your recent links and nothing else. Team status, members and machines move to Settings. A single line at the bottom appears only when something needs a hand. Built for a team of ten or more. Revision 4 makes every button run its real workflow: open Settings and try Tenants and Members, right-click a link, or pick First run.</p>
   </header>
 
-  <section class="stage" aria-label="Prototype">
+  <section aria-label="Prototype">
+    <div class="controls">
+      <span>Scenario</span>
+      <span class="segs" id="scn">
+        <button aria-pressed="true" data-s="admin" id="s-admin">Admin, 12 members</button>
+        <button aria-pressed="false" data-s="member" id="s-member">Member</button>
+        <button aria-pressed="false" data-s="calm" id="s-calm">All calm</button>
+        <button aria-pressed="false" data-s="firstrun" id="s-firstrun">First run</button>
+      </span>
+      <span>Appearance</span>
+      <span class="segs" id="appearance">
+        <button aria-pressed="true" data-a="match" id="a-match">Match page</button>
+        <button aria-pressed="false" data-a="light" id="a-light">Light</button>
+        <button aria-pressed="false" data-a="dark" id="a-dark">Dark</button>
+      </span>
+      <span class="segs"><button aria-pressed="false" id="dragbtn">Simulate a drag</button></span>
+    </div>
     <div class="desk" id="desk">
       <div class="menubar">
         <span aria-hidden="true">Wi-Fi</span><span aria-hidden="true">100%</span>
-        <span class="sbicon" id="sbicon" role="img" aria-label="Share Bar">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M8 9.5v4"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><path d="M5 5.2a4 4 0 0 0 0 5.6M11 5.2a4 4 0 0 1 0 5.6M3 3.2a7 7 0 0 0 0 9.6M13 3.2a7 7 0 0 1 0 9.6"/></svg><b id="sbcount"></b>
-        </span>
-        <span aria-hidden="true">Thu 15:42</span>
+        <span class="sbicon" role="img" id="sbicon" aria-label="Share Bar"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M8 9.5v4"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><path d="M5 5.2a4 4 0 0 0 0 5.6M11 5.2a4 4 0 0 1 0 5.6M3 3.2a7 7 0 0 0 0 9.6M13 3.2a7 7 0 0 1 0 9.6"/></svg><i id="sbdot"></i></span>
+        <span aria-hidden="true">Sat 09:20</span>
       </div>
-      <div class="poparea"><div class="pop" id="pop" role="dialog" aria-label="Share Bar"></div></div>
-      <div id="live" role="status" aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)"></div>
-    </div>
-
-    <aside class="side">
-      <div class="card">
-        <h3>Scenario</h3>
-        <div class="opts" id="scenarios"></div>
-      </div>
-      <div class="card">
-        <h3>Popover appearance</h3>
-        <div class="segs" id="appearance">
-          <button aria-pressed="true" data-a="match" id="ap-match">Match page</button>
-          <button aria-pressed="false" data-a="light" id="ap-light">Light</button>
-          <button aria-pressed="false" data-a="dark" id="ap-dark">Dark</button>
-        </div>
-        <div class="segs" style="margin-top:10px"><button aria-pressed="false" id="dragbtn">Simulate a drag over the popover</button></div>
-      </div>
-      <div class="card">
-        <h3>Try it with the keyboard</h3>
-        <ul>
-          <li>Arrow keys move through rows; Return copies.</li>
-          <li>Delete removes; focus moves to Undo, and Command Z also undoes while the note is up.</li>
-          <li>Left and right arrows switch tenants on the tab strip.</li>
-          <li>In a member's menu, arrows move and Esc closes.</li>
-        </ul>
-      </div>
-    </aside>
-  </section>
-
-  <section aria-labelledby="h-r1">
-    <h2 id="h-r1">What the critique changed</h2>
-    <div class="sheet">
-      <div class="tablewrap">
-        <table class="scores">
-          <thead><tr><th>Lens</th><th>Before</th><th>After</th><th>What changed</th></tr></thead>
-          <tbody>
-            <tr><td>Restraint</td><td>5</td><td>8</td><td>Orange only for what needs a hand; one carrier per fact; drop target only during a drag</td></tr>
-            <tr><td>Hierarchy</td><td>6</td><td>8</td><td>The status line is the one heavy element; Share File is a quiet button beside it</td></tr>
-            <tr><td>Brand fit</td><td>5</td><td>7</td><td>Route line under the tabs; origin marks: filled Mac, outlined member, dashed cloud</td></tr>
-            <tr><td>System</td><td>6</td><td>8</td><td>Token ladder built; type at 15, 13, 12 mono, 11; spacing on 4 pt steps</td></tr>
-            <tr><td>Accessibility</td><td>5</td><td>8</td><td>Contrast fixed in light; focus kept across renders; menu and tabs take arrows and Esc; live-region toast</td></tr>
-            <tr><td>Busy admin</td><td>6</td><td>8</td><td>"Needs a look" strip with one action each; one scroll region; popover capped at 640 pt</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <div>
-        <p><b>Needs a look</b> counts only what an admin can act on: an offline machine, a paused member, an expired code, a member who left. An invited member is information, not an alert.</p>
-        <p><b>Copy</b> flashes on the row itself. Copying a link whose machine is offline says so, because the visitor would get a 503.</p>
+      <div class="deskbody">
+        <div class="pop mac" id="pop" role="dialog" aria-label="Share Bar"></div>
+        <div class="win mac" id="win" role="dialog" aria-label="Share Bar Settings"></div>
       </div>
     </div>
   </section>
 
-  <section aria-labelledby="h-states">
-    <h2 id="h-states">States, one row each</h2>
-    <p>A quiet row means the link answers. Chips appear only when a row differs from its machine's state, and every chip is a symbol plus a word.</p>
-    <div class="sheet">
-      <div class="tablewrap"><table class="statetbl" id="linkstates"><thead><tr><th>Link</th><th>Shown as</th><th>Visitor sees</th></tr></thead><tbody></tbody></table></div>
-      <div class="tablewrap"><table class="statetbl" id="memberstates"><thead><tr><th>Member</th><th>Shown as</th><th>Counts as</th></tr></thead><tbody></tbody></table></div>
+  <section>
+    <h2>What changed in revisions 3 and 4</h2>
+    <div class="cols">
+      <div class="card"><h3>The menu answers one question</h3><ul>
+        <li>"Where is the link I just shared?" Recent links, newest first, with search. Nothing is grouped by person.</li>
+        <li><b>Mine</b> is the default; <b>Team</b> shows everyone's recent links with the owner in the meta line.</li>
+        <li>Each row has one meta line: who, where it lives, and expiry. A state word appears there only when the link does not answer.</li>
+      </ul></div>
+      <div class="card"><h3>Status became one line</h3><ul>
+        <li>No status header, no route line, no strip. When all is well, the footer says "All links answer" in gray.</li>
+        <li>When something needs a hand, the footer says "2 need a look" in orange. Clicking it opens a short list with one action each.</li>
+        <li>The menu bar icon gets a small dot, nothing more.</li>
+      </ul></div>
+      <div class="card"><h3>Settings holds the rest</h3><ul>
+        <li><b>General</b>: launch at login, default expiry, default storage, copy format, notifications.</li>
+        <li><b>Tenants</b>: every hostname, your role, the machine that serves it, start and stop.</li>
+        <li><b>Members</b> (admins): a searchable table that works for 12 or 50 people, invite, pause, rotate, remove.</li>
+        <li><b>Advanced</b>: CLI path, logs, the legacy menu.</li>
+      </ul></div>
     </div>
   </section>
 
-  <section aria-labelledby="h-sm">
-    <h2 id="h-sm">The state machines behind these screens</h2>
-    <p>An audit of <code>bin/share</code>, the Share Bar and SPEC-009 found 19 state machines that live only as flag combinations, file presence or prose. Six can cause a wrong action today. The fix is five shared mechanisms, not nineteen separate ones, and nothing on disk or on the wire changes shape.</p>
-    <div class="tablewrap"><table class="scores">
-      <thead><tr><th>Machine</th><th>What goes wrong today</th><th>Decision</th></tr></thead>
+  <section>
+    <h2>Interaction map</h2>
+    <p>Every control reads its state from <code>share state</code> and offers only what that state allows. The full map, with every refusal sentence, is <code>docs/design/share-bar-interactions.md</code>.</p>
+    <div class="tablewrap" style="overflow-x:auto"><table class="imap">
+      <thead><tr><th>Where</th><th>Control</th><th>Runs</th><th>State machine move</th><th>Shown while it runs</th></tr></thead>
       <tbody>
-        <tr><td>Member status (SPEC-009)</td><td>After <code>rotate</code> the member must join again, but <code>join</code> only accepts <code>invited</code>, so every rejoin fails</td><td>One transition table owns every status; rotate ends at <code>invited</code> and join restores the earlier status</td></tr>
-        <tr><td>Multi-step commands</td><td>A <code>setup --r2</code> that dies after the config write reports R2 on, and new cloud links 404</td><td>A step journal: <code>status</code> and the Share Bar say "stopped at step 13; rerun this"</td></tr>
-        <tr><td>Profile role</td><td>After <code>migrate</code> the bar shows Stopped with a Start button that cannot work</td><td>One role function; a migrated profile reads as not set up</td></tr>
-        <tr><td>Link state per row</td><td>Expired links stay copyable; a link whose login gate vanished turns public silently</td><td><code>link_state</code> on every row: live, expired, shadowed, gate missing, revoked, paused</td></tr>
-        <tr><td>Join progress (SPEC-009)</td><td>Resume guesses the step from which files exist; a wrong guess spends the one-time code</td><td>Join records its step and resumes from it</td></tr>
-        <tr><td>Config file</td><td>A <code>setup</code> rerun drops keys it does not own; on a members tenant it would drop <code>members=on</code> and its safety refusals</td><td>Every writer keeps keys it does not own</td></tr>
+        <tr><td>Tenants</td><td>Add, join a team</td><td><code>share join &lt;code&gt;</code></td><td>role R0 to R7; member invited, joining, active</td><td>6 named steps; Stop keeps the step, Resume continues</td></tr>
+        <tr><td>Tenants</td><td>Add, set up a hostname</td><td><code>share setup &lt;host&gt;</code></td><td>role R0 to R2; serve starting to serving</td><td>6 named steps</td></tr>
+        <tr><td>Tenants</td><td>Start serving</td><td><code>share start</code></td><td>serve stopped or failed to starting to serving</td><td>Status: Starting, then Serving</td></tr>
+        <tr><td>Tenants</td><td>Stop serving</td><td><code>share stop</code></td><td>serve to stopped</td><td>Confirm names what stops answering</td></tr>
+        <tr><td>Tenants</td><td>Turn on cloud storage</td><td><code>share setup --r2</code></td><td>tier T0 to T1</td><td>9 named steps</td></tr>
+        <tr><td>Tenants</td><td>Turn on members</td><td><code>share setup --r2 --members</code></td><td>tier T1 to T2</td><td>4 named steps</td></tr>
+        <tr><td>Tenants</td><td>Resume, Roll back</td><td>journal <code>rerun</code>, rollback</td><td>op died at step n to done, or undone</td><td>Continues from the stopped step</td></tr>
+        <tr><td>Tenants</td><td>Remove</td><td><code>teardown</code>, <code>leave</code>, <code>leave --local</code></td><td>role to R0; refused on T2 with members</td><td>Sheet names what is deleted per role</td></tr>
+        <tr><td>Members</td><td>Invite, Send a new code</td><td><code>member add</code>, <code>member invite</code></td><td>none to invited; invited, joining, left to invited</td><td>Code shown once</td></tr>
+        <tr><td>Members</td><td>Pause, Resume</td><td><code>member pause</code>, <code>resume</code></td><td>active and paused</td><td>Row shows Pausing, step n</td></tr>
+        <tr><td>Members</td><td>Rotate keys</td><td><code>member rotate</code></td><td>active or paused to invited (status kept for the rejoin)</td><td>New code shown once</td></tr>
+        <tr><td>Members</td><td>Remove, Purge</td><td><code>member rm</code>, <code>purge</code></td><td>any to removed; removed to deleted</td><td>Choice for their cloud links</td></tr>
+        <tr><td>Members</td><td>Finish</td><td>the stopped verb again</td><td>a stale <code>...ing</code> to its resting status</td><td>Shown only for a stale lease</td></tr>
+        <tr><td>Menu</td><td>Row click, right-click</td><td>copy; <code>rm</code>, revoke, <code>refresh</code></td><td>link live to gone (own) or revoked (admin)</td><td>Expired and revoked rows never copy</td></tr>
+        <tr><td>Menu</td><td>N need a look</td><td>per line</td><td>reads D2, D3, D5, D8</td><td>One action per line</td></tr>
       </tbody>
     </table></div>
-    <p style="margin-top:12px"><b>Shared across all three audiences.</b> <code>share state</code> stays schema 1 and only gains keys, so the shipped Share Bar keeps working. Every refusal gets a stable code and a next command, so a person reads the sentence, the bar shows a copyable fix, and an agent reads the code. Agents read state only from <code>share state</code>, never from the human <code>status</code> text.</p>
+    <h3 style="font:600 17px var(--page-display);margin:22px 0 8px">Gaps the mapping found, and the decisions</h3>
+    <div class="tablewrap" style="overflow-x:auto"><table class="imap">
+      <thead><tr><th>Gap</th><th>Decision</th></tr></thead>
+      <tbody>
+        <tr><td>The menu itself had no state machine</td><td>Swift <code>PopoverState</code>: list, issues, publishing, drop target, undo; one reducer, one test per move</td></tr>
+        <tr><td>"Add tenant" had no meaning</td><td>Two paths: join with a code (R0 to R7) or set up a hostname (R0 to R2), both journaled</td></tr>
+        <tr><td>The app cannot run admin commands: the admin token lives only in the shell environment</td><td>New config key <code>admin_token_cmd</code>, a command, never the token; empty means Share Bar asks each time and never stores it</td></tr>
+        <tr><td>A member removed while offline had no state</td><td>"You were removed" with Clean up (<code>leave --local</code>)</td></tr>
+        <tr><td>Long admin commands from the app need stop and resume</td><td>Stop ends the process; the journal keeps the step; the tenant shows Resume or Roll back</td></tr>
+        <tr><td>Removing a members tenant had no answer</td><td>Refused with code <code>members_present</code> and a link to Members</td></tr>
+        <tr><td>Cloud storage and members were command-line only</td><td>Buttons in the tenant detail, admin only, journaled</td></tr>
+        <tr><td>First run had no design</td><td>The two Add paths, shown in the menu</td></tr>
+        <tr><td>Link actions beyond copy were undefined</td><td>Right-click menu, items shown only when the link state allows them</td></tr>
+        <tr><td>Member buttons had no rule</td><td>Each button reads the D8 table; a dimmed button says why</td></tr>
+      </tbody>
+    </table></div>
   </section>
 
-  <section aria-labelledby="h-calls">
-    <h2 id="h-calls">Calls for your review</h2>
-    <div class="calls">
-      <div class="call"><p><b>Popover instead of the native menu.</b> A menu cannot hold chips, presence or a route line. The cost is rebuilding the keyboard path the menu gave for free; this prototype shows it. Keep the old menu as a fallback for one release?</p></div>
-      <div class="call"><p><b>Group links by the machine that holds them.</b> The alternative is one flat list by date with an origin column. Grouping makes "An's MacBook is offline, 2 links wait" obvious; a flat list finds one name faster.</p></div>
-      <div class="call"><p><b>Start and Stop move into the gear menu.</b> They are rare, and the space goes to the route line. A stopped origin still shows in the strip as something that needs a hand.</p></div>
-      <div class="call"><p><b>Undo before the CLI runs.</b> Remove waits while the note is up, then calls <code>share rm</code>. Removing a member's link only revokes it, so the file on their machine survives either way.</p></div>
+  <section>
+    <h2>References</h2>
+    <p>Mobbin covers iOS and web, not macOS menu bar apps, so the menu bar patterns come from apps I know well; the settings and list patterns cite Mobbin screens.</p>
+    <div class="refs">
+      <div>Dropbox menu bar<span>Recent activity list as the default; status and preferences behind a gear</span></div>
+      <div>Tailscale menu bar<span>One status line, devices in a submenu, a separate Settings window</span></div>
+      <div>CleanShot X and Droplr<span>Recent captures as the whole menu; copy link on click</span></div>
+      <div>macOS System Settings toolbar<span>Icon tabs across the top of a preferences window</span></div>
+      <a href="https://mobbin.com/screens/9faa5a29-a202-4641-9aec-2cafd2bb6d3d">Dropbox iOS, files<span>One meta line per file: size, when</span></a>
+      <a href="https://mobbin.com/screens/07897a07-e74b-45fb-8591-7dfd0fc08831">Dropbox iOS, upload done<span>Toast with "Copy link" after an upload</span></a>
+      <a href="https://mobbin.com/screens/3c9a44d0-fc98-46c1-b577-33bfea687567">Bloom, settings<span>Account and Team sections; members with an invite row</span></a>
+      <a href="https://mobbin.com/screens/417263d3-73aa-4646-96ae-69a409a20ebc">Firecrawl, settings<span>Team, Billing, Advanced as a short section list</span></a>
+      <a href="https://mobbin.com/screens/c1bf83ff-9577-4fe6-aff9-0230030944ee">Linear, members<span>Members as a table with status and last seen</span></a>
     </div>
   </section>
 
-  <section aria-labelledby="h-refs">
-    <h2 id="h-refs">References</h2>
-    <div class="refs">
-      <a href="https://mobbin.com/screens/8acfdd2c-754e-4bae-872a-5beddb49205c">Dub, links list<span>Inline copy, struck-through archived link, toast with Undo</span></a>
-      <a href="https://mobbin.com/screens/c1bf83ff-9577-4fe6-aff9-0230030944ee">Linear, members<span>Quiet "Invited" chip, Online dot</span></a>
-      <a href="https://mobbin.com/screens/061864d2-cf26-4ae7-9ef9-4a5abc7c9cf1">Square, team members<span>Active and Invited as small chips</span></a>
-      <a href="https://mobbin.com/screens/3504e265-cf45-45de-bac7-18d97965d984">AutoSend, team<span>One status word with a dot</span></a>
-      <a href="https://mobbin.com/screens/722f7f8c-3c79-457f-8d36-88dda4b8d17c">SavvyCal, scheduling links<span>Links grouped under their owner</span></a>
-      <a href="https://mobbin.com/screens/de781b49-f1cd-42f9-a157-a14a951896b4">Proton Drive, shared links<span>Expiry as its own column</span></a>
-      <a href="https://mobbin.com/screens/77f399e9-65be-4bf0-9ae9-462c63a5f547">Mistral, upload<span>A drop target that names its limits</span></a>
+  <section>
+    <h2>Calls for your review</h2>
+    <div class="calls">
+      <div class="call"><p><b>Mine as the default scope.</b> A member mostly needs their own links. Admins can switch to Team; the choice is remembered.</p></div>
+      <div class="call"><p><b>Members and machines live only in Settings.</b> The menu never lists people. An offline member shows up only through the footer line, and only for admins.</p></div>
+      <div class="call"><p><b>Eight recent links, then "Show all".</b> Show all opens the full list in a window with the same search; the menu stays short.</p></div>
+      <div class="call"><p><b>Settings window instead of submenus.</b> Tenants, members and start/stop are rare tasks; a window is easier to scan and works with the keyboard.</p></div>
     </div>
   </section>
 </div>
@@ -318,213 +352,409 @@ a{color:var(--accent)}
 const IC = {
   doc:'<path d="M4 1.8h5l3 3V14H4z"/><path d="M9 1.8v3h3"/>', folder:'<path d="M1.8 4.2h4.4l1.3 1.4h6.7v7.6H1.8z"/>',
   video:'<rect x="1.8" y="3.5" width="9" height="9" rx="1.5"/><path d="M10.8 7l3.4-2v6l-3.4-2"/>', page:'<rect x="2" y="2" width="12" height="12" rx="2"/><path d="M2 5.5h12"/>',
-  live:'<circle cx="8" cy="8" r="2"/><path d="M4.5 4.5a5 5 0 0 0 0 7M11.5 4.5a5 5 0 0 1 0 7"/>', mac:'<rect x="2" y="3" width="12" height="8" rx="1"/><path d="M5.5 13.5h5"/>',
-  cloud:'<path d="M4.5 12.5h7a3 3 0 0 0 .3-6 4 4 0 0 0-7.6 1 2.5 2.5 0 0 0 .3 5z"/>', copy:'<rect x="5" y="5" width="8.5" height="8.5" rx="1.5"/><path d="M3 10.5V3.8A1.3 1.3 0 0 1 4.3 2.5H10"/>',
+  live:'<circle cx="8" cy="8" r="2"/><path d="M4.5 4.5a5 5 0 0 0 0 7M11.5 4.5a5 5 0 0 1 0 7"/>', image:'<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><circle cx="6" cy="6.5" r="1.2"/><path d="M2.5 12l3.5-3.5 3 3 2-2 2.5 2.5"/>',
+  copy:'<rect x="5" y="5" width="8.5" height="8.5" rx="1.5"/><path d="M3 10.5V3.8A1.3 1.3 0 0 1 4.3 2.5H10"/>',
   gear:'<circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/>',
-  more:'<circle cx="3.5" cy="8" r="1.1" fill="currentColor"/><circle cx="8" cy="8" r="1.1" fill="currentColor"/><circle cx="12.5" cy="8" r="1.1" fill="currentColor"/>',
-  pause:'<circle cx="8" cy="8" r="6"/><path d="M6.5 5.8v4.4M9.5 5.8v4.4"/>', moon:'<path d="M12.5 10A5.5 5.5 0 0 1 6 3.5a5.5 5.5 0 1 0 6.5 6.5z"/>',
-  x:'<circle cx="8" cy="8" r="6"/><path d="M6 6l4 4M10 6l-4 4"/>', clock:'<circle cx="8" cy="8" r="6"/><path d="M8 4.8V8l2 1.4"/>',
-  up:'<circle cx="8" cy="8" r="6"/><path d="M8 11V5.3M5.6 7.6L8 5.2l2.4 2.4"/>', mail:'<rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="M2.5 4.5L8 9l5.5-4.5"/>',
-  exit:'<path d="M9.5 3H3v10h6.5M7 8h7M11.5 5.5L14 8l-2.5 2.5"/>', check:'<circle cx="8" cy="8" r="6.3"/><path d="M5.3 8.2l1.8 1.8 3.6-3.8"/>',
-  warn:'<path d="M8 2l6.3 11H1.7z"/><path d="M8 6.5v3M8 11.4v.2"/>', drop:'<path d="M8 2.5v8M5 7.5l3 3 3-3"/><path d="M2.5 11v2.5h11V11"/>',
-  chev:'<path d="M6 3.5L10.5 8 6 12.5"/>'
+  plus:'<path d="M8 3v10M3 8h10"/>', search:'<circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/>', chevd:'<path d="M3.5 6L8 10.5 12.5 6"/>', chevl:'<path d="M10 3.5L5.5 8 10 12.5"/>',
+  warn:'<path d="M8 2l6.3 11H1.7z"/><path d="M8 6.5v3M8 11.4v.2"/>', moon:'<path d="M12.5 10A5.5 5.5 0 0 1 6 3.5a5.5 5.5 0 1 0 6.5 6.5z"/>', pause:'<circle cx="8" cy="8" r="6"/><path d="M6.5 5.8v4.4M9.5 5.8v4.4"/>',
+  exit:'<path d="M9.5 3H3v10h6.5M7 8h7M11.5 5.5L14 8l-2.5 2.5"/>', drop:'<path d="M8 2.5v8M5 7.5l3 3 3-3"/><path d="M2.5 11v2.5h11V11"/>',
+  sliders:'<path d="M3 4h10M3 8h10M3 12h10"/><circle cx="6" cy="4" r="1.5" fill="currentColor"/><circle cx="10" cy="8" r="1.5" fill="currentColor"/><circle cx="5" cy="12" r="1.5" fill="currentColor"/>',
+  globe:'<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/>', people:'<circle cx="6" cy="5.5" r="2.3"/><path d="M1.8 13.5c.5-2.5 2.2-3.8 4.2-3.8s3.7 1.3 4.2 3.8"/><circle cx="11.3" cy="6" r="1.8"/><path d="M10.5 9.8c1.9.1 3.3 1.3 3.7 3.7"/>',
+  wrench:'<path d="M10.5 2.5a3 3 0 0 0-3 4l-5 5 2 2 5-5a3 3 0 0 0 4-3l-1.8 1.3-1.7-.5-.5-1.7z"/>', check:'<path d="M3.5 8.5l3 3 6-6.5"/>',
+  key:'<circle cx="5" cy="10" r="2.5"/><path d="M7 8.5L13 2.5M11 4.5l1.5 1.5M9.5 6l1.2 1.2"/>', stop:'<rect x="4" y="4" width="8" height="8" rx="1"/>', redo:'<path d="M12.5 6.5A5 5 0 1 0 13 9"/><path d="M13 3v3.5H9.5"/>'
 };
 const svg = (k, cls='') => `<svg class="${cls}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[k]}</svg>`;
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
-/* link states: tone + glyph + word; "attention" is the only warm tone */
-const LS = {
-  paused:{tone:'quiet', i:'pause', w:'Paused', visitor:'503: paused by the tenant admin', dim:true},
-  offline:{tone:'quiet', i:'moon', w:'Offline', visitor:'Generic 503: the machine serving this link is offline', dim:true},
-  revoked:{tone:'error', i:'x', w:'Removed', visitor:'404', struck:true},
-  expired:{tone:'quiet', i:'clock', w:'Expired', visitor:'404 (the Worker checks expiry)', dim:true},
-  publishing:{tone:'info', i:'up', w:'Uploading', visitor:'404 until the row lands'}
+/* ---------- data ---------- */
+const TEAM_LINKS = [
+  {t:'folder',n:'kid-demos',who:'You',where:'this Mac',exp:'never',ago:'2m',id:'0d489d'},
+  {t:'doc',n:'q4-pitch-deck.pdf',who:'You',where:'this Mac',exp:'6d',ago:'1h',id:'c4e211'},
+  {t:'video',n:'playdate-uat-run.mov',who:'An',where:"An's MacBook",exp:'3d',ago:'2h',id:'7f3a21',state:'offline'},
+  {t:'page',n:'press-kit.html',who:'You',where:'this Mac',exp:'21d',ago:'3h',id:'a19f03'},
+  {t:'image',n:'hero-v4.png',who:'Linh',where:'cloud',exp:'7d',ago:'4h',id:'91fe20'},
+  {t:'live',n:'localhost:3000',who:'Bình',where:"Bình's server",exp:'live',ago:'5h',id:'91ac4e'},
+  {t:'page',n:'landing-draft.html',who:'Dũng',where:"Dũng's iMac",exp:'2d',ago:'yesterday',id:'e04b9c',state:'paused'},
+  {t:'video',n:'hermes-demo-45s.mp4',who:'You',where:'cloud',exp:'30d',ago:'yesterday',id:'f1d7e2'},
+  {t:'doc',n:'invoice-2026-10.pdf',who:'You',where:'cloud',exp:'expired',ago:'9d',id:'b2c3d4',state:'expired'},
+  {t:'doc',n:'bao-cao-thang-10.pdf',who:'An',where:"An's MacBook",exp:'6d',ago:'2d',id:'2be8d0',state:'offline'},
+  {t:'doc',n:'contract-draft-v2.pdf',who:'Khoa',where:'cloud',exp:'14d',ago:'2d',id:'3c8d11'},
+  {t:'folder',n:'brand-assets',who:'Minh',where:"Minh's Mac Studio",exp:'never',ago:'3d',id:'7a2b90'},
+  {t:'image',n:'moodboard.png',who:'Phúc',where:'cloud',exp:'5d',ago:'4d',id:'d4e5f6'}
+];
+const mkMembers = () => [
+  {n:'An',st:'active',pres:'off',seen:'offline 2h',links:2,mach:"An's MacBook"},
+  {n:'Bình',st:'active',pres:'on',seen:'online',links:1,mach:"Bình's server"},
+  {n:'Chi',st:'invited',pres:null,seen:'code expires in 6d',links:0,mach:'none yet'},
+  {n:'Dũng',st:'paused',pres:'on',seen:'online',links:1,mach:"Dũng's iMac"},
+  {n:'Giang',st:'active',pres:'on',seen:'online',links:0,mach:'cloud only'},
+  {n:'Hà',st:'left',pres:null,seen:'left 1d ago',links:0,mach:"Hà's MacBook"},
+  {n:'Khoa',st:'active',pres:'on',seen:'online',links:1,mach:'cloud only'},
+  {n:'Linh',st:'active',pres:'on',seen:'online',links:1,mach:'cloud only'},
+  {n:'Minh',st:'pausing',step:'step 2 of 3 (deploy)',stale:true,pres:'on',seen:'online',links:1,mach:"Minh's Mac Studio"},
+  {n:'Nam',st:'active',pres:'off',seen:'offline 3d',links:0,mach:"Nam's Mini"},
+  {n:'Phúc',st:'active',pres:'on',seen:'online',links:1,mach:'cloud only'},
+  {n:'Quân',st:'removed',pres:null,seen:'removed 5d ago',links:0,mach:"Quân's NUC"}
+];
+/* D8: verbs the admin may run per member status */
+const CAN = {
+  invited:['invite','renew','rm'], joining:['invite','rm'], active:['pause','rotate','renew','rm'], paused:['resume','rotate','renew','rm'],
+  left:['invite','rm'], removed:['purge'], pausing:['finish','rm'], resuming:['finish','rm'], rotating:['finish','rm'], removing:['finish']
 };
-const MS = {
-  invited:{tone:'info', i:'mail', w:'Invited', counts:'Information'},
-  paused:{tone:'quiet', i:'pause', w:'Paused', counts:'Needs a look: Resume'},
-  expired:{tone:'quiet', i:'mail', w:'Code expired', counts:'Needs a look: Send a new code'},
-  left:{tone:'quiet', i:'exit', w:'Left', counts:'Needs a look: Remove'},
-  removing:{tone:'info', i:'up', w:'Removing', counts:'Working: the step is named'}
+const WHY = {pause:'only an active member can be paused', resume:'only a paused member can be resumed', rotate:'rotate needs an active or paused member', renew:'nothing to renew yet', invite:'they already joined; use Rotate keys', rm:'already removed', purge:'only removed members can be purged'};
+const mkTenants = () => ({
+  admin:[
+    {h:'s.console.so',role:'Admin',tier:'T2',from:'Mini (this Mac)',phase:'serving',reason:'',token:'1Password command, expires in 81d',links:12},
+    {h:'s.d.foundation',role:'Admin',tier:'T1',from:'Mini (this Mac)',phase:'serving',reason:'',token:'1Password command, expires in 40d',links:3,
+      op:{verb:'setup --r2',step:13,of:16,name:'route',rerun:'share setup s.d.foundation --r2 --bucket share-dfoundation',rollback:'share setup s.d.foundation --no-r2'}},
+    {h:'s.han.ws',role:'Owner',tier:'T0',from:'Mini (this Mac)',phase:'failed',reason:'port 8787 is in use',token:'asks each time',links:5}],
+  member:[{h:'s.console.so',role:'Member',tier:'T2',from:"An's MacBook (this Mac)",phase:'serving',reason:'',token:'Keychain, expires in 6d',links:2,mstatus:'active'}],
+  calm:[{h:'s.han.ws',role:'Owner',tier:'T0',from:'Mini (this Mac)',phase:'serving',reason:'',token:'asks each time',links:5}],
+  firstrun:[]
+});
+const SCN_LINKS = {
+  admin:TEAM_LINKS,
+  member:TEAM_LINKS.filter(l=>l.state!=='expired').map(l=>l.who==='An'?{...l,who:'You',where:'this Mac',state:null}:(l.who==='You'?{...l,who:'Han',where:'Mini'}:l)),
+  calm:[{t:'page',n:'posture-routine.html',who:'You',where:'this Mac',exp:'never',ago:'1d',id:'ef5507'},{t:'folder',n:'trang-mobility',who:'You',where:'this Mac',exp:'never',ago:'8d',id:'89f402'},{t:'page',n:'max-big-race.html',who:'You',where:'this Mac',exp:'27d',ago:'3d',id:'4fcc6d'}],
+  firstrun:[]
 };
-const chip = (map, k) => { const c = map[k]; return `<span class="chip ${c.tone}">${svg(c.i)}${esc(c.w)}</span>`; };
+let TEN = mkTenants(), MEMBERS = mkMembers();
+let cur='admin', tIdx=0, view='list', scope='mine', q='', tmenu=false, ctx=null, dragging=false, flashId=null, toastMsg=null, toastUndo=false, toastT=null, appearance='match';
+let tab='tenants', selTenant=0, selMember='An', mfilter='', sheet=null, runner=null;
+const pop=document.getElementById('pop'), win=document.getElementById('win');
+const isAdmin = () => TEN[cur].some(t=>t.role==='Admin');
 
-const SCEN = {
-  admin:{label:'Admin, busy afternoon', note:"Three tenants. On s.console.so An's MacBook is offline, Dũng is paused and Hà left.",
-    tenants:[
-      {host:'s.console.so', role:'Admin',
-       groups:[
-        {o:'mac', via:'Mini', who:'This Mac', rows:[
-          {t:'folder', n:'kid-demos', exp:'', id:'0d489d'}, {t:'page', n:'press-kit.html', exp:'21d', id:'a19f03'},
-          {t:'doc', n:'q4-pitch-deck.pdf', exp:'6d', state:'publishing', id:'c4e211'}]},
-        {o:'AN', via:"An's MacBook", who:'An', gstate:'offline', rows:[
-          {t:'video', n:'playdate-uat-run.mov', exp:'3d', state:'offline', id:'7f3a21'}, {t:'doc', n:'bao-cao-thang-10.pdf', exp:'6d', state:'offline', id:'2be8d0'}]},
-        {o:'BI', via:"Bình's server", who:'Bình', rows:[
-          {t:'live', n:'localhost:3000', exp:'live', id:'91ac4e'}, {t:'doc', n:'old-pricing.pdf', exp:'', state:'revoked', id:'5d0f7a'}]},
-        {o:'DU', via:"Dũng's iMac", who:'Dũng', gstate:'paused', rows:[{t:'page', n:'landing-draft.html', exp:'2d', state:'paused', id:'e04b9c'}]},
-        {o:'cloud', via:'R2 bucket', who:'Cloud', rows:[
-          {t:'video', n:'hermes-demo-45s.mp4', exp:'30d', id:'f1d7e2'}, {t:'doc', n:'invoice-2026-10.pdf', exp:'', state:'expired', id:'b2c3d4'}]}],
-       look:[
-        {i:'moon', t:"An's MacBook is offline", s:'2 links wait for it', act:'Show', go:'g-1'},
-        {i:'pause', t:'Dũng is paused', s:'1 link answers 503', act:'Resume'},
-        {i:'exit', t:'Hà left', s:'remove to close the tunnel and token', act:'Remove'}],
-       members:[
-        {ini:'AN', n:'An', st:null, pres:'off', sub:'last seen 2h ago', links:2},
-        {ini:'DU', n:'Dũng', st:'paused', pres:'on', sub:'online', links:1},
-        {ini:'HA', n:'Hà', st:'left', pres:null, sub:'waiting for removal', links:0},
-        {ini:'CH', n:'Chi', st:'invited', pres:null, sub:'code expires in 6d', links:0},
-        {ini:'BI', n:'Bình', st:null, pres:'on', sub:'online', links:2},
-        {ini:'GI', n:'Giang', st:null, pres:'on', sub:'online', links:0}], removed:2},
-      {host:'s.d.foundation', role:'Admin', look:[], groups:[
-        {o:'mac', via:'Mini', who:'This Mac', rows:[{t:'page', n:'how-we-run-work.html', exp:'', id:'4ecc11'}, {t:'folder', n:'support-ticket-guide', exp:'', id:'a68960'}]},
-        {o:'cloud', via:'R2 bucket', who:'Cloud', rows:[{t:'folder', n:'support-ticket-guide', exp:'', id:'ba6377'}]}], members:[], removed:0},
-      {host:'s.han.ws', role:'Owner', look:[], groups:[
-        {o:'mac', via:'Mini', who:'This Mac', rows:[{t:'page', n:'posture-routine.html', exp:'', id:'ef5507'}, {t:'folder', n:'trang-mobility', exp:'', id:'89f402'}, {t:'page', n:'max-big-race.html', exp:'27d', id:'4fcc6d'}]}], members:[], removed:0}]},
-  member:{label:"Member, on An's laptop", note:'An sees the tenant and its own links. No member list, no admin actions.',
-    tenants:[{host:'s.console.so', role:'Member', memberView:true, look:[], groups:[
-      {o:'mac', via:"An's MacBook", who:'This Mac', rows:[{t:'video', n:'playdate-uat-run.mov', exp:'3d', id:'7f3a21'}, {t:'doc', n:'bao-cao-thang-10.pdf', exp:'6d', id:'2be8d0'}]},
-      {o:'cloud', via:'R2 bucket', who:'Cloud', rows:[{t:'video', n:'hermes-demo-45s.mp4', exp:'30d', id:'f1d7e2'}]}], members:[], removed:0, routeAll:['Mini','An','Bình','Dũng','Cloud']}]},
-  calm:{label:'One tenant, all calm', note:'Nothing needs a hand, so nothing is warm.',
-    tenants:[{host:'s.han.ws', role:'Owner', look:[], groups:[
-      {o:'mac', via:'Mini', who:'This Mac', rows:[{t:'page', n:'posture-routine.html', exp:'', id:'ef5507'}, {t:'folder', n:'trang-mobility', exp:'', id:'89f402'}, {t:'page', n:'max-big-race.html', exp:'27d', id:'4fcc6d'}]}], members:[], removed:0}]}
-};
-
-let cur='admin', tIdx=0, membersOpen=false, kmenu=null, toastMsg=null, toastUndo=false, toastT=null, appearance='match', dragging=false, flashId=null;
-const pop = document.getElementById('pop');
-
-function om(o){ return o==='mac' ? `<span class="om mac" aria-hidden="true">${svg('mac')}</span>` : o==='cloud' ? `<span class="om cloud" aria-hidden="true">${svg('cloud')}</span>` : `<span class="om mem" aria-hidden="true">${esc(o)}</span>`; }
-function lookCount(t){ return (t.look||[]).length; }
-
-function render(){
-  const focusId = document.activeElement && pop.contains(document.activeElement) ? document.activeElement.id : null;
-  const sc = SCEN[cur], ts = sc.tenants, t = ts[Math.min(tIdx, ts.length-1)];
-  const total = ts.reduce((a,x)=>a+lookCount(x),0);
-  let h = `<div class="top">`;
-  h += total ? `<svg class="sym" viewBox="0 0 16 16" fill="none" stroke="var(--state-attention)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC.warn}</svg><div class="ttl">${total} ${total===1?'thing needs':'things need'} a look</div>`
-             : `<svg class="sym" viewBox="0 0 16 16" fill="none" stroke="var(--label-2)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC.check}</svg><div class="ttl">All links answer</div>`;
-  h += `<button class="btn" id="sharefile">Share File…</button><button class="ib" id="gear" aria-label="Start, stop, settings and quit">${svg('gear')}</button></div>`;
-  if (t.look && t.look.length){
-    h += `<div class="strip" role="list" aria-label="Needs a look">${t.look.slice(0,3).map((l,i)=>`<button class="srow" role="listitem" id="look-${i}" data-go="${l.go||''}">${svg(l.i)}<span class="st">${esc(l.t)} <small>${esc(l.s)}</small></span><span class="btn" aria-hidden="true">${esc(l.act)}</span></button>`).join('')}${t.look.length>3?`<div class="srow" style="cursor:default"><span class="st"><small>${t.look.length-3} more in the list below</small></span></div>`:''}</div>`;
-  }
-  if (ts.length > 1){
-    h += `<div class="seg" role="tablist" aria-label="Tenants">${ts.map((x,i)=>{const n=lookCount(x); return `<button role="tab" id="tab-${i}" aria-selected="${i===tIdx}" tabindex="${i===tIdx?0:-1}" aria-label="${esc(x.host)}${n?`, ${n} need a look`:''}"><span class="h">${esc(x.host)}</span>${n?`<span class="cnt">${svg('warn')}${n}</span>`:''}</button>`;}).join('')}</div>`;
-  }
-  const origins = t.routeAll ? t.routeAll.map(n=>({n, cls:''})) : t.groups.map(g=>({n: g.o==='mac'?g.via:g.o==='cloud'?'R2':g.who, cls: g.gstate==='offline'?'off warn':g.gstate==='paused'?'off':''}));
-  if (origins.length > 1) h += `<div class="route" aria-label="Route: ${esc(t.host)} is served by ${origins.map(o=>o.n).join(', ')}"><span class="host">${esc(t.host)}</span><span class="arw" aria-hidden="true">▸</span>${origins.map((o,i)=>`<span class="o ${o.cls}">${esc(o.n)}</span>${i<origins.length-1?'<span class="arw" aria-hidden="true">·</span>':''}`).join('')}<span class="role">${esc(t.role)}</span></div>`;
-  h += `<div class="scroll" id="scroll">`;
-  t.groups.forEach((g, gi) => {
-    h += `<div class="grp" id="g-${gi}">${om(g.o)}<span>${esc(g.who)}</span><span class="via">→ ${esc(g.via)}</span>${g.gstate?chip(LS,g.gstate):''}</div>`;
-    g.rows.forEach(r => {
-      const st = r.state ? LS[r.state] : null, inherited = g.gstate && r.state===g.gstate;
-      const cls = ['row', st&&st.dim?'dim':'', st&&st.struck?'struck':'', flashId===r.id?'flash':''].join(' ');
-      const where = g.o==='mac' ? 'on this Mac' : g.o==='cloud' ? 'in the cloud' : `on ${g.via}`;
-      const life = r.exp==='' ? (r.state?'':'never expires') : r.exp==='live' ? 'live server' : `${r.exp} left`;
-      const voice = [r.n, where, st?st.w:'answers', life].filter(Boolean).join(', ');
-      const trail = r.state==='publishing' ? `<span class="prog" aria-hidden="true"><i style="width:60%"></i></span>` : `<span class="tr">${esc(r.exp)}</span>`;
-      h += `<div class="${cls}" role="button" tabindex="0" id="r-${r.id}" data-id="${r.id}" data-dim="${st&&st.dim?g.via:''}" data-url="${esc(t.host)}/${r.id}/${esc(r.n)}" aria-label="${esc(voice)}" aria-keyshortcuts="Enter Delete">${svg(r.t,'tg')}<span class="nm">${esc(r.n)}</span>${st&&!inherited?chip(LS,r.state):''}${trail}<button class="ib copy" tabindex="-1" aria-hidden="true">${svg('copy')}</button></div>`;
-    });
+/* "need a look": derived from the state machines, never stored */
+function issues(){
+  const out=[], ts=TEN[cur];
+  ts.forEach((t,i)=>{
+    if (t.op) out.push({i:'redo',t:`${t.op.verb} stopped at step ${t.op.step} of ${t.op.of} (${t.op.name})`,s:t.h,act:'Resume',fn:()=>resumeOp(i)});
+    if (t.phase==='failed') out.push({i:'stop',t:`This Mac stopped serving ${t.h}`,s:t.reason,act:'Start',fn:()=>startServe(i)});
+    if (/expires in [0-9]d/.test(t.token)) out.push({i:'key',t:'Your key expires in 6 days',s:t.h+': ask the admin to renew it',act:'Copy request',fn:()=>toast('Copied a renew request for your admin.')});
   });
-  if (t.members && t.members.length){
-    const open = membersOpen;
-    const info = t.members.filter(m=>m.st==='invited').length;
-    h += `<button class="mhead" id="mhead" aria-expanded="${open}">${svg('chev')}<span>Members</span><span class="sum">${t.members.length}${info?`, ${info} invited`:''}${t.removed?`, ${t.removed} removed`:''}</span><span class="btn" id="invite" role="button" tabindex="0">Invite…</span></button>`;
-    if (open){
-      t.members.forEach(m => {
-        h += `<div class="mrow" id="m-${m.ini}">${om(m.ini)}<span class="mn">${esc(m.n)}<small>${esc(m.sub)}</small></span>${m.st?chip(MS,m.st):''}${m.pres?`<span class="pres ${m.pres}" role="img" aria-label="${m.pres==='on'?'online':'offline'}"></span>`:''}<span class="tr">${m.links}</span><button class="ib kbtn" id="k-${m.ini}" data-m="${m.ini}" aria-label="Actions for ${esc(m.n)}" aria-haspopup="menu" aria-expanded="${kmenu===m.ini}">${svg('more')}</button>${kmenu===m.ini?kmenuHTML(m):''}</div>`;
-      });
-    }
+  if (cur==='admin'){
+    const m = n => MEMBERS.find(x=>x.n===n);
+    if (m('An') && m('An').pres==='off' && m('An').st!=='removed') out.push({i:'moon',t:"An's MacBook is offline",s:'2 links answer 503 until it is back',act:'Open',fn:()=>openMember('An')});
+    if (m('Dũng') && m('Dũng').st==='paused') out.push({i:'pause',t:'Dũng is paused',s:'1 link answers 503',act:'Resume',fn:()=>memberVerb('Dũng','resume')});
+    if (m('Hà') && m('Hà').st==='left') out.push({i:'exit',t:'Hà left',s:'remove to close the tunnel and token',act:'Remove',fn:()=>memberVerb('Hà','rm')});
+    if (m('Minh') && m('Minh').st==='pausing') out.push({i:'redo',t:'Pausing Minh stopped at step 2',s:'the lease is stale since 14:02',act:'Finish',fn:()=>memberVerb('Minh','finish')});
   }
-  if (dragging){
-    const where = t.memberView ? "on this Mac (An's MacBook)" : 'on this Mac (Mini)';
-    h += `<div class="droplay" role="status">${svg('drop')}<b>Release to share on ${esc(t.host)}</b><small>Stored ${esc(where)}. Up to 500 files, 300 MB each.</small></div>`;
-  }
-  h += `</div>`;
-  if (toastMsg) h += `<div class="toast" id="toast"><span class="tt">${esc(toastMsg)}</span>${toastUndo?'<button id="undo">Undo</button>':''}</div>`;
-  pop.innerHTML = h;
-  document.getElementById('sbcount').textContent = total ? String(total) : '';
-  document.getElementById('sbicon').setAttribute('aria-label', total ? `Share Bar, ${total} need a look` : 'Share Bar, all links answer');
-  bind();
-  if (focusId){ const el = document.getElementById(focusId); if (el) el.focus(); }
+  return out;
 }
-function kmenuHTML(m){
-  return `<div class="kmenu" role="menu" aria-label="Actions for ${esc(m.n)}"><button role="menuitem" tabindex="-1">${m.st==='paused'?'Resume':'Pause'}</button><button role="menuitem" tabindex="-1">Rotate keys…</button><button role="menuitem" tabindex="-1">Copy a new invite code</button><hr><button role="menuitem" tabindex="-1" class="danger">Remove ${esc(m.n)}…</button></div>`;
+
+/* ---------- popover ---------- */
+function renderPop(){
+  const ts=TEN[cur], links=SCN_LINKS[cur];
+  const keep=document.activeElement && pop.contains(document.activeElement) ? document.activeElement.id : null;
+  let h='';
+  const iss = issues();
+  if (!ts.length){
+    h+=`<div class="ph"><b style="flex:1;padding:3px 6px;font:600 var(--fs-title) var(--sys)">Share Bar</b><button class="ib" id="gearbtn" aria-label="Settings">${svg('gear')}</button></div>
+      <div class="first"><p>Share files from your Mac at a link on a hostname you or your team own.</p>
+      <button class="btn prim" id="fr-join">Join a team with a code…</button><button class="btn" id="fr-setup">Set up my own hostname…</button></div>`;
+  } else if (view==='issues'){
+    h+=`<div class="back"><button class="ib" id="backbtn" aria-label="Back to links">${svg('chevl')}</button><b>Needs a look</b></div><div class="list" style="padding-top:6px">`;
+    if (!iss.length) h+=`<div class="empty">Nothing needs a look.</div>`;
+    iss.forEach((x,i)=>{ h+=`<div class="irow">${svg(x.i,'g')}<span class="tx">${esc(x.t)}<small>${esc(x.s)}</small></span><button class="btn" id="ia-${i}">${esc(x.act)}</button></div>`; });
+    h+=`</div>`;
+  } else {
+    const t=ts[Math.min(tIdx,ts.length-1)];
+    h+=`<div class="ph"><button class="tenant" id="tenantbtn" aria-haspopup="menu" aria-expanded="${tmenu}"><span>${esc(t.h)}</span>${ts.length>1?svg('chevd'):''}</button><button class="ib" id="addbtn" aria-label="Share a file">${svg('plus')}</button><button class="ib" id="gearbtn" aria-label="Settings">${svg('gear')}</button></div>`;
+    if (tmenu) h+=`<div class="tmenu" role="menu">${ts.map((x,i)=>`<button role="menuitem" id="tm-${i}"><span class="ck">${i===tIdx?svg('check'):''}</span>${esc(x.h)}<span class="tm">${x.role}</span></button>`).join('')}<hr><button role="menuitem" id="tm-manage"><span class="ck"></span>Manage tenants…</button></div>`;
+    h+=`<div class="search">${svg('search')}<input id="q" placeholder="Search links" value="${esc(q)}" aria-label="Search links"></div>`;
+    const showScope = links.some(l=>l.who!=='You');
+    if (showScope) h+=`<div class="scope" role="group" aria-label="Whose links"><button id="sc-mine" aria-pressed="${scope==='mine'}">Mine</button><button id="sc-team" aria-pressed="${scope==='team'}">Team</button></div>`;
+    let rows = links.filter(l => (scope==='team' || !showScope) ? true : l.who==='You');
+    if (q) rows = rows.filter(l => (l.n+' '+l.who).toLowerCase().includes(q.toLowerCase()));
+    const total=rows.length; rows=rows.slice(0,8);
+    h+=`<div class="list" role="list">`;
+    if (!rows.length) h+=`<div class="empty">${q?`No links match "${esc(q)}".`:'No links yet. Drop a file on the menu bar icon to share it.'}</div>`;
+    rows.forEach(l=>{
+      const st=l.state||null;
+      const word = st==='offline'?'offline':st==='paused'?'paused':st==='expired'?'expired':st==='revoked'?'removed by admin':null;
+      const meta = [scope==='team'&&showScope ? l.who : null, l.where, word || (l.exp==='never'?null:l.exp==='live'?'live server':l.exp+' left')].filter(Boolean).join(' · ');
+      h+=`<div class="row ${st?'dim':''} ${flashId===l.id?'flash':''}" role="listitem" tabindex="0" id="r-${l.id}" data-id="${l.id}" aria-label="${esc(l.n+', '+meta)}"><span class="ti">${svg(l.t)}</span><span class="tx"><span class="nm">${esc(l.n)}</span><span class="mt">${esc(meta)}</span></span><span class="mt" style="flex:none;font-size:11px;color:var(--label-3)">${esc(l.ago)}</span><button class="ib copy" tabindex="-1" aria-hidden="true">${svg('copy')}</button></div>`;
+    });
+    if (total>8) h+=`<button class="more" id="showall">Show all ${total} links…</button>`;
+    h+=`</div><div class="pf">`;
+    h+= iss.length ? `<button class="issue" id="issuebtn">${svg('warn')}${iss.length} need a look</button>` : `<span class="ok"><i></i>All links answer</span>`;
+    h+=`<span class="sp"></span><span class="hint">Right-click a link for more</span></div>`;
+    if (ctx) h+=ctxHTML(ctx);
+  }
+  if (dragging && ts.length){ const t=ts[tIdx]; h+=`<div class="drag" role="status">${svg('drop')}<b>Release to share on ${esc(t.h)}</b><small>Stored on ${esc(t.from.replace(' (this Mac)',''))}. Copies the link when done.</small></div>`; }
+  if (toastMsg) h+=`<div class="toast" id="toast"><span>${esc(toastMsg)}</span>${toastUndo?'<button id="undo">Undo</button>':''}</div>`;
+  pop.innerHTML=h;
+  document.getElementById('sbdot').hidden = !iss.length;
+  document.getElementById('sbicon').setAttribute('aria-label', iss.length ? `Share Bar, ${iss.length} need a look` : 'Share Bar');
+  bindPop(iss);
+  if (keep){ const el=document.getElementById(keep); if (el){ el.focus(); if (keep==='q') el.setSelectionRange(q.length,q.length); } }
+}
+function linkById(id){ return SCN_LINKS[cur].find(l=>l.id===id); }
+function ctxHTML(c){
+  const l=linkById(c.id), own=l.who==='You', dead=l.state==='expired'||l.state==='revoked';
+  const items=[];
+  if (!dead) items.push(['copy','Copy link']);
+  if (!dead) items.push(['open','Open in browser']);
+  if (own && l.where==='this Mac') items.push(['finder','Show in Finder']);
+  if (own && l.where!=='cloud' || own && l.where==='cloud') items.push(['refresh','Refresh from source']);
+  items.push(['sep']);
+  if (own) items.push(['rm','Remove link…']);
+  else if (cur==='admin') items.push(['revoke','Revoke link…']);
+  return `<div class="ctx" role="menu" style="top:${c.y}px">${items.map(([k,lab])=>k==='sep'?'<hr>':`<button role="menuitem" data-k="${k}" class="${k==='rm'||k==='revoke'?'danger':''}">${lab}</button>`).join('')}</div>`;
 }
 function toast(msg, undo){
-  toastMsg = msg; toastUndo = !!undo; render();
-  document.getElementById('live').textContent = undo ? msg + ' Press Command Z to undo.' : msg;
+  toastMsg=msg; toastUndo=!!undo; renderPop(); clearTimeout(toastT);
   if (undo) document.getElementById('undo')?.focus();
-  clearTimeout(toastT);
-  const arm = () => { toastT = setTimeout(()=>{ toastMsg=null; render(); }, undo?6000:3000); };
-  if (!document.getElementById('toast')?.contains(document.activeElement)) arm();
-  const el = document.getElementById('toast');
-  if (el){ el.onmouseenter = el.onfocusin = () => clearTimeout(toastT); el.onmouseleave = el.onfocusout = arm; }
+  toastT=setTimeout(()=>{ if (!document.getElementById('toast')?.contains(document.activeElement)){ toastMsg=null; renderPop(); } }, undo?6000:3500);
 }
-function copyRow(r){
-  flashId = r.dataset.id; const via = r.dataset.dim;
-  toast(via ? `Copied. ${via} is offline: visitors get a 503 until it is back.` : `Copied ${r.dataset.url}`);
-  setTimeout(()=>{ flashId=null; render(); }, 1200);
+function copyRow(id){
+  const l=linkById(id);
+  if (l.state==='expired'){ toast('This link expired, so it no longer answers. Share the file again for a new link.'); return; }
+  if (l.state==='revoked'){ toast('This link was removed by an admin.'); return; }
+  flashId=id; toast(l.state==='offline'?`Copied. ${l.where} is offline: visitors get a 503 until it is back.`:l.state==='paused'?'Copied. This member is paused: visitors get a 503.':'Copied the link to '+l.n+'.');
+  setTimeout(()=>{ flashId=null; renderPop(); },1200);
 }
-function bind(){
-  pop.querySelectorAll('[role=tab]').forEach(b => {
-    b.onclick = () => { tIdx = +b.id.split('-')[1]; kmenu=null; membersOpen=false; render(); document.getElementById('tab-'+tIdx)?.focus(); };
-    b.onkeydown = e => { if (e.key!=='ArrowRight' && e.key!=='ArrowLeft') return; e.preventDefault(); const n = pop.querySelectorAll('[role=tab]').length; tIdx = (tIdx + (e.key==='ArrowRight'?1:-1) + n) % n; kmenu=null; render(); document.getElementById('tab-'+tIdx)?.focus(); };
-  });
-  pop.querySelectorAll('.row').forEach(r => {
-    r.onclick = () => copyRow(r);
-    r.onkeydown = e => {
-      if (e.key==='Enter'){ e.preventDefault(); copyRow(r); }
-      if (e.key==='Backspace' || e.key==='Delete'){ e.preventDefault(); toast('Removed ' + r.querySelector('.nm').textContent + '. The link stops answering.', true); }
-      if (e.key==='ArrowDown' || e.key==='ArrowUp'){ e.preventDefault(); const rows=[...pop.querySelectorAll('.row')]; const i=rows.indexOf(r); rows[Math.max(0,Math.min(rows.length-1,i+(e.key==='ArrowDown'?1:-1)))].focus(); }
+function bindPop(iss){
+  const on=(id,f)=>{ const el=document.getElementById(id); if (el) el.onclick=f; };
+  const ts=TEN[cur];
+  on('tenantbtn',()=>{ if (ts.length>1){ tmenu=!tmenu; renderPop(); document.getElementById('tm-0')?.focus(); } });
+  ts.forEach((x,i)=>on('tm-'+i,()=>{ tIdx=i; tmenu=false; renderPop(); }));
+  on('tm-manage',()=>{ tmenu=false; tab='tenants'; selTenant=tIdx; renderPop(); renderWin(); });
+  on('gearbtn',()=>{ tab='general'; renderWin(); });
+  on('addbtn',()=>toast('Choose a file to share, or drop one on the menu bar icon.'));
+  on('fr-join',()=>{ tab='tenants'; renderWin(); openSheet({kind:'add',path:'join'}); });
+  on('fr-setup',()=>{ tab='tenants'; renderWin(); openSheet({kind:'add',path:'setup'}); });
+  on('sc-mine',()=>{ scope='mine'; renderPop(); });
+  on('sc-team',()=>{ scope='team'; renderPop(); });
+  on('issuebtn',()=>{ view='issues'; renderPop(); document.getElementById('backbtn')?.focus(); });
+  on('backbtn',()=>{ view='list'; renderPop(); document.getElementById('issuebtn')?.focus(); });
+  on('showall',()=>toast('Opens all links in a window, with the same search.'));
+  (iss||[]).forEach((x,i)=>on('ia-'+i,()=>{ x.fn(); renderPop(); }));
+  const qi=document.getElementById('q'); if (qi) qi.oninput=e=>{ q=e.target.value; renderPop(); };
+  pop.querySelectorAll('.row').forEach(r=>{
+    r.onclick=()=>copyRow(r.dataset.id);
+    r.oncontextmenu=e=>{ e.preventDefault(); ctx={id:r.dataset.id,y:r.offsetTop+r.offsetHeight-4+ (pop.querySelector('.list')?.offsetTop||0) - (pop.querySelector('.list')?.scrollTop||0)}; renderPop(); pop.querySelector('.ctx button')?.focus(); };
+    r.onkeydown=e=>{
+      if (e.key==='Enter'){ e.preventDefault(); copyRow(r.dataset.id); }
+      if (e.key==='ContextMenu' || (e.shiftKey && e.key==='F10')){ e.preventDefault(); r.oncontextmenu(e); }
+      if (e.key==='Backspace'||e.key==='Delete'){ e.preventDefault(); const l=linkById(r.dataset.id); toast(l.who==='You'?'Removed '+l.n+'. The link stops answering.':'Revoked '+l.n+'. The file stays on '+l.where+'.', true); }
+      if (e.key==='ArrowDown'||e.key==='ArrowUp'){ e.preventDefault(); const rs=[...pop.querySelectorAll('.row')]; const i=rs.indexOf(r); rs[Math.max(0,Math.min(rs.length-1,i+(e.key==='ArrowDown'?1:-1)))].focus(); }
     };
   });
-  pop.querySelectorAll('.srow').forEach(s => s.onclick = () => {
-    const go = s.dataset.go; if (go){ const el = document.getElementById(go); el?.scrollIntoView({block:'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'}); el?.nextElementSibling?.focus(); return; }
-    const act = s.querySelector('.btn').textContent; toast(act==='Remove' ? 'Removing Hà: tunnel, token and VPC Service go; the record stays for audit.' : 'Resumed Dũng: the link answers again.', act==='Remove');
+  pop.querySelectorAll('.ctx button').forEach((b,i,all)=>{
+    b.onkeydown=e=>{ if(e.key==='ArrowDown'){e.preventDefault();all[(i+1)%all.length].focus();} if(e.key==='ArrowUp'){e.preventDefault();all[(i-1+all.length)%all.length].focus();} if(e.key==='Escape'){e.preventDefault();const id=ctx.id;ctx=null;renderPop();document.getElementById('r-'+id)?.focus();} };
+    b.onclick=()=>{ const id=ctx.id, l=linkById(id); ctx=null; renderPop(); const k=b.dataset.k;
+      if (k==='copy') copyRow(id);
+      else if (k==='open') toast('Opens '+l.n+' in your browser.');
+      else if (k==='finder') toast('Shows the copy under ~/share/pub in Finder.');
+      else if (k==='refresh') toast('Re-copied '+l.n+' from its source. Same link.');
+      else if (k==='rm') toast('Removed '+l.n+'. The link stops answering.', true);
+      else if (k==='revoke') toast('Revoked '+l.n+'. It stops answering now; the file stays on '+l.where+'.', true);
+    };
   });
-  const mh = document.getElementById('mhead');
-  if (mh) mh.onclick = e => { if (e.target.id==='invite'){ toast('Invite code copied. Send it to the new member: it works once, for 7 days.'); return; } membersOpen = !membersOpen; render(); };
-  const inv = document.getElementById('invite'); if (inv) inv.onkeydown = e => { if (e.key==='Enter'||e.key===' '){ e.preventDefault(); e.stopPropagation(); toast('Invite code copied. Send it to the new member: it works once, for 7 days.'); } };
-  pop.querySelectorAll('.kbtn').forEach(b => b.onclick = e => { e.stopPropagation(); kmenu = kmenu===b.dataset.m ? null : b.dataset.m; render(); pop.querySelector('.kmenu [role=menuitem]')?.focus(); });
-  const menu = pop.querySelector('.kmenu');
-  if (menu){
-    const items = [...menu.querySelectorAll('[role=menuitem]')];
-    items.forEach((it, i) => {
-      it.onkeydown = e => {
-        if (e.key==='ArrowDown'){ e.preventDefault(); items[(i+1)%items.length].focus(); }
-        if (e.key==='ArrowUp'){ e.preventDefault(); items[(i-1+items.length)%items.length].focus(); }
-        if (e.key==='Escape'){ e.preventDefault(); const k=kmenu; kmenu=null; render(); document.getElementById('k-'+k)?.focus(); }
-      };
-      it.onclick = e => { e.stopPropagation(); const label = it.textContent.replace('…',''); kmenu=null; render(); toast(label.startsWith('Remove') ? `${label}: their links stop answering now.` : `${label}: done.`, label.startsWith('Remove')); };
-    });
+  on('undo',()=>toast('Undone. Nothing changed.'));
+}
+
+/* ---------- step runner (D3 journal, made visible) ---------- */
+const STEPS = {
+  join:['redeem: checking the code','record: telling the team you are joining','store: saving your keys in Keychain','serve: starting the server on this Mac','probe: checking a test link','done'],
+  setup:['zone: finding the zone','tunnel: creating the tunnel','dns: adding the DNS record','token: storing the tunnel key','service: starting the server','live: checking the hostname'],
+  r2:['checks: proving the admin token','bucket','marker','worker: deploying the Worker','workers.dev off','pointers for existing links','config','route','health: three good answers'],
+  members:['checks: scopes and Workers VPC','worker: deploying Worker v5','marker: members on','config: members=on'],
+  resume:['route: attaching the route','alias: none','health: three good answers','done']
+};
+function runSteps(title, key, from, done, cancelLabel){
+  const steps=STEPS[key]; let i=from||0;
+  sheet={kind:'progress',title,steps,i,key,cancelLabel:cancelLabel||'Stop'};
+  renderWin();
+  clearInterval(runner);
+  runner=setInterval(()=>{ i++; if (i>=steps.length){ clearInterval(runner); runner=null; sheet=null; done(); renderWin(); renderPop(); return; } sheet.i=i; renderWin(); }, 650);
+}
+function stopRun(onStop){ clearInterval(runner); runner=null; const at=sheet.i; sheet=null; onStop(at); renderWin(); renderPop(); }
+
+/* ---------- tenant actions ---------- */
+const PHASE = {serving:'Serving', starting:'Starting', stopped:'Stopped', failed:'Stopped', tunnel_down:'Tunnel not connected'};
+function startServe(i){ const t=TEN[cur][i]; t.phase='starting'; t.reason=''; renderWin(); renderPop(); setTimeout(()=>{ t.phase='serving'; renderWin(); renderPop(); toast(t.h+' is serving from this Mac.'); },1400); }
+function resumeOp(i){ const t=TEN[cur][i]; tab='tenants'; selTenant=i; runSteps(`Resuming ${t.op.verb} on ${t.h}`,'resume',0,()=>{ t.op=null; toast(t.h+': cloud storage is on.'); }); }
+function openMember(n){ tab='members'; selMember=n; renderWin(); }
+function openSheet(s){ sheet=s; renderWin(); setTimeout(()=>win.querySelector('.sheet input, .sheet button')?.focus(),0); }
+
+/* ---------- member actions (D8) ---------- */
+function memberVerb(n, v){
+  const m=MEMBERS.find(x=>x.n===n); tab='members'; selMember=n;
+  const st=m.st;
+  if (v==='invite' || v==='rotate'){ openSheet({kind:'code',member:n,rotate:v==='rotate'}); if (v==='rotate'){ m.prev=st; m.st='invited'; m.seen='new code, expires in 7d'; } else { m.st='invited'; m.seen='code expires in 7d'; } return; }
+  if (v==='pause'){ openSheet({kind:'confirm',title:`Pause ${n}?`,body:`${n}'s links on their machine answer 503 until you resume. Cloud links keep working. ${n} cannot add links while paused.`,ok:'Pause',fn:()=>{ m.st='paused'; toast(n+' is paused.'); }}); return; }
+  if (v==='resume'){ m.st='active'; toast(n+' is active again; their links answer.'); }
+  if (v==='renew'){ openSheet({kind:'confirm',title:`Renew ${n}'s key`,body:'Extends the key by 90 days. Nothing changes on their machine.',ok:'Renew',fn:()=>toast(n+"'s key now expires in 90 days.")}); return; }
+  if (v==='rm'){ openSheet({kind:'remove-member',member:n}); return; }
+  if (v==='purge'){ MEMBERS=MEMBERS.filter(x=>x.n!==n); selMember=MEMBERS[0].n; toast(n+"'s record is deleted. The name can be used again."); }
+  if (v==='finish'){ m.st=st==='pausing'?'paused':st==='resuming'?'active':st==='rotating'?'invited':'removed'; delete m.step; delete m.stale; toast('Finished: '+n+' is '+m.st+'.'); }
+  renderWin(); renderPop();
+}
+
+/* ---------- settings window ---------- */
+const TABS=[['general','General','sliders'],['tenants','Tenants','globe'],['members','Members','people'],['advanced','Advanced','wrench']];
+function tenantButtons(t){
+  const b=[];
+  if (t.op) { b.push(['resume','Resume','prim']); b.push(['rollback','Roll back','']); }
+  if (t.phase==='stopped'||t.phase==='failed') b.push(['start','Start serving', t.op?'':'prim']);
+  if (t.phase==='serving'||t.phase==='starting'||t.phase==='tunnel_down') b.push(['stop','Stop serving','']);
+  if ((t.role==='Owner'||t.role==='Admin') && t.tier==='T0' && !t.op) b.push(['r2','Turn on cloud storage…','']);
+  if (t.role==='Admin' && t.tier==='T1' && !t.op) b.push(['members','Turn on members…','']);
+  if (t.role==='Member') b.push(['renewreq','Ask to renew key','']);
+  b.push(['openb','Open in browser','']);
+  return b;
+}
+function renderWin(){
+  const ts=TEN[cur];
+  const tabs = TABS.filter(x=> x[0]!=='members' || isAdmin());
+  if (!tabs.find(x=>x[0]===tab)) tab='general';
+  const keep=document.activeElement && win.contains(document.activeElement) ? document.activeElement.id : null;
+  let h=`<div class="tb"><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><div class="wtitle">${esc(tabs.find(x=>x[0]===tab)[1])}</div>${tabs.map(x=>`<button class="tab" role="tab" id="tab-${x[0]}" aria-selected="${tab===x[0]}">${svg(x[2])}${x[1]}</button>`).join('')}</div><div class="pane">`;
+  if (tab==='general'){
+    h+=`<div class="form">
+      <div class="lab">Startup</div><div class="ctl"><label><input type="checkbox" id="g-login" checked> Open Share Bar at login</label></div>
+      <div class="lab">Menu shows</div><div class="ctl"><select id="g-scope"><option>My links</option><option>Team links</option></select><small>You can switch in the menu at any time.</small></div>
+      <div class="lab">Recent links</div><div class="ctl"><select id="g-count"><option>8</option><option>5</option><option>12</option></select></div>
+      <div class="hr"></div>
+      <div class="lab">New links expire</div><div class="ctl"><select id="g-exp"><option>after 7 days</option><option>after 1 day</option><option>after 30 days</option><option>never</option></select><small>Saved as ttl= in the share config, so the command line uses it too.</small></div>
+      <div class="lab">Store new links</div><div class="ctl"><label><input type="radio" name="st" id="g-st1" checked> On this Mac</label><label><input type="radio" name="st" id="g-st2"> In the cloud</label><small>Cloud links answer while this Mac sleeps. Only on tenants with cloud storage.</small></div>
+      <div class="lab">After sharing</div><div class="ctl"><label><input type="checkbox" id="g-copy" checked> Copy the link</label><label><input type="checkbox" id="g-notify" checked> Show a notification</label></div>
+      <div class="hr"></div>
+      <div class="lab">Notify me when</div><div class="ctl"><label><input type="checkbox" id="g-n1" checked> A machine serving my links goes offline</label><label><input type="checkbox" id="g-n2"> A link is about to expire</label>${isAdmin()?'<label><input type="checkbox" id="g-n3" checked> A member needs a look</label>':''}</div>
+      <div class="lab">Shortcut</div><div class="ctl"><span class="btn mono" style="width:max-content">⌃⌥S</span><small>Opens the menu from anywhere.</small></div>
+    </div>`;
+  } else if (tab==='tenants'){
+    if (!ts.length){
+      h+=`<div class="empty" style="padding:40px 20px">No tenants yet.<br><br><button class="btn prim" id="t-add">Add a tenant…</button></div>`;
+    } else {
+      if (selTenant>=ts.length) selTenant=0;
+      const t=ts[selTenant];
+      h+=`<div class="tsplit"><div><div class="tblwrap"><table class="tbl"><thead><tr><th>Hostname</th><th>Role</th></tr></thead><tbody>${ts.map((x,i)=>`<tr class="${i===selTenant?'sel':''}" id="tr-${i}" tabindex="0"><td class="mono">${esc(x.h)}${(x.op||x.phase==='failed')?` <span class="chip attention">${svg('warn')}</span>`:''}</td><td>${esc(x.role)}</td></tr>`).join('')}</tbody></table></div>
+        <div class="pm"><button class="btn" id="t-add" aria-label="Add a tenant">＋ Add</button><button class="btn" id="t-rm" aria-label="Remove ${esc(t.h)}">－ Remove</button></div></div>`;
+      const storage = t.tier==='T0'?'This Mac only':'This Mac and the cloud';
+      const status = t.phase==='failed' ? `Stopped: ${t.reason}` : PHASE[t.phase];
+      h+=`<div class="detail"><h4 class="mono">${esc(t.h)}</h4><dl>
+        <dt>Your role</dt><dd>${esc(t.role)}</dd>
+        <dt>Storage</dt><dd>${storage}</dd>
+        ${t.role!=='Member'?`<dt>Members</dt><dd>${t.tier==='T2'?'On':'Off'}</dd>`:''}
+        <dt>Served from</dt><dd>${esc(t.from)}</dd>
+        <dt>Status</dt><dd>${t.phase==='serving'?'<span class="pres on"></span>':t.phase==='starting'?'<span class="spin" aria-hidden="true"></span>':'<span class="pres off"></span>'}${esc(status)}</dd>
+        <dt>Key</dt><dd>${esc(t.token)}</dd>
+        ${t.op?`<dt>Interrupted</dt><dd class="att">${esc(t.op.verb)} stopped at step ${t.op.step} of ${t.op.of} (${esc(t.op.name)})</dd>`:''}
+      </dl><div class="pm">${tenantButtons(t).map(([k,l,c])=>`<button class="btn ${c}" id="tb-${k}">${l}</button>`).join('')}</div></div></div>`;
+    }
+  } else if (tab==='members'){
+    const ms = MEMBERS.filter(m=>!mfilter || m.n.toLowerCase().includes(mfilter.toLowerCase()));
+    const sel = MEMBERS.find(m=>m.n===selMember) || MEMBERS[0];
+    const stchip = m => m.st==='invited'?`<span class="chip info">Invited</span>`:m.st==='paused'?`<span class="chip quiet">Paused</span>`:m.st==='left'?`<span class="chip attention">Left</span>`:m.st==='removed'?`<span class="chip quiet">Removed</span>`:/ing$/.test(m.st)?`<span class="chip attention">${m.st[0].toUpperCase()+m.st.slice(1)}${m.stale?', stopped':''}</span>`:'';
+    const can = CAN[sel.st]||[];
+    const btn = (v,l,cls='') => { const ok=can.includes(v); return `<button class="btn ${cls}" id="m-${v}" ${ok?'':'disabled'} title="${ok?'':esc(WHY[v]||'')}">${l}</button>`; };
+    h+=`<div class="filter"><input class="tf" style="font-family:var(--sys)" id="mf" placeholder="Search ${MEMBERS.length} members" value="${esc(mfilter)}" aria-label="Search members"><span style="color:var(--label-2);font-size:12px">${MEMBERS.filter(m=>m.pres==='on').length} online</span><span class="sp" style="flex:1"></span><button class="btn prim" id="m-new">Invite…</button></div>
+      <div class="tblwrap"><table class="tbl"><thead><tr><th>Name</th><th>Status</th><th>Machine</th><th>Links</th></tr></thead><tbody>${ms.map(m=>`<tr class="${m.n===sel.n?'sel':''}" id="mr-${m.n}" tabindex="0"><td>${m.pres?`<span class="pres ${m.pres}" role="img" aria-label="${m.pres==='on'?'online':'offline'}"></span>`:'<span class="pres" style="visibility:hidden"></span>'}${esc(m.n)}</td><td>${stchip(m)} <span style="color:var(--label-2);font-size:11px">${esc(m.step||m.seen)}</span></td><td>${esc(m.mach)}</td><td>${m.links}</td></tr>`).join('')}</tbody></table></div>
+      <div class="pm"><span style="font-size:12px;color:var(--label-2)">${esc(sel.n)}:</span>${can.includes('finish')?btn('finish','Finish','prim'):''}${btn('pause','Pause')}${btn('resume','Resume')}${btn('invite','Send a new code')}${btn('rotate','Rotate keys…')}${btn('renew','Renew…')}${sel.st==='removed'?btn('purge','Purge','danger'):btn('rm','Remove…','danger')}</div>
+      <p class="why">${can.length?'':''}Buttons follow the member's status. Hover a dimmed button to see why it is off.</p>`;
+  } else {
+    h+=`<div class="form">
+      <div class="lab">share CLI</div><div class="ctl"><input class="tf" id="a-cli" value="/opt/homebrew/bin/share"><small>Version 0.10.0. Every action runs this command.</small></div>
+      <div class="lab">Admin key</div><div class="ctl"><input class="tf" id="a-admin" value="op read op://Toolkit/cf-console-labs-admin/credential"><small>A command that prints the Cloudflare admin token. Share Bar runs it only for admin actions and never saves the token. Leave empty to be asked each time.</small></div>
+      <div class="lab">Logs</div><div class="ctl"><button class="btn" id="a-logs" style="width:max-content">Show serve log in Finder</button></div>
+      <div class="lab">Menu style</div><div class="ctl"><label><input type="checkbox" id="a-legacy"> Use the classic menu (one release only)</label></div>
+      <div class="lab">Diagnostics</div><div class="ctl"><button class="btn" id="a-copy" style="width:max-content">Copy share state as JSON</button><small>For bug reports and agents.</small></div>
+    </div>`;
   }
-  const sf = document.getElementById('sharefile'); if (sf) sf.onclick = () => toast('Choose a file to share. Or drop one on the popover.');
-  const u = document.getElementById('undo'); if (u){ u.onclick = () => { toast('Undone. Nothing changed.'); }; }
+  h+=`</div>`;
+  if (sheet) h+=sheetHTML();
+  win.innerHTML=h;
+  bindWin(tabs);
+  if (keep){ const el=document.getElementById(keep); if (el){ el.focus(); if (keep==='mf') el.setSelectionRange(mfilter.length,mfilter.length); } }
 }
-function renderScenarios(){
-  const box = document.getElementById('scenarios');
-  box.innerHTML = Object.entries(SCEN).map(([k,s]) => `<button class="opt" aria-pressed="${k===cur}" id="scn-${k}"><b>${esc(s.label)}</b><span>${esc(s.note)}</span></button>`).join('');
-  box.querySelectorAll('.opt').forEach(b => b.onclick = () => { cur = b.id.slice(4); tIdx=0; membersOpen=false; kmenu=null; toastMsg=null; renderScenarios(); render(); document.getElementById(b.id)?.focus(); });
+function sheetHTML(){
+  const s=sheet; let b='';
+  if (s.kind==='add'){
+    b=`<h4>Add a tenant</h4><div class="seg2"><button id="sp-join" aria-pressed="${s.path==='join'}">Join a team</button><button id="sp-setup" aria-pressed="${s.path==='setup'}">Set up a hostname</button></div>`;
+    if (s.path==='join') b+=`<label class="fl">Invite code<input class="tf" id="sh-code" placeholder="SHR-7Q4K-M2XD-9PLA-3VTB"></label><p class="sm">Your admin sends this code. It works once. Joining takes about a minute and sets up this Mac to serve your links.</p><div class="pm"><span class="sp"></span><button class="btn" id="sh-cancel">Cancel</button><button class="btn prim" id="sh-go">Join</button></div>`;
+    else b+=`<label class="fl">Hostname<input class="tf" id="sh-host" placeholder="s.example.com"></label><label class="fl">Cloudflare admin key<select id="sh-tok"><option>Ask me now (not saved)</option><option>Run the admin key command from Advanced</option></select></label><label class="fl chk"><input type="checkbox" id="sh-r2"> Also turn on cloud storage</label><p class="sm">Creates a tunnel and a DNS record in your Cloudflare account. Links are served from this Mac.</p><div class="pm"><span class="sp"></span><button class="btn" id="sh-cancel">Cancel</button><button class="btn prim" id="sh-go">Set up</button></div>`;
+  } else if (s.kind==='progress'){
+    b=`<h4>${esc(s.title)}</h4><ol class="steps">${s.steps.map((x,i)=>`<li class="${i<s.i?'done':i===s.i?'now':''}">${i<s.i?svg('check'):i===s.i?'<span class="spin" aria-hidden="true"></span>':'<span class="dot"></span>'}${esc(x)}</li>`).join('')}</ol><p class="sm" role="status">Step ${s.i+1} of ${s.steps.length}. Stopping keeps your place; Resume continues from this step.</p><div class="pm"><span class="sp"></span><button class="btn" id="sh-stop">${esc(s.cancelLabel)}</button></div>`;
+  } else if (s.kind==='confirm'){
+    b=`<h4>${esc(s.title)}</h4><p class="sm">${esc(s.body)}</p><div class="pm"><span class="sp"></span><button class="btn" id="sh-cancel">Cancel</button><button class="btn ${s.danger?'dangerf':'prim'}" id="sh-ok">${esc(s.ok)}</button></div>`;
+  } else if (s.kind==='remove-tenant'){
+    const t=TEN[cur][selTenant];
+    let body, ok='Remove', refuse=false;
+    if (t.role==='Admin' && t.tier==='T2'){ refuse=true; body=`${t.h} has members. Remove every member first; then this Mac can remove the tenant.`; }
+    else if (t.role==='Member'){ body=`You leave ${t.h}. Your links stop answering and are removed from this Mac. The admin finishes the cloud side.`; ok='Leave'; }
+    else if (t.tier==='T1'){ body=`Deletes the tunnel, the DNS record and this Mac's links. Cloud links keep answering from the bucket until they expire.`; }
+    else body=`Deletes the tunnel, the DNS record and this Mac's ${t.links} links. Visitors get a Cloudflare error.`;
+    b=`<h4>${refuse?"Can't remove "+esc(t.h)+' yet':(ok==='Leave'?'Leave ':'Remove ')+esc(t.h)+'?'}</h4><p class="sm">${esc(body)}</p><div class="pm"><span class="sp"></span><button class="btn" id="sh-cancel">${refuse?'Close':'Cancel'}</button>${refuse?'<button class="btn prim" id="sh-members">Open Members</button>':`<button class="btn dangerf" id="sh-ok">${ok}</button>`}</div>`;
+  } else if (s.kind==='remove-member'){
+    b=`<h4>Remove ${esc(s.member)}?</h4><p class="sm">Their machine links stop answering now. Their tunnel and key are deleted. Their files stay on their machine.</p><label class="fl">Their cloud links<select id="sh-cl"><option>Keep until they expire</option><option>Delete now</option></select></label><div class="pm"><span class="sp"></span><button class="btn" id="sh-cancel">Cancel</button><button class="btn dangerf" id="sh-ok">Remove</button></div>`;
+  } else if (s.kind==='code'){
+    b=`<h4>${s.rotate?'New keys for '+esc(s.member):'Invite code for '+esc(s.member)}</h4><p class="sm">${s.rotate?'Old keys stop working now. Their links keep the same addresses. They join again with this code.':'Send this to '+esc(s.member)+'. It works once, for 7 days.'}</p><div class="code mono">SHR-7Q4K-M2XD-9PLA-3VTB</div><p class="sm">Share Bar shows the code only now. If it is lost, send a new one.</p><div class="pm"><span class="sp"></span><button class="btn" id="sh-copy">Copy code</button><button class="btn prim" id="sh-cancel">Done</button></div>`;
+  } else if (s.kind==='invite'){
+    b=`<h4>Invite a member</h4><label class="fl">Name<input class="tf" id="sh-name" placeholder="e.g. linh"></label><label class="fl">Their links live<select id="sh-mode"><option>On their machine</option><option>In the cloud only</option></select></label><label class="fl">Code works for<select id="sh-ttl"><option>7 days</option><option>1 day</option><option>30 days</option></select></label><div class="pm"><span class="sp"></span><button class="btn" id="sh-cancel">Cancel</button><button class="btn prim" id="sh-go">Create invite</button></div>`;
+  }
+  return `<div class="scrim"></div><div class="sheet" role="dialog" aria-modal="true">${b}</div>`;
 }
-function pageDark(){ const t = document.documentElement.dataset.theme; return t==='dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches); }
-function applyAppearance(){
-  const dark = appearance==='dark' || (appearance==='match' && pageDark());
-  pop.classList.toggle('dark', dark); document.getElementById('desk').classList.toggle('dark-desk', dark);
-  document.querySelectorAll('.statetbl .pop').forEach(p => p.classList.toggle('dark', pageDark()));
+function bindWin(tabs){
+  const on=(id,f)=>{ const el=document.getElementById(id); if (el) el.onclick=f; };
+  tabs.forEach(x=>{ const b=document.getElementById('tab-'+x[0]); b.onclick=()=>{ tab=x[0]; renderWin(); document.getElementById('tab-'+tab)?.focus(); }; b.onkeydown=e=>{ if(e.key!=='ArrowRight'&&e.key!=='ArrowLeft')return; e.preventDefault(); const i=tabs.findIndex(t=>t[0]===tab); tab=tabs[(i+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length][0]; renderWin(); document.getElementById('tab-'+tab)?.focus(); }; });
+  const ts=TEN[cur];
+  win.querySelectorAll('tr[id^=tr-]').forEach(r=>{ const pick=()=>{ selTenant=+r.id.slice(3); renderWin(); document.getElementById(r.id)?.focus(); }; r.onclick=pick; r.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){e.preventDefault();pick();} }; });
+  on('t-add',()=>openSheet({kind:'add',path:isAdmin()||cur==='calm'?'setup':'join'}));
+  on('t-rm',()=>openSheet({kind:'remove-tenant'}));
+  const t=ts[selTenant];
+  on('tb-start',()=>startServe(selTenant));
+  on('tb-stop',()=>openSheet({kind:'confirm',title:`Stop serving ${t.h}?`,body:"Links on this Mac stop answering until you start again. Cloud links and other members' links keep working.",ok:'Stop serving',fn:()=>{ t.phase='stopped'; toast(t.h+' stopped serving from this Mac.'); }}));
+  on('tb-resume',()=>resumeOp(selTenant));
+  on('tb-rollback',()=>openSheet({kind:'confirm',title:'Roll back cloud storage?',body:`Runs "${t.op.rollback}". The route is removed and links serve from this Mac alone again. Nothing in the bucket is deleted.`,ok:'Roll back',fn:()=>{ t.op=null; t.tier='T0'; toast('Rolled back: '+t.h+' serves from this Mac only.'); }}));
+  on('tb-r2',()=>runSteps(`Turning on cloud storage for ${t.h}`,'r2',0,()=>{ t.tier='T1'; toast(t.h+': cloud storage is on.'); }));
+  on('tb-members',()=>runSteps(`Turning on members for ${t.h}`,'members',0,()=>{ t.tier='T2'; toast(t.h+': members are on. Invite people from the Members tab.'); }));
+  on('tb-renewreq',()=>toast('Copied a renew request for your admin.'));
+  on('tb-openb',()=>toast('Opens https://'+t.h+'/ in your browser.'));
+  const mf=document.getElementById('mf'); if (mf) mf.oninput=e=>{ mfilter=e.target.value; renderWin(); };
+  win.querySelectorAll('tr[id^=mr-]').forEach(r=>{ const pick=()=>{ selMember=r.id.slice(3); renderWin(); document.getElementById(r.id)?.focus(); }; r.onclick=pick; r.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){e.preventDefault();pick();} }; });
+  ['finish','pause','resume','invite','rotate','renew','rm','purge'].forEach(v=>on('m-'+v,()=>memberVerb(selMember,v)));
+  on('m-new',()=>openSheet({kind:'invite'}));
+  /* sheet */
+  on('sh-cancel',()=>{ sheet=null; renderWin(); });
+  on('sp-join',()=>{ sheet.path='join'; renderWin(); });
+  on('sp-setup',()=>{ sheet.path='setup'; renderWin(); });
+  on('sh-ok',()=>{ const s=sheet; sheet=null;
+    if (s.kind==='confirm') s.fn();
+    if (s.kind==='remove-tenant'){ const x=TEN[cur][selTenant]; TEN[cur].splice(selTenant,1); selTenant=0; tIdx=0; toast((x.role==='Member'?'Left ':'Removed ')+x.h+'.'); }
+    if (s.kind==='remove-member'){ const m=MEMBERS.find(y=>y.n===s.member); m.st='removed'; m.pres=null; m.seen='removed just now'; toast(s.member+' is removed. Their machine links stopped answering.'); }
+    renderWin(); renderPop(); });
+  on('sh-members',()=>{ sheet=null; tab='members'; renderWin(); });
+  on('sh-copy',()=>toast('Invite code copied.'));
+  on('sh-go',()=>{ const s=sheet;
+    if (s.kind==='invite'){ const n=(document.getElementById('sh-name').value||'linh').trim(); MEMBERS.push({n,st:'invited',pres:null,seen:'code expires in 7d',links:0,mach:'none yet'}); selMember=n; sheet={kind:'code',member:n}; renderWin(); return; }
+    if (s.path==='join'){ runSteps('Joining s.console.so','join',0,()=>{ TEN[cur].push({h:'s.console.so',role:'Member',tier:'T2',from:'this Mac',phase:'serving',reason:'',token:'Keychain, expires in 90d',links:0}); selTenant=TEN[cur].length-1; toast('You joined s.console.so.'); }); }
+    else { const host=(document.getElementById('sh-host').value||'s.example.com').trim(); runSteps('Setting up '+host,'setup',0,()=>{ TEN[cur].push({h:host,role:'Owner',tier:'T0',from:'Mini (this Mac)',phase:'serving',reason:'',token:'asks each time',links:0}); selTenant=TEN[cur].length-1; toast(host+' is serving from this Mac.'); }); }
+  });
+  on('sh-stop',()=>{ const key=sheet.key, title=sheet.title;
+    stopRun(at=>{
+      if (key==='join'){ TEN[cur].push({h:'s.console.so',role:'Member',tier:'T2',from:'this Mac',phase:'stopped',reason:'',token:'Keychain',links:0,op:{verb:'join',step:at+1,of:STEPS.join.length,name:STEPS.join[at].split(':')[0],rerun:'share join',rollback:'share leave --local'}}); selTenant=TEN[cur].length-1; }
+      else if (key!=='resume' && key!=='setup'){ const tt=TEN[cur][selTenant]; tt.op={verb:key==='r2'?'setup --r2':'setup --members',step:at+1,of:STEPS[key].length,name:STEPS[key][at].split(':')[0],rerun:'share setup '+tt.h+(key==='r2'?' --r2':' --r2 --members'),rollback:'share setup '+tt.h+' --no-r2'}; }
+      toast('Stopped at step '+(at+1)+'. Resume continues from there.');
+    }); });
+  win.querySelector('.sheet')?.addEventListener('keydown',e=>{ if (e.key==='Escape' && sheet && sheet.kind!=='progress'){ sheet=null; renderWin(); } });
 }
-document.querySelectorAll('#appearance button').forEach(b => b.onclick = () => { appearance = b.dataset.a; document.querySelectorAll('#appearance button').forEach(x => x.setAttribute('aria-pressed', String(x===b))); applyAppearance(); });
-document.getElementById('dragbtn').onclick = e => { dragging = !dragging; e.currentTarget.setAttribute('aria-pressed', String(dragging)); render(); };
-const desk = document.getElementById('desk');
-desk.addEventListener('dragover', e => { e.preventDefault(); if (!dragging){ dragging = true; render(); } });
-desk.addEventListener('dragleave', e => { if (!desk.contains(e.relatedTarget)){ dragging = false; render(); } });
-desk.addEventListener('drop', e => { e.preventDefault(); dragging = false; toast('Sharing ' + (e.dataTransfer.files[0]?.name || 'the file') + ': uploading 1 of 1.'); });
-document.addEventListener('keydown', e => { if ((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='z' && toastUndo && toastMsg){ e.preventDefault(); toast('Undone. Nothing changed.'); } });
-document.addEventListener('click', e => { if (kmenu && !e.target.closest('.kmenu') && !e.target.closest('.kbtn')){ kmenu = null; render(); } });
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyAppearance);
-new MutationObserver(applyAppearance).observe(document.documentElement, {attributes:true, attributeFilter:['data-theme']});
-function fillStates(){
-  const wrap = s => `<span class="pop">${s}</span>`;
-  document.querySelector('#linkstates tbody').innerHTML = [['Answers', '<span style="color:var(--ink-2)">quiet row, no chip</span>', 'The file'], ...Object.entries(LS).map(([k,c]) => [c.w, wrap(chip(LS,k)), esc(c.visitor)])].map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('');
-  document.querySelector('#memberstates tbody').innerHTML = [['Active', 'presence dot: filled online, ring offline', 'Offline counts as needs a look'], ...Object.entries(MS).map(([k,c]) => [c.w, wrap(chip(MS,k)), esc(c.counts)]), ['Removed', 'folded into the members count', 'Purge removes the record']].map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('');
-}
-renderScenarios(); render(); fillStates(); applyAppearance();
+
+/* ---------- page wiring ---------- */
+function pageDark(){ const t=document.documentElement.dataset.theme; return t==='dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches); }
+function applyAppearance(){ const d = appearance==='dark' || (appearance==='match' && pageDark()); pop.classList.toggle('dark',d); win.classList.toggle('dark',d); document.getElementById('desk').classList.toggle('dark-desk',d); }
+document.querySelectorAll('#scn button').forEach(b=>b.onclick=()=>{ cur=b.dataset.s; TEN=mkTenants(); MEMBERS=mkMembers(); tIdx=0; selTenant=0; view='list'; scope='mine'; q=''; tmenu=false; ctx=null; sheet=null; clearInterval(runner); toastMsg=null; tab=cur==='firstrun'?'tenants':'tenants'; document.querySelectorAll('#scn button').forEach(x=>x.setAttribute('aria-pressed',String(x===b))); renderPop(); renderWin(); });
+document.querySelectorAll('#appearance button').forEach(b=>b.onclick=()=>{ appearance=b.dataset.a; document.querySelectorAll('#appearance button').forEach(x=>x.setAttribute('aria-pressed',String(x===b))); applyAppearance(); });
+document.getElementById('dragbtn').onclick=e=>{ dragging=!dragging; e.currentTarget.setAttribute('aria-pressed',String(dragging)); renderPop(); };
+const desk=document.getElementById('desk');
+desk.addEventListener('dragover',e=>{ e.preventDefault(); if(!dragging){dragging=true;renderPop();} });
+desk.addEventListener('dragleave',e=>{ if(!desk.contains(e.relatedTarget)){dragging=false;renderPop();} });
+desk.addEventListener('drop',e=>{ e.preventDefault(); dragging=false; toast('Sharing '+(e.dataTransfer.files[0]?.name||'the file')+'. The link is copied when it is ready.'); });
+document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='z'&&toastUndo&&toastMsg){ e.preventDefault(); toast('Undone. Nothing changed.'); } if(e.key==='Escape'&&(tmenu||ctx)){ tmenu=false; ctx=null; renderPop(); } });
+document.addEventListener('click',e=>{ if((tmenu||ctx) && !e.target.closest('.tmenu') && !e.target.closest('.ctx') && !e.target.closest('#tenantbtn')){ tmenu=false; ctx=null; renderPop(); } });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',applyAppearance);
+new MutationObserver(applyAppearance).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+renderPop(); renderWin(); applyAppearance();
 </script>
