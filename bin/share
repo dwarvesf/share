@@ -3826,7 +3826,7 @@ link_apply() { # appends link_state and reason to every list_out row (G7): revok
   local mpaused="" moffline="" self=""
   if [[ -f $health ]]; then
     IFS=$'\037' read -r mpaused moffline self < <(jq -r --argjson now "$now" '
-      ((.members // {}) | select((.at // 0) > ($now - 86400)) | .list // []) as $l
+      ((.members // {}) as $m | if (($m.at // 0) > ($now - 86400)) then ($m.list // []) else [] end) as $l
       | [([$l[] | select(.paused == true) | .suffix] | join(" ")), ([$l[] | select(.paused != true and (.connectors // 1) == 0) | .suffix] | join(" ")),
          ((.member // {}).status // "")] | join("\u001f")' "$health" 2>/dev/null) || true
   fi
@@ -6251,7 +6251,7 @@ reg_jq_valid='def s: type == "string"; def clean: s and (explode | all(. >= 32 a
   and ((.invite // {}) | type == "object" and ((.hash // "") | s and test("^([0-9a-f]{64})?$")) and ((.expires // 0) | type == "number"))
   and ((.token_unreachable_until // "") | s and test("^[0-9TZ:.-]{0,32}$")) and ((.by // "") | clean)'
 reg_valid() { jq -e --arg id "${2:-}" "$reg_jq_valid" <<<"$1" >/dev/null 2>&1; }   # reg_valid <json> [member_id]
-reg_rec="" reg_etag="" reg_id=""
+reg_rec="" reg_etag="" reg_id="" reg_refuse_code="" reg_refuse_msg=""
 reg_get() { # reg_get <member_id>: reg_rec and reg_etag; 1 when absent; a record failing validation dies record_invalid (never trusted)
   reg_id=$1 reg_rec="" reg_etag=""
   r2_call GET "u/$1.json" || die "reading u/$1.json needs the admin S3 pair"
@@ -6293,7 +6293,8 @@ reg_status() { # reg_status <verb> <actor> <to> [step] [jq over the record]: one
       local ov os ou; ov="$(mb_ing_verb "$cur")"; os="$(jq -r '.step // "?"' <<<"$reg_rec")"; ou="$(jq -r '.updated // "?"' <<<"$reg_rec")"
       die_code member_busy "$(jq -r .name <<<"$reg_rec") is mid-$ov (step $os) since $ou; finish it: share member $ov $(jq -r .name <<<"$reg_rec")" "share member $ov $(jq -r .name <<<"$reg_rec")"
     fi
-    [[ $rc == 0 ]] || die_code member_not_allowed "$(jq -r .name <<<"$reg_rec") is $cur; share member $verb does not run from there; nothing more was changed" "$me member ls"
+    [[ $rc == 0 ]] || { [[ -z $reg_refuse_code ]] || die_code "$reg_refuse_code" "$reg_refuse_msg" "ask the tenant admin"
+      die_code member_not_allowed "$(jq -r .name <<<"$reg_rec") is $cur; share member $verb does not run from there; nothing more was changed" "$me member ls"; }
     new="$(jq -c --arg to "$to" --arg cur "$cur" --arg s "$step" --arg sn "$sname" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg by "$(r2_by)" '
       .status = $to | .updated = $now | .by = $by
       | if ($to | endswith("ing")) then
@@ -7063,6 +7064,7 @@ cmd_join() { # cmd_join [<host> <code>]: the bare form resumes a died join from 
 reg_status_join() { # reg_status_join <to> <step>: the member's own record write: joining at step 3, the final status at step 6; a 412 at step 3 keeps nothing here
   local to=$1 st=$2 rc=0 extra=.
   [[ $to == joining ]] || extra='.joined = (now | strftime("%Y-%m-%dT%H:%M:%SZ")) | del(.invite)'
+  reg_refuse_code=member_changed reg_refuse_msg="the admin changed this member during the join; nothing was kept here"   # the join refusal table (DEC-37)
   ( reg_status join member "$to" "$st" "$extra" ) || rc=$?
   if [[ $rc != 0 ]]; then
     if [[ $to == joining ]]; then join_local_undo; op_done; fi
