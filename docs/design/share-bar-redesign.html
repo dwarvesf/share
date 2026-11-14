@@ -72,7 +72,8 @@ a{color:var(--accent)}
 /* ===== popover ===== */
 .pop{width:340px;max-width:100%;border-radius:12px;background:var(--bg);backdrop-filter:blur(30px) saturate(1.6);-webkit-backdrop-filter:blur(30px) saturate(1.6);box-shadow:0 0 0 .5px rgba(0,0,0,.18),0 18px 50px rgba(0,0,0,.28);overflow:hidden;position:relative;display:flex;flex-direction:column}
 .ph{display:flex;align-items:center;gap:4px;padding:8px 8px 6px 10px}
-.tenant{display:inline-flex;align-items:center;gap:4px;border:0;background:transparent;color:var(--label);font:600 var(--fs-title) var(--sys);padding:3px 6px;border-radius:6px;cursor:pointer;min-width:0;flex:1;justify-content:flex-start}
+.tenant{display:inline-flex;align-items:center;gap:4px;border:0;background:transparent;color:var(--label);font:600 var(--fs-title) var(--sys);padding:3px 6px;border-radius:6px;cursor:pointer;min-width:0;flex:0 1 auto;max-width:calc(100% - 70px);justify-content:flex-start}
+.ph .grow{flex:1}
 .tenant:hover{background:var(--hover)}
 .tenant span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tenant svg{width:10px;height:10px;color:var(--label-2);flex:none}
@@ -101,8 +102,9 @@ a{color:var(--accent)}
 .row .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row .mt{font-size:var(--fs-meta);color:var(--label-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row.dim .nm{color:var(--label-dim)}
-.row .ib.copy{opacity:0}
-.row:hover .ib.copy,.row:focus-visible .ib.copy{opacity:1}
+.row .ib.rmore{visibility:hidden}
+.row:hover .ib.rmore,.row:focus-visible .ib.rmore,.row:focus-within .ib.rmore{visibility:visible}
+.row .ago{flex:none;font-size:11px;color:var(--label-3);min-width:46px;text-align:right}
 .row.flash::after{content:"Copied";position:absolute;right:40px;font:600 var(--fs-meta) var(--sys);color:var(--state-ok);background:var(--bg);padding:0 4px}
 .empty{padding:28px 20px;text-align:center;color:var(--label-2)}
 .more{display:block;margin:2px 16px 4px;font-size:var(--fs-meta);color:var(--label-2);background:none;border:0;cursor:pointer;padding:0}
@@ -280,12 +282,21 @@ select,.tf{font:var(--fs-body) var(--sys);color:var(--label);background:var(--fi
 .kmenu2 button.danger{color:var(--state-error-ink)}
 .kmenu2 button.danger:hover,.kmenu2 button.danger:focus-visible{color:#fff}
 .kmenu2 hr{border:0;border-top:1px solid var(--sep);margin:4px}
+/* r7: footer status, upload row, more button */
+.pf{min-height:40px}
+.fstatus{display:inline-flex;align-items:center;gap:6px;min-width:0;flex:1;padding:4px 6px;color:var(--label)}
+.fstatus svg{width:14px;height:14px;color:var(--state-ok);flex:none}
+.fstatus span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row.up{cursor:default}
+.row.up .nm{color:var(--label)}
+.prog{position:relative;width:44px;height:4px;border-radius:2px;background:var(--hover);overflow:hidden;flex:none;margin-right:8px}
+.prog i{position:absolute;inset:0 auto 0 0;background:var(--state-info);border-radius:2px;transition:width .3s}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 
 <div class="wrap">
   <header>
-    <h1>Share Bar, revision 5: Settings rebuilt</h1>
+    <h1>Share Bar, revision 6: menu polish</h1>
     <p class="lede">The menu shows your recent links and nothing else. Team status, members and machines move to Settings. A single line at the bottom appears only when something needs a hand. Built for a team of ten or more. Revision 5 rebuilds Members and Tenants on the pattern real team tools use (a row menu instead of a button bar, a source list instead of a table) and was checked in 20 screenshotted states, light, dark and narrow. Every button runs its real workflow: open Settings and try Tenants and Members, right-click a link, or pick First run.</p>
   </header>
 
@@ -426,6 +437,7 @@ const IC = {
   more:'<circle cx="3.5" cy="8" r="1.1" fill="currentColor"/><circle cx="8" cy="8" r="1.1" fill="currentColor"/><circle cx="12.5" cy="8" r="1.1" fill="currentColor"/>',
   key:'<circle cx="5" cy="10" r="2.5"/><path d="M7 8.5L13 2.5M11 4.5l1.5 1.5M9.5 6l1.2 1.2"/>', stop:'<rect x="4" y="4" width="8" height="8" rx="1"/>', redo:'<path d="M12.5 6.5A5 5 0 1 0 13 9"/><path d="M13 3v3.5H9.5"/>'
 };
+IC.gear=(()=>{let d='';const n=8,ro=6.6,ri=5.1,cx=8,cy=8;for(let i=0;i<n*4;i++){const a=(i/(n*4))*Math.PI*2-Math.PI/2+Math.PI/(n*4);const r=(i%4<2)?ro:ri;d+=(i?'L':'M')+(cx+r*Math.cos(a)).toFixed(2)+' '+(cy+r*Math.sin(a)).toFixed(2);}return '<path d="'+d+'Z"/><circle cx="8" cy="8" r="2.2"/>';})();
 const svg = (k, cls='') => `<svg class="${cls}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[k]}</svg>`;
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -522,36 +534,40 @@ function renderPop(){
     h+=`</div>`;
   } else {
     const t=ts[Math.min(tIdx,ts.length-1)];
-    h+=`<div class="ph"><button class="tenant" id="tenantbtn" aria-haspopup="menu" aria-expanded="${tmenu}"><span>${esc(t.h)}</span>${ts.length>1?svg('chevd'):''}</button><button class="ib" id="addbtn" aria-label="Share a file">${svg('plus')}</button><button class="ib" id="gearbtn" aria-label="Settings">${svg('gear')}</button></div>`;
+    h+=`<div class="ph"><button class="tenant" id="tenantbtn" aria-haspopup="menu" aria-expanded="${tmenu}"><span>${esc(t.h)}</span>${ts.length>1?svg('chevd'):''}</button><span class="grow"></span><button class="ib" id="addbtn" aria-label="Share a file">${svg('plus')}</button><button class="ib" id="gearbtn" aria-label="Settings">${svg('gear')}</button></div>`;
     if (tmenu) h+=`<div class="tmenu" role="menu">${ts.map((x,i)=>`<button role="menuitem" id="tm-${i}"><span class="ck">${i===tIdx?svg('check'):''}</span>${esc(x.h)}<span class="tm">${x.role}</span></button>`).join('')}<hr><button role="menuitem" id="tm-manage"><span class="ck"></span>Manage tenants…</button></div>`;
     h+=`<div class="search">${svg('search')}<input id="q" placeholder="Search links" value="${esc(q)}" aria-label="Search links"></div>`;
     const showScope = links.some(l=>l.who!=='You');
     if (showScope) h+=`<div class="scope" role="group" aria-label="Whose links"><button id="sc-mine" aria-pressed="${scope==='mine'}">Mine</button><button id="sc-team" aria-pressed="${scope==='team'}">Team</button></div>`;
-    let rows = links.filter(l => (scope==='team' || !showScope) ? true : l.who==='You');
+    let rows = links.filter(l => l.state!=='expired').filter(l => (scope==='team' || !showScope) ? true : l.who==='You');
     if (q) rows = rows.filter(l => (l.n+' '+l.who).toLowerCase().includes(q.toLowerCase()));
     const total=rows.length; rows=rows.slice(0,8);
     h+=`<div class="list" role="list">`;
+    if (uploading) h+=`<div class="row up" role="listitem"><span class="ti">${svg('doc')}</span><span class="tx"><span class="nm">${esc(uploading.n)}</span><span class="mt">Uploading to this Mac · ${uploading.p}%</span></span><span class="prog"><i style="width:${uploading.p}%"></i></span></div>`;
     if (!rows.length) h+=`<div class="empty">${q?`No links match "${esc(q)}".`:'No links yet. Drop a file on the menu bar icon to share it.'}</div>`;
     rows.forEach(l=>{
       const st=l.state||null;
       const word = st==='offline'?'offline':st==='paused'?'paused':st==='expired'?'expired':st==='revoked'?'removed by admin':null;
       const meta = [scope==='team'&&showScope ? l.who : null, l.where, word || (l.exp==='never'?null:l.exp==='live'?'live server':l.exp+' left')].filter(Boolean).join(' · ');
-      h+=`<div class="row ${st?'dim':''} ${flashId===l.id?'flash':''}" role="listitem" tabindex="0" id="r-${l.id}" data-id="${l.id}" aria-label="${esc(l.n+', '+meta)}"><span class="ti">${svg(l.t)}</span><span class="tx"><span class="nm">${esc(l.n)}</span><span class="mt">${esc(meta)}</span></span><span class="mt" style="flex:none;font-size:11px;color:var(--label-3)">${esc(l.ago)}</span><button class="ib copy" tabindex="-1" aria-hidden="true">${svg('copy')}</button></div>`;
+      h+=`<div class="row ${st?'dim':''} ${flashId===l.id?'flash':''}" role="listitem" tabindex="0" id="r-${l.id}" data-id="${l.id}" aria-label="${esc(l.n+', '+meta)}"><span class="ti">${svg(l.t)}</span><span class="tx"><span class="nm">${esc(l.n)}</span><span class="mt">${esc(meta)}</span></span><span class="ago">${esc(l.ago)}</span><button class="ib rmore" tabindex="-1" aria-label="More for ${esc(l.n)}" data-id="${l.id}">${svg('more')}</button></div>`;
     });
     if (total>8) h+=`<button class="more" id="showall">Show all ${total} links…</button>`;
     h+=`</div><div class="pf">`;
-    h+= iss.length ? `<button class="issue" id="issuebtn">${svg('warn')}${iss.length} need a look</button>` : `<span class="ok"><i></i>All links answer</span>`;
-    h+=`<span class="sp"></span><span class="hint">Right-click a link for more</span></div>`;
+    if (toastMsg) h+=`<span class="fstatus" role="status">${svg(toastIcon)}<span>${esc(toastMsg)}</span></span>${toastUndo?'<button class="btn" id="undo">Undo</button>':''}`;
+    else h+= iss.length ? `<button class="issue" id="issuebtn">${svg('warn')}${iss.length} need a look</button>` : `<span class="ok"><i></i>All links answer</span>`;
+    h+= toastMsg ? '</div>' : `<span class="sp"></span></div>`;
     if (ctx) h+=ctxHTML(ctx);
   }
   if (dragging && ts.length){ const t=ts[tIdx]; h+=`<div class="drag" role="status">${svg('drop')}<b>Release to share on ${esc(t.h)}</b><small>Stored on ${esc(t.from.replace(' (this Mac)',''))}. Copies the link when done.</small></div>`; }
-  if (toastMsg) h+=`<div class="toast" id="toast"><span>${esc(toastMsg)}</span>${toastUndo?'<button id="undo">Undo</button>':''}</div>`;
+  if (toastMsg && (!ts.length || view==='issues')) h+=`<div class="toast" id="toast"><span>${esc(toastMsg)}</span>${toastUndo?'<button id="undo">Undo</button>':''}</div>`;
   pop.innerHTML=h;
   document.getElementById('sbdot').hidden = !iss.length;
   document.getElementById('sbicon').setAttribute('aria-label', iss.length ? `Share Bar, ${iss.length} need a look` : 'Share Bar');
   bindPop(iss);
   if (keep){ const el=document.getElementById(keep); if (el){ el.focus(); if (keep==='q') el.setSelectionRange(q.length,q.length); } }
 }
+let uploading=null;
+function publishDemo(name){ uploading={n:name,p:0}; renderPop(); const t=setInterval(()=>{ uploading.p+=25; if (uploading.p>=100){ clearInterval(t); uploading=null; SCN_LINKS[cur].unshift({t:'doc',n:name,who:'You',where:'this Mac',exp:'7d',ago:'now',id:'aa'+Math.random().toString(16).slice(2,6)}); flashId=SCN_LINKS[cur][0].id; toast('Link copied: '+name); setTimeout(()=>{flashId=null;renderPop();},1200); return; } renderPop(); },450); }
 function linkById(id){ return SCN_LINKS[cur].find(l=>l.id===id); }
 function ctxHTML(c){
   const l=linkById(c.id), own=l.who==='You', dead=l.state==='expired'||l.state==='revoked';
@@ -565,16 +581,17 @@ function ctxHTML(c){
   else if (cur==='admin') items.push(['revoke','Revoke link…']);
   return `<div class="ctx" role="menu" style="top:${c.y}px">${items.map(([k,lab])=>k==='sep'?'<hr>':`<button role="menuitem" data-k="${k}" class="${k==='rm'||k==='revoke'?'danger':''}">${lab}</button>`).join('')}</div>`;
 }
-function toast(msg, undo){
-  toastMsg=msg; toastUndo=!!undo; renderPop(); clearTimeout(toastT);
+let toastIcon='check';
+function toast(msg, undo, icon){
+  toastMsg=msg; toastUndo=!!undo; toastIcon=icon||(undo?'check':'check'); renderPop(); clearTimeout(toastT);
   if (undo) document.getElementById('undo')?.focus();
-  toastT=setTimeout(()=>{ if (!document.getElementById('toast')?.contains(document.activeElement)){ toastMsg=null; renderPop(); } }, undo?6000:3500);
+  toastT=setTimeout(()=>{ const u=document.getElementById('undo'); if (!(u && u===document.activeElement)){ toastMsg=null; renderPop(); } }, undo?6000:3500);
 }
 function copyRow(id){
   const l=linkById(id);
   if (l.state==='expired'){ toast('This link expired, so it no longer answers. Share the file again for a new link.'); return; }
   if (l.state==='revoked'){ toast('This link was removed by an admin.'); return; }
-  flashId=id; toast(l.state==='offline'?`Copied. ${l.where} is offline: visitors get a 503 until it is back.`:l.state==='paused'?'Copied. This member is paused: visitors get a 503.':'Copied the link to '+l.n+'.');
+  flashId=id; toast(l.state==='offline'?`Copied. ${l.where} is offline: visitors get a 503 until it is back.`:l.state==='paused'?'Copied. This member is paused: visitors get a 503.':'Link copied: '+l.n);
   setTimeout(()=>{ flashId=null; renderPop(); },1200);
 }
 function bindPop(iss){
@@ -584,7 +601,7 @@ function bindPop(iss){
   ts.forEach((x,i)=>on('tm-'+i,()=>{ tIdx=i; tmenu=false; renderPop(); }));
   on('tm-manage',()=>{ tmenu=false; tab='tenants'; selTenant=tIdx; renderPop(); renderWin(); });
   on('gearbtn',()=>{ tab='general'; renderWin(); });
-  on('addbtn',()=>toast('Choose a file to share, or drop one on the menu bar icon.'));
+  on('addbtn',()=>publishDemo('brief-v2.pdf'));
   on('fr-join',()=>{ tab='tenants'; renderWin(); openSheet({kind:'add',path:'join'}); });
   on('fr-setup',()=>{ tab='tenants'; renderWin(); openSheet({kind:'add',path:'setup'}); });
   on('sc-mine',()=>{ scope='mine'; renderPop(); });
@@ -595,7 +612,7 @@ function bindPop(iss){
   (iss||[]).forEach((x,i)=>on('ia-'+i,()=>{ x.fn(); renderPop(); }));
   const qi=document.getElementById('q'); if (qi) qi.oninput=e=>{ q=e.target.value; renderPop(); };
   pop.querySelectorAll('.row').forEach(r=>{
-    r.onclick=()=>copyRow(r.dataset.id);
+    r.onclick=e=>{ if (e.target.closest('.rmore')){ e.stopPropagation(); ctx={id:r.dataset.id,y:r.offsetTop+r.offsetHeight-4+(pop.querySelector('.list')?.offsetTop||0)-(pop.querySelector('.list')?.scrollTop||0)}; renderPop(); pop.querySelector('.ctx button')?.focus(); return; } copyRow(r.dataset.id); };
     r.oncontextmenu=e=>{ e.preventDefault(); ctx={id:r.dataset.id,y:r.offsetTop+r.offsetHeight-4+ (pop.querySelector('.list')?.offsetTop||0) - (pop.querySelector('.list')?.scrollTop||0)}; renderPop(); pop.querySelector('.ctx button')?.focus(); };
     r.onkeydown=e=>{
       if (e.key==='Enter'){ e.preventDefault(); copyRow(r.dataset.id); }
