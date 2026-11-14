@@ -152,7 +152,7 @@ General writes Share Bar preferences (UserDefaults) except two that write CLI co
 | G1 | No machine for the menu itself (list, need-a-look, publishing, drag, undo) | Name it in Swift as `PopoverState`: `list(scope, query)`, `issues`, `publishing(step, of)`, `dropTarget`, `undo(action, deadline)`; one reducer, one test per transition |
 | G2 | "Add tenant" had no defined meaning | Two paths: join with a code (R0 to R7) and set up a hostname (R0 to R2); both journaled |
 | G3 | The GUI cannot run admin verbs: the admin token is environment only | New config key `admin_token_cmd` (a command, never the token), same pattern as `api_token_cmd`; unset means the Share Bar asks for the token each time and never stores it |
-| G4 | A member removed while offline has no state in the Share Bar | New D8 display state: own record `removed` or token 401 shows "You were removed" with Clean up (`leave --local`) |
+| G4 | A member removed while offline has no state in the Share Bar | New D8 display state: own record read as `removed` shows "You were removed" with Clean up (`leave --local`); a token 401 alone reads "Your key stopped working; ask the admin", never Clean up (SPEC-009 DEC-79) |
 | G5 | Long admin verbs from the GUI need cancel and resume | Cancel stops the process; the journal keeps the step; the tenant shows Resume or Roll back |
 | G6 | Teardown on a members tenant had no UI answer | Refused with code `members_present` and a link to Members |
 | G7 | Tier changes (cloud storage, members) were CLI only | Buttons in the tenant detail, admin only, journaled |
