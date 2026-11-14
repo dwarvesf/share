@@ -4767,7 +4767,7 @@ r2_api_dry_member() { # r2_api_dry_member METHOD PATH JSON <.cf dir>: the member
     "POST /user/tokens")
       n=$(( $(cat "$d/tokens/.n" 2>/dev/null || echo 0) + 1 )); echo "$n" >"$d/tokens/.n"
       id="$(printf '%032d' "$n")"
-      jq -c --arg id "$id" --arg v "msec-$n-$u" '{id: $id, status: "active"} + . + {value: $v}' <<<"$body" >"$d/tokens/$u/$id.json"
+      jq -c --arg id "$id" --arg n "$n" --arg u "$u" '{id: $id, status: "active"} + . + {value: ("msec-" + $n + "-" + $u)}' <<<"$body" >"$d/tokens/$u/$id.json"   # the value is built in jq, so no argv holds it
       cf_body="$(jq -c '{success: true, result: .}' "$d/tokens/$u/$id.json")" ;;
     "PUT /user/tokens/"*)
       id="${p##*/}"
@@ -7085,9 +7085,11 @@ join_probe() { # one probe link (v:3) on this machine, fetched 3 times through t
   write_caddyfile; caddy_reload || true
   lock_release index
   worker_bind="M_$(mb_suffix "$(cfg member_id)")=127.0.0.1:$port"
+  local want=200   # a paused member coming back (rotate or invite from paused, DEC-30): the Worker answers its paused 503 before the binding
+  [[ "$(jq -r '.prev_status // ""' <<<"$reg_rec")" != paused ]] || want=503
   for i in $(seq 1 "${SHARE_JOIN_PROBES:-20}"); do
     worker_call GET "/$id/$name"
-    if [[ $wk_code == 200 ]]; then ok=$((ok + 1)); [[ $ok -lt 3 ]] || break; else ok=0; [[ ${SHARE_R2_DRY:-0} == 1 ]] || sleep 2; fi
+    if [[ $wk_code == "$want" ]]; then ok=$((ok + 1)); [[ $ok -lt 3 ]] || break; else ok=0; [[ ${SHARE_R2_DRY:-0} == 1 ]] || sleep 2; fi
   done
   worker_bind=""
   cmd_rm "$id" >/dev/null 2>&1 || true

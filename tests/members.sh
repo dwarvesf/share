@@ -27,7 +27,7 @@ chmod +x "$MX/bin/security" "$MX/bin/trash"
 mx_env=()   # extra VAR=value pairs for the next mxa call (cleared by mxa)
 mxa() { # mxa <verb...>: the tenant origin profile ten of mx.example.test, R2 and Access dry; the admin token unless MX_TOK=- , the minter unless MX_MINT=-
   local e=(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u CLOUDFLARE_API_TOKEN -u SHARE_MINTER_TOKEN
-    HOME="$MX_HOME" PATH="$MX/bin:$PATH" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$MX_DRY" SHARE_R2_TOKEN=drytoken SHARE_ACCESS_DRY=1 SHARE_ACCESS_POLL=0
+    HOME="$MX_HOME" PATH="${MX_PRE:+$MX_PRE:}$MX/bin:$PATH" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$MX_DRY" SHARE_R2_TOKEN=drytoken SHARE_ACCESS_DRY=1 SHARE_ACCESS_POLL=0
     SHARE_R2_WAIT=2 SHARE_HOSTS="$mx_this" SHARE_LEASE_WAIT="${MX_LEASE_WAIT:-2}")
   [[ ${MX_TOK:-} == - ]] || e+=(CLOUDFLARE_API_TOKEN="${MX_TOK:-admintoken}")
   [[ ${MX_MINT:-} == - ]] || e+=(SHARE_MINTER_TOKEN="${MX_MINT:-mintertoken}")
@@ -49,10 +49,12 @@ mx_t2() { # mx_fresh, then members on
 MXM_HOME="$MX/member"; MXM_ROOT="$MXM_HOME/share"; MXM_CONF="$MXM_HOME/.config/share/config"
 mxm() { # mxm <verb...>: the default profile of a second machine's HOME (the member), on the same dry bucket and dry Worker; its own Keychain stand-in
   env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u CLOUDFLARE_API_TOKEN -u SHARE_MINTER_TOKEN -u SHARE_HOSTS \
-    HOME="$MXM_HOME" MX_KV="$MX/kv-member" PATH="$MX/bin:$PATH" SHARE_TUNNEL=0 SHARE_JOIN_SERVICE=0 SHARE_CLIPBOARD=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$MX_DRY" SHARE_R2_WAIT=2 \
+    HOME="$MXM_HOME" MX_KV="$MX/kv-member" PATH="${MX_PRE:+$MX_PRE:}$MX/bin:$PATH" SHARE_TUNNEL=0 SHARE_JOIN_SERVICE=0 SHARE_CLIPBOARD=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$MX_DRY" SHARE_R2_WAIT=2 \
     SHARE_R2_DRY_WORKER="node $(dirname "$SH")/../tests/worker.mjs --dir $MX_DRY --host mx.example.test" ${mxm_env[@]+"${mxm_env[@]}"} bash "${MXM_SH:-$SH}" "$@"
 }
 mxm_env=()
+MP=$((base + 376))   # the member's Caddy port
+MXM_LOG="$MXM_ROOT/r2-calls.log"
 mxm_fresh() { mxm stop >/dev/null 2>&1; rm -rf "$MXM_HOME" "$MX/kv-member"; mkdir -p "$MXM_HOME"; }
 mx_save() { rm -rf "$MX/snap.$1"; mkdir -p "$MX/snap.$1"; cp -R "$MX_HOME" "$MX_DRY" "$MX/snap.$1/"; }
 mx_load() { rm -rf "$MX_HOME" "$MX_DRY"; cp -R "$MX/snap.$1/home" "$MX_HOME"; cp -R "$MX/snap.$1/bucket" "$MX_DRY"; : >"$MX_LOG"; }
@@ -206,8 +208,8 @@ check "mm seam: SHARE_R2_DRY_WORKER answers a dry redeem through the real Worker
 o=$(mx_env=(SHARE_R2_DRY_WORKER="$wk"); mxa worker-call POST /_share/redeem "$H64" 2>&1)
 check "mm seam: the dry Worker's second redeem of the same object answers 404" "code=404" "$(head -1 <<<"$o")"
 # every seam refuses outside SHARE_TUNNEL=0 and a .test hostname
-o=$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_HOSTNAME -u XDG_CONFIG_HOME HOME="$MX_HOME" PATH="$MX/bin:$PATH" SHARE_TUNNEL=1 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$MX_DRY" CLOUDFLARE_API_TOKEN=x bash "$SH" --profile ten r2-api POST $A/cfd_tunnel '{"name":"z"}' 2>&1)
-o2=$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_HOSTNAME -u XDG_CONFIG_HOME HOME="$MX_HOME" PATH="$MX/bin:$PATH" SHARE_TUNNEL=1 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$MX_DRY" SHARE_R2_DRY_WORKER="$wk" bash "$SH" --profile ten worker-call POST /_share/redeem x 2>&1)
+o=$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_HOSTNAME -u XDG_CONFIG_HOME HOME="$MX_HOME" PATH="${MX_PRE:+$MX_PRE:}$MX/bin:$PATH" SHARE_TUNNEL=1 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$MX_DRY" CLOUDFLARE_API_TOKEN=x bash "$SH" --profile ten r2-api POST $A/cfd_tunnel '{"name":"z"}' 2>&1)
+o2=$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_HOSTNAME -u XDG_CONFIG_HOME HOME="$MX_HOME" PATH="${MX_PRE:+$MX_PRE:}$MX/bin:$PATH" SHARE_TUNNEL=1 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$MX_DRY" SHARE_R2_DRY_WORKER="$wk" bash "$SH" --profile ten worker-call POST /_share/redeem x 2>&1)
 check "mm seam: the dry account and the dry Worker refuse outside SHARE_TUNNEL=0 (no file written)" "1 code=000 1 0" \
   "$(grep -c 'test seam for SHARE_TUNNEL=0' <<<"$o") $(grep '^code=' <<<"$o2") $(grep -c 'SHARE_R2_DRY_WORKER, with SHARE_TUNNEL=0' <<<"$o2") $(mx_body "$(mx_api GET "$A/cfd_tunnel?name=z&is_deleted=false")" | jq '.result | length')"
 fi
@@ -609,8 +611,6 @@ check "mm OT-08: a deploy that keeps failing (3 tries) dies with the record addi
 fi
 if mx_on "member machine"; then
 echo "=== members: member machine (R7) and join ==="
-MP=$((base + 376))   # the member's Caddy port
-MXM_LOG="$MXM_ROOT/r2-calls.log"
 mxm_writes() { grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$MXM_LOG" 2>/dev/null || true; }
 mx_load t2; mxm_fresh
 SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 SHARE_TEST_CODE=$MXC1 mxa member add an --port "$MP" >/dev/null 2>&1; mx_save invited
@@ -762,4 +762,121 @@ check "mm DP-join-5: a probe that fails leaves the record joining; the message n
   "$rc $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json") $(grep -c '^share: a probe link did not answer .*share member ls; rerun: share join$' <<<"$out")"
 out=$(mxm join 2>&1); rc=$?; mxm stop >/dev/null 2>&1
 check "mm DP-join-5: the bare join retries the probe and ends active" "0 active" "$rc $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json")"
+fi
+if mx_on "member ls"; then
+echo "=== members: member ls and member sync ==="
+mx_load t2
+SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 SHARE_TEST_CODE=$MXC1 mxa member add an --port $((base + 377)) >/dev/null 2>&1
+SHARE_TEST_MEMBER_IDS=m-bo-bbbbbbb2 SHARE_TEST_CODE=$MXC2 mxa member add bo --port $((base + 378)) >/dev/null 2>&1
+mx_save two
+mx_set() { jq -c "$2" "$MX_DRY/u/$1.json" >"$MX/r" && mv "$MX/r" "$MX_DRY/u/$1.json"; }   # mx_set <member_id> <jq>: forge or move a record
+mx_paused() { jq -c --arg p "$1" '(.bindings |= map(if .name == "PAUSED" then .text = $p else . end))' "$MX_DRY/.cf/script.json" >"$MX/s" && mv "$MX/s" "$MX_DRY/.cf/script.json"; }
+# MB-08: an invite past its expiry reads expired; sync deletes its i/
+mx_load two; mx_set m-an-aaaaaaa1 '.invite.expires = 1000'; ih="$(jq -r .invite.hash "$MX_DRY/u/m-an-aaaaaaa1.json")"
+jq -c '.expires = 1000' "$MX_DRY/i/$ih" >"$MX/e" && mv "$MX/e" "$MX_DRY/i/$ih"
+out=$(mxa member ls 2>&1)
+check "mm MB-08: an invited record past invite.expires reads expired" "1" "$(grep -c '^an: expired$' <<<"$out")"
+out=$(mxa member sync 2>&1); rc=$?
+check "mm MB-08: member sync deletes the expired i/ object, and only it" "0 0 1" "$rc $([[ -e $MX_DRY/i/$ih ]] && echo 1 || echo 0) $(find "$MX_DRY/i" -type f | grep -c .)"
+# MB-20: two connectors on a member tunnel
+mx_load two; tid="$(jq -r .tunnel_id "$MX_DRY/u/m-an-aaaaaaa1.json")"; echo 2 >"$MX_DRY/.cf/tunnels/$tid.conns"; mx_set m-an-aaaaaaa1 '.status = "active" | del(.invite)'
+out=$(mxa member ls 2>&1); js=$(mxa member ls --json 2>&1)
+check "mm MB-20: two connectors on a member tunnel: member ls flags the extra connector, rotate now" "1 extra_connector 2" \
+  "$(grep -c 'extra_connector (extra connector: rotate now)' <<<"$out") $(jq -r '.[] | select(.name == "an") | .drift | join(" ")' <<<"$js") $(jq -r '.[] | select(.name == "an") | .account.connectors' <<<"$js")"
+# MB-22, FG-05, FG-06: records that disagree with the deploy are drift, and member ls writes nothing
+mx_load two; mx_set m-an-aaaaaaa1 '.status = "active" | del(.invite)'; mx_set m-bo-bbbbbbb2 '.status = "removed" | del(.invite)'; mx_paused '["aaaaaaa1"]'
+: >"$MX_LOG"; js=$(mxa member ls --json 2>&1); out=$(mxa member ls 2>&1)
+check "mm MB-22, FG-05, FG-06: a forged active record of a paused member and a removed record still bound are two drift codes" \
+  "deploy_paused_record_active deploy_bound_record_removed 2" \
+  "$(jq -r '.[] | select(.name == "an") | .drift | join(" ")' <<<"$js") $(jq -r '.[] | select(.name == "bo") | .drift | join(" ")' <<<"$js") $(grep -c '^    drift: ' <<<"$out")"
+check "mm MB-22: member ls writes nothing to the bucket or Cloudflare" "0" "$(mx_writes)"
+b0="$(mx_bind)"; out=$(SHARE_TEST_MEMBER_IDS=m-cl-ccccccc3 mxa member add cl --cloud 2>&1)
+check "mm FG-05, FG-06 (NC-9): a later verb never unpauses the forged active member nor drops the removed member's binding" "$b0" "$(mx_bind)"
+out=$(mxa member sync 2>&1); rc=$?
+check "mm MB-23: member sync makes the record paused (the deploy wins); the removed-but-bound member is reported, not changed" "0 paused removed 1" \
+  "$rc $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json") $(jq -r .status "$MX_DRY/u/m-bo-bbbbbbb2.json") $(grep -c 'm-bo-bbbbbbb2 is removed and still bound: reported, not changed' <<<"$out")"
+# DEC-75: a paused record missing from PAUSED is paused again, never unpaused
+mx_load two; mx_set m-an-aaaaaaa1 '.status = "paused" | del(.invite)'
+out=$(mxa member sync 2>&1); rc=$?
+check "mm DEC-75: sync re-adds a paused record's suffix to PAUSED (one deploy), never unpauses it" "0 paused 1" \
+  "$rc $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json") $(mx_bind | grep -c 'PAUSED=\["aaaaaaa1"\]')"
+# MB-33: after rotate on a paused member (invited, prev_status paused, PAUSED holds it), sync reports and leaves it; the re-join ends paused
+mx_load two; mx_set m-an-aaaaaaa1 '.prev_status = "paused"'; mx_paused '["aaaaaaa1"]'
+out=$(mxa member sync 2>&1); rc=$?
+check "mm MB-33: sync reports an invited record and leaves it invited with prev_status paused" "0 invited paused 1" \
+  "$rc $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json") $(jq -r .prev_status "$MX_DRY/u/m-an-aaaaaaa1.json") $(grep -c 'm-an-aaaaaaa1 is invited: reported, not changed' <<<"$out")"
+mxm_fresh; out=$(mxm join mx.example.test "$MXC1" 2>&1); rc=$?; mxm stop >/dev/null 2>&1
+check "mm MB-33: the re-join with the new code ends paused" "0 paused" "$rc $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json")"
+# MB-28: an admin verb killed at step 3 on another host: the record's step, the lease holder live, then stale with the rerun
+mx_load two; mx_set m-an-aaaaaaa1 '.status = "pausing" | .step = 3 | .step_name = "deploy" | .prev_status = "active"'
+mx_lease "otherhost:4242:0badf00d" pause m-an-aaaaaaa1 3
+out=$(mxa member ls 2>&1)
+check "mm MB-28: member ls names the step and the lease holder, live while it runs" "1" "$(grep -c '^an: pausing, step 3 (deploy), lease held by otherhost:4242:0badf00d (live)$' <<<"$out")"
+mx_aged 1000 "$MX_DRY/lock/admin"; out=$(mxa member ls 2>&1)
+check "mm MB-28: past 900 s it reads stale since <time>, with the rerun" "1" "$(grep -c '^an: pausing, step 3 (deploy), lease held by otherhost:4242:0badf00d (stale since 20[0-9-]*T[0-9:]*Z; rerun: share member pause an)$' <<<"$out")"
+# MB-29: can[] through member_can for every stored status; a stale ...ing lists finish; removed lists only purge
+mx_load two; rm -f "$MX_DRY"/u/*.json
+for st in adding invited joining active pausing paused resuming inviting rotating renewing removing removed left; do
+  mx_put_rec "$st" "m-$st-$(printf '%s' "$st" | shasum | cut -c1-8)" '.mode = "machine"'
+done
+mx_lease "otherhost:4242:0badf00d" pause "m-pausing-$(printf '%s' pausing | shasum | cut -c1-8)" 2 1000
+js=$(mxa member ls --json 2>&1); bad=""
+while IFS=$'\t' read -r st can; do
+  want=""; for v in add invite pause resume rotate renew rm purge adopt join leave sync; do [[ "$(bash "$SH" state-fn member-can "$st" "$v" admin machine)" == yes ]] && want="${want:+$want }$v"; done
+  [[ $st != *ing ]] || want="${want:+$want }finish"
+  [[ $can == "$want" ]] || bad="$bad $st=[$can]/[$want]"
+done < <(jq -r '.[] | [.status, (.can | join(" "))] | @tsv' <<<"$js")
+check "mm MB-29: each can[] equals the verbs member_can allows the admin; a stale ...ing adds finish; removed lists only purge" " 13 purge" \
+  "$bad $(jq length <<<"$js") $(jq -r '.[] | select(.status == "removed") | .can | join(" ")' <<<"$js")"
+# MB-35: the members cache: member ls writes it; state reads paused and offline from it; with no cache both read live; state makes no Cloudflare call
+mx_load two; mx_set m-an-aaaaaaa1 '.status = "paused" | del(.invite)'; mx_set m-bo-bbbbbbb2 '.status = "active" | del(.invite)'; mx_paused '["aaaaaaa1"]'
+mkdir -p "$MX_DRY/m"
+for p in "dd0001 m-an-aaaaaaa1" "dd0002 m-bo-bbbbbbb2"; do
+  jq -nc --arg id "${p% *}" --arg o "${p#* }" '{v: 3, id: $id, storage: "machine", origin: $o, name: "f.txt", by: "m", added: "2026-11-15", expires: 0, opts: "", type: "text"}' >"$MX_DRY/m/${p% *}"
+done
+mxa member ls >/dev/null 2>&1
+: >"$MX_LOG"; st="$(mxa state 2>/dev/null)"
+check "mm MB-35: after member ls, state reads the paused member's link paused and the 0-connector member's link offline, with no Cloudflare call" "paused offline 0" \
+  "$(jq -r '.shares[] | select(.id == "dd0001") | .link_state' <<<"$st") $(jq -r '.shares[] | select(.id == "dd0002") | .link_state' <<<"$st") $(grep -c '^API ' "$MX_LOG")"
+jq -c 'del(.members)' "$MX_ROOT/../../../.config/share/profiles/ten/.health" >"$MX/h" 2>/dev/null && mv "$MX/h" "$MX_HOME/.config/share/profiles/ten/.health"
+st="$(mxa state 2>/dev/null)"
+check "mm MB-35: with the cache removed both read live" "live live" "$(jq -r '.shares[] | select(.id == "dd0001" or .id == "dd0002") | .link_state' <<<"$st" | tr '\n' ' ' | sed 's/ $//')"
+jq -c '.members = {at: 1000, list: [{suffix: "aaaaaaa1", paused: true, connectors: 0}]}' "$MX_HOME/.config/share/profiles/ten/.health" >"$MX/h" && mv "$MX/h" "$MX_HOME/.config/share/profiles/ten/.health"
+check "mm MB-35: a cache older than 24 h reads live" "live" "$(mxa state 2>/dev/null | jq -r '.shares[] | select(.id == "dd0001") | .link_state')"
+# OC-03: a v0.9 admin's setup --force leaves a v4 Worker with no member binding; the admin's rerun, --members and member sync --rebind restore them
+mx_load two; mx_set m-an-aaaaaaa1 '.status = "paused" | del(.invite)'; mx_set m-bo-bbbbbbb2 '.status = "active" | del(.invite)'
+jq -c '.bindings |= map(select(.type != "vpc_service" and .name != "MEMBERS" and .name != "PAUSED") | if .name == "VERSION" then .text = "4" else . end)' "$MX_DRY/.cf/script.json" >"$MX/s" && mv "$MX/s" "$MX_DRY/.cf/script.json"
+mxa setup mx.example.test --r2 --bucket mx-bucket >/dev/null 2>&1; mxa setup mx.example.test --r2 --bucket mx-bucket --members --yes >/dev/null 2>&1
+out=$(mxa member sync --rebind 2>&1); rc=$?
+check "mm OC-03: after a downgrade lost the bindings, sync --rebind restores both bindings from the account's services and PAUSED from the records" \
+  "0 MEMBERS M_aaaaaaa1 M_bbbbbbb2 PAUSED 1" "$rc $(mx_bind | sed 's/=[^ ]*//g') $(mx_bind | grep -c 'PAUSED=\["aaaaaaa1"\]')"
+fi
+
+if mx_on "secrets"; then
+echo "=== members: no token, key or code in argv, files or output (Q-SEC-6) ==="
+# every argv of jq, openssl, security, curl and cloudflared is logged by a shim on PATH; then the argv log, both call logs, every
+# output and every file under both HOMEs (the Keychain stand-in apart) are searched for the code, the minted and connector tokens, and the keys
+mkdir -p "$MX/argv"; : >"$MX/argv.log"
+for t in jq openssl security curl cloudflared; do
+  real="$(PATH="$MX/bin:$PATH" command -v "$t" || true)"; [[ -n $real ]] || continue
+  printf '#!/bin/bash\nprintf "%%s %%s\\n" "%s" "$*" >>"%s/argv.log"\nexec "%s" "$@"\n' "$t" "$MX" "$real" >"$MX/argv/$t"; chmod +x "$MX/argv/$t"
+done
+mx_load t2; mxm_fresh
+MX_PRE="$MX/argv"
+o1=$(SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 SHARE_TEST_CODE=$MXC1 mxa member add an --port $((base + 379)) 2>&1)
+o2=$(mxm join mx.example.test "$MXC1" 2>&1)
+o3=$(mxa member ls --json 2>&1); o4=$(mxm state 2>&1); mxm stop >/dev/null 2>&1
+MX_PRE=""
+mint="$(find "$MX_DRY/.cf/tokens" -name '*.json' -exec jq -r '.value // empty' {} + | head -1)"; ctok="$(jq -r '"ctok-SECRET-" + (.tunnel_id | split("-") | last)' "$MX_DRY/u/m-an-aaaaaaa1.json")"
+check "mm Q-SEC-6: the shims ran (argv logged for jq, openssl and security)" "1 1 1" "$(grep -c '^jq ' "$MX/argv.log" | awk '{print ($1 > 0)}') $(grep -c '^openssl ' "$MX/argv.log" | awk '{print ($1 > 0)}') $(grep -c '^security ' "$MX/argv.log" | awk '{print ($1 > 0)}')"
+leak=""
+for secret in "$MXC1" "$mint" "$ctok" admintoken mintertoken share-invite-key share-invite-mac; do
+  [[ -n $secret ]] || { leak="$leak empty-fixture"; continue; }
+  grep -qF -- "$secret" "$MX/argv.log" && leak="$leak argv:${secret:0:6}"
+  cat "$MX_LOG" "$MXM_LOG" 2>/dev/null | grep -qF -- "$secret" && leak="$leak log:${secret:0:6}"
+  grep -rqF -- "$secret" "$MX_HOME" "$MXM_HOME" 2>/dev/null && leak="$leak file:${secret:0:6}"
+  printf '%s\n%s\n%s\n' "$o2" "$o3" "$o4" | grep -qF -- "$secret" && leak="$leak out:${secret:0:6}"
+done
+check "mm Q-SEC-6: no code, minted token, connector token, admin or minter token, or key derivation reaches an argv, a log, a file or the output" "" "$leak"
+check "mm Q-SEC-6: the code prints once, on the share join line member add ends with" "1 1" "$(grep -cF "$MXC1" <<<"$o1") $(tail -1 <<<"$o1" | grep -c "^share join mx.example.test $MXC1$")"
 fi
