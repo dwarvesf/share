@@ -1,0 +1,1058 @@
+<meta charset="utf-8">
+<title>Share Bar Redesign</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: review page. Top: a mock desktop with the menu bar popover (left) and the Settings window (right). Below: what changed, references, calls. */
+:root{
+  --page:#eef0f3; --panel:#ffffff; --ink:#1b1f24; --ink-2:#555e69; --rule:#d9dde3; --accent:#0a62e0;
+  --desk-1:#8592a1; --desk-2:#64707e;
+  --page-display:"Geist",-apple-system,"Helvetica Neue",Arial,sans-serif;
+  --page-mono:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){color-scheme:dark;--page:#121418;--panel:#1b1e23;--ink:#e7eaee;--ink-2:#a0a9b4;--rule:#2c3138;--accent:#5aa2ff;--desk-1:#2a3440;--desk-2:#1d252e;}}
+:root[data-theme="dark"]{color-scheme:dark;--page:#121418;--panel:#1b1e23;--ink:#e7eaee;--ink-2:#a0a9b4;--rule:#2c3138;--accent:#5aa2ff;--desk-1:#2a3440;--desk-2:#1d252e;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:400 15px/1.55 var(--page-display);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.wrap{max-width:1240px;margin:0 auto;padding-block:36px 72px;display:grid;gap:40px}
+h1{font:600 34px/1.1 var(--page-display);letter-spacing:-.015em;margin:0 0 10px;text-wrap:balance}
+h2{font:600 21px/1.2 var(--page-display);margin:0 0 12px;text-wrap:balance}
+p{margin:0 0 10px;max-width:70ch}
+code{font:500 .88em var(--page-mono)}
+a{color:var(--accent)}
+.lede{color:var(--ink-2);font-size:17px}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.controls{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;margin-bottom:12px;font-size:14px;color:var(--ink-2)}
+.segs{display:inline-flex;gap:4px;flex-wrap:wrap}
+.segs button{border:1px solid var(--rule);background:var(--panel);color:var(--ink);font:500 13px var(--page-display);padding:5px 10px;border-radius:7px;cursor:pointer}
+.segs button[aria-pressed="true"]{background:var(--ink);color:var(--page);border-color:var(--ink)}
+.desk{border-radius:12px;overflow:hidden;background:linear-gradient(160deg,var(--desk-1),var(--desk-2));border:1px solid var(--rule)}
+.menubar{height:28px;display:flex;align-items:center;justify-content:flex-end;gap:14px;padding:0 14px;background:rgba(255,255,255,.6);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);font:500 13px -apple-system,BlinkMacSystemFont,sans-serif;color:#1b1f24}
+.desk.dark-desk .menubar{background:rgba(30,32,36,.65);color:#eceef1}
+.sbicon{display:inline-flex;align-items:center;gap:3px;height:22px;padding:0 5px;border-radius:5px;background:rgba(0,0,0,.12)}
+.desk.dark-desk .sbicon{background:rgba(255,255,255,.18)}
+.sbicon svg{width:16px;height:16px}
+.sbicon i{width:6px;height:6px;border-radius:50%;background:#ff9500}
+.deskbody{display:flex;flex-direction:row-reverse;flex-wrap:wrap;justify-content:flex-start;gap:24px;padding:6px 18px 24px;align-items:flex-start}
+@media (max-width:520px){.deskbody{justify-content:center;padding-inline:8px}}
+
+/* ===== native-ish tokens shared by popover and settings window ===== */
+.mac{
+  --p-ink-a:0,0,0;
+  --bg:rgba(246,246,248,.95); --win:#f5f5f7; --field:#ffffff;
+  --label:#1d1d1f; --label-2:#5f5f64; --label-3:#7a7a80; --label-dim:#66666b;
+  --sep:rgba(var(--p-ink-a),.09); --hover:rgba(var(--p-ink-a),.06); --press:rgba(var(--p-ink-a),.10); --sel:rgba(var(--p-ink-a),.08);
+  --state-attention:#ff9500; --state-attention-ink:#8a4b00; --state-error-ink:#a3190f; --state-quiet:#8e8e93; --state-quiet-ink:#4a4a4f;
+  --state-info:#0060df; --state-info-ink:#0050b8; --state-ok:#28a745; --focus:#0060df; --chip-a:14%;
+  --toast-bg:rgba(30,30,32,.95); --toast-fg:#f5f5f7; --toast-action:#8cc4ff;
+  --fs-title:15px; --fs-body:13px; --fs-mono:12px; --fs-meta:11px;
+  --sys:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif; --mono:ui-monospace,"SF Mono",Menlo,monospace;
+  color:var(--label);font:400 var(--fs-body)/1.35 var(--sys)}
+.mac.dark{color-scheme:dark;--p-ink-a:255,255,255;--bg:rgba(38,38,42,.94);--win:#26262a;--field:#1e1e21;
+  --label:#f5f5f7;--label-2:#b0b0b6;--label-3:#8a8a8f;--label-dim:#9a9aa0;
+  --state-attention:#ff9f0a;--state-attention-ink:#ffc266;--state-error-ink:#ff9a93;--state-quiet:#98989d;--state-quiet-ink:#d1d1d6;
+  --state-info:#0a6fe0;--state-info-ink:#8cc4ff;--state-ok:#30d158;--focus:#4c9bff;--chip-a:24%;
+  --toast-bg:rgba(240,240,242,.97);--toast-fg:#1d1d1f;--toast-action:#0050b8}
+.mac :focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
+.ib{border:0;background:transparent;color:var(--label-2);width:26px;height:26px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;flex:none}
+.ib:hover{background:var(--hover);color:var(--label)}
+.ib svg{width:16px;height:16px}
+.btn{border:1px solid rgba(var(--p-ink-a),.18);background:var(--field);color:var(--label);font:500 var(--fs-body) var(--sys);border-radius:6px;padding:3px 10px;cursor:pointer;white-space:nowrap}
+.btn:hover{background:var(--hover)}
+.btn.prim{background:var(--state-info);border-color:var(--state-info);color:#fff}
+.btn.danger{color:var(--state-error-ink)}
+.chip{display:inline-flex;align-items:center;gap:4px;font:500 var(--fs-meta) var(--sys);padding:2px 6px 2px 4px;border-radius:4px;white-space:nowrap;flex:none}
+.chip svg{width:11px;height:11px}
+.chip.quiet{background:color-mix(in srgb,var(--state-quiet) var(--chip-a),transparent);color:var(--state-quiet-ink)}
+.chip.info{background:color-mix(in srgb,var(--state-info) var(--chip-a),transparent);color:var(--state-info-ink)}
+.chip.attention{background:color-mix(in srgb,var(--state-attention) var(--chip-a),transparent);color:var(--state-attention-ink)}
+
+/* ===== popover ===== */
+.pop{width:340px;max-width:100%;border-radius:12px;background:var(--bg);backdrop-filter:blur(30px) saturate(1.6);-webkit-backdrop-filter:blur(30px) saturate(1.6);box-shadow:0 0 0 .5px rgba(0,0,0,.18),0 18px 50px rgba(0,0,0,.28);overflow:hidden;position:relative;display:flex;flex-direction:column}
+.ph{display:flex;align-items:center;gap:4px;padding:8px 8px 6px 10px}
+.tenant{display:inline-flex;align-items:center;gap:4px;border:0;background:transparent;color:var(--label);font:600 var(--fs-title) var(--sys);padding:3px 6px;border-radius:6px;cursor:pointer;min-width:0;flex:0 1 auto;max-width:calc(100% - 70px);justify-content:flex-start}
+.ph .grow{flex:1}
+.tenant:hover{background:var(--hover)}
+.tenant span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tenant svg{width:10px;height:10px;color:var(--label-2);flex:none}
+.tmenu{position:absolute;left:10px;top:40px;z-index:6;background:var(--bg);border-radius:8px;box-shadow:0 0 0 .5px rgba(0,0,0,.2),0 10px 30px rgba(0,0,0,.25);padding:4px;min-width:230px;backdrop-filter:blur(30px);-webkit-backdrop-filter:blur(30px)}
+.tmenu button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:0;background:transparent;color:var(--label);font:400 var(--fs-body) var(--sys);padding:5px 8px;border-radius:4px;cursor:pointer}
+.tmenu button:hover,.tmenu button:focus-visible{background:var(--state-info);color:#fff;outline:none}
+.tmenu button:hover .tm,.tmenu button:focus-visible .tm{color:#fff}
+.tmenu .ck{width:14px;flex:none}
+.tmenu .tm{margin-left:auto;font-size:var(--fs-meta);color:var(--label-2)}
+.tmenu hr{border:0;border-top:1px solid var(--sep);margin:4px}
+.search{margin:0 10px 8px;display:flex;align-items:center;gap:6px;background:var(--hover);border-radius:7px;padding:0 8px;height:28px}
+.search svg{width:13px;height:13px;color:var(--label-2);flex:none}
+.search input{flex:1;min-width:0;border:0;background:transparent;color:var(--label);font:var(--fs-body) var(--sys);outline:none}
+.search input::placeholder{color:var(--label-3)}
+.scope{display:flex;margin:0 10px 6px;background:var(--hover);border-radius:7px;padding:2px;gap:2px}
+.scope button{flex:1;border:0;background:transparent;color:var(--label);font:500 var(--fs-meta) var(--sys);padding:4px;border-radius:5px;cursor:pointer}
+.scope button[aria-pressed="true"]{background:var(--bg);box-shadow:0 0 0 .5px var(--sep),0 1px 2px rgba(0,0,0,.14)}
+.mac.dark .scope button[aria-pressed="true"]{background:rgba(255,255,255,.16)}
+.list{max-height:360px;overflow-y:auto;padding:2px 0 6px}
+.sect{padding:8px 16px 2px;font:600 var(--fs-meta) var(--sys);color:var(--label-2)}
+.row{display:flex;align-items:center;gap:10px;min-height:40px;margin:0 6px;padding:4px 6px 4px 10px;border-radius:7px;cursor:pointer;position:relative}
+.row:hover{background:var(--hover)}
+.row .ti{width:28px;height:28px;border-radius:6px;background:rgba(var(--p-ink-a),.06);display:inline-flex;align-items:center;justify-content:center;flex:none;color:var(--label-2)}
+.row .ti svg{width:15px;height:15px}
+.row .tx{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.25}
+.row .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .mt{font-size:var(--fs-meta);color:var(--label-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row.dim .nm{color:var(--label-dim)}
+.row.menu-open{background:var(--press)}
+.row.menu-open .ib.rmore{visibility:visible;background:var(--hover)}
+.row .ib.rmore{visibility:hidden}
+.row:hover .ib.rmore,.row:focus-visible .ib.rmore,.row:focus-within .ib.rmore{visibility:visible}
+.row .ago{flex:none;font-size:11px;color:var(--label-3);min-width:46px;text-align:right}
+.row.flash::after{content:"Copied";position:absolute;right:40px;font:600 var(--fs-meta) var(--sys);color:var(--state-ok);background:var(--bg);padding:0 4px}
+.empty{padding:28px 20px;text-align:center;color:var(--label-2)}
+.more{display:block;margin:2px 16px 4px;font-size:var(--fs-meta);color:var(--label-2);background:none;border:0;cursor:pointer;padding:0}
+.more:hover{color:var(--label)}
+.pf{display:flex;align-items:center;gap:6px;border-top:1px solid var(--sep);padding:6px 6px 6px 10px}
+.pf .issue{display:inline-flex;align-items:center;gap:6px;border:0;background:transparent;color:var(--state-attention-ink);font:500 var(--fs-body) var(--sys);padding:4px 6px;border-radius:6px;cursor:pointer}
+.pf .issue:hover{background:var(--hover)}
+.pf .issue svg{width:14px;height:14px}
+.pf .ok{display:inline-flex;align-items:center;gap:6px;color:var(--label-2);font-size:var(--fs-meta);padding:4px 6px}
+.pf .ok i{width:7px;height:7px;border-radius:50%;background:var(--state-ok)}
+.pf .sp{flex:1}
+.back{display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid var(--sep)}
+.back b{font:600 var(--fs-title) var(--sys);flex:1}
+.irow{display:flex;align-items:center;gap:10px;margin:0 6px;padding:8px 6px 8px 10px;border-radius:7px}
+.irow:hover{background:var(--hover)}
+.irow svg.g{width:16px;height:16px;color:var(--state-attention-ink);flex:none}
+.irow .tx{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.3}
+.irow .tx small{color:var(--label-2);font-size:var(--fs-meta)}
+.drag{position:absolute;inset:8px;border:2px dashed var(--focus);border-radius:10px;background:color-mix(in srgb,var(--bg) 85%,var(--focus));display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;text-align:center;padding:16px;z-index:4}
+.drag svg{width:24px;height:24px;color:var(--focus)}
+.drag small{color:var(--label-2);font-size:var(--fs-meta)}
+.toast{margin:0 8px 8px;background:var(--toast-bg);color:var(--toast-fg);border-radius:7px;padding:8px 12px;display:flex;gap:8px;align-items:center}
+.toast span{flex:1;min-width:0}
+.toast button{border:0;background:transparent;color:var(--toast-action);font:600 var(--fs-body) var(--sys);cursor:pointer}
+
+/* ===== settings window ===== */
+.win{width:620px;max-width:100%;border-radius:11px;background:var(--win);box-shadow:0 0 0 .5px rgba(0,0,0,.22),0 22px 60px rgba(0,0,0,.32);overflow:hidden}
+.tb{display:flex;align-items:center;justify-content:center;position:relative;padding:8px 10px 6px;border-bottom:1px solid var(--sep);flex-wrap:wrap;gap:2px}
+.lights{position:absolute;left:12px;top:12px;display:flex;gap:7px}
+.lights i{width:12px;height:12px;border-radius:50%;background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+.wtitle{width:100%;text-align:center;font:600 var(--fs-body) var(--sys);color:var(--label-2);margin-bottom:4px}
+.tab{display:flex;flex-direction:column;align-items:center;gap:2px;border:0;background:transparent;color:var(--label-2);font:500 var(--fs-meta) var(--sys);padding:4px 10px;border-radius:6px;cursor:pointer;min-width:66px}
+.tab svg{width:20px;height:20px}
+.tab[aria-selected="true"]{background:var(--sel);color:var(--state-info-ink)}
+.tab:hover{color:var(--label)}
+.pane{padding:18px 24px 22px;min-height:360px}
+.form{display:grid;grid-template-columns:132px minmax(0,360px);gap:12px 14px;align-items:start;justify-content:center;padding-block:4px 8px}
+@media (max-width:560px){.form{grid-template-columns:1fr;gap:4px 0}.form .lab{margin-top:10px}}
+.lab{text-align:right;color:var(--label);padding-top:3px}
+@media (max-width:560px){.lab{text-align:left}}
+.ctl{display:flex;flex-direction:column;gap:6px}
+.ctl small{color:var(--label-2);font-size:var(--fs-meta)}
+.ctl label{display:flex;align-items:center;gap:7px;cursor:pointer}
+.ctl input[type=checkbox],.ctl input[type=radio]{accent-color:var(--state-info);margin:0}
+select,.tf{font:var(--fs-body) var(--sys);color:var(--label);background:var(--field);border:1px solid rgba(var(--p-ink-a),.18);border-radius:6px;padding:3px 8px;width:max-content;max-width:100%}
+.tf{width:100%;font-family:var(--mono);font-size:var(--fs-mono)}
+.hr{grid-column:1/-1;border-top:1px solid var(--sep);margin:2px 0}
+.tbl{width:100%;border-collapse:collapse;font:inherit}
+.tbl td.mono{white-space:nowrap}
+.tbl .chip{padding:1px 3px;vertical-align:1px}
+.tbl th{text-align:left;font:500 var(--fs-meta) var(--sys);color:var(--label-2);padding:4px 8px;border-bottom:1px solid var(--sep)}
+.tbl td{padding:6px 8px;border-bottom:1px solid var(--sep);vertical-align:middle}
+.tbl tr.sel td{background:var(--sel)}
+.tbl tr{cursor:pointer}
+.mono{font-family:var(--mono);font-size:var(--fs-mono)}
+.tblwrap{border:1px solid var(--sep);border-radius:7px;background:var(--field);max-height:250px;overflow:auto}
+.pm{display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap}
+.pm .sp{flex:1}
+.pres{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:1px}
+.pres.on{background:var(--state-ok)} .pres.off{border:1.5px solid var(--label-3)}
+.filter{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+.filter .tf{width:200px}
+
+/* page sections */
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:16px}
+.card h3{font:600 15px var(--page-display);margin:0 0 8px}
+.card ul{margin:0;padding-left:18px;display:grid;gap:6px;font-size:14px}
+.imap{width:100%;border-collapse:collapse;font-size:14px;min-width:640px}.imap th{text-align:left;font:500 12px var(--page-display);color:var(--ink-2);border-bottom:1px solid var(--ink-2);padding:6px 10px 6px 0}.imap td{padding:8px 10px 8px 0;border-bottom:1px solid var(--rule);vertical-align:top}
+.refs{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;font-size:14px}
+.refs a,.refs div{display:block;padding:10px 12px;background:var(--panel);border:1px solid var(--rule);border-radius:8px;text-decoration:none;color:var(--ink)}
+.refs span{display:block;color:var(--ink-2);font-size:13px}
+.calls{display:grid;gap:12px;counter-reset:c}
+.call{background:var(--panel);border:1px solid var(--rule);border-radius:10px;padding:14px 16px;display:grid;grid-template-columns:28px 1fr;gap:10px}
+.call::before{counter-increment:c;content:counter(c);font:600 13px var(--page-mono);color:var(--accent);padding-top:2px}
+.call p{margin:0}
+/* r4: tenants detail, sheets, context menu, first run */
+.win{position:relative}
+.tsplit{display:grid;grid-template-columns:200px 1fr;gap:18px}
+@media (max-width:560px){.tsplit{grid-template-columns:1fr}}
+.detail h4{margin:0 0 10px;font:600 var(--fs-title) var(--mono)}
+.detail dl{display:grid;grid-template-columns:110px 1fr;gap:6px 10px;margin:0 0 6px}
+.detail dt{color:var(--label-2);text-align:right}
+.detail dd{margin:0}
+.detail dd.att{color:var(--state-attention-ink)}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.btn.dangerf{background:#d70015;border-color:#d70015;color:#fff}
+.why{font-size:var(--fs-meta);color:var(--label-2);margin:8px 0 0}
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.18);z-index:8}
+.sheet{position:absolute;left:50%;top:44px;transform:translateX(-50%);width:min(420px,calc(100% - 24px));background:var(--win);border-radius:0 0 10px 10px;box-shadow:0 12px 40px rgba(0,0,0,.35),0 0 0 .5px rgba(0,0,0,.2);padding:16px 18px 14px;z-index:9;display:flex;flex-direction:column;gap:10px}
+.sheet h4{margin:0;font:600 var(--fs-title) var(--sys)}
+.sheet .sm{margin:0;font-size:var(--fs-meta);color:var(--label-2);max-width:none}
+.sheet .fl{display:flex;flex-direction:column;gap:4px;font-size:var(--fs-meta);color:var(--label-2)}
+.sheet .fl.chk{flex-direction:row;align-items:center;gap:6px;color:var(--label)}
+.sheet .fl select{width:100%}
+.seg2{display:flex;background:var(--hover);border-radius:7px;padding:2px;gap:2px}
+.seg2 button{flex:1;border:0;background:transparent;color:var(--label);font:500 var(--fs-body) var(--sys);padding:5px;border-radius:5px;cursor:pointer}
+.seg2 button[aria-pressed="true"]{background:var(--field);box-shadow:0 0 0 .5px var(--sep),0 1px 2px rgba(0,0,0,.14)}
+.steps{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.steps li{display:flex;align-items:center;gap:8px;color:var(--label-3)}
+.steps li svg{width:13px;height:13px;color:var(--state-ok)}
+.steps li.done{color:var(--label-2)} .steps li.now{color:var(--label);font-weight:600}
+.steps .dot{width:7px;height:7px;border-radius:50%;border:1.5px solid var(--label-3);margin:0 3px}
+.spin{display:inline-block;width:12px;height:12px;border-radius:50%;border:2px solid var(--sep);border-top-color:var(--focus);animation:sp 0.8s linear infinite;margin-right:6px;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.code{background:var(--field);border:1px solid var(--sep);border-radius:7px;padding:10px;text-align:center;font-size:15px;letter-spacing:.04em;user-select:all}
+.ctx{position:absolute;left:0;top:0;z-index:7;background:var(--bg);border-radius:8px;box-shadow:0 0 0 .5px rgba(0,0,0,.2),0 10px 30px rgba(0,0,0,.25);padding:4px;min-width:200px;backdrop-filter:blur(30px);-webkit-backdrop-filter:blur(30px)}
+.ctx button{display:block;width:100%;text-align:left;border:0;background:transparent;color:var(--label);font:400 var(--fs-body) var(--sys);padding:4px 8px;border-radius:4px;cursor:pointer}
+.ctx button:hover,.ctx button:focus-visible{background:var(--state-info);color:#fff;outline:none}
+.ctx button.danger{color:var(--state-error-ink)}
+.ctx button.danger:hover,.ctx button.danger:focus-visible{color:#fff}
+.ctx hr{border:0;border-top:1px solid var(--sep);margin:4px}
+.pf .hint{font-size:var(--fs-meta);color:var(--label-3);padding-right:6px}
+.first{padding:6px 14px 16px;display:flex;flex-direction:column;gap:8px}
+.first p{margin:0 0 4px;color:var(--label-2)}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}}
+/* r5: settings panes */
+.pane{padding:16px 20px 20px}
+.pane.tall{min-height:420px}
+.tsplit{display:grid;grid-template-columns:190px minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:560px){.tsplit{grid-template-columns:1fr}}
+.srcwrap{display:flex;flex-direction:column}
+.srclist{border:1px solid var(--sep);border-bottom:0;border-radius:7px 7px 0 0;background:var(--field);padding:4px;display:flex;flex-direction:column;gap:2px;min-height:300px}
+.src{display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:5px;cursor:pointer;outline:none}
+.src:hover{background:var(--hover)}
+.src.sel{background:var(--state-info);color:#fff}
+.src.sel .r{color:rgba(255,255,255,.85)}
+.src:focus-visible{box-shadow:0 0 0 2px var(--focus)}
+.srct{display:flex;flex-direction:column;min-width:0;flex:1;line-height:1.3}
+.srct .h{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.srct .r{font-size:var(--fs-meta);color:var(--label-2)}
+.adot{width:7px;height:7px;border-radius:50%;background:var(--state-attention);flex:none}
+.src.sel .adot{background:#fff}
+.pmbar{display:flex;border:1px solid var(--sep);border-radius:0 0 7px 7px;background:var(--field)}
+.pmb{width:28px;height:22px;border:0;border-right:1px solid var(--sep);background:transparent;color:var(--label);display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.pmb:hover{background:var(--hover)}
+.pmb svg{width:12px;height:12px}
+.detail{min-width:0}
+.dhead{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.dhead h4{margin:0;font:600 17px var(--mono)}
+.dstat{display:inline-flex;align-items:center;color:var(--label-2);margin-left:4px}
+.detail dl{display:grid;grid-template-columns:96px minmax(0,1fr);gap:8px 14px;margin:0 0 18px}
+.detail dt{color:var(--label-2);text-align:left}
+.detail dd{margin:0;min-width:0}
+.dbtns{display:flex;flex-wrap:wrap;gap:8px}
+.callout{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:color-mix(in srgb,var(--state-attention) 10%,var(--field));margin-bottom:16px;flex-wrap:wrap}
+.callout>svg{width:16px;height:16px;color:var(--state-attention-ink);flex:none}
+.callout .cbody{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.callout .cbtns{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+.callout{align-items:flex-start}
+.callout small{color:var(--label-2);font-size:var(--fs-meta)}
+.emptypane{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:360px;text-align:center;color:var(--label-2)}
+.emptypane b{color:var(--label);font-size:var(--fs-title)}
+.mtop{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.mtop .sp{flex:1}
+.seg2.small button{font-size:var(--fs-meta);padding:4px 10px;flex:none}
+.search.sm{margin:0;width:150px;height:26px}
+.mlist{border:1px solid var(--sep);border-radius:8px;background:var(--field);max-height:330px;overflow-y:auto;overflow-x:hidden}
+.mrow{display:grid;grid-template-columns:28px minmax(0,1fr) 92px 52px 28px;align-items:center;gap:10px;padding:7px 8px 7px 10px;border-bottom:1px solid var(--sep);position:relative;height:auto;margin:0;border-radius:0}
+.mrow:last-child{border-bottom:0}
+.mrow:hover,.mrow.open{background:var(--hover)}
+.av{width:26px;height:26px;border-radius:50%;background:rgba(var(--p-ink-a),.08);display:inline-flex;align-items:center;justify-content:center;font:600 10.5px var(--sys);color:var(--label-2)}
+.mtx{display:flex;flex-direction:column;min-width:0;line-height:1.3}
+.mn{font-weight:500}
+.ms{font-size:var(--fs-meta);color:var(--label-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mst{display:flex}
+.pl{font-size:var(--fs-meta);color:var(--label-2);display:inline-flex;align-items:center;gap:5px}
+.pl::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--state-ok)}
+.pl.off::before{background:transparent;border:1.5px solid var(--label-3);width:5px;height:5px}
+.mlk{font-size:var(--fs-meta);color:var(--label-2);text-align:right;font-variant-numeric:tabular-nums}
+.kb{opacity:.55}
+.mrow:hover .kb,.mrow.open .kb,.kb:focus-visible{opacity:1}
+.kmenu2{position:absolute;right:8px;top:calc(100% - 4px);z-index:6;background:var(--bg);border-radius:8px;box-shadow:0 0 0 .5px rgba(0,0,0,.2),0 10px 30px rgba(0,0,0,.25);padding:4px;min-width:180px;backdrop-filter:blur(30px);-webkit-backdrop-filter:blur(30px)}
+.kmenu2 button{display:block;width:100%;text-align:left;border:0;background:transparent;color:var(--label);font:400 var(--fs-body) var(--sys);padding:4px 8px;border-radius:4px;cursor:pointer}
+.kmenu2 button:hover,.kmenu2 button:focus-visible{background:var(--state-info);color:#fff;outline:none}
+.kmenu2 button.danger{color:var(--state-error-ink)}
+.kmenu2 button.danger:hover,.kmenu2 button.danger:focus-visible{color:#fff}
+.kmenu2 hr{border:0;border-top:1px solid var(--sep);margin:4px}
+/* r7: footer status, upload row, more button */
+.pf{min-height:40px}
+.fstatus{display:inline-flex;align-items:center;gap:6px;min-width:0;flex:1;padding:4px 6px;color:var(--label)}
+.fstatus svg{width:14px;height:14px;color:var(--state-ok);flex:none}
+.fstatus span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row.up{cursor:default}
+.row.up .nm{color:var(--label)}
+.prog{position:relative;width:44px;height:4px;border-radius:2px;background:var(--hover);overflow:hidden;flex:none;margin-right:8px}
+.prog i{position:absolute;inset:0 auto 0 0;background:var(--state-info);border-radius:2px;transition:width .3s}
+/* r8: quick look, drag, tenant groups, hotkey */
+.desk{position:relative}
+[hidden]{display:none!important}
+#qlhost{position:absolute;inset:28px 0 0 0;display:flex;align-items:center;justify-content:center;padding:24px 16px;z-index:20;background:rgba(0,0,0,.42);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)}
+.qlp{width:min(560px,calc(100% - 32px));border-radius:12px;background:var(--win);box-shadow:0 0 0 .5px rgba(0,0,0,.25),0 30px 80px rgba(0,0,0,.4);overflow:hidden}
+.qlh{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--sep)}
+.qln{flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center}
+.qlb{height:300px;display:flex;align-items:center;justify-content:center;background:rgba(var(--p-ink-a),.04)}
+.qlf{display:flex;flex-direction:column;gap:2px;padding:10px 14px;font-size:var(--fs-meta);color:var(--label-2)}
+.qlf .mono{color:var(--label);font-size:var(--fs-mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qd .pg{width:200px;height:260px;background:#fff;border-radius:3px;box-shadow:0 2px 10px rgba(0,0,0,.18);padding:22px 20px;display:flex;flex-direction:column;gap:9px}
+.qd b{display:block;height:12px;width:70%;background:#2a2a2e;border-radius:2px}
+.qd p,.qp p{margin:0;height:6px;background:#d6d6db;border-radius:2px}
+.qd p.s,.qp p.s{width:60%}
+.qd .blk{height:60px;background:#e8e8ec;border-radius:3px}
+.qv{width:440px;height:248px;background:#111;border-radius:6px;position:relative;display:flex;align-items:center;justify-content:center}
+.qplay{width:0;height:0;border-left:26px solid rgba(255,255,255,.9);border-top:16px solid transparent;border-bottom:16px solid transparent;margin-left:6px}
+.qbar{position:absolute;left:14px;right:14px;bottom:12px;height:3px;background:rgba(255,255,255,.25);border-radius:2px}
+.qbar i{position:absolute;inset:0 auto 0 0;background:#fff;border-radius:2px}
+.qf{width:300px;background:var(--field);border:1px solid var(--sep);border-radius:8px;padding:6px}
+.qf div{display:flex;align-items:center;gap:8px;padding:5px 6px;font-size:var(--fs-body)}
+.qf svg{width:15px;height:15px;color:var(--label-2)}
+.qi{width:420px;height:250px;border-radius:6px;background:linear-gradient(135deg,#f6d365,#fda085 45%,#a1c4fd)}
+.qp{width:440px;height:260px;background:#fff;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.18);overflow:hidden}
+.qpbar{height:22px;background:#ececf0;display:flex;gap:5px;align-items:center;padding:0 8px}
+.qpbar i{width:8px;height:8px;border-radius:50%;background:#c9c9cf}
+.qpbody{padding:18px;display:flex;flex-direction:column;gap:9px}
+.qpbody b{display:block;height:14px;width:55%;background:#2a2a2e;border-radius:2px}
+.qpimg{height:90px;background:#e8e8ec;border-radius:4px}
+.ql-live{display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--label-2);text-align:center;max-width:280px}
+.ql-live svg{width:34px;height:34px;color:var(--state-info)}
+.ql-live b{color:var(--label);font-size:var(--fs-title)}
+.ihead{display:flex;align-items:center;gap:8px;padding:10px 16px 2px;font-size:var(--fs-meta);color:var(--label-2)}
+.ihead .mono{font-size:var(--fs-meta);color:var(--label);font-weight:600}
+.ihead .cur{font-size:10px;padding:0 5px;border-radius:3px;background:rgba(var(--p-ink-a),.07)}
+.kb2{font:500 10.5px var(--sys);color:var(--label-3);border:1px solid rgba(var(--p-ink-a),.14);border-radius:4px;padding:0 4px;flex:none}
+.row[draggable="true"]{cursor:grab}
+.row[draggable="true"]:active{cursor:grabbing}
+/* r14: forms, invite, impact, all links */
+.fieldrow{display:flex;gap:8px;align-items:center;min-width:0}
+.fieldrow .tf{flex:1;min-width:0}
+.okline{display:inline-flex;align-items:center;gap:5px;font-size:var(--fs-meta);color:var(--label-2)}
+.okline svg{width:13px;height:13px;color:var(--state-ok)}
+.btn .spin{width:10px;height:10px;margin-right:5px}
+.shead{display:flex;flex-direction:column;gap:4px}
+.sheet{width:min(440px,calc(100% - 24px));padding:20px 20px 16px;gap:14px}
+.tf.sans{font-family:var(--sys);font-size:var(--fs-body)}
+fieldset.fl{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+fieldset.fl legend{padding:0;margin-bottom:6px;font-size:var(--fs-meta);color:var(--label-2)}
+.opt2{display:flex;gap:10px;align-items:flex-start;padding:9px 11px;border:1px solid rgba(var(--p-ink-a),.14);border-radius:8px;background:var(--field);cursor:pointer;color:var(--label)}
+.opt2.on{border-color:var(--state-info);box-shadow:0 0 0 1px var(--state-info) inset}
+.opt2 input{margin-top:2px;accent-color:var(--state-info)}
+.opt2 span{display:flex;flex-direction:column;gap:1px}
+.opt2 b{font-weight:600;font-size:var(--fs-body)}
+.opt2 small{font-size:var(--fs-meta);color:var(--label-2)}
+.fl>.seg2{align-self:flex-start}
+.impact{list-style:none;margin:0;padding:10px 12px;display:flex;flex-direction:column;gap:7px;background:var(--field);border:1px solid var(--sep);border-radius:8px}
+.impact li{display:flex;gap:8px;align-items:flex-start;font-size:var(--fs-body)}
+.impact svg{width:14px;height:14px;flex:none;margin-top:1px}
+.impact .bad svg{color:var(--state-error-ink)} .impact .good svg{color:var(--state-ok)}
+.tb.slim{padding-bottom:8px}
+.lclose{width:12px;height:12px;border-radius:50%;background:#ff5f57;border:0;padding:0;cursor:pointer}
+.lights .lclose+i{background:#febc2e}.lights .lclose+i+i{background:#28c840}
+.bulk{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:6px 8px 6px 12px;border-radius:7px;background:color-mix(in srgb,var(--state-info) 10%,var(--field));font-weight:500}
+.bulk .sp{flex:1}
+.ltable{border:1px solid var(--sep);border-radius:8px;background:var(--field);overflow:hidden}
+.lth,.ltr{display:grid;grid-template-columns:28px minmax(0,1fr) 64px 112px 58px 46px 34px;align-items:center;gap:8px;padding:0 8px}
+.lth{height:28px;font-size:var(--fs-meta);color:var(--label-2);border-bottom:1px solid var(--sep);font-weight:500}
+.ltb{max-height:300px;overflow-y:auto}
+.ltr{min-height:42px;border-bottom:1px solid var(--sep)}
+.ltr:last-child{border-bottom:0}
+.ltr:hover{background:var(--hover)}
+.ltr.sel{background:color-mix(in srgb,var(--state-info) 9%,transparent)}
+.ltr.dim .nm,.ltr.dim .cell{color:var(--label-dim)}
+.ltr input,.lth input{accent-color:var(--state-info);margin:0}
+.ln{display:flex;align-items:center;gap:8px;min-width:0}
+.ln .ti{width:26px;height:26px;border-radius:6px;background:rgba(var(--p-ink-a),.06);display:inline-flex;align-items:center;justify-content:center;flex:none;color:var(--label-2)}
+.ln .ti svg{width:14px;height:14px}
+.ln .tx{display:flex;flex-direction:column;min-width:0;line-height:1.25}
+.ln .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ln .mt{font-size:var(--fs-meta);color:var(--label-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ln .wd{color:var(--state-attention-ink)}
+.cell{font-size:var(--fs-meta);color:var(--label-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.r{text-align:right}
+.na{color:var(--label-3)}
+.ib[disabled]{opacity:.35;cursor:not-allowed}
+.lfoot{margin-top:8px;font-size:var(--fs-meta);color:var(--label-2)}
+.more{margin-top:4px}
+.picked{flex:1;min-width:0;display:flex;align-items:center;gap:8px;padding:5px 8px;border:1px solid rgba(var(--p-ink-a),.14);border-radius:6px;background:var(--field)}
+.picked svg{width:14px;height:14px;color:var(--label-2);flex:none}
+.picked span{display:flex;flex-direction:column;min-width:0;line-height:1.2}
+.picked b{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.picked small{font-size:var(--fs-meta);color:var(--label-2)}
+.mac .search input:focus-visible{outline:none}
+.mac .search:focus-within{box-shadow:0 0 0 2px var(--focus)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Share Bar, revision 8: dialogs and All links</h1>
+    <p class="lede">The menu shows your recent links and nothing else. Team status, members and machines move to Settings. A single line at the bottom appears only when something needs a hand. Built for a team of ten or more. Revision 7 adds Quick Look (focus a link, press Space), dragging a link out of the menu, tenant groups in Needs a look, view counts on cloud links, and Control-Option-S to search. Revision 5 rebuilt Members and Tenants on the pattern real team tools use (a row menu instead of a button bar, a source list instead of a table) and was checked in 20 screenshotted states, light, dark and narrow. Every button runs its real workflow: open Settings and try Tenants and Members, right-click a link, or pick First run.</p>
+  </header>
+
+  <section aria-label="Prototype">
+    <div class="controls">
+      <span>Scenario</span>
+      <span class="segs" id="scn">
+        <button aria-pressed="true" data-s="admin" id="s-admin">Admin, 12 members</button>
+        <button aria-pressed="false" data-s="member" id="s-member">Member</button>
+        <button aria-pressed="false" data-s="calm" id="s-calm">All calm</button>
+        <button aria-pressed="false" data-s="firstrun" id="s-firstrun">First run</button>
+      </span>
+      <span>Appearance</span>
+      <span class="segs" id="appearance">
+        <button aria-pressed="true" data-a="match" id="a-match">Match page</button>
+        <button aria-pressed="false" data-a="light" id="a-light">Light</button>
+        <button aria-pressed="false" data-a="dark" id="a-dark">Dark</button>
+      </span>
+      <span class="segs"><button aria-pressed="false" id="dragbtn">Simulate a drag</button></span>
+    </div>
+    <div class="desk" id="desk">
+      <div class="menubar">
+        <span aria-hidden="true">Wi-Fi</span><span aria-hidden="true">100%</span>
+        <span class="sbicon" role="img" id="sbicon" aria-label="Share Bar"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M8 9.5v4"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><path d="M5 5.2a4 4 0 0 0 0 5.6M11 5.2a4 4 0 0 1 0 5.6M3 3.2a7 7 0 0 0 0 9.6M13 3.2a7 7 0 0 1 0 9.6"/></svg><i id="sbdot"></i></span>
+        <span aria-hidden="true">Sat 09:20</span>
+      </div>
+      <div class="deskbody">
+        <div id="qlhost" hidden></div>
+        <div class="pop mac" id="pop" role="dialog" aria-label="Share Bar"></div>
+        <div class="win mac" id="win" role="dialog" aria-label="Share Bar Settings"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What changed in revisions 3 and 4</h2>
+    <div class="cols">
+      <div class="card"><h3>The menu answers one question</h3><ul>
+        <li>"Where is the link I just shared?" Recent links, newest first, with search. Nothing is grouped by person.</li>
+        <li><b>Mine</b> is the default; <b>Team</b> shows everyone's recent links with the owner in the meta line.</li>
+        <li>Each row has one meta line: who, where it lives, and expiry. A state word appears there only when the link does not answer.</li>
+      </ul></div>
+      <div class="card"><h3>Status became one line</h3><ul>
+        <li>No status header, no route line, no strip. When all is well, the footer says "All links answer" in gray.</li>
+        <li>When something needs a hand, the footer says "2 need a look" in orange. Clicking it opens a short list with one action each.</li>
+        <li>The menu bar icon gets a small dot, nothing more.</li>
+      </ul></div>
+      <div class="card"><h3>Settings holds the rest</h3><ul>
+        <li><b>General</b>: launch at login, default expiry, default storage, copy format, notifications.</li>
+        <li><b>Tenants</b>: every hostname, your role, the machine that serves it, start and stop.</li>
+        <li><b>Members</b> (admins): a searchable table that works for 12 or 50 people, invite, pause, rotate, remove.</li>
+        <li><b>Advanced</b>: CLI path, logs, the legacy menu.</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Interaction map</h2>
+    <p>Every control reads its state from <code>share state</code> and offers only what that state allows. The full map, with every refusal sentence, is <code>docs/design/share-bar-interactions.md</code>.</p>
+    <div class="tablewrap" style="overflow-x:auto"><table class="imap">
+      <thead><tr><th>Where</th><th>Control</th><th>Runs</th><th>State machine move</th><th>Shown while it runs</th></tr></thead>
+      <tbody>
+        <tr><td>Tenants</td><td>Add, join a team</td><td><code>share join &lt;code&gt;</code></td><td>role R0 to R7; member invited, joining, active</td><td>6 named steps; Stop keeps the step, Resume continues</td></tr>
+        <tr><td>Tenants</td><td>Add, set up a hostname</td><td><code>share setup &lt;host&gt;</code></td><td>role R0 to R2; serve starting to serving</td><td>6 named steps</td></tr>
+        <tr><td>Tenants</td><td>Start serving</td><td><code>share start</code></td><td>serve stopped or failed to starting to serving</td><td>Status: Starting, then Serving</td></tr>
+        <tr><td>Tenants</td><td>Stop serving</td><td><code>share stop</code></td><td>serve to stopped</td><td>Confirm names what stops answering</td></tr>
+        <tr><td>Tenants</td><td>Turn on cloud storage</td><td><code>share setup --r2</code></td><td>tier T0 to T1</td><td>9 named steps</td></tr>
+        <tr><td>Tenants</td><td>Turn on members</td><td><code>share setup --r2 --members</code></td><td>tier T1 to T2</td><td>4 named steps</td></tr>
+        <tr><td>Tenants</td><td>Resume, Roll back</td><td>journal <code>rerun</code>, rollback</td><td>op died at step n to done, or undone</td><td>Continues from the stopped step</td></tr>
+        <tr><td>Tenants</td><td>Remove</td><td><code>teardown</code>, <code>leave</code>, <code>leave --local</code></td><td>role to R0; refused on T2 with members</td><td>Sheet names what is deleted per role</td></tr>
+        <tr><td>Members</td><td>Invite, Send a new code</td><td><code>member add</code>, <code>member invite</code></td><td>none to invited; invited, joining, left to invited</td><td>Code shown once</td></tr>
+        <tr><td>Members</td><td>Pause, Resume</td><td><code>member pause</code>, <code>resume</code></td><td>active and paused</td><td>Row shows Pausing, step n</td></tr>
+        <tr><td>Members</td><td>Rotate keys</td><td><code>member rotate</code></td><td>active or paused to invited (status kept for the rejoin)</td><td>New code shown once</td></tr>
+        <tr><td>Members</td><td>Remove, Purge</td><td><code>member rm</code>, <code>purge</code></td><td>any to removed; removed to deleted</td><td>Choice for their cloud links</td></tr>
+        <tr><td>Members</td><td>Finish</td><td>the stopped verb again</td><td>a stale <code>...ing</code> to its resting status</td><td>Shown only for a stale lease</td></tr>
+        <tr><td>Menu</td><td>Row click, right-click</td><td>copy; <code>rm</code>, revoke, <code>refresh</code></td><td>link live to gone (own) or revoked (admin)</td><td>Expired and revoked rows never copy</td></tr>
+        <tr><td>Menu</td><td>N need a look</td><td>per line</td><td>reads D2, D3, D5, D8</td><td>One action per line</td></tr>
+      </tbody>
+    </table></div>
+    <h3 style="font:600 17px var(--page-display);margin:22px 0 8px">Gaps the mapping found, and the decisions</h3>
+    <div class="tablewrap" style="overflow-x:auto"><table class="imap">
+      <thead><tr><th>Gap</th><th>Decision</th></tr></thead>
+      <tbody>
+        <tr><td>The menu itself had no state machine</td><td>Swift <code>PopoverState</code>: list, issues, publishing, drop target, undo; one reducer, one test per move</td></tr>
+        <tr><td>"Add tenant" had no meaning</td><td>Two paths: join with a code (R0 to R7) or set up a hostname (R0 to R2), both journaled</td></tr>
+        <tr><td>The app cannot run admin commands: the admin token lives only in the shell environment</td><td>New config key <code>admin_token_cmd</code>, a command, never the token; empty means Share Bar asks each time and never stores it</td></tr>
+        <tr><td>A member removed while offline had no state</td><td>"You were removed" with Clean up (<code>leave --local</code>)</td></tr>
+        <tr><td>Long admin commands from the app need stop and resume</td><td>Stop ends the process; the journal keeps the step; the tenant shows Resume or Roll back</td></tr>
+        <tr><td>Removing a members tenant had no answer</td><td>Refused with code <code>members_present</code> and a link to Members</td></tr>
+        <tr><td>Cloud storage and members were command-line only</td><td>Buttons in the tenant detail, admin only, journaled</td></tr>
+        <tr><td>First run had no design</td><td>The two Add paths, shown in the menu</td></tr>
+        <tr><td>Link actions beyond copy were undefined</td><td>Right-click menu, items shown only when the link state allows them</td></tr>
+        <tr><td>Member buttons had no rule</td><td>Each button reads the D8 table; a dimmed button says why</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section>
+    <h2>References</h2>
+    <p>Mobbin covers iOS and web, not macOS menu bar apps, so the menu bar patterns come from apps I know well; the settings and list patterns cite Mobbin screens.</p>
+    <div class="refs">
+      <div>Dropbox menu bar<span>Recent activity list as the default; status and preferences behind a gear</span></div>
+      <div>Tailscale menu bar<span>One status line, devices in a submenu, a separate Settings window</span></div>
+      <div>CleanShot X and Droplr<span>Recent captures as the whole menu; copy link on click</span></div>
+      <div>macOS System Settings toolbar<span>Icon tabs across the top of a preferences window</span></div>
+      <a href="https://mobbin.com/screens/9faa5a29-a202-4641-9aec-2cafd2bb6d3d">Dropbox iOS, files<span>One meta line per file: size, when</span></a>
+      <a href="https://mobbin.com/screens/07897a07-e74b-45fb-8591-7dfd0fc08831">Dropbox iOS, upload done<span>Toast with "Copy link" after an upload</span></a>
+      <a href="https://mobbin.com/screens/3c9a44d0-fc98-46c1-b577-33bfea687567">Bloom, settings<span>Account and Team sections; members with an invite row</span></a>
+      <a href="https://mobbin.com/screens/417263d3-73aa-4646-96ae-69a409a20ebc">Firecrawl, settings<span>Team, Billing, Advanced as a short section list</span></a>
+      <a href="https://mobbin.com/screens/c1bf83ff-9577-4fe6-aff9-0230030944ee">Linear, members<span>Members as a table with status and last seen</span></a>
+    </div>
+  </section>
+
+  <section>
+    <h2>Calls for your review</h2>
+    <div class="calls">
+      <div class="call"><p><b>Mine as the default scope.</b> A member mostly needs their own links. Admins can switch to Team; the choice is remembered.</p></div>
+      <div class="call"><p><b>Members and machines live only in Settings.</b> The menu never lists people. An offline member shows up only through the footer line, and only for admins.</p></div>
+      <div class="call"><p><b>Eight recent links, then "Show all".</b> Show all opens the full list in a window with the same search; the menu stays short.</p></div>
+      <div class="call"><p><b>Settings window instead of submenus.</b> Tenants, members and start/stop are rare tasks; a window is easier to scan and works with the keyboard.</p></div>
+    </div>
+  </section>
+</div>
+
+<script>
+const IC = {
+  doc:'<path d="M4 1.8h5l3 3V14H4z"/><path d="M9 1.8v3h3"/>', folder:'<path d="M1.8 4.2h4.4l1.3 1.4h6.7v7.6H1.8z"/>',
+  video:'<rect x="1.8" y="3.5" width="9" height="9" rx="1.5"/><path d="M10.8 7l3.4-2v6l-3.4-2"/>', page:'<rect x="2" y="2" width="12" height="12" rx="2"/><path d="M2 5.5h12"/>',
+  live:'<circle cx="8" cy="8" r="2"/><path d="M4.5 4.5a5 5 0 0 0 0 7M11.5 4.5a5 5 0 0 1 0 7"/>', image:'<rect x="2" y="2.5" width="12" height="11" rx="1.5"/><circle cx="6" cy="6.5" r="1.2"/><path d="M2.5 12l3.5-3.5 3 3 2-2 2.5 2.5"/>',
+  copy:'<rect x="5" y="5" width="8.5" height="8.5" rx="1.5"/><path d="M3 10.5V3.8A1.3 1.3 0 0 1 4.3 2.5H10"/>',
+  gear:'<circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/>',
+  plus:'<path d="M8 3v10M3 8h10"/>', search:'<circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/>', chevd:'<path d="M3.5 6L8 10.5 12.5 6"/>', chevl:'<path d="M10 3.5L5.5 8 10 12.5"/>',
+  warn:'<path d="M8 2l6.3 11H1.7z"/><path d="M8 6.5v3M8 11.4v.2"/>', moon:'<path d="M12.5 10A5.5 5.5 0 0 1 6 3.5a5.5 5.5 0 1 0 6.5 6.5z"/>', pause:'<circle cx="8" cy="8" r="6"/><path d="M6.5 5.8v4.4M9.5 5.8v4.4"/>',
+  exit:'<path d="M9.5 3H3v10h6.5M7 8h7M11.5 5.5L14 8l-2.5 2.5"/>', drop:'<path d="M8 2.5v8M5 7.5l3 3 3-3"/><path d="M2.5 11v2.5h11V11"/>',
+  sliders:'<path d="M3 4h10M3 8h10M3 12h10"/><circle cx="6" cy="4" r="1.5" fill="currentColor"/><circle cx="10" cy="8" r="1.5" fill="currentColor"/><circle cx="5" cy="12" r="1.5" fill="currentColor"/>',
+  globe:'<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/>', people:'<circle cx="6" cy="5.5" r="2.3"/><path d="M1.8 13.5c.5-2.5 2.2-3.8 4.2-3.8s3.7 1.3 4.2 3.8"/><circle cx="11.3" cy="6" r="1.8"/><path d="M10.5 9.8c1.9.1 3.3 1.3 3.7 3.7"/>',
+  wrench:'<path d="M10.5 2.5a3 3 0 0 0-3 4l-5 5 2 2 5-5a3 3 0 0 0 4-3l-1.8 1.3-1.7-.5-.5-1.7z"/>', check:'<path d="M3.5 8.5l3 3 6-6.5"/>',
+  ext:'<path d="M9 2.5h4.5V7M13.5 2.5L7.5 8.5M12 9.5V13a.5.5 0 0 1-.5.5h-8A.5.5 0 0 1 3 13V5a.5.5 0 0 1 .5-.5H7"/>',
+  x2:'<path d="M4 4l8 8M12 4l-8 8"/>',
+  more:'<circle cx="3.5" cy="8" r="1.1" fill="currentColor"/><circle cx="8" cy="8" r="1.1" fill="currentColor"/><circle cx="12.5" cy="8" r="1.1" fill="currentColor"/>',
+  key:'<circle cx="5" cy="10" r="2.5"/><path d="M7 8.5L13 2.5M11 4.5l1.5 1.5M9.5 6l1.2 1.2"/>', stop:'<rect x="4" y="4" width="8" height="8" rx="1"/>', redo:'<path d="M12.5 6.5A5 5 0 1 0 13 9"/><path d="M13 3v3.5H9.5"/>'
+};
+IC.gear=(()=>{let d='';const n=8,ro=6.6,ri=5.1,cx=8,cy=8;for(let i=0;i<n*4;i++){const a=(i/(n*4))*Math.PI*2-Math.PI/2+Math.PI/(n*4);const r=(i%4<2)?ro:ri;d+=(i?'L':'M')+(cx+r*Math.cos(a)).toFixed(2)+' '+(cy+r*Math.sin(a)).toFixed(2);}return '<path d="'+d+'Z"/><circle cx="8" cy="8" r="2.2"/>';})();
+const svg = (k, cls='') => `<svg class="${cls}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[k]}</svg>`;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ---------- data ---------- */
+const TEAM_LINKS = [
+  {t:'folder',n:'kid-demos',who:'You',where:'this Mac',exp:'never',ago:'2m',id:'0d489d'},
+  {t:'doc',n:'q4-pitch-deck.pdf',who:'You',where:'this Mac',exp:'6d',ago:'1h',id:'c4e211'},
+  {t:'video',n:'playdate-uat-run.mov',who:'An',where:"An's MacBook",exp:'3d',ago:'2h',id:'7f3a21',state:'offline'},
+  {t:'page',n:'press-kit.html',who:'You',where:'this Mac',exp:'21d',ago:'3h',id:'a19f03'},
+  {t:'image',n:'hero-v4.png',who:'Linh',where:'cloud',exp:'7d',ago:'4h',id:'91fe20',views:3},
+  {t:'live',n:'localhost:3000',who:'Bình',where:"Bình's server",exp:'live',ago:'5h',id:'91ac4e'},
+  {t:'page',n:'landing-draft.html',who:'Dũng',where:"Dũng's iMac",exp:'2d',ago:'yesterday',id:'e04b9c',state:'paused'},
+  {t:'video',n:'hermes-demo-45s.mp4',who:'You',where:'cloud',exp:'30d',ago:'yesterday',id:'f1d7e2',views:12},
+  {t:'doc',n:'invoice-2026-10.pdf',who:'You',where:'cloud',exp:'expired',ago:'9d',id:'b2c3d4',state:'expired'},
+  {t:'doc',n:'bao-cao-thang-10.pdf',who:'An',where:"An's MacBook",exp:'6d',ago:'2d',id:'2be8d0',state:'offline'},
+  {t:'doc',n:'contract-draft-v2.pdf',who:'Khoa',where:'cloud',exp:'14d',ago:'2d',id:'3c8d11',views:1},
+  {t:'folder',n:'brand-assets',who:'Minh',where:"Minh's Mac Studio",exp:'never',ago:'3d',id:'7a2b90'},
+  {t:'image',n:'moodboard.png',who:'Phúc',where:'cloud',exp:'5d',ago:'4d',id:'d4e5f6',views:0}
+];
+const mkMembers = () => [
+  {n:'An',st:'active',pres:'off',seen:'offline 2h',links:2,mach:"An's MacBook"},
+  {n:'Bình',st:'active',pres:'on',seen:'online',links:1,mach:"Bình's server"},
+  {n:'Chi',st:'invited',pres:null,seen:'code expires in 6d',links:0,mach:'none yet'},
+  {n:'Dũng',st:'paused',pres:'on',seen:'online',links:1,mach:"Dũng's iMac"},
+  {n:'Giang',st:'active',pres:'on',seen:'online',links:0,mach:'cloud only'},
+  {n:'Hà',st:'left',pres:null,seen:'left 1d ago',links:0,mach:"Hà's MacBook"},
+  {n:'Khoa',st:'active',pres:'on',seen:'online',links:1,mach:'cloud only'},
+  {n:'Linh',st:'active',pres:'on',seen:'online',links:1,mach:'cloud only'},
+  {n:'Minh',st:'pausing',step:'step 2 of 3 (deploy)',stale:true,pres:'on',seen:'online',links:1,mach:"Minh's Mac Studio"},
+  {n:'Nam',st:'active',pres:'off',seen:'offline 3d',links:0,mach:"Nam's Mini"},
+  {n:'Phúc',st:'active',pres:'on',seen:'online',links:1,mach:'cloud only'},
+  {n:'Quân',st:'removed',pres:null,seen:'removed 5d ago',links:0,mach:"Quân's NUC"}
+];
+/* D8: verbs the admin may run per member status */
+const CAN = {
+  invited:['invite','renew','rm'], joining:['invite','rm'], active:['pause','rotate','renew','rm'], paused:['resume','rotate','renew','rm'],
+  left:['invite','rm'], removed:['purge'], pausing:['finish','rm'], resuming:['finish','rm'], rotating:['finish','rm'], removing:['finish']
+};
+const WHY = {pause:'only an active member can be paused', resume:'only a paused member can be resumed', rotate:'rotate needs an active or paused member', renew:'nothing to renew yet', invite:'they already joined; use Rotate keys', rm:'already removed', purge:'only removed members can be purged'};
+const mkTenants = () => ({
+  admin:[
+    {h:'s.console.so',role:'Admin',tier:'T2',from:'Mini (this Mac)',phase:'serving',reason:'',token:'1Password command, expires in 81d',links:12},
+    {h:'s.d.foundation',role:'Admin',tier:'T1',from:'Mini (this Mac)',phase:'serving',reason:'',token:'1Password command, expires in 40d',links:3,
+      op:{verb:'setup --r2',step:13,of:16,name:'route',rerun:'share setup s.d.foundation --r2 --bucket share-dfoundation',rollback:'share setup s.d.foundation --no-r2'}},
+    {h:'s.han.ws',role:'Owner',tier:'T0',from:'Mini (this Mac)',phase:'failed',reason:'port 8787 is in use',token:'asks each time',links:5}],
+  member:[{h:'s.console.so',role:'Member',tier:'T2',from:"An's MacBook (this Mac)",phase:'serving',reason:'',token:'Keychain, expires in 6d',links:2,mstatus:'active'}],
+  calm:[{h:'s.han.ws',role:'Owner',tier:'T0',from:'Mini (this Mac)',phase:'serving',reason:'',token:'asks each time',links:5}],
+  firstrun:[]
+});
+const SCN_LINKS = {
+  admin:TEAM_LINKS,
+  member:TEAM_LINKS.filter(l=>l.state!=='expired').map(l=>l.who==='An'?{...l,who:'You',where:'this Mac',state:null}:(l.who==='You'?{...l,who:'Han',where:'Mini'}:l)),
+  calm:[{t:'page',n:'posture-routine.html',who:'You',where:'this Mac',exp:'never',ago:'1d',id:'ef5507'},{t:'folder',n:'trang-mobility',who:'You',where:'this Mac',exp:'never',ago:'8d',id:'89f402'},{t:'page',n:'max-big-race.html',who:'You',where:'this Mac',exp:'27d',ago:'3d',id:'4fcc6d'}],
+  firstrun:[]
+};
+let TEN = mkTenants(), MEMBERS = mkMembers();
+let cur='admin', tIdx=0, view='list', scope='mine', q='', tmenu=false, ctx=null, dragging=false, flashId=null, toastMsg=null, toastUndo=false, toastT=null, appearance='match';
+let invMode='machine', invTtl='7';
+let akSrc='1p', akTest=null, winMode='settings', lfilter='all', lq='', lsel=new Set();
+let tab='tenants', selTenant=0, selMember='An', mfilter='', mview='all', memberMenu=null, sheet=null, runner=null;
+const pop=document.getElementById('pop'), win=document.getElementById('win');
+const isAdmin = () => TEN[cur].some(t=>t.role==='Admin');
+
+/* "need a look": derived from the state machines, never stored */
+function issues(){
+  const out=[], ts=TEN[cur];
+  ts.forEach((t,i)=>{
+    if (t.op) out.push({h:t.h,i:'redo',t:`Setup stopped at step ${t.op.step} of ${t.op.of}`,s:'The route step did not finish',act:'Resume',fn:()=>resumeOp(i)});
+    if (t.phase==='failed') out.push({h:t.h,i:'stop',t:'This Mac stopped serving',s:t.reason[0].toUpperCase()+t.reason.slice(1),act:'Start',fn:()=>startServe(i)});
+    if (/expires in [0-9]d/.test(t.token)) out.push({h:t.h,i:'key',t:'Your key expires in 6 days',s:'Ask the admin to renew it',act:'Copy request',fn:()=>toast('Copied a renew request for your admin.')});
+  });
+  if (cur==='admin'){
+    const m = n => MEMBERS.find(x=>x.n===n);
+    if (m('An') && m('An').pres==='off' && m('An').st!=='removed') out.push({h:'s.console.so',i:'moon',t:"An's MacBook is offline",s:'2 links answer 503 until it is back',act:'Open',fn:()=>openMember('An')});
+    if (m('Dũng') && m('Dũng').st==='paused') out.push({h:'s.console.so',i:'pause',t:'Dũng is paused',s:'1 link answers 503',act:'Resume',fn:()=>memberVerb('Dũng','resume')});
+    if (m('Hà') && m('Hà').st==='left') out.push({h:'s.console.so',i:'exit',t:'Hà left',s:'remove to close the tunnel and token',act:'Remove',fn:()=>memberVerb('Hà','rm')});
+    if (m('Minh') && m('Minh').st==='pausing') out.push({h:'s.console.so',i:'redo',t:'Pausing Minh stopped at step 2',s:'the lease is stale since 14:02',act:'Finish',fn:()=>memberVerb('Minh','finish')});
+  }
+  return out;
+}
+
+/* ---------- popover ---------- */
+function renderPop(){
+  const ts=TEN[cur], links=SCN_LINKS[cur];
+  const keep=document.activeElement && pop.contains(document.activeElement) ? document.activeElement.id : null;
+  let h='';
+  const iss = issues();
+  if (!ts.length){
+    h+=`<div class="ph"><b style="flex:1;padding:3px 6px;font:600 var(--fs-title) var(--sys)">Share Bar</b><button class="ib" id="gearbtn" aria-label="Settings">${svg('gear')}</button></div>
+      <div class="first"><p>Share files from your Mac at a link on a hostname you or your team own.</p>
+      <button class="btn prim" id="fr-join">Join a team with a code…</button><button class="btn" id="fr-setup">Set up my own hostname…</button></div>`;
+  } else if (view==='issues'){
+    h+=`<div class="back"><button class="ib" id="backbtn" aria-label="Back to links">${svg('chevl')}</button><b>Needs a look</b></div><div class="list" style="padding-top:6px">`;
+    if (!iss.length) h+=`<div class="empty">Nothing needs a look.</div>`;
+    const curH = ts[Math.min(tIdx,ts.length-1)].h;
+    const hosts = [...new Set([curH, ...iss.map(x=>x.h)])].filter(hh=>iss.some(x=>x.h===hh));
+    hosts.forEach(hh=>{ h+=`<div class="ihead"><span class="mono">${esc(hh)}</span>${hh===curH?'<span class="cur">current</span>':''}</div>`;
+      iss.forEach((x,i)=>{ if (x.h!==hh) return; h+=`<div class="irow">${svg(x.i,'g')}<span class="tx">${esc(x.t)}<small>${esc(x.s)}</small></span><button class="btn" id="ia-${i}">${esc(x.act)}</button></div>`; }); });
+    h+=`</div>`;
+  } else {
+    const t=ts[Math.min(tIdx,ts.length-1)];
+    h+=`<div class="ph"><button class="tenant" id="tenantbtn" aria-haspopup="menu" aria-expanded="${tmenu}"><span>${esc(t.h)}</span>${ts.length>1?svg('chevd'):''}</button><span class="grow"></span><button class="ib" id="addbtn" aria-label="Share a file">${svg('plus')}</button><button class="ib" id="gearbtn" aria-label="Settings">${svg('gear')}</button></div>`;
+    if (tmenu) h+=`<div class="tmenu" role="menu">${ts.map((x,i)=>`<button role="menuitem" id="tm-${i}"><span class="ck">${i===tIdx?svg('check'):''}</span>${esc(x.h)}<span class="tm">${x.role}</span></button>`).join('')}<hr><button role="menuitem" id="tm-manage"><span class="ck"></span>Manage tenants…</button></div>`;
+    h+=`<div class="search">${svg('search')}<input id="q" placeholder="Search links" value="${esc(q)}" aria-label="Search links" aria-keyshortcuts="Control+Alt+S">${q?'':'<kbd class="kb2" aria-hidden="true">⌃⌥S</kbd>'}</div>`;
+    const showScope = links.some(l=>l.who!=='You');
+    if (showScope) h+=`<div class="scope" role="group" aria-label="Whose links"><button id="sc-mine" aria-pressed="${scope==='mine'}">Mine</button><button id="sc-team" aria-pressed="${scope==='team'}">Team</button></div>`;
+    let rows = links.filter(l => l.state!=='expired').filter(l => (scope==='team' || !showScope) ? true : l.who==='You');
+    if (q) rows = rows.filter(l => (l.n+' '+l.who).toLowerCase().includes(q.toLowerCase()));
+    const total=rows.length; rows=rows.slice(0,8);
+    h+=`<div class="list" role="list">`;
+    if (uploading) h+=`<div class="row up" role="listitem"><span class="ti">${svg('doc')}</span><span class="tx"><span class="nm">${esc(uploading.n)}</span><span class="mt">Uploading to this Mac · ${uploading.p}%</span></span><span class="prog"><i style="width:${uploading.p}%"></i></span></div>`;
+    if (!rows.length) h+=`<div class="empty">${q?`No links match "${esc(q)}".`:'No links yet. Drop a file on the menu bar icon to share it.'}</div>`;
+    rows.forEach(l=>{
+      const st=l.state||null;
+      const word = st==='offline'?'offline':st==='paused'?'paused':st==='expired'?'expired':st==='revoked'?'removed by admin':null;
+      const meta = [scope==='team'&&showScope ? l.who : null, l.where, word || (l.exp==='never'?null:l.exp==='live'?'live server':l.exp+' left'), (l.views!=null && !word) ? (l.views===1?'1 view':l.views+' views') : null].filter(Boolean).join(' · ');
+      h+=`<div class="row ${st?'dim':''} ${flashId===l.id?'flash':''} ${ctx&&ctx.id===l.id?'menu-open':''}" role="listitem" tabindex="0" draggable="${st==='expired'||st==='revoked'?'false':'true'}" id="r-${l.id}" data-id="${l.id}" aria-label="${esc(l.n+', '+meta)}"><span class="ti">${svg(l.t)}</span><span class="tx"><span class="nm">${esc(l.n)}</span><span class="mt">${esc(meta)}</span></span><span class="ago">${esc(l.ago)}</span><button class="ib rmore" tabindex="-1" aria-label="More for ${esc(l.n)}" data-id="${l.id}">${svg('more')}</button></div>`;
+    });
+    h+=`<button class="more" id="showall">Show all ${links.length} links…</button>`;
+    h+=`</div><div class="pf">`;
+    if (toastMsg) h+=`<span class="fstatus" role="status">${svg(toastIcon)}<span>${esc(toastMsg)}</span></span>${toastUndo?'<button class="btn" id="undo">Undo</button>':''}`;
+    else h+= iss.length ? `<button class="issue" id="issuebtn">${svg('warn')}${iss.length} need a look</button>` : `<span class="ok"><i></i>All links answer</span>`;
+    h+= toastMsg ? '</div>' : `<span class="sp"></span></div>`;
+    if (ctx) h+=ctxHTML(ctx);
+  }
+  if (dragging && ts.length){ const t=ts[tIdx]; h+=`<div class="drag" role="status">${svg('drop')}<b>Release to share on ${esc(t.h)}</b><small>Stored on ${esc(t.from.replace(' (this Mac)',''))}. Copies the link when done.</small></div>`; }
+  if (toastMsg && (!ts.length || view==='issues')) h+=`<div class="toast" id="toast"><span>${esc(toastMsg)}</span>${toastUndo?'<button id="undo">Undo</button>':''}</div>`;
+  pop.innerHTML=h;
+  document.getElementById('sbdot').hidden = !iss.length;
+  document.getElementById('sbicon').setAttribute('aria-label', iss.length ? `Share Bar, ${iss.length} need a look` : 'Share Bar');
+  bindPop(iss);
+  if (ctx) placeCtx();
+  if (keep){ const el=document.getElementById(keep); if (el){ el.focus(); if (keep==='q') el.setSelectionRange(q.length,q.length); } }
+}
+let uploading=null;
+function publishDemo(name){ uploading={n:name,p:0}; renderPop(); const t=setInterval(()=>{ uploading.p+=25; if (uploading.p>=100){ clearInterval(t); uploading=null; SCN_LINKS[cur].unshift({t:'doc',n:name,who:'You',where:'this Mac',exp:'7d',ago:'now',id:'aa'+Math.random().toString(16).slice(2,6)}); flashId=SCN_LINKS[cur][0].id; toast('Link copied: '+name); setTimeout(()=>{flashId=null;renderPop();},1200); return; } renderPop(); },450); }
+let internalDrag=false, dragHint=null, ql=null;
+function linkURL(l){ const t=TEN[cur][Math.min(tIdx,TEN[cur].length-1)]; return 'https://'+(t?t.h:'s.example.com')+'/'+l.id+'/'+encodeURIComponent(l.n); }
+function renderFootOnly(){ const f=pop.querySelector('.pf'); if (f && dragHint) f.innerHTML=`<span class="fstatus" role="status">${svg('drop')}<span>Drop to paste the link to ${esc(dragHint)}</span></span>`; }
+function qlPreview(l){
+  if (l.t==='video') return `<div class="qv"><div class="qplay"></div><div class="qbar"><i style="width:34%"></i></div></div>`;
+  if (l.t==='folder') return `<div class="qf">${['index.html','scenes/','readme.md','demo-1.mp4','demo-2.mp4'].map(n=>`<div>${svg(n.endsWith('/')?'folder':n.endsWith('.mp4')?'video':'doc')}<span>${n}</span></div>`).join('')}</div>`;
+  if (l.t==='image') return `<div class="qi"></div>`;
+  if (l.t==='page') return `<div class="qp"><div class="qpbar"><i></i><i></i><i></i></div><div class="qpbody"><b></b><p></p><p></p><p class="s"></p><div class="qpimg"></div></div></div>`;
+  if (l.t==='live') return `<div class="ql-live">${svg('live')}<b>Live server</b><span>Visitors see whatever answers on localhost:3000 right now.</span></div>`;
+  return `<div class="qd"><div class="pg"><b></b><p></p><p></p><p></p><p class="s"></p><div class="blk"></div><p></p><p class="s"></p></div></div>`;
+}
+function renderQL(){
+  const el=document.getElementById('qlhost'); if (!el) return;
+  if (!ql){ el.innerHTML=''; el.hidden=true; return; }
+  const l=linkById(ql); el.hidden=false;
+  const meta=[l.who==='You'?'You':l.who, l.where, l.exp==='never'?'never expires':l.exp==='live'?'live server':l.exp+' left', l.views!=null?(l.views===1?'1 view':l.views+' views'):null].filter(Boolean).join(' · ');
+  el.innerHTML=`<div class="qlp mac ${pop.classList.contains('dark')?'dark':''}" role="dialog" aria-label="Quick Look: ${esc(l.n)}"><div class="qlh"><button class="ib" id="ql-x" aria-label="Close">${svg('x2')}</button><span class="qln">${esc(l.n)}</span><button class="btn" id="ql-open">Open in browser</button><button class="btn prim" id="ql-copy">Copy link</button></div><div class="qlb">${qlPreview(l)}</div><div class="qlf"><span class="mono">${esc(linkURL(l))}</span><span>${esc(meta)}</span></div></div>`;
+  document.getElementById('ql-x').onclick=()=>{ const id=ql; ql=null; renderQL(); document.getElementById('r-'+id)?.focus(); };
+  document.getElementById('ql-copy').onclick=()=>{ const id=ql; ql=null; renderQL(); copyRow(id); };
+  document.getElementById('ql-open').onclick=()=>{ ql=null; renderQL(); toast('Opened '+l.n+' in your browser.'); };
+  document.getElementById('ql-copy').focus();
+}
+/* Context menu: anchored to the More button (or the pointer, or the row), opens upward when there is no room below, stays inside the popover. */
+function openCtx(id, anchor){ ctx={id, anchor}; renderPop(); placeCtx(); pop.querySelector('.ctx button')?.focus(); }
+function placeCtx(){
+  const m=pop.querySelector('.ctx'); if (!m || !ctx) return;
+  const pr=pop.getBoundingClientRect(), mw=m.offsetWidth, mh=m.offsetHeight, pad=8;
+  const row=document.getElementById('r-'+ctx.id);
+  let ax, ayTop, ayBot, alignRight=false;
+  if (ctx.anchor && ctx.anchor.x!=null){ ax=ctx.anchor.x-pr.left; ayTop=ayBot=ctx.anchor.y-pr.top; }
+  else if (row){ const b=(ctx.anchor==='more' ? row.querySelector('.rmore') : row).getBoundingClientRect(); ayTop=b.top-pr.top; ayBot=b.bottom-pr.top; if (ctx.anchor==='more'){ ax=b.right-pr.left; alignRight=true; } else ax=b.left-pr.left+32; }
+  else { ax=pad; ayTop=ayBot=pad; }
+  let left = alignRight ? ax-mw : ax;
+  left = Math.max(pad, Math.min(left, pr.width-mw-pad));
+  let top = ayBot+4;
+  if (top+mh > pr.height-pad) top = ayTop-mh-4;
+  top = Math.max(pad, Math.min(top, pr.height-mh-pad));
+  m.style.left=left+'px'; m.style.top=top+'px'; m.style.visibility='visible';
+}
+function linkById(id){ return SCN_LINKS[cur].find(l=>l.id===id); }
+function ctxHTML(c){
+  const l=linkById(c.id), own=l.who==='You', dead=l.state==='expired'||l.state==='revoked';
+  const items=[];
+  if (!dead) items.push(['copy','Copy link']);
+  if (!dead) items.push(['open','Open in browser']);
+  if (own && l.where==='this Mac') items.push(['finder','Show in Finder']);
+  if (own && l.where!=='cloud' || own && l.where==='cloud') items.push(['refresh','Refresh from source']);
+  items.push(['sep']);
+  if (own) items.push(['rm','Remove link…']);
+  else if (cur==='admin') items.push(['revoke','Revoke link…']);
+  return `<div class="ctx" role="menu" style="visibility:hidden">${items.map(([k,lab])=>k==='sep'?'<hr>':`<button role="menuitem" data-k="${k}" class="${k==='rm'||k==='revoke'?'danger':''}">${lab}</button>`).join('')}</div>`;
+}
+let toastIcon='check';
+function toast(msg, undo, icon){
+  toastMsg=msg; toastUndo=!!undo; toastIcon=icon||(undo?'check':'check'); renderPop(); clearTimeout(toastT);
+  if (undo) document.getElementById('undo')?.focus();
+  toastT=setTimeout(()=>{ const u=document.getElementById('undo'); if (!(u && u===document.activeElement)){ toastMsg=null; renderPop(); } }, undo?6000:3500);
+}
+function copyRow(id){
+  const l=linkById(id);
+  if (l.state==='expired'){ toast('This link expired, so it no longer answers. Share the file again for a new link.'); return; }
+  if (l.state==='revoked'){ toast('This link was removed by an admin.'); return; }
+  flashId=id; toast(l.state==='offline'?`Copied. ${l.where} is offline: visitors get a 503 until it is back.`:l.state==='paused'?'Copied. This member is paused: visitors get a 503.':'Link copied: '+l.n);
+  setTimeout(()=>{ flashId=null; renderPop(); },1200);
+}
+function bindPop(iss){
+  const on=(id,f)=>{ const el=document.getElementById(id); if (el) el.onclick=f; };
+  const ts=TEN[cur];
+  on('tenantbtn',()=>{ if (ts.length>1){ tmenu=!tmenu; renderPop(); document.getElementById('tm-0')?.focus(); } });
+  ts.forEach((x,i)=>on('tm-'+i,()=>{ tIdx=i; tmenu=false; renderPop(); }));
+  on('tm-manage',()=>{ tmenu=false; tab='tenants'; selTenant=tIdx; renderPop(); renderWin(); });
+  on('gearbtn',()=>{ tab='general'; renderWin(); });
+  on('addbtn',()=>publishDemo('brief-v2.pdf'));
+  on('fr-join',()=>{ tab='tenants'; renderWin(); openSheet({kind:'add',path:'join'}); });
+  on('fr-setup',()=>{ tab='tenants'; renderWin(); openSheet({kind:'add',path:'setup'}); });
+  on('sc-mine',()=>{ scope='mine'; renderPop(); });
+  on('sc-team',()=>{ scope='team'; renderPop(); });
+  on('issuebtn',()=>{ view='issues'; renderPop(); document.getElementById('backbtn')?.focus(); });
+  on('backbtn',()=>{ view='list'; renderPop(); document.getElementById('issuebtn')?.focus(); });
+  on('showall',()=>{ winMode='links'; lfilter='all'; lq=''; lsel.clear(); renderWin(); document.getElementById('lq')?.focus(); });
+  (iss||[]).forEach((x,i)=>on('ia-'+i,()=>{ x.fn(); renderPop(); }));
+  pop.querySelector('.list')?.addEventListener('scroll',()=>{ if (ctx){ ctx=null; renderPop(); } },{once:true});
+  const qi=document.getElementById('q'); if (qi) qi.oninput=e=>{ q=e.target.value; renderPop(); };
+  pop.querySelectorAll('.row').forEach(r=>{
+    r.onclick=e=>{ if (e.target.closest('.rmore')){ e.stopPropagation(); openCtx(r.dataset.id, e.target.closest('.rmore') ? 'more' : (e.type==='contextmenu' && e.clientX ? {x:e.clientX,y:e.clientY} : 'row')); return; } copyRow(r.dataset.id); };
+    r.oncontextmenu=e=>{ e.preventDefault(); openCtx(r.dataset.id, e.target.closest('.rmore') ? 'more' : (e.type==='contextmenu' && e.clientX ? {x:e.clientX,y:e.clientY} : 'row')); };
+    r.ondragstart=e=>{ const l=linkById(r.dataset.id); const url=linkURL(l); internalDrag=true; e.dataTransfer.setData('text/uri-list',url); e.dataTransfer.setData('text/plain',url); e.dataTransfer.effectAllowed='copy'; dragHint=l.n; renderFootOnly(); };
+    r.ondragend=()=>{ internalDrag=false; dragHint=null; renderPop(); };
+    r.onkeydown=e=>{
+      if (e.key===' '){ e.preventDefault(); ql=r.dataset.id; renderQL(); return; }
+      if (e.key==='Enter'){ e.preventDefault(); copyRow(r.dataset.id); }
+      if (e.key==='ContextMenu' || (e.shiftKey && e.key==='F10')){ e.preventDefault(); r.oncontextmenu(e); }
+      if (e.key==='Backspace'||e.key==='Delete'){ e.preventDefault(); const l=linkById(r.dataset.id); toast(l.who==='You'?'Removed '+l.n+'. The link stops answering.':'Revoked '+l.n+'. The file stays on '+l.where+'.', true); }
+      if (e.key==='ArrowDown'||e.key==='ArrowUp'){ e.preventDefault(); const rs=[...pop.querySelectorAll('.row')]; const i=rs.indexOf(r); rs[Math.max(0,Math.min(rs.length-1,i+(e.key==='ArrowDown'?1:-1)))].focus(); }
+    };
+  });
+  pop.querySelectorAll('.ctx button').forEach((b,i,all)=>{
+    b.onkeydown=e=>{ if(e.key==='ArrowDown'){e.preventDefault();all[(i+1)%all.length].focus();} if(e.key==='ArrowUp'){e.preventDefault();all[(i-1+all.length)%all.length].focus();} if(e.key==='Escape'){e.preventDefault();const id=ctx.id;ctx=null;renderPop();document.getElementById('r-'+id)?.focus();} };
+    b.onclick=()=>{ const id=ctx.id, l=linkById(id); ctx=null; renderPop(); const k=b.dataset.k;
+      if (k==='copy') copyRow(id);
+      else if (k==='open') toast('Opens '+l.n+' in your browser.');
+      else if (k==='finder') toast('Shows the copy under ~/share/pub in Finder.');
+      else if (k==='refresh') toast('Re-copied '+l.n+' from its source. Same link.');
+      else if (k==='rm') toast('Removed '+l.n+'. The link stops answering.', true);
+      else if (k==='revoke') toast('Revoked '+l.n+'. It stops answering now; the file stays on '+l.where+'.', true);
+    };
+  });
+  on('undo',()=>toast('Undone. Nothing changed.'));
+}
+
+/* ---------- step runner (D3 journal, made visible) ---------- */
+const STEPS = {
+  join:['Check the code','Tell the team you are joining','Save your keys in Keychain','Start the server on this Mac','Test a link through the hostname','Done'],
+  setup:['Find the zone','Create the tunnel','Add the DNS record','Store the tunnel key','Start the server','Check the hostname answers'],
+  r2:['Check the admin key','Create the bucket','Mark the bucket for this hostname','Deploy the Worker','Turn off the workers.dev address','Register existing links','Save the settings','Route the hostname to the Worker','Check three good answers'],
+  members:['Check the admin key and Workers VPC','Deploy the Worker with member routing','Mark the bucket: members on','Save the settings'],
+  resume:['Route the hostname to the Worker','Check three good answers','Done']
+};
+function runSteps(title, key, from, done, cancelLabel){
+  const steps=STEPS[key]; let i=from||0;
+  sheet={kind:'progress',title,steps,i,key,cancelLabel:cancelLabel||'Stop'};
+  renderWin();
+  clearInterval(runner);
+  runner=setInterval(()=>{ i++; if (i>=steps.length){ clearInterval(runner); runner=null; sheet=null; done(); renderWin(); renderPop(); return; } sheet.i=i; renderWin(); }, 650);
+}
+function stopRun(onStop){ clearInterval(runner); runner=null; const at=sheet.i; sheet=null; onStop(at); renderWin(); renderPop(); }
+
+/* ---------- tenant actions ---------- */
+const PHASE = {serving:'Serving', starting:'Starting', stopped:'Stopped', failed:'Stopped', tunnel_down:'Tunnel not connected'};
+function startServe(i){ const t=TEN[cur][i]; t.phase='starting'; t.reason=''; renderWin(); renderPop(); setTimeout(()=>{ t.phase='serving'; renderWin(); renderPop(); toast(t.h+' is serving from this Mac.'); },1400); }
+function resumeOp(i){ const t=TEN[cur][i]; tab='tenants'; selTenant=i; runSteps(`Resuming ${t.op.verb} on ${t.h}`,'resume',0,()=>{ t.op=null; toast(t.h+': cloud storage is on.'); }); }
+function openMember(n){ tab='members'; selMember=n; renderWin(); }
+function openSheet(s){ sheet=s; renderWin(); setTimeout(()=>(win.querySelector('.sheet input.tf, .sheet select')||win.querySelector('.sheet .btn.prim')||win.querySelector('.sheet .btn'))?.focus(),0); }
+
+/* ---------- member actions (D8) ---------- */
+function memberVerb(n, v){
+  const m=MEMBERS.find(x=>x.n===n); tab='members'; selMember=n;
+  const st=m.st;
+  if (v==='invite' || v==='rotate'){ openSheet({kind:'code',member:n,rotate:v==='rotate'}); if (v==='rotate'){ m.prev=st; m.st='invited'; m.seen='new code, expires in 7d'; } else { m.st='invited'; m.seen='code expires in 7d'; } return; }
+  if (v==='pause'){ openSheet({kind:'confirm',title:`Pause ${n}?`,body:'',impact:[['x2',`${m.links} ${m.links===1?'link on their computer answers':'links on their computer answer'} "paused" until you resume`,'bad'],['x2',`${n} cannot add links while paused`,'bad'],['check','Their cloud links keep working','good']],ok:'Pause',fn:()=>{ m.st='paused'; toast(n+' is paused.'); }}); return; }
+  if (v==='resume'){ m.st='active'; toast(n+' is active again; their links answer.'); }
+  if (v==='renew'){ openSheet({kind:'confirm',title:`Renew ${n}'s key`,body:'Extends the key by 90 days. Nothing changes on their machine.',ok:'Renew',fn:()=>toast(n+"'s key now expires in 90 days.")}); return; }
+  if (v==='rm'){ openSheet({kind:'remove-member',member:n}); return; }
+  if (v==='purge'){ MEMBERS=MEMBERS.filter(x=>x.n!==n); selMember=MEMBERS[0].n; toast(n+"'s record is deleted. The name can be used again."); }
+  if (v==='finish'){ m.st=st==='pausing'?'paused':st==='resuming'?'active':st==='rotating'?'invited':'removed'; delete m.step; delete m.stale; toast('Finished: '+n+' is '+m.st+'.'); }
+  renderWin(); renderPop();
+}
+
+/* ---------- settings window ---------- */
+const TABS=[['general','General','sliders'],['tenants','Tenants','globe'],['members','Members','people'],['advanced','Advanced','wrench']];
+function tenantButtons(t){
+  const b=[];
+  if (t.op) { b.push(['resume','Resume','prim']); b.push(['rollback','Roll back','']); }
+  if (t.phase==='stopped'||t.phase==='failed') b.push(['start','Start serving', t.op?'':'prim']);
+  if (t.phase==='serving'||t.phase==='starting'||t.phase==='tunnel_down') b.push(['stop','Stop serving','']);
+  if ((t.role==='Owner'||t.role==='Admin') && t.tier==='T0' && !t.op) b.push(['r2','Turn on cloud storage…','']);
+  if (t.role==='Admin' && t.tier==='T1' && !t.op) b.push(['members','Turn on members…','']);
+  if (t.role==='Member') b.push(['renewreq','Ask to renew key','']);
+  b.push(['openb','Open in browser','']);
+  return b;
+}
+function renderWin(){
+  if (winMode==='links'){ renderLinksWin(); return; }
+  const ts=TEN[cur];
+  const tabs = TABS.filter(x=> x[0]!=='members' || isAdmin());
+  if (!tabs.find(x=>x[0]===tab)) tab='general';
+  const keep=document.activeElement && win.contains(document.activeElement) ? document.activeElement.id : null;
+  let h=`<div class="tb"><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><div class="wtitle">${esc(tabs.find(x=>x[0]===tab)[1])}</div>${tabs.map(x=>`<button class="tab" role="tab" id="tab-${x[0]}" aria-selected="${tab===x[0]}">${svg(x[2])}${x[1]}</button>`).join('')}</div><div class="pane ${tab==='tenants'||tab==='members'?'tall':''}">`;
+  if (tab==='general'){
+    h+=`<div class="form">
+      <div class="lab">Startup</div><div class="ctl"><label><input type="checkbox" id="g-login" checked> Open Share Bar at login</label></div>
+      <div class="lab">Menu shows</div><div class="ctl"><select id="g-scope"><option>My links</option><option>Team links</option></select><small>You can switch in the menu at any time.</small></div>
+      <div class="lab">Recent links</div><div class="ctl"><select id="g-count"><option>8</option><option>5</option><option>12</option></select></div>
+      <div class="hr"></div>
+      <div class="lab">New links expire</div><div class="ctl"><select id="g-exp"><option>after 7 days</option><option>after 1 day</option><option>after 30 days</option><option>never</option></select><small>Saved as ttl= in the share config, so the command line uses it too.</small></div>
+      <div class="lab">Store new links</div><div class="ctl"><label><input type="radio" name="st" id="g-st1" checked> On this Mac</label><label><input type="radio" name="st" id="g-st2"> In the cloud</label><small>Cloud links answer while this Mac sleeps. Only on tenants with cloud storage.</small></div>
+      <div class="lab">After sharing</div><div class="ctl"><label><input type="checkbox" id="g-copy" checked> Copy the link</label><label><input type="checkbox" id="g-notify" checked> Show a notification</label></div>
+      <div class="hr"></div>
+      <div class="lab">Notify me when</div><div class="ctl"><label><input type="checkbox" id="g-n1" checked> A machine serving my links goes offline</label><label><input type="checkbox" id="g-n2"> A link is about to expire</label>${isAdmin()?'<label><input type="checkbox" id="g-n3" checked> A member needs a look</label>':''}</div>
+      <div class="lab">Shortcut</div><div class="ctl"><span class="btn mono" style="width:max-content">⌃⌥S</span><small>Opens the menu from anywhere.</small></div>
+    </div>`;
+  } else if (tab==='tenants'){
+    if (!ts.length){
+      h+=`<div class="emptypane"><b>No tenants yet</b><span>Join your team with an invite code, or set up a hostname you own.</span><button class="btn prim" id="t-add">Add a tenant…</button></div>`;
+    } else {
+      if (selTenant>=ts.length) selTenant=0;
+      const t=ts[selTenant];
+      const sline = x => x.op ? 'Interrupted' : x.phase==='failed' ? 'Stopped' : PHASE[x.phase];
+      h+=`<div class="tsplit"><div class="srcwrap"><div class="srclist" role="listbox" aria-label="Tenants">${ts.map((x,i)=>`<div class="src ${i===selTenant?'sel':''}" role="option" aria-selected="${i===selTenant}" id="tr-${i}" tabindex="0"><span class="srct"><span class="mono h">${esc(x.h)}</span><span class="r">${esc(x.role)} · ${esc(sline(x))}</span></span>${(x.op||x.phase==='failed')?'<span class="adot" aria-label="needs a look"></span>':''}</div>`).join('')}</div>
+        <div class="pmbar"><button class="pmb" id="t-add" aria-label="Add a tenant">${svg('plus')}</button><button class="pmb" id="t-rm" aria-label="Remove ${esc(t.h)}"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M3 8h10"/></svg></button></div></div>`;
+      const storage = t.tier==='T0'?'This Mac only':'This Mac and the cloud';
+      const statusTxt = t.phase==='failed' ? `Stopped: ${t.reason}` : PHASE[t.phase];
+      const dot = t.phase==='serving'?'<span class="pres on"></span>':t.phase==='starting'?'<span class="spin" aria-hidden="true"></span>':'<span class="pres off"></span>';
+      const btns = tenantButtons(t).filter(b=>!['resume','rollback','openb'].includes(b[0]));
+      h+=`<div class="detail"><div class="dhead"><h4 class="mono">${esc(t.h)}</h4><button class="ib" id="tb-openb" aria-label="Open ${esc(t.h)} in your browser" title="Open in browser">${svg('ext')}</button><span class="dstat">${dot}${esc(statusTxt)}</span></div>`;
+      if (t.op) h+=`<div class="callout">${svg('redo')}<div class="cbody"><b>Setup stopped at step ${t.op.step} of ${t.op.of}</b><small>The ${esc(t.op.name)} step did not finish. Resume continues from there; Roll back undoes the cloud storage change.</small><div class="cbtns"><button class="btn" id="tb-rollback">Roll back</button><button class="btn prim" id="tb-resume">Resume</button></div></div></div>`;
+      h+=`<dl>
+        <dt>Your role</dt><dd>${esc(t.role)}</dd>
+        <dt>Storage</dt><dd>${storage}</dd>
+        ${t.role!=='Member'?`<dt>Members</dt><dd>${t.tier==='T2'?'On':'Off'}</dd>`:''}
+        <dt>Served from</dt><dd>${esc(t.from)}</dd>
+        <dt>Key</dt><dd>${esc(t.token)}</dd>
+      </dl><div class="dbtns">${btns.map(([k,l,c])=>`<button class="btn ${t.op?'':c}" id="tb-${k}">${l}</button>`).join('')}</div></div></div>`;
+    }
+  } else if (tab==='members'){
+    const look = m => m.pres==='off'&&m.st!=='removed'&&m.links>0 || ['paused','left'].includes(m.st) || /ing$/.test(m.st);
+    let ms = MEMBERS.filter(m=>!mfilter || m.n.toLowerCase().includes(mfilter.toLowerCase()));
+    ms = mview==='look' ? ms.filter(look) : mview==='removed' ? ms.filter(m=>m.st==='removed') : ms.filter(m=>m.st!=='removed');
+    const nLook = MEMBERS.filter(look).length, nRm = MEMBERS.filter(m=>m.st==='removed').length, nAll = MEMBERS.length-nRm;
+    const stchip = m => m.st==='invited'?`<span class="chip info">Invited</span>`:m.st==='paused'?`<span class="chip quiet">Paused</span>`:m.st==='left'?`<span class="chip attention">Left</span>`:m.st==='removed'?`<span class="chip quiet">Removed</span>`:/ing$/.test(m.st)?`<span class="chip attention">${m.stale?'Stopped':m.st[0].toUpperCase()+m.st.slice(1)}</span>`:`<span class="pl ${m.pres}">${m.pres==='on'?'Online':'Offline'}</span>`;
+    const sub = m => m.st==='invited'?m.seen:/ing$/.test(m.st)?(m.stale?`pausing stopped at ${m.step}`:m.step):m.st==='left'?m.seen:m.pres==='off'&&m.st!=='removed'?`${m.mach} · ${m.seen}`:m.mach;
+    h+=`<div class="mtop"><div class="seg2 small" role="group" aria-label="Show"><button id="mv-all" aria-pressed="${mview==='all'}">All ${nAll}</button><button id="mv-look" aria-pressed="${mview==='look'}">Needs a look ${nLook}</button><button id="mv-removed" aria-pressed="${mview==='removed'}">Removed ${nRm}</button></div><span class="sp"></span><div class="search sm">${svg('search')}<input id="mf" placeholder="Search" value="${esc(mfilter)}" aria-label="Search members"></div><button class="btn prim" id="m-new">Invite…</button></div>
+      <div class="mlist" role="list">`;
+    if (!ms.length) h+=`<div class="empty">${mfilter?'No members match.':mview==='look'?'Nobody needs a look.':'No removed members.'}</div>`;
+    ms.forEach(m=>{
+      const can = CAN[m.st]||[];
+      h+=`<div class="mrow ${memberMenu===m.n?'open':''}" role="listitem" id="mr-${m.n}"><span class="av">${esc(m.n.slice(0,2))}</span><span class="mtx"><span class="mn">${esc(m.n)}</span><span class="ms">${esc(sub(m))}</span></span><span class="mst">${stchip(m)}</span><span class="mlk">${m.links?m.links+(m.links===1?' link':' links'):''}</span><button class="ib kb" id="mk-${m.n}" aria-label="Actions for ${esc(m.n)}" aria-haspopup="menu" aria-expanded="${memberMenu===m.n}">${svg('more')}</button>${memberMenu===m.n?memberMenuHTML(m,can):''}</div>`;
+    });
+    h+=`</div>`;
+  } else {
+    h+=`<div class="form">
+      <div class="lab">share CLI</div><div class="ctl"><input class="tf" id="a-cli" value="/opt/homebrew/bin/share" spellcheck="false" autocomplete="off"><small>Version 0.10.0. Every action runs this command.</small></div>
+      <div class="lab">Admin key</div><div class="ctl"><select id="a-src"><option value="1p" ${akSrc==='1p'?'selected':''}>From 1Password</option><option value="cmd" ${akSrc==='cmd'?'selected':''}>From a command</option><option value="ask" ${akSrc==='ask'?'selected':''}>Ask me each time</option></select>
+        ${akSrc==='ask'?'<small>Share Bar asks for the Cloudflare admin token before each admin action and forgets it right after.</small>':`${akSrc==='1p'?`<div class="fieldrow"><span class="picked">${svg('key')}<span><b>cf-console-labs-admin</b><small>Toolkit vault · credential</small></span></span><button class="btn" id="a-choose">Choose…</button></div>`:`<div class="fieldrow"><input class="tf" id="a-admin" spellcheck="false" autocomplete="off" value="security find-generic-password -w -s cf-admin" aria-label="Command that prints the token"></div>`}
+        <div class="fieldrow"><button class="btn" id="a-test">${akTest==='run'?'<span class="spin" aria-hidden="true"></span>Testing':'Test'}</button>${akTest==='ok'?`<span class="okline">${svg('check')}Works for tunnels, DNS and Workers</span>`:''}</div>
+        <small>Used only for admin actions such as inviting members or turning on cloud storage. The token is read when needed and never saved.</small>`}</div>
+      <div class="lab">Logs</div><div class="ctl"><button class="btn" id="a-logs" style="width:max-content">Show serve log in Finder</button></div>
+      <div class="lab">Menu style</div><div class="ctl"><label><input type="checkbox" id="a-legacy"> Use the classic menu (one release only)</label></div>
+      <div class="lab">Diagnostics</div><div class="ctl"><button class="btn" id="a-copy" style="width:max-content">Copy share state as JSON</button><small>For bug reports and agents.</small></div>
+    </div>`;
+  }
+  h+=`</div>`;
+  if (sheet) h+=sheetHTML();
+  win.innerHTML=h;
+  bindWin(tabs);
+  if (keep){ const el=document.getElementById(keep); if (el){ el.focus(); if (keep==='mf') el.setSelectionRange(mfilter.length,mfilter.length); } }
+}
+function renderLinksWin(){
+  const all=SCN_LINKS[cur], t=TEN[cur][tIdx]||{h:''};
+  const klass=l=>l.state==='expired'?'expired':l.state?'look':'live';
+  const n={all:all.length,live:all.filter(l=>klass(l)==='live').length,look:all.filter(l=>klass(l)==='look').length,expired:all.filter(l=>klass(l)==='expired').length};
+  let rows=all.filter(l=>lfilter==='all'||klass(l)===lfilter);
+  if (lq) rows=rows.filter(l=>(l.n+' '+l.who+' '+l.where).toLowerCase().includes(lq.toLowerCase()));
+  const keep=document.activeElement && win.contains(document.activeElement) ? document.activeElement.id : null;
+  const word=l=>l.state==='offline'?'Owner offline':l.state==='paused'?'Paused':l.state==='expired'?'Expired':null;
+  let h=`<div class="tb slim"><span class="lights" aria-hidden="true"><button class="lclose" id="lw-close" aria-label="Close All links"></button><i></i><i></i></span><div class="wtitle">All links on ${esc(t.h)}</div></div>
+  <div class="pane tall"><div class="mtop"><div class="seg2 small" role="group" aria-label="Show">${[['all','All'],['live','Live'],['look','Needs a look'],['expired','Expired']].map(([k,l])=>`<button id="lf-${k}" aria-pressed="${lfilter===k}">${l} ${n[k]}</button>`).join('')}</div><span class="sp"></span><div class="search sm">${svg('search')}<input id="lq" placeholder="Search" value="${esc(lq)}" aria-label="Search links" spellcheck="false"></div></div>`;
+  if (lsel.size) h+=`<div class="bulk"><span>${lsel.size} selected</span><span class="sp"></span><button class="btn" id="lb-copy">Copy links</button><button class="btn danger" id="lb-rm">Remove…</button><button class="ib" id="lb-x" aria-label="Clear selection">${svg('x2')}</button></div>`;
+  h+=`<div class="ltable" role="table"><div class="lth" role="row"><span role="columnheader"><input type="checkbox" id="l-all" aria-label="Select all" ${rows.length&&rows.every(r=>lsel.has(r.id))?'checked':''}></span><span role="columnheader">Name</span><span role="columnheader">Owner</span><span role="columnheader">Lives on</span><span role="columnheader" class="r">Expires</span><span role="columnheader" class="r">Views</span><span></span></div><div class="ltb">`;
+  if (!rows.length) h+=`<div class="empty">${lq?'No links match.':'Nothing here.'}</div>`;
+  rows.forEach(l=>{ const w=word(l);
+    h+=`<div class="ltr ${lsel.has(l.id)?'sel':''} ${l.state==='expired'?'dim':''}" role="row" id="lr-${l.id}"><span><input type="checkbox" data-id="${l.id}" ${lsel.has(l.id)?'checked':''} aria-label="Select ${esc(l.n)}"></span><span class="ln"><span class="ti">${svg(l.t)}</span><span class="tx"><span class="nm">${esc(l.n)}</span><span class="mt">${w?`<span class="wd">${w}</span> · `:''}created ${esc(l.ago==='now'?'just now':/^[0-9]/.test(l.ago)?l.ago+' ago':l.ago)}</span></span></span><span class="cell">${esc(l.who)}</span><span class="cell">${esc(l.where)}</span><span class="cell r">${esc(l.exp==='never'?'Never':l.exp==='live'?'Live':l.exp==='expired'?'Expired':l.exp)}</span><span class="cell r">${l.views!=null?l.views:''}</span><span class="cell r"><button class="ib lcopy" data-id="${l.id}" aria-label="Copy link to ${esc(l.n)}" ${l.state==='expired'?'disabled':''}>${svg('copy')}</button></span></div>`; });
+  h+=`</div></div><div class="lfoot">${all.length} links · ${all.filter(l=>l.who==='You').length} yours · Views are counted for cloud links only</div></div>`;
+  win.innerHTML=h;
+  const on=(id,f)=>{ const el=document.getElementById(id); if (el) el.onclick=f; };
+  on('lw-close',()=>{ winMode='settings'; lsel.clear(); renderWin(); });
+  ['all','live','look','expired'].forEach(k=>on('lf-'+k,()=>{ lfilter=k; lsel.clear(); renderWin(); }));
+  const qi=document.getElementById('lq'); if (qi) qi.oninput=e=>{ lq=e.target.value; renderWin(); };
+  win.querySelectorAll('.ltr input[type=checkbox]').forEach(c=>c.onchange=()=>{ c.checked?lsel.add(c.dataset.id):lsel.delete(c.dataset.id); renderWin(); });
+  const ca=document.getElementById('l-all'); if (ca) ca.onchange=()=>{ rows.forEach(r=>ca.checked?lsel.add(r.id):lsel.delete(r.id)); renderWin(); };
+  win.querySelectorAll('.lcopy').forEach(b=>b.onclick=()=>{ copyRow(b.dataset.id); });
+  on('lb-copy',()=>{ toast(`Copied ${lsel.size} links, one per line.`); lsel.clear(); renderWin(); });
+  on('lb-rm',()=>{ toast(`Removed ${lsel.size} links. They stop answering.`, true); lsel.clear(); renderWin(); });
+  on('lb-x',()=>{ lsel.clear(); renderWin(); });
+  if (keep){ const el=document.getElementById(keep); if (el){ el.focus(); if (keep==='lq') el.setSelectionRange(lq.length,lq.length); } }
+}
+function memberMenuHTML(m, can){
+  const items=[];
+  if (can.includes('finish')) items.push(['finish','Finish '+m.st.replace(/ing$/,'')+'ing']);
+  if (can.includes('resume')) items.push(['resume','Resume']);
+  if (can.includes('pause')) items.push(['pause','Pause…']);
+  if (can.includes('invite')) items.push(['invite','Send a new code']);
+  if (can.includes('rotate')) items.push(['rotate','Rotate keys…']);
+  if (can.includes('renew')) items.push(['renew','Renew key…']);
+  const danger = can.includes('purge') ? ['purge','Delete record'] : can.includes('rm') ? ['rm','Remove '+m.n+'…'] : null;
+  return `<div class="kmenu2" role="menu">${items.map(([k,l])=>`<button role="menuitem" data-v="${k}">${esc(l)}</button>`).join('')}${danger?(items.length?'<hr>':'')+`<button role="menuitem" class="danger" data-v="${danger[0]}">${esc(danger[1])}</button>`:''}</div>`;
+}
+function sheetHTML(){
+  const s=sheet; let b='';
+  if (s.kind==='add'){
+    b=`<h4>Add a tenant</h4><div class="seg2"><button id="sp-join" aria-pressed="${s.path==='join'}">Join a team</button><button id="sp-setup" aria-pressed="${s.path==='setup'}">Set up a hostname</button></div>`;
+    if (s.path==='join') b+=`<label class="fl">Invite code<input class="tf" id="sh-code" placeholder="SHR-7Q4K-M2XD-9PLA-3VTB"></label><p class="sm">Your admin sends this code. It works once. Joining takes about a minute and sets up this Mac to serve your links.</p><div class="pm"><span class="sp"></span><button class="btn" id="sh-cancel">Cancel</button><button class="btn prim" id="sh-go">Join</button></div>`;
+    else b+=`<label class="fl">Hostname<input class="tf" id="sh-host" placeholder="s.example.com"></label><label class="fl">Cloudflare admin key<select id="sh-tok"><option>Ask me now (not saved)</option><option>Run the admin key command from Advanced</option></select></label><label class="fl chk"><input type="checkbox" id="sh-r2"> Also turn on cloud storage</label><p class="sm">Creates a tunnel and a DNS record in your Cloudflare account. Links are served from this Mac.</p><div class="pm"><span class="sp"></span><button class="btn" id="sh-cancel">Cancel</button><button class="btn prim" id="sh-go">Set up</button></div>`;
+  } else if (s.kind==='progress'){
+    b=`<h4>${esc(s.title)}</h4><ol class="steps">${s.steps.map((x,i)=>`<li class="${i<s.i?'done':i===s.i?'now':''}">${i<s.i?svg('check'):i===s.i?'<span class="spin" aria-hidden="true"></span>':'<span class="dot"></span>'}${esc(x)}</li>`).join('')}</ol><p class="sm" role="status">Step ${s.i+1} of ${s.steps.length}. Stopping keeps your place; Resume continues from this step.</p><div class="pm"><span class="sp"></span><button class="btn" id="sh-stop">${esc(s.cancelLabel)}</button></div>`;
+  } else if (s.kind==='confirm'){
+    b=`<div class="shead"><h4>${esc(s.title)}</h4>${s.body?`<p class="sm">${esc(s.body)}</p>`:''}</div>${s.impact?`<ul class="impact">${s.impact.map(([ic,txt,c])=>`<li class="${c}">${svg(ic)}<span>${esc(txt)}</span></li>`).join('')}</ul>`:''}<div class="pm"><span class="sp"></span><button class="btn" id="sh-cancel">Cancel</button><button class="btn ${s.danger?'dangerf':'prim'}" id="sh-ok">${esc(s.ok)}</button></div>`;
+  } else if (s.kind==='remove-tenant'){
+    const t=TEN[cur][selTenant];
+    let body, ok='Remove', refuse=false;
+    if (t.role==='Admin' && t.tier==='T2'){ refuse=true; body=`${t.h} has members. Remove every member first; then this Mac can remove the tenant.`; }
+    else if (t.role==='Member'){ body=`You leave ${t.h}. Your links stop answering and are removed from this Mac. The admin finishes the cloud side.`; ok='Leave'; }
+    else if (t.tier==='T1'){ body=`Deletes the tunnel, the DNS record and this Mac's links. Cloud links keep answering from the bucket until they expire.`; }
+    else body=`Deletes the tunnel, the DNS record and this Mac's ${t.links} links. Visitors get a Cloudflare error.`;
+    b=`<h4>${refuse?"Can't remove "+esc(t.h)+' yet':(ok==='Leave'?'Leave ':'Remove ')+esc(t.h)+'?'}</h4><p class="sm">${esc(body)}</p><div class="pm"><span class="sp"></span><button class="btn" id="sh-cancel">${refuse?'Close':'Cancel'}</button>${refuse?'<button class="btn prim" id="sh-members">Open Members</button>':`<button class="btn dangerf" id="sh-ok">${ok}</button>`}</div>`;
+  } else if (s.kind==='remove-member'){
+    b=`<h4>Remove ${esc(s.member)}?</h4><p class="sm">Their machine links stop answering now. Their tunnel and key are deleted. Their files stay on their machine.</p><label class="fl">Their cloud links<select id="sh-cl"><option>Keep until they expire</option><option>Delete now</option></select></label><div class="pm"><span class="sp"></span><button class="btn" id="sh-cancel">Cancel</button><button class="btn dangerf" id="sh-ok">Remove</button></div>`;
+  } else if (s.kind==='code'){
+    b=`<h4>${s.rotate?'New keys for '+esc(s.member):'Invite code for '+esc(s.member)}</h4><p class="sm">${s.rotate?'Old keys stop working now. Their links keep the same addresses. They join again with this code.':'Send this to '+esc(s.member)+'. It works once, for '+(invTtl==='1'?'1 day':invTtl+' days')+'.'}</p><div class="code mono">SHR-7Q4K-M2XD-9PLA-3VTB</div><p class="sm">Share Bar shows the code only now. If it is lost, send a new one.</p><div class="pm"><span class="sp"></span><button class="btn" id="sh-copy">Copy code</button><button class="btn prim" id="sh-cancel">Done</button></div>`;
+  } else if (s.kind==='invite'){
+    const th=(TEN[cur][tIdx]||{}).h||'';
+    b=`<div class="shead"><h4>Invite to ${esc(th)}</h4><p class="sm">You get a one-time code to send them. Nothing is sent from here.</p></div>
+      <label class="fl">Name<input class="tf sans" id="sh-name" placeholder="As the team will see it" spellcheck="false" autocomplete="off"></label>
+      <fieldset class="fl"><legend>Where their links live</legend>
+        <label class="opt2 ${invMode==='machine'?'on':''}"><input type="radio" name="im" id="im-m" ${invMode==='machine'?'checked':''}><span><b>On their computer</b><small>Files stay on their machine. Links answer while it is on.</small></span></label>
+        <label class="opt2 ${invMode==='cloud'?'on':''}"><input type="radio" name="im" id="im-c" ${invMode==='cloud'?'checked':''}><span><b>In the cloud</b><small>Uploaded to the team bucket. Links answer any time.</small></span></label>
+      </fieldset>
+      <div class="fl"><span>Code expires after</span><div class="seg2 small" role="group" aria-label="Code expires after"><button id="it-1" aria-pressed="${invTtl==='1'}">1 day</button><button id="it-7" aria-pressed="${invTtl==='7'}">7 days</button><button id="it-30" aria-pressed="${invTtl==='30'}">30 days</button></div></div>
+      <div class="pm"><span class="sp"></span><button class="btn" id="sh-cancel">Cancel</button><button class="btn prim" id="sh-go">Create code</button></div>`;
+  }
+  return `<div class="scrim"></div><div class="sheet" role="dialog" aria-modal="true">${b}</div>`;
+}
+function bindWin(tabs){
+  const on=(id,f)=>{ const el=document.getElementById(id); if (el) el.onclick=f; };
+  tabs.forEach(x=>{ const b=document.getElementById('tab-'+x[0]); b.onclick=()=>{ tab=x[0]; renderWin(); document.getElementById('tab-'+tab)?.focus(); }; b.onkeydown=e=>{ if(e.key!=='ArrowRight'&&e.key!=='ArrowLeft')return; e.preventDefault(); const i=tabs.findIndex(t=>t[0]===tab); tab=tabs[(i+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length][0]; renderWin(); document.getElementById('tab-'+tab)?.focus(); }; });
+  const ts=TEN[cur];
+  win.querySelectorAll('.src').forEach(r=>{ const pick=()=>{ selTenant=+r.id.slice(3); renderWin(); document.getElementById(r.id)?.focus(); }; r.onclick=pick; r.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){e.preventDefault();pick();} }; });
+  on('t-add',()=>openSheet({kind:'add',path:isAdmin()||cur==='calm'?'setup':'join'}));
+  on('t-rm',()=>openSheet({kind:'remove-tenant'}));
+  const t=ts[selTenant];
+  on('tb-start',()=>startServe(selTenant));
+  on('tb-stop',()=>{ const all=SCN_LINKS[cur]; const here=all.filter(l=>l.where==='this Mac').length; const rest=all.length-here; openSheet({kind:'confirm',title:`Stop serving ${t.h} from this Mac?`,body:'',impact:[['x2',`${here} ${here===1?'link':'links'} on this Mac stop answering until you start again`,'bad'],['check',`${rest} cloud and member ${rest===1?'link keeps':'links keep'} working`,'good']],ok:'Stop serving',fn:()=>{ t.phase='stopped'; toast(t.h+' stopped serving from this Mac.'); }}); });
+  on('tb-resume',()=>resumeOp(selTenant));
+  on('tb-rollback',()=>openSheet({kind:'confirm',title:'Roll back cloud storage?',body:`Runs "${t.op.rollback}". The route is removed and links serve from this Mac alone again. Nothing in the bucket is deleted.`,ok:'Roll back',fn:()=>{ t.op=null; t.tier='T0'; toast('Rolled back: '+t.h+' serves from this Mac only.'); }}));
+  on('tb-r2',()=>runSteps(`Turning on cloud storage for ${t.h}`,'r2',0,()=>{ t.tier='T1'; toast(t.h+': cloud storage is on.'); }));
+  on('tb-members',()=>runSteps(`Turning on members for ${t.h}`,'members',0,()=>{ t.tier='T2'; toast(t.h+': members are on. Invite people from the Members tab.'); }));
+  on('tb-renewreq',()=>toast('Copied a renew request for your admin.'));
+  on('tb-openb',()=>toast('Opens https://'+t.h+'/ in your browser.'));
+  const mf=document.getElementById('mf'); if (mf) mf.oninput=e=>{ mfilter=e.target.value; renderWin(); };
+  ['all','look','removed'].forEach(v=>on('mv-'+v,()=>{ mview=v; memberMenu=null; renderWin(); }));
+  win.querySelectorAll('.kb').forEach(b=>b.onclick=e=>{ e.stopPropagation(); const n=b.id.slice(3); memberMenu = memberMenu===n?null:n; selMember=n; renderWin(); win.querySelector('.kmenu2 button')?.focus(); });
+  win.querySelectorAll('.kmenu2 button').forEach((b,i,all)=>{
+    b.onclick=e=>{ e.stopPropagation(); const n=memberMenu; memberMenu=null; memberVerb(n,b.dataset.v); };
+    b.onkeydown=e=>{ if(e.key==='ArrowDown'){e.preventDefault();all[(i+1)%all.length].focus();} if(e.key==='ArrowUp'){e.preventDefault();all[(i-1+all.length)%all.length].focus();} if(e.key==='Escape'){e.preventDefault();const n=memberMenu;memberMenu=null;renderWin();document.getElementById('mk-'+n)?.focus();} };
+  });
+  on('m-new',()=>openSheet({kind:'invite'}));
+  /* sheet */
+  const src=document.getElementById('a-src'); if (src) src.onchange=()=>{ akSrc=src.value; akTest=null; renderWin(); };
+  on('a-choose',()=>toast('Opens the 1Password item picker.'));
+  on('a-test',()=>{ akTest='run'; renderWin(); setTimeout(()=>{ akTest='ok'; renderWin(); },900); });
+  on('im-m',()=>{ invMode='machine'; renderWin(); }); on('im-c',()=>{ invMode='cloud'; renderWin(); });
+  ['1','7','30'].forEach(d=>on('it-'+d,()=>{ invTtl=d; renderWin(); }));
+  on('sh-cancel',()=>{ sheet=null; renderWin(); });
+  on('sp-join',()=>{ sheet.path='join'; renderWin(); document.getElementById('sh-code')?.focus(); });
+  on('sp-setup',()=>{ sheet.path='setup'; renderWin(); document.getElementById('sh-host')?.focus(); });
+  on('sh-ok',()=>{ const s=sheet; sheet=null;
+    if (s.kind==='confirm') s.fn();
+    if (s.kind==='remove-tenant'){ const x=TEN[cur][selTenant]; TEN[cur].splice(selTenant,1); selTenant=0; tIdx=0; toast((x.role==='Member'?'Left ':'Removed ')+x.h+'.'); }
+    if (s.kind==='remove-member'){ const m=MEMBERS.find(y=>y.n===s.member); m.st='removed'; m.pres=null; m.seen='removed just now'; toast(s.member+' is removed. Their machine links stopped answering.'); }
+    renderWin(); renderPop(); });
+  on('sh-members',()=>{ sheet=null; tab='members'; renderWin(); });
+  on('sh-copy',()=>toast('Invite code copied.'));
+  on('sh-go',()=>{ const s=sheet;
+    if (s.kind==='invite'){ const n=(document.getElementById('sh-name').value||'linh').trim(); MEMBERS.push({n,st:'invited',pres:null,seen:`code expires in ${invTtl}d`,links:0,mach:invMode==='cloud'?'cloud only':'none yet'}); selMember=n; sheet={kind:'code',member:n}; renderWin(); return; }
+    if (s.path==='join'){ runSteps('Joining s.console.so','join',0,()=>{ TEN[cur].push({h:'s.console.so',role:'Member',tier:'T2',from:'this Mac',phase:'serving',reason:'',token:'Keychain, expires in 90d',links:0}); selTenant=TEN[cur].length-1; toast('You joined s.console.so.'); }); }
+    else { const host=(document.getElementById('sh-host').value||'s.example.com').trim(); runSteps('Setting up '+host,'setup',0,()=>{ TEN[cur].push({h:host,role:'Owner',tier:'T0',from:'Mini (this Mac)',phase:'serving',reason:'',token:'asks each time',links:0}); selTenant=TEN[cur].length-1; toast(host+' is serving from this Mac.'); }); }
+  });
+  on('sh-stop',()=>{ const key=sheet.key, title=sheet.title;
+    stopRun(at=>{
+      if (key==='join'){ TEN[cur].push({h:'s.console.so',role:'Member',tier:'T2',from:'this Mac',phase:'stopped',reason:'',token:'Keychain',links:0,op:{verb:'join',step:at+1,of:STEPS.join.length,name:STEPS.join[at].toLowerCase(),rerun:'share join',rollback:'share leave --local'}}); selTenant=TEN[cur].length-1; }
+      else if (key!=='resume' && key!=='setup'){ const tt=TEN[cur][selTenant]; tt.op={verb:key==='r2'?'setup --r2':'setup --members',step:at+1,of:STEPS[key].length,name:STEPS[key][at].toLowerCase(),rerun:'share setup '+tt.h+(key==='r2'?' --r2':' --r2 --members'),rollback:'share setup '+tt.h+' --no-r2'}; }
+      toast('Stopped at step '+(at+1)+'. Resume continues from there.');
+    }); });
+  win.querySelector('.sheet')?.addEventListener('keydown',e=>{ if (e.key==='Escape' && sheet && sheet.kind!=='progress'){ sheet=null; renderWin(); } });
+}
+
+/* ---------- page wiring ---------- */
+function pageDark(){ const t=document.documentElement.dataset.theme; return t==='dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches); }
+function applyAppearance(){ const d = appearance==='dark' || (appearance==='match' && pageDark()); pop.classList.toggle('dark',d); win.classList.toggle('dark',d); document.getElementById('desk').classList.toggle('dark-desk',d); }
+document.querySelectorAll('#scn button').forEach(b=>b.onclick=()=>{ cur=b.dataset.s; TEN=mkTenants(); MEMBERS=mkMembers(); tIdx=0; selTenant=0; view='list'; scope='mine'; q=''; tmenu=false; ctx=null; sheet=null; memberMenu=null; mview='all'; clearInterval(runner); toastMsg=null; tab=cur==='firstrun'?'tenants':'tenants'; document.querySelectorAll('#scn button').forEach(x=>x.setAttribute('aria-pressed',String(x===b))); renderPop(); renderWin(); });
+document.querySelectorAll('#appearance button').forEach(b=>b.onclick=()=>{ appearance=b.dataset.a; document.querySelectorAll('#appearance button').forEach(x=>x.setAttribute('aria-pressed',String(x===b))); applyAppearance(); });
+document.getElementById('dragbtn').onclick=e=>{ dragging=!dragging; e.currentTarget.setAttribute('aria-pressed',String(dragging)); renderPop(); };
+const desk=document.getElementById('desk');
+desk.addEventListener('dragover',e=>{ if (internalDrag) return; e.preventDefault(); if(!dragging){dragging=true;renderPop();} });
+desk.addEventListener('dragleave',e=>{ if(!desk.contains(e.relatedTarget)){dragging=false;renderPop();} });
+desk.addEventListener('drop',e=>{ if (internalDrag) return; e.preventDefault(); dragging=false; toast('Sharing '+(e.dataTransfer.files[0]?.name||'the file')+'. The link is copied when it is ready.'); });
+document.addEventListener('keydown',e=>{ if(e.ctrlKey&&e.altKey&&e.code==='KeyS'){ e.preventDefault(); view='list'; ctx=null; tmenu=false; renderPop(); document.getElementById('q')?.focus(); return; } if(ql&&(e.key==='Escape'||e.key===' ')&&!e.target.closest('input')){ e.preventDefault(); const id=ql; ql=null; renderQL(); document.getElementById('r-'+id)?.focus(); return; } if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='z'&&toastUndo&&toastMsg){ e.preventDefault(); toast('Undone. Nothing changed.'); } if(e.key==='Escape'&&(tmenu||ctx)){ tmenu=false; ctx=null; renderPop(); } });
+document.addEventListener('click',e=>{ if(memberMenu && !e.target.closest('.kmenu2') && !e.target.closest('.kb')){ memberMenu=null; renderWin(); } if((tmenu||ctx) && !e.target.closest('.tmenu') && !e.target.closest('.ctx') && !e.target.closest('#tenantbtn')){ tmenu=false; ctx=null; renderPop(); } });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',applyAppearance);
+new MutationObserver(applyAppearance).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+renderPop(); renderWin(); applyAppearance();
+</script>
