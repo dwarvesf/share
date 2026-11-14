@@ -219,13 +219,74 @@ select,.tf{font:var(--fs-body) var(--sys);color:var(--label);background:var(--fi
 .first{padding:6px 14px 16px;display:flex;flex-direction:column;gap:8px}
 .first p{margin:0 0 4px;color:var(--label-2)}
 @media (prefers-reduced-motion:reduce){.spin{animation:none}}
+/* r5: settings panes */
+.pane{padding:16px 20px 20px;min-height:400px}
+.tsplit{display:grid;grid-template-columns:190px minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:560px){.tsplit{grid-template-columns:1fr}}
+.srcwrap{display:flex;flex-direction:column}
+.srclist{border:1px solid var(--sep);border-bottom:0;border-radius:7px 7px 0 0;background:var(--field);padding:4px;display:flex;flex-direction:column;gap:2px;min-height:300px}
+.src{display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:5px;cursor:pointer;outline:none}
+.src:hover{background:var(--hover)}
+.src.sel{background:var(--state-info);color:#fff}
+.src.sel .r{color:rgba(255,255,255,.85)}
+.src:focus-visible{box-shadow:0 0 0 2px var(--focus)}
+.srct{display:flex;flex-direction:column;min-width:0;flex:1;line-height:1.3}
+.srct .h{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.srct .r{font-size:var(--fs-meta);color:var(--label-2)}
+.adot{width:7px;height:7px;border-radius:50%;background:var(--state-attention);flex:none}
+.src.sel .adot{background:#fff}
+.pmbar{display:flex;border:1px solid var(--sep);border-radius:0 0 7px 7px;background:var(--field)}
+.pmb{width:28px;height:22px;border:0;border-right:1px solid var(--sep);background:transparent;color:var(--label);display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.pmb:hover{background:var(--hover)}
+.pmb svg{width:12px;height:12px}
+.detail{min-width:0}
+.dhead{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.dhead h4{margin:0;font:600 17px var(--mono)}
+.dstat{display:inline-flex;align-items:center;color:var(--label-2);margin-left:4px}
+.detail dl{display:grid;grid-template-columns:96px minmax(0,1fr);gap:8px 14px;margin:0 0 18px}
+.detail dt{color:var(--label-2);text-align:left}
+.detail dd{margin:0;min-width:0}
+.dbtns{display:flex;flex-wrap:wrap;gap:8px}
+.callout{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:color-mix(in srgb,var(--state-attention) 10%,var(--field));margin-bottom:16px;flex-wrap:wrap}
+.callout>svg{width:16px;height:16px;color:var(--state-attention-ink);flex:none}
+.callout .cbody{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.callout .cbtns{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+.callout{align-items:flex-start}
+.callout small{color:var(--label-2);font-size:var(--fs-meta)}
+.emptypane{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:360px;text-align:center;color:var(--label-2)}
+.emptypane b{color:var(--label);font-size:var(--fs-title)}
+.mtop{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.mtop .sp{flex:1}
+.seg2.small button{font-size:var(--fs-meta);padding:4px 10px;flex:none}
+.search.sm{margin:0;width:150px;height:26px}
+.mlist{border:1px solid var(--sep);border-radius:8px;background:var(--field);max-height:330px;overflow-y:auto;overflow-x:hidden}
+.mrow{display:grid;grid-template-columns:28px minmax(0,1fr) 92px 52px 28px;align-items:center;gap:10px;padding:7px 8px 7px 10px;border-bottom:1px solid var(--sep);position:relative;height:auto;margin:0;border-radius:0}
+.mrow:last-child{border-bottom:0}
+.mrow:hover,.mrow.open{background:var(--hover)}
+.av{width:26px;height:26px;border-radius:50%;background:rgba(var(--p-ink-a),.08);display:inline-flex;align-items:center;justify-content:center;font:600 10.5px var(--sys);color:var(--label-2)}
+.mtx{display:flex;flex-direction:column;min-width:0;line-height:1.3}
+.mn{font-weight:500}
+.ms{font-size:var(--fs-meta);color:var(--label-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mst{display:flex}
+.pl{font-size:var(--fs-meta);color:var(--label-2);display:inline-flex;align-items:center;gap:5px}
+.pl::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--state-ok)}
+.pl.off::before{background:transparent;border:1.5px solid var(--label-3);width:5px;height:5px}
+.mlk{font-size:var(--fs-meta);color:var(--label-2);text-align:right;font-variant-numeric:tabular-nums}
+.kb{opacity:.55}
+.mrow:hover .kb,.mrow.open .kb,.kb:focus-visible{opacity:1}
+.kmenu2{position:absolute;right:8px;top:calc(100% - 4px);z-index:6;background:var(--bg);border-radius:8px;box-shadow:0 0 0 .5px rgba(0,0,0,.2),0 10px 30px rgba(0,0,0,.25);padding:4px;min-width:180px;backdrop-filter:blur(30px);-webkit-backdrop-filter:blur(30px)}
+.kmenu2 button{display:block;width:100%;text-align:left;border:0;background:transparent;color:var(--label);font:400 var(--fs-body) var(--sys);padding:4px 8px;border-radius:4px;cursor:pointer}
+.kmenu2 button:hover,.kmenu2 button:focus-visible{background:var(--state-info);color:#fff;outline:none}
+.kmenu2 button.danger{color:var(--state-error-ink)}
+.kmenu2 button.danger:hover,.kmenu2 button.danger:focus-visible{color:#fff}
+.kmenu2 hr{border:0;border-top:1px solid var(--sep);margin:4px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 
 <div class="wrap">
   <header>
-    <h1>Share Bar, revision 4: every control mapped</h1>
-    <p class="lede">The menu shows your recent links and nothing else. Team status, members and machines move to Settings. A single line at the bottom appears only when something needs a hand. Built for a team of ten or more. Revision 4 makes every button run its real workflow: open Settings and try Tenants and Members, right-click a link, or pick First run.</p>
+    <h1>Share Bar, revision 5: Settings rebuilt</h1>
+    <p class="lede">The menu shows your recent links and nothing else. Team status, members and machines move to Settings. A single line at the bottom appears only when something needs a hand. Built for a team of ten or more. Revision 5 rebuilds Members and Tenants on the pattern real team tools use (a row menu instead of a button bar, a source list instead of a table) and was checked in 20 screenshotted states, light, dark and narrow. Every button runs its real workflow: open Settings and try Tenants and Members, right-click a link, or pick First run.</p>
   </header>
 
   <section aria-label="Prototype">
@@ -361,6 +422,8 @@ const IC = {
   sliders:'<path d="M3 4h10M3 8h10M3 12h10"/><circle cx="6" cy="4" r="1.5" fill="currentColor"/><circle cx="10" cy="8" r="1.5" fill="currentColor"/><circle cx="5" cy="12" r="1.5" fill="currentColor"/>',
   globe:'<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/>', people:'<circle cx="6" cy="5.5" r="2.3"/><path d="M1.8 13.5c.5-2.5 2.2-3.8 4.2-3.8s3.7 1.3 4.2 3.8"/><circle cx="11.3" cy="6" r="1.8"/><path d="M10.5 9.8c1.9.1 3.3 1.3 3.7 3.7"/>',
   wrench:'<path d="M10.5 2.5a3 3 0 0 0-3 4l-5 5 2 2 5-5a3 3 0 0 0 4-3l-1.8 1.3-1.7-.5-.5-1.7z"/>', check:'<path d="M3.5 8.5l3 3 6-6.5"/>',
+  ext:'<path d="M9 2.5h4.5V7M13.5 2.5L7.5 8.5M12 9.5V13a.5.5 0 0 1-.5.5h-8A.5.5 0 0 1 3 13V5a.5.5 0 0 1 .5-.5H7"/>',
+  more:'<circle cx="3.5" cy="8" r="1.1" fill="currentColor"/><circle cx="8" cy="8" r="1.1" fill="currentColor"/><circle cx="12.5" cy="8" r="1.1" fill="currentColor"/>',
   key:'<circle cx="5" cy="10" r="2.5"/><path d="M7 8.5L13 2.5M11 4.5l1.5 1.5M9.5 6l1.2 1.2"/>', stop:'<rect x="4" y="4" width="8" height="8" rx="1"/>', redo:'<path d="M12.5 6.5A5 5 0 1 0 13 9"/><path d="M13 3v3.5H9.5"/>'
 };
 const svg = (k, cls='') => `<svg class="${cls}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[k]}</svg>`;
@@ -420,7 +483,7 @@ const SCN_LINKS = {
 };
 let TEN = mkTenants(), MEMBERS = mkMembers();
 let cur='admin', tIdx=0, view='list', scope='mine', q='', tmenu=false, ctx=null, dragging=false, flashId=null, toastMsg=null, toastUndo=false, toastT=null, appearance='match';
-let tab='tenants', selTenant=0, selMember='An', mfilter='', sheet=null, runner=null;
+let tab='tenants', selTenant=0, selMember='An', mfilter='', mview='all', memberMenu=null, sheet=null, runner=null;
 const pop=document.getElementById('pop'), win=document.getElementById('win');
 const isAdmin = () => TEN[cur].some(t=>t.role==='Admin');
 
@@ -557,11 +620,11 @@ function bindPop(iss){
 
 /* ---------- step runner (D3 journal, made visible) ---------- */
 const STEPS = {
-  join:['redeem: checking the code','record: telling the team you are joining','store: saving your keys in Keychain','serve: starting the server on this Mac','probe: checking a test link','done'],
-  setup:['zone: finding the zone','tunnel: creating the tunnel','dns: adding the DNS record','token: storing the tunnel key','service: starting the server','live: checking the hostname'],
-  r2:['checks: proving the admin token','bucket','marker','worker: deploying the Worker','workers.dev off','pointers for existing links','config','route','health: three good answers'],
-  members:['checks: scopes and Workers VPC','worker: deploying Worker v5','marker: members on','config: members=on'],
-  resume:['route: attaching the route','alias: none','health: three good answers','done']
+  join:['Check the code','Tell the team you are joining','Save your keys in Keychain','Start the server on this Mac','Test a link through the hostname','Done'],
+  setup:['Find the zone','Create the tunnel','Add the DNS record','Store the tunnel key','Start the server','Check the hostname answers'],
+  r2:['Check the admin key','Create the bucket','Mark the bucket for this hostname','Deploy the Worker','Turn off the workers.dev address','Register existing links','Save the settings','Route the hostname to the Worker','Check three good answers'],
+  members:['Check the admin key and Workers VPC','Deploy the Worker with member routing','Mark the bucket: members on','Save the settings'],
+  resume:['Route the hostname to the Worker','Check three good answers','Done']
 };
 function runSteps(title, key, from, done, cancelLabel){
   const steps=STEPS[key]; let i=from||0;
@@ -577,7 +640,7 @@ const PHASE = {serving:'Serving', starting:'Starting', stopped:'Stopped', failed
 function startServe(i){ const t=TEN[cur][i]; t.phase='starting'; t.reason=''; renderWin(); renderPop(); setTimeout(()=>{ t.phase='serving'; renderWin(); renderPop(); toast(t.h+' is serving from this Mac.'); },1400); }
 function resumeOp(i){ const t=TEN[cur][i]; tab='tenants'; selTenant=i; runSteps(`Resuming ${t.op.verb} on ${t.h}`,'resume',0,()=>{ t.op=null; toast(t.h+': cloud storage is on.'); }); }
 function openMember(n){ tab='members'; selMember=n; renderWin(); }
-function openSheet(s){ sheet=s; renderWin(); setTimeout(()=>win.querySelector('.sheet input, .sheet button')?.focus(),0); }
+function openSheet(s){ sheet=s; renderWin(); setTimeout(()=>(win.querySelector('.sheet input.tf, .sheet select')||win.querySelector('.sheet .btn.prim')||win.querySelector('.sheet .btn'))?.focus(),0); }
 
 /* ---------- member actions (D8) ---------- */
 function memberVerb(n, v){
@@ -627,34 +690,42 @@ function renderWin(){
     </div>`;
   } else if (tab==='tenants'){
     if (!ts.length){
-      h+=`<div class="empty" style="padding:40px 20px">No tenants yet.<br><br><button class="btn prim" id="t-add">Add a tenant…</button></div>`;
+      h+=`<div class="emptypane"><b>No tenants yet</b><span>Join your team with an invite code, or set up a hostname you own.</span><button class="btn prim" id="t-add">Add a tenant…</button></div>`;
     } else {
       if (selTenant>=ts.length) selTenant=0;
       const t=ts[selTenant];
-      h+=`<div class="tsplit"><div><div class="tblwrap"><table class="tbl"><thead><tr><th>Hostname</th><th>Role</th></tr></thead><tbody>${ts.map((x,i)=>`<tr class="${i===selTenant?'sel':''}" id="tr-${i}" tabindex="0"><td class="mono">${esc(x.h)}${(x.op||x.phase==='failed')?` <span class="chip attention">${svg('warn')}</span>`:''}</td><td>${esc(x.role)}</td></tr>`).join('')}</tbody></table></div>
-        <div class="pm"><button class="btn" id="t-add" aria-label="Add a tenant">＋ Add</button><button class="btn" id="t-rm" aria-label="Remove ${esc(t.h)}">－ Remove</button></div></div>`;
+      const sline = x => x.op ? 'Interrupted' : x.phase==='failed' ? 'Stopped' : PHASE[x.phase];
+      h+=`<div class="tsplit"><div class="srcwrap"><div class="srclist" role="listbox" aria-label="Tenants">${ts.map((x,i)=>`<div class="src ${i===selTenant?'sel':''}" role="option" aria-selected="${i===selTenant}" id="tr-${i}" tabindex="0"><span class="srct"><span class="mono h">${esc(x.h)}</span><span class="r">${esc(x.role)} · ${esc(sline(x))}</span></span>${(x.op||x.phase==='failed')?'<span class="adot" aria-label="needs a look"></span>':''}</div>`).join('')}</div>
+        <div class="pmbar"><button class="pmb" id="t-add" aria-label="Add a tenant">${svg('plus')}</button><button class="pmb" id="t-rm" aria-label="Remove ${esc(t.h)}"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M3 8h10"/></svg></button></div></div>`;
       const storage = t.tier==='T0'?'This Mac only':'This Mac and the cloud';
-      const status = t.phase==='failed' ? `Stopped: ${t.reason}` : PHASE[t.phase];
-      h+=`<div class="detail"><h4 class="mono">${esc(t.h)}</h4><dl>
+      const statusTxt = t.phase==='failed' ? `Stopped: ${t.reason}` : PHASE[t.phase];
+      const dot = t.phase==='serving'?'<span class="pres on"></span>':t.phase==='starting'?'<span class="spin" aria-hidden="true"></span>':'<span class="pres off"></span>';
+      const btns = tenantButtons(t).filter(b=>!['resume','rollback','openb'].includes(b[0]));
+      h+=`<div class="detail"><div class="dhead"><h4 class="mono">${esc(t.h)}</h4><button class="ib" id="tb-openb" aria-label="Open ${esc(t.h)} in your browser" title="Open in browser">${svg('ext')}</button><span class="dstat">${dot}${esc(statusTxt)}</span></div>`;
+      if (t.op) h+=`<div class="callout">${svg('redo')}<div class="cbody"><b>Setup stopped at step ${t.op.step} of ${t.op.of}</b><small>The ${esc(t.op.name)} step did not finish. Resume continues from there; Roll back undoes the cloud storage change.</small><div class="cbtns"><button class="btn" id="tb-rollback">Roll back</button><button class="btn prim" id="tb-resume">Resume</button></div></div></div>`;
+      h+=`<dl>
         <dt>Your role</dt><dd>${esc(t.role)}</dd>
         <dt>Storage</dt><dd>${storage}</dd>
         ${t.role!=='Member'?`<dt>Members</dt><dd>${t.tier==='T2'?'On':'Off'}</dd>`:''}
         <dt>Served from</dt><dd>${esc(t.from)}</dd>
-        <dt>Status</dt><dd>${t.phase==='serving'?'<span class="pres on"></span>':t.phase==='starting'?'<span class="spin" aria-hidden="true"></span>':'<span class="pres off"></span>'}${esc(status)}</dd>
         <dt>Key</dt><dd>${esc(t.token)}</dd>
-        ${t.op?`<dt>Interrupted</dt><dd class="att">${esc(t.op.verb)} stopped at step ${t.op.step} of ${t.op.of} (${esc(t.op.name)})</dd>`:''}
-      </dl><div class="pm">${tenantButtons(t).map(([k,l,c])=>`<button class="btn ${c}" id="tb-${k}">${l}</button>`).join('')}</div></div></div>`;
+      </dl><div class="dbtns">${btns.map(([k,l,c])=>`<button class="btn ${t.op?'':c}" id="tb-${k}">${l}</button>`).join('')}</div></div></div>`;
     }
   } else if (tab==='members'){
-    const ms = MEMBERS.filter(m=>!mfilter || m.n.toLowerCase().includes(mfilter.toLowerCase()));
-    const sel = MEMBERS.find(m=>m.n===selMember) || MEMBERS[0];
-    const stchip = m => m.st==='invited'?`<span class="chip info">Invited</span>`:m.st==='paused'?`<span class="chip quiet">Paused</span>`:m.st==='left'?`<span class="chip attention">Left</span>`:m.st==='removed'?`<span class="chip quiet">Removed</span>`:/ing$/.test(m.st)?`<span class="chip attention">${m.st[0].toUpperCase()+m.st.slice(1)}${m.stale?', stopped':''}</span>`:'';
-    const can = CAN[sel.st]||[];
-    const btn = (v,l,cls='') => { const ok=can.includes(v); return `<button class="btn ${cls}" id="m-${v}" ${ok?'':'disabled'} title="${ok?'':esc(WHY[v]||'')}">${l}</button>`; };
-    h+=`<div class="filter"><input class="tf" style="font-family:var(--sys)" id="mf" placeholder="Search ${MEMBERS.length} members" value="${esc(mfilter)}" aria-label="Search members"><span style="color:var(--label-2);font-size:12px">${MEMBERS.filter(m=>m.pres==='on').length} online</span><span class="sp" style="flex:1"></span><button class="btn prim" id="m-new">Invite…</button></div>
-      <div class="tblwrap"><table class="tbl"><thead><tr><th>Name</th><th>Status</th><th>Machine</th><th>Links</th></tr></thead><tbody>${ms.map(m=>`<tr class="${m.n===sel.n?'sel':''}" id="mr-${m.n}" tabindex="0"><td>${m.pres?`<span class="pres ${m.pres}" role="img" aria-label="${m.pres==='on'?'online':'offline'}"></span>`:'<span class="pres" style="visibility:hidden"></span>'}${esc(m.n)}</td><td>${stchip(m)} <span style="color:var(--label-2);font-size:11px">${esc(m.step||m.seen)}</span></td><td>${esc(m.mach)}</td><td>${m.links}</td></tr>`).join('')}</tbody></table></div>
-      <div class="pm"><span style="font-size:12px;color:var(--label-2)">${esc(sel.n)}:</span>${can.includes('finish')?btn('finish','Finish','prim'):''}${btn('pause','Pause')}${btn('resume','Resume')}${btn('invite','Send a new code')}${btn('rotate','Rotate keys…')}${btn('renew','Renew…')}${sel.st==='removed'?btn('purge','Purge','danger'):btn('rm','Remove…','danger')}</div>
-      <p class="why">${can.length?'':''}Buttons follow the member's status. Hover a dimmed button to see why it is off.</p>`;
+    const look = m => m.pres==='off'&&m.st!=='removed'&&m.links>0 || ['paused','left'].includes(m.st) || /ing$/.test(m.st);
+    let ms = MEMBERS.filter(m=>!mfilter || m.n.toLowerCase().includes(mfilter.toLowerCase()));
+    ms = mview==='look' ? ms.filter(look) : mview==='removed' ? ms.filter(m=>m.st==='removed') : ms.filter(m=>m.st!=='removed');
+    const nLook = MEMBERS.filter(look).length, nRm = MEMBERS.filter(m=>m.st==='removed').length, nAll = MEMBERS.length-nRm;
+    const stchip = m => m.st==='invited'?`<span class="chip info">Invited</span>`:m.st==='paused'?`<span class="chip quiet">Paused</span>`:m.st==='left'?`<span class="chip attention">Left</span>`:m.st==='removed'?`<span class="chip quiet">Removed</span>`:/ing$/.test(m.st)?`<span class="chip attention">${m.stale?'Stopped':m.st[0].toUpperCase()+m.st.slice(1)}</span>`:`<span class="pl ${m.pres}">${m.pres==='on'?'Online':'Offline'}</span>`;
+    const sub = m => m.st==='invited'?m.seen:/ing$/.test(m.st)?(m.stale?`pausing stopped at ${m.step}`:m.step):m.st==='left'?m.seen:m.pres==='off'&&m.st!=='removed'?`${m.mach} · ${m.seen}`:m.mach;
+    h+=`<div class="mtop"><div class="seg2 small" role="group" aria-label="Show"><button id="mv-all" aria-pressed="${mview==='all'}">All ${nAll}</button><button id="mv-look" aria-pressed="${mview==='look'}">Needs a look ${nLook}</button><button id="mv-removed" aria-pressed="${mview==='removed'}">Removed ${nRm}</button></div><span class="sp"></span><div class="search sm">${svg('search')}<input id="mf" placeholder="Search" value="${esc(mfilter)}" aria-label="Search members"></div><button class="btn prim" id="m-new">Invite…</button></div>
+      <div class="mlist" role="list">`;
+    if (!ms.length) h+=`<div class="empty">${mfilter?'No members match.':mview==='look'?'Nobody needs a look.':'No removed members.'}</div>`;
+    ms.forEach(m=>{
+      const can = CAN[m.st]||[];
+      h+=`<div class="mrow ${memberMenu===m.n?'open':''}" role="listitem" id="mr-${m.n}"><span class="av">${esc(m.n.slice(0,2))}</span><span class="mtx"><span class="mn">${esc(m.n)}</span><span class="ms">${esc(sub(m))}</span></span><span class="mst">${stchip(m)}</span><span class="mlk">${m.links?m.links+(m.links===1?' link':' links'):''}</span><button class="ib kb" id="mk-${m.n}" aria-label="Actions for ${esc(m.n)}" aria-haspopup="menu" aria-expanded="${memberMenu===m.n}">${svg('more')}</button>${memberMenu===m.n?memberMenuHTML(m,can):''}</div>`;
+    });
+    h+=`</div>`;
   } else {
     h+=`<div class="form">
       <div class="lab">share CLI</div><div class="ctl"><input class="tf" id="a-cli" value="/opt/homebrew/bin/share"><small>Version 0.10.0. Every action runs this command.</small></div>
@@ -669,6 +740,17 @@ function renderWin(){
   win.innerHTML=h;
   bindWin(tabs);
   if (keep){ const el=document.getElementById(keep); if (el){ el.focus(); if (keep==='mf') el.setSelectionRange(mfilter.length,mfilter.length); } }
+}
+function memberMenuHTML(m, can){
+  const items=[];
+  if (can.includes('finish')) items.push(['finish','Finish '+m.st.replace(/ing$/,'')+'ing']);
+  if (can.includes('resume')) items.push(['resume','Resume']);
+  if (can.includes('pause')) items.push(['pause','Pause…']);
+  if (can.includes('invite')) items.push(['invite','Send a new code']);
+  if (can.includes('rotate')) items.push(['rotate','Rotate keys…']);
+  if (can.includes('renew')) items.push(['renew','Renew key…']);
+  const danger = can.includes('purge') ? ['purge','Delete record'] : can.includes('rm') ? ['rm','Remove '+m.n+'…'] : null;
+  return `<div class="kmenu2" role="menu">${items.map(([k,l])=>`<button role="menuitem" data-v="${k}">${esc(l)}</button>`).join('')}${danger?(items.length?'<hr>':'')+`<button role="menuitem" class="danger" data-v="${danger[0]}">${esc(danger[1])}</button>`:''}</div>`;
 }
 function sheetHTML(){
   const s=sheet; let b='';
@@ -701,7 +783,7 @@ function bindWin(tabs){
   const on=(id,f)=>{ const el=document.getElementById(id); if (el) el.onclick=f; };
   tabs.forEach(x=>{ const b=document.getElementById('tab-'+x[0]); b.onclick=()=>{ tab=x[0]; renderWin(); document.getElementById('tab-'+tab)?.focus(); }; b.onkeydown=e=>{ if(e.key!=='ArrowRight'&&e.key!=='ArrowLeft')return; e.preventDefault(); const i=tabs.findIndex(t=>t[0]===tab); tab=tabs[(i+(e.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length][0]; renderWin(); document.getElementById('tab-'+tab)?.focus(); }; });
   const ts=TEN[cur];
-  win.querySelectorAll('tr[id^=tr-]').forEach(r=>{ const pick=()=>{ selTenant=+r.id.slice(3); renderWin(); document.getElementById(r.id)?.focus(); }; r.onclick=pick; r.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){e.preventDefault();pick();} }; });
+  win.querySelectorAll('.src').forEach(r=>{ const pick=()=>{ selTenant=+r.id.slice(3); renderWin(); document.getElementById(r.id)?.focus(); }; r.onclick=pick; r.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){e.preventDefault();pick();} }; });
   on('t-add',()=>openSheet({kind:'add',path:isAdmin()||cur==='calm'?'setup':'join'}));
   on('t-rm',()=>openSheet({kind:'remove-tenant'}));
   const t=ts[selTenant];
@@ -714,13 +796,17 @@ function bindWin(tabs){
   on('tb-renewreq',()=>toast('Copied a renew request for your admin.'));
   on('tb-openb',()=>toast('Opens https://'+t.h+'/ in your browser.'));
   const mf=document.getElementById('mf'); if (mf) mf.oninput=e=>{ mfilter=e.target.value; renderWin(); };
-  win.querySelectorAll('tr[id^=mr-]').forEach(r=>{ const pick=()=>{ selMember=r.id.slice(3); renderWin(); document.getElementById(r.id)?.focus(); }; r.onclick=pick; r.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){e.preventDefault();pick();} }; });
-  ['finish','pause','resume','invite','rotate','renew','rm','purge'].forEach(v=>on('m-'+v,()=>memberVerb(selMember,v)));
+  ['all','look','removed'].forEach(v=>on('mv-'+v,()=>{ mview=v; memberMenu=null; renderWin(); }));
+  win.querySelectorAll('.kb').forEach(b=>b.onclick=e=>{ e.stopPropagation(); const n=b.id.slice(3); memberMenu = memberMenu===n?null:n; selMember=n; renderWin(); win.querySelector('.kmenu2 button')?.focus(); });
+  win.querySelectorAll('.kmenu2 button').forEach((b,i,all)=>{
+    b.onclick=e=>{ e.stopPropagation(); const n=memberMenu; memberMenu=null; memberVerb(n,b.dataset.v); };
+    b.onkeydown=e=>{ if(e.key==='ArrowDown'){e.preventDefault();all[(i+1)%all.length].focus();} if(e.key==='ArrowUp'){e.preventDefault();all[(i-1+all.length)%all.length].focus();} if(e.key==='Escape'){e.preventDefault();const n=memberMenu;memberMenu=null;renderWin();document.getElementById('mk-'+n)?.focus();} };
+  });
   on('m-new',()=>openSheet({kind:'invite'}));
   /* sheet */
   on('sh-cancel',()=>{ sheet=null; renderWin(); });
-  on('sp-join',()=>{ sheet.path='join'; renderWin(); });
-  on('sp-setup',()=>{ sheet.path='setup'; renderWin(); });
+  on('sp-join',()=>{ sheet.path='join'; renderWin(); document.getElementById('sh-code')?.focus(); });
+  on('sp-setup',()=>{ sheet.path='setup'; renderWin(); document.getElementById('sh-host')?.focus(); });
   on('sh-ok',()=>{ const s=sheet; sheet=null;
     if (s.kind==='confirm') s.fn();
     if (s.kind==='remove-tenant'){ const x=TEN[cur][selTenant]; TEN[cur].splice(selTenant,1); selTenant=0; tIdx=0; toast((x.role==='Member'?'Left ':'Removed ')+x.h+'.'); }
@@ -735,8 +821,8 @@ function bindWin(tabs){
   });
   on('sh-stop',()=>{ const key=sheet.key, title=sheet.title;
     stopRun(at=>{
-      if (key==='join'){ TEN[cur].push({h:'s.console.so',role:'Member',tier:'T2',from:'this Mac',phase:'stopped',reason:'',token:'Keychain',links:0,op:{verb:'join',step:at+1,of:STEPS.join.length,name:STEPS.join[at].split(':')[0],rerun:'share join',rollback:'share leave --local'}}); selTenant=TEN[cur].length-1; }
-      else if (key!=='resume' && key!=='setup'){ const tt=TEN[cur][selTenant]; tt.op={verb:key==='r2'?'setup --r2':'setup --members',step:at+1,of:STEPS[key].length,name:STEPS[key][at].split(':')[0],rerun:'share setup '+tt.h+(key==='r2'?' --r2':' --r2 --members'),rollback:'share setup '+tt.h+' --no-r2'}; }
+      if (key==='join'){ TEN[cur].push({h:'s.console.so',role:'Member',tier:'T2',from:'this Mac',phase:'stopped',reason:'',token:'Keychain',links:0,op:{verb:'join',step:at+1,of:STEPS.join.length,name:STEPS.join[at].toLowerCase(),rerun:'share join',rollback:'share leave --local'}}); selTenant=TEN[cur].length-1; }
+      else if (key!=='resume' && key!=='setup'){ const tt=TEN[cur][selTenant]; tt.op={verb:key==='r2'?'setup --r2':'setup --members',step:at+1,of:STEPS[key].length,name:STEPS[key][at].toLowerCase(),rerun:'share setup '+tt.h+(key==='r2'?' --r2':' --r2 --members'),rollback:'share setup '+tt.h+' --no-r2'}; }
       toast('Stopped at step '+(at+1)+'. Resume continues from there.');
     }); });
   win.querySelector('.sheet')?.addEventListener('keydown',e=>{ if (e.key==='Escape' && sheet && sheet.kind!=='progress'){ sheet=null; renderWin(); } });
@@ -745,7 +831,7 @@ function bindWin(tabs){
 /* ---------- page wiring ---------- */
 function pageDark(){ const t=document.documentElement.dataset.theme; return t==='dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches); }
 function applyAppearance(){ const d = appearance==='dark' || (appearance==='match' && pageDark()); pop.classList.toggle('dark',d); win.classList.toggle('dark',d); document.getElementById('desk').classList.toggle('dark-desk',d); }
-document.querySelectorAll('#scn button').forEach(b=>b.onclick=()=>{ cur=b.dataset.s; TEN=mkTenants(); MEMBERS=mkMembers(); tIdx=0; selTenant=0; view='list'; scope='mine'; q=''; tmenu=false; ctx=null; sheet=null; clearInterval(runner); toastMsg=null; tab=cur==='firstrun'?'tenants':'tenants'; document.querySelectorAll('#scn button').forEach(x=>x.setAttribute('aria-pressed',String(x===b))); renderPop(); renderWin(); });
+document.querySelectorAll('#scn button').forEach(b=>b.onclick=()=>{ cur=b.dataset.s; TEN=mkTenants(); MEMBERS=mkMembers(); tIdx=0; selTenant=0; view='list'; scope='mine'; q=''; tmenu=false; ctx=null; sheet=null; memberMenu=null; mview='all'; clearInterval(runner); toastMsg=null; tab=cur==='firstrun'?'tenants':'tenants'; document.querySelectorAll('#scn button').forEach(x=>x.setAttribute('aria-pressed',String(x===b))); renderPop(); renderWin(); });
 document.querySelectorAll('#appearance button').forEach(b=>b.onclick=()=>{ appearance=b.dataset.a; document.querySelectorAll('#appearance button').forEach(x=>x.setAttribute('aria-pressed',String(x===b))); applyAppearance(); });
 document.getElementById('dragbtn').onclick=e=>{ dragging=!dragging; e.currentTarget.setAttribute('aria-pressed',String(dragging)); renderPop(); };
 const desk=document.getElementById('desk');
@@ -753,7 +839,7 @@ desk.addEventListener('dragover',e=>{ e.preventDefault(); if(!dragging){dragging
 desk.addEventListener('dragleave',e=>{ if(!desk.contains(e.relatedTarget)){dragging=false;renderPop();} });
 desk.addEventListener('drop',e=>{ e.preventDefault(); dragging=false; toast('Sharing '+(e.dataTransfer.files[0]?.name||'the file')+'. The link is copied when it is ready.'); });
 document.addEventListener('keydown',e=>{ if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='z'&&toastUndo&&toastMsg){ e.preventDefault(); toast('Undone. Nothing changed.'); } if(e.key==='Escape'&&(tmenu||ctx)){ tmenu=false; ctx=null; renderPop(); } });
-document.addEventListener('click',e=>{ if((tmenu||ctx) && !e.target.closest('.tmenu') && !e.target.closest('.ctx') && !e.target.closest('#tenantbtn')){ tmenu=false; ctx=null; renderPop(); } });
+document.addEventListener('click',e=>{ if(memberMenu && !e.target.closest('.kmenu2') && !e.target.closest('.kb')){ memberMenu=null; renderWin(); } if((tmenu||ctx) && !e.target.closest('.tmenu') && !e.target.closest('.ctx') && !e.target.closest('#tenantbtn')){ tmenu=false; ctx=null; renderPop(); } });
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change',applyAppearance);
 new MutationObserver(applyAppearance).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
 renderPop(); renderWin(); applyAppearance();
