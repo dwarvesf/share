@@ -537,7 +537,9 @@ The app changes anything only by running share's normal verbs (`add`, `rm`, `ref
 | `storage_default` | an origin with R2 on only: `local` or `cloud`, the storage of an `add` with neither `--local` nor `--cloud` |
 | `cloud_error` | why the bucket's rows are missing (the menu reads them only with a stored token); the local rows still list |
 | `cloud_more` | how many more bucket rows exist past the newest 25 that `state` reads; about, since it counts orphan pointers too |
-| `access_pending` | count of Access apps waiting for deletion (`access-pending` lines) |
+| `access_pending` | count of Access apps waiting for deletion: lines with no owner (a delete waiting for a token) or a dead owner |
+| `access_inflight` | count of Access apps a running `add` is still working on (a live owner); not waiting for anything, so no `prune` is due |
+| `access_bad` | count of hand-edited `access-pending` lines no sweep acts on |
 | `skipped` | count of malformed index rows; present only when greater than zero |
 | `backend` | `"r2"` on an r2 profile only, absent on a tunnel profile. There `state` is `serving` once set up, `ready` comes from one `/healthz` probe (2 s), `mode` is `named`, `hosts` is `""`, `serves_here` and `service` are `false`, every share is a `snapshot`, and `skipped` is never set. Share Bar shows neither Start nor Stop for it |
 | `codes_v` | integer, `1`: the version of the refusal code list (`share state-fn codes`); it moves only when a code is renamed or removed |
@@ -545,6 +547,11 @@ The app changes anything only by running share's normal verbs (`add`, `rm`, `ref
 | `role` | what kind of profile this is: `none`, `quick`, `origin`, `tenant_origin`, `r2_profile`, `member`, or `migrated`. A `migrated` profile moved to another machine; its `state` reads `not_setup` |
 | `tier` | on `origin` and `tenant_origin` only: `t0` no bucket, `t1` a bucket, `t2` a bucket and `members=on` |
 | `ops` | the step journal: `[{verb, step, of, name, alive, rerun, rerun_argv}]`, plus `rollback` and `rollback_argv` on a verb that has one; `[]` when nothing runs or died. An entry that cannot be read is `{"verb": "?", "alive": false}` |
+| `serve` | `{phase, reason}`: why serving is or is not up. `phase` is `not_setup`, `elsewhere` (set up, but this machine is not in `hosts=`), `failed` (the login service is installed and the last serve ended with a code other than `stopped`), `stopped`, `starting` (serve runs, not ready, under 30 s), `tunnel_down` (serve runs, not ready, older), `worker_down` (an r2 profile whose Worker does not answer `/healthz`) or `serving`. `reason` is the `.serve-exit` code for `failed`, `ok` for `serving`, else the phase name. Each phase maps onto the old `state` and `ready` pair, which keep their values |
+| `shares[].link_state` | `live`, `expired` (past its expiry, not yet pruned), `shadowed` (a cloud link holds the same id and wins), `gate_missing` (a gated link whose Access app the last listing with an exported token found gone: the link is public) or `revoked` (an admin revoked it) |
+| `shares[].reason` | present only when `link_state` says more: `cloud_id_wins`, `access_app_gone`, or `revoked_by=<who>` |
+| `token` | present on a profile that uses a token: `{source, status, expires_on}`. `source` is `cmd`, `keychain`, `file` or `env`; `status` is `missing`, `unchecked` (a source resolves, nothing verified it in the last 7 days), `invalid`, `expired`, `expiring` (within 14 days) or `ok`. Read from the `.health` cache; `state` never calls Cloudflare for it |
+| `compat` | present on a profile with a Worker: `{cli, worker, status, min_cli}`. `status` is `ok`, `worker_older`, `worker_newer`, `cli_below_min` or `unknown` (no Worker pair cached). Read from the `.health` cache |
 
 Invariants: `state` never prunes, never writes or creates a file, never needs a TTY,
 and never touches the clipboard. Removing or renaming a field bumps `schema`; adding a
@@ -563,6 +570,18 @@ The multi-step verbs (`setup <host>`, `setup --r2`, `--no-r2`, tunnel `teardown`
 `serve` records why it ended in `$root/.serve-exit` (`{"code":...,"at":...}`): its own refusal's code, `cloudflared_died` or `caddy_failed` when a child exits, and `stopped` from `share stop`. A serve removes a stale record only once it answers, so a crash loop under launchd keeps its reason.
 
 The admin token for `setup --r2`, `--no-r2` and `teardown --purge` comes from `CLOUDFLARE_API_TOKEN`, else from `admin_token_cmd` in the profile config (`share admin-token --cmd '<command>'`): a command that prints it, run once per process and never stored or exported, so the serve daemon never holds a token that came from the command. `setup <host>`, tunnel `teardown`, `migrate` and `setup --backend r2` also run the command when it is set and the variable is not. `minter_token_cmd` (`share minter-token`) works the same for the token that mints member tokens. Config writers rewrite only the keys they own and keep every other line byte for byte, in place.
+
+**Serving phase.** `state.serve` is `{phase, reason}`, computed in one place for `status`, `state` and the Share Bar. A running serve is `serving` once `/ready` answers, `starting` for its first 30 seconds, and `tunnel_down` after that; a stopped profile is `stopped`, `elsewhere` when this machine is not in `hosts=` (`status` then says links work while a machine in `hosts=` serves, never "share start"), or `failed` when the login service is installed and `.serve-exit` holds a code other than `stopped`. An r2 profile is `worker_down` or `serving` by one `/healthz` probe. Every phase maps onto the same `state` and `ready` values `state` always printed.
+
+**Link state.** Each `shares[]` row carries `link_state`: `live`, `expired`, `shadowed`, `gate_missing` or `revoked`, with a `reason` when it says more. Expiry and revocation come from the row; `shadowed` and `gate_missing` come from checks that need the network, so `state` reads what the last `share ls` saw, kept in `.health` for a week. `share ls` adds `state=<link_state>` to the second line of a row that is not live.
+
+**The `.health` cache.** `$config_dir/.health` (mode 600, no secret) holds what the last token check, Worker probe and listing saw: `token` (written by `share api-token`), `worker` (the Worker's version and sha, written by an r2 profile's `status` and by every setup that waits for `/healthz`), `gates` and `shadow` (written by `share ls`), and `min_cli`. Each writer replaces only its own top-level key, so a key another writer owns survives. `state` reads it and never refreshes it, so it makes no call and writes nothing; `state.token` and `state.compat` come from it. Every teardown removes the file with the config.
+
+**Access apps in flight.** An `add` that is still working owns an `access-pending` line. `state.access_inflight` counts those; `access_pending` counts only lines that wait for a delete (no owner, or a dead one), so the Share Bar no longer asks for a `prune` while an add runs.
+
+**The `add` journal.** A local `add` journals as `add` with the steps `pointer`, `publish`, `access`, `host`, `gate` and `row`. Two adds may overlap, so it never refuses with `op_running`. A dead add's journal is consumed by the next bare `prune` (also serve's hourly one): with its row in the index the add finished and only the file goes; with no row its copy goes to the Trash and its pointer is dropped, and any Access app is left to the same prune's sweep.
+
+**`share config`.** `share config ttl <duration>` and `share config storage_default local|cloud` set the two CLI defaults the Share Bar's General tab writes (`ttl` takes `12h`, `7d` or `never`; `storage_default` needs a bucket). With no value the command prints the current one, and `--unset` drops it. Any other key is refused with the code `config_key_unknown`. Writes go through the same key-keeping writer as the other verbs.
 
 ## Why each choice
 

@@ -100,3 +100,29 @@ Decisions the spec left open, and changes from it, made while building Phase 1. 
 | A4 minor | a refusal after `op_begin` reads as a dead op (B8) | partly folded: teardown's refusals moved before the journal (A1); `setup --r2` refusals at its read steps keep B8 |
 | A5 minor | CD-07's curl stub answers `/ready`, so "keeps the reason" cannot see a removal at start | open: add a not-ready cloudflared fixture with a failing `/ready` |
 | A6 minor | AT-09 cannot see an export behind `env -u`; no check fails without `lock_take config` or `lock_take ops` | open: add an `env` dump from the token command, and two concurrent writers per lock |
+
+## Build delta: Phase 2 (G6, G7, G8, G9, G10, G14)
+
+Decisions the spec left open, and changes from it, made while building Phase 2. Kept as a running list; the AC map and the advisor round follow at the end.
+
+### Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| C1 | `serve_state` keeps HEAD's precedence: a running serve reads `serving` even on a `migrated` profile, and `not_setup` for a stopped one means "no hostname and not quick", not "role none" | the spec table says role first, but invariant 1 (every old `[state, ready]` value for every old input) is stronger: a config with only `hostname=` has role `none` and reads `stopped` today |
+| C2 | the `starting` age is the pidfile's mtime, with `SHARE_STATE_NOW` as the clock seam | serve writes the pidfile once, at start; no extra file, and `stat -c` then `stat -f` covers GNU and BSD |
+| C3 | `failed` also needs the service installed (spec) and `elsewhere` wins over it | `not_in_hosts` is itself a serve exit code; a machine outside `hosts=` must read `elsewhere`, not `failed` |
+| C4 | the reasons `starting`, `elsewhere` and `not_setup` repeat the phase name and are not codes; only `ok`, `tunnel_down`, `worker_down` join the code table | the spec names those three; the skill explains the rest in prose |
+| C5 | `list_rows` is a wrapper: `list_rows_raw` builds the rows, `link_apply` appends `link_state` and `reason` as fields 11 and 12 | every `return` inside the raw body still reaches the classification, and the three readers (`cmd_ls`, `state_lines`, the jq `row`) read one more pair of fields |
+| C6 | `list_bucket` prints `#shadow <id>` lines for an id a cloud record also holds; `list_rows` strips them | the shadow set lives in the subshell that reads the bucket; a header line is the one channel it already uses (`#more`) |
+| C7 | `gate_missing` reads a `gates` key of `.health` (`{at, missing}`), written by `access_ls_check` only when the check ran, and ignored when older than 7 days | closes the validation warning "no store is named"; a state poll never makes the Access call |
+| C8 | `revoked` is in `link_state` now (opts `revoked`, reason `revoked_by=<by>`), ahead of `expired` | SPEC-009 TASK-0c waited on G7 for it; a revoked row answers 404 whatever its expiry |
+| C9 | `ls` shows the state as a trailing `state=<s> (<why>)` on a row's second line, only when the row is not `live` | the first line stays the one a test or a script greps for the link |
+| C10 | `access_pending` is deferred plus orphan, `access_inflight` intent plus bound, `access_bad` the hand-edited lines; `pending_count` keeps its no-argument and `live` forms for teardown's callers | CP-06 and the spec; teardown still counts every line |
+| C11 | the `add` journal opens after the copy is staged: steps `pointer`, `publish`, `access`, `host`, `gate`, `row`; a handled gate failure calls `op_done` | a copy that fails leaves nothing to undo; an add that undid its own work must not read as a dead op |
+| C12 | `add_sweep` decides by the row, not the step: a dead add with its row in the index just loses its journal; with no row its `pub/<id>` is trashed and its pointer dropped | a kill between `op_step 6` and the append, or after it, both resolve right |
+| C13 | `state.token` is emitted only when the profile uses a token (bucket, r2 backend, or a source exists); `state.compat` only on a profile with a Worker | a plain tunnel profile with no token would otherwise read `missing` forever |
+| C14 | `token_source` checks existence only (`api_token_cmd` or `r2_token_cmd` set, a Keychain item by `find-generic-password` without `-w`, the 600 file, an env token); the cache counts only for the same source and under 7 days old | a swapped token must not inherit the old one's `ok`; `state` never runs a command |
+| C15 | `.health` writers: `r2_expiry_note` (the `api-token` paths) writes `token`; `cmd_status_r2` and `r2_wait_healthz` write `worker`; `access_ls_check` writes `gates`; teardown removes the file | one call site per fact that is already fetched; no new network call anywhere |
+| C16 | `state.compat.worker` is the Worker's `<version> <sha>` pair as it reported it | SG-06's Share Bar decode reads it as a string |
+| C17 | `share config` refuses with a plain `die` when the profile has no config file, and prints nothing for an unset key | `config_put` would otherwise create a config that makes a ghost profile |
