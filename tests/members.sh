@@ -240,3 +240,132 @@ mxa member sync >"$MX/cc15b.out" 2>&1; rb=$?
 : >"$MX_DRY/.resume"; wait "$pa"; ra=$?; rm -f "$MX_DRY/.resume" "$MX_DRY/.paused"
 check "mm CC-15: the first holder resumes after a takeover and dies lease_lost before its next Cloudflare call; the second's lease stays" "1 lease_lost 0 0 otherhost:7:12345678" \
   "$ra $(mx_jcode "$(cat "$MX/cc15a.out")") $rb $(grep -c 'connectivity/directory/services$' "$MX_LOG") $(jq -r .holder "$MX_DRY/lock/admin")"
+mx_wait_step() { # mx_wait_step <root> <verb> <n>: the pid of a run held at step n by SHARE_OP_PAUSE (20 s cap)
+  local f _ pid
+  for _ in $(seq 1 100); do
+    for f in "$1/ops/$2".*.json; do
+      [[ -e $f ]] || continue
+      pid="$(jq -r --argjson n "$3" 'select(.step == $n) | .pid' "$f" 2>/dev/null)"
+      [[ -n $pid ]] && { echo "$pid"; return 0; }
+    done
+    sleep 0.2
+  done
+  return 1
+}
+mx_kill_at() { # mx_kill_at <root> <verb> <n> <runner> <args...>: run held at step n, then kill -9; 0 when it was held and killed
+  local root=$1 verb=$2 n=$3 run=$4 pid; shift 4
+  ( mx_env=(SHARE_OP_PAUSE="$verb:$n"); mxm_env=(SHARE_OP_PAUSE="$verb:$n"); "$run" "$@" >/dev/null 2>&1 ) &
+  pid="$(mx_wait_step "$root" "$verb" "$n")" || { wait; return 1; }
+  kill -9 "$pid" 2>/dev/null; wait 2>/dev/null; mx_gone "$pid"
+}
+mx_ops() { find "$1/ops" -name '*.json' 2>/dev/null | sed 's|.*/||' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//'; }
+mx_t2_ok() { # 1 when T2 is in place as a clean setup --members leaves it: marker, config, MEMBERS and PAUSED deployed, no lease, an empty ops/
+  [[ "$(jq -c '{members, min_cli}' "$MX_DRY/share.json")" == "{\"members\":true,\"min_cli\":\"$(bash "$SH" version)\"}" && "$(grep -c '^members=on$' "$MX_CONF")" == 1 &&
+    "$(mx_bind)" == *"MEMBERS=1"*"PAUSED=[]"* && ! -e $MX_DRY/lock/admin && -z "$(mx_ops "$MX_ROOT")" ]] && echo 1 || echo 0
+}
+mx_t1_ok() { # 1 when members are off as a clean --no-members leaves them
+  [[ "$(jq -c 'has("members") or has("min_cli")' "$MX_DRY/share.json")" == false && "$(grep -c '^members=' "$MX_CONF")" == 0 &&
+    "$(mx_bind)" == "" && ! -e $MX_DRY/lock/admin && -z "$(mx_ops "$MX_ROOT")" ]] && echo 1 || echo 0
+}
+mx_ln() { grep -n -- "$1" "$MX_LOG" | sed -n "${2:-1}p" | cut -d: -f1; }   # mx_ln <pattern> [nth]: the line number of the nth match
+
+echo "=== members: tenant T1 to T2 and back ==="
+mx_fresh; mx_save t1
+out=$(mxa setup mx.example.test --r2 --bucket mx-bucket --members --yes 2>&1); rc=$?
+SG="API GET /accounts/acct-dry/workers/scripts/share-mx-example-test/settings"
+ord="$(mx_ln "$SG" 1) $(mx_ln 'cfd_tunnel?per_page=1') $(mx_ln 'connectivity/directory/services?per_page=1') $(mx_ln '^PUT lock/admin') $(mx_ln "$SG" 2) $(mx_ln '^API PUT /accounts/acct-dry/workers/scripts/share-mx-example-test$') $(mx_ln '^HEALTHZ' 4) $(mx_ln '^PUT share.json') $(mx_ln '^CONFIG members on') $(mx_ln '^DELETE lock/admin')"
+check "mm TN-01: settings GET < scopes < services probe < lease < settings GET < deploy < nonce 3x < marker < config < lease DELETE" "0 1" \
+  "$rc $(awk '{for (i = 2; i <= NF; i++) if ($i == "" || $i + 0 <= $(i - 1) + 0) {print 0; exit}} END {if (NF == 10) print 1; else print 0}' <<<"$ord" | tail -1)"
+check "mm TN-01: T2 is the marker (members:true, min_cli), the config, and the Worker v5 pair with MEMBERS and PAUSED []" "1 $(sed -n 's/^WORKER_VERSION=\([0-9]*\).*/\1/p' "$SH")" \
+  "$(mx_t2_ok) $(jq -r '.bindings[] | select(.name == "VERSION") | .text' "$MX_DRY/.cf/script.json")"
+check "mm TN-01: the deploy carries a fresh DEPLOY nonce that /healthz served 3x" "1" "$(jq -r '[.bindings[] | select(.name == "DEPLOY") | .text] | first' "$MX_DRY/.cf/script.json" | grep -cE '^[0-9a-f]{16}$')"
+mx_save t2
+mxr() { mx_load t1; "$@"; : >"$MX_LOG"; out=$(mx_env=(${mxr_env[@]+"${mxr_env[@]}"} SHARE_ERROR_JSON=1); mxa setup mx.example.test --r2 --bucket mx-bucket --members ${mxr_yes---yes} 2>&1); rc=$?; mxr_env=(); unset mxr_yes; }
+mxr_env=(SHARE_R2_DRY_DENY='API GET */cfd_tunnel*'); mxr :
+check "mm TN-02: a missing Tunnel scope is named; nothing written" "1 1 0" "$rc $(grep -c '^share: .*lacks Cloudflare Tunnel Write' <<<"$out") $(mx_writes)"
+mxr_env=(SHARE_R2_DRY_DENY='API GET */connectivity/directory/services*'); mxr :
+check "mm TN-02: a services list 403 names Connectivity Directory Admin; nothing written" "1 1 0" "$rc $(grep -c '^share: .*lacks Connectivity Directory Admin' <<<"$out") $(mx_writes)"
+mxr rm -f "$MX_DRY/m/0c0001"
+check "mm TN-02: a local row without its pointer refuses; nothing written" "1 1 0" "$rc $(grep -c '^share: local link 0c0001 has no pointer' <<<"$out") $(mx_writes)"
+mxr eval 'printf "{\"v\":1,\"host\":\"other.example.test\"}\n" >"$MX_DRY/share.json"'
+check "mm TN-02: a marker naming another host refuses; nothing written" "1 1 0" "$rc $(grep -c "^share: bucket mx-bucket's share.json names another hostname" <<<"$out") $(mx_writes)"
+mxr_yes=""; mxr :
+check "mm TN-02: no TTY and no --yes for the members confirmation refuses; nothing written" "1 1 0" "$rc $(grep -c '^share: Members on: .*rerun with --yes' <<<"$out") $(mx_writes)"
+mx_load t2; out=$(mxa setup mx.example.test --r2 --bucket mx-bucket --members --yes 2>&1); rc=$?
+check "mm TN-03: a rerun on T2 writes no marker and skips an equal deploy" "0 0 0 1" \
+  "$rc $(grep -c '^PUT share.json' "$MX_LOG") $(grep -c '^API PUT /accounts/acct-dry/workers/scripts/' "$MX_LOG") $(mx_t2_ok)"
+# TN-04, TN-05: back to T1 only with every record removed or purged
+mx_load t2; mkdir -p "$MX_DRY/u"
+printf '{"v":1,"member_id":"m-an-aaaaaaa1","name":"an","mode":"cloud","status":"invited","rotation":0,"added":"x","updated":"x","by":"a"}\n' >"$MX_DRY/u/m-an-aaaaaaa1.json"
+out=$(mx_env=(SHARE_ERROR_JSON=1); mxa setup mx.example.test --r2 --bucket mx-bucket --no-members 2>&1); rc=$?
+check "mm TN-04: --no-members with a record not removed is refused naming the member" "1 members_present 1 0" "$rc $(mx_jcode "$out") $(grep -c '^share: member an (invited) is not removed' <<<"$out") $(mx_writes)"
+jq -c '.status = "removed"' "$MX_DRY/u/m-an-aaaaaaa1.json" >"$MX/r.json" && mv "$MX/r.json" "$MX_DRY/u/m-an-aaaaaaa1.json"
+: >"$MX_LOG"; out=$(mxa setup mx.example.test --r2 --bucket mx-bucket --no-members 2>&1); rc=$?
+check "mm TN-05: --no-members with every record removed drops the marker keys (If-Match), MEMBERS and PAUSED, and the config key" "0 1 1" "$rc $(mx_t1_ok) $(grep -c '^PUT share.json' "$MX_LOG")"
+mx_load t2; out=$(mx_env=(SHARE_ERROR_JSON=1); mxa setup mx.example.test --no-r2 2>&1); rc=$?
+check "mm TN-06: --no-r2 on T2 is refused, naming --no-members first" "1 members_present 1 0" "$rc $(mx_jcode "$out") $(grep -c '^share: .*--no-members first' <<<"$out") $(mx_writes)"
+mx_load t2; out=$(mx_env=(SHARE_ERROR_JSON=1); mxa teardown --yes 2>&1); rc=$?
+check "mm TN-07: teardown of a T2 origin dies members_present before any change" "1 members_present 0 1" "$rc $(mx_jcode "$out") $(mx_writes) $([[ -f $MX_CONF ]] && echo 1 || echo 0)"
+out=$(mxa migrate --to nowhere.example.test 2>&1); rc=$?
+check "mm TN-07: migrate of a T2 origin is refused before any change" "1 0 1" "$rc $(mx_writes) $(grep -c '^share: R2 is on' <<<"$out")"
+# TN-11: the marker says members:true and the config lost members=on (an older CLI's rerun)
+mx_load t2; sed -i.bak '/^members=on$/d' "$MX_CONF"
+st="$(mxa state 2>/dev/null)"; out=$(mxa status 2>&1)
+check "mm TN-11: state reads tier t2 with tier_drift; status prints the config_drift repair line" "t2 true 1" \
+  "$(jq -r .tier <<<"$st") $(jq -r '.tier_drift // false' <<<"$st") $(grep -c '^drift: config_drift: .*repair: share --profile ten setup mx.example.test --r2 --bucket mx-bucket --members$' <<<"$out")"
+out=$(mx_env=(SHARE_ERROR_JSON=1); mxa teardown --yes 2>&1); rc=$?
+check "mm TN-11: teardown is still refused (it reads the marker)" "1 members_present" "$rc $(mx_jcode "$out")"
+# TN-12: the marker forged to members:false while a vpc_service binding is deployed
+mx_load t2; SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 mxa member add an --port $((base + 372)) >/dev/null 2>&1
+sed -i.bak '/^members=on$/d' "$MX_CONF"; jq -c '.members = false' "$MX_DRY/share.json" >"$MX/s.json" && mv "$MX/s.json" "$MX_DRY/share.json"; : >"$MX_LOG"
+out=$(mx_env=(SHARE_ERROR_JSON=1); mxa teardown --yes 2>&1); rc=$?; out2=$(mx_env=(SHARE_ERROR_JSON=1); mxa setup mx.example.test --no-r2 2>&1); rc2=$?
+out3=$(mxa migrate --to nowhere.example.test 2>&1); rc3=$?
+check "mm TN-12: a forged members:false never opens teardown, --no-r2 or migrate while a binding is deployed" "1 members_present 1 members_present 1 0" \
+  "$rc $(mx_jcode "$out") $rc2 $(mx_jcode "$out2") $rc3 $(mx_writes)"
+# TN-08: a setup --r2 rerun on T2 takes the lease, reads settings after it, and carries the binding and PAUSED
+mx_load t2; SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 mxa member add an --port $((base + 372)) >/dev/null 2>&1
+jq -c '(.bindings |= map(if .name == "SHA" then .text = "000000000000" elif .name == "PAUSED" then .text = "[\"aaaaaaa1\"]" else . end))' "$MX_DRY/.cf/script.json" >"$MX/s.json" && mv "$MX/s.json" "$MX_DRY/.cf/script.json"
+b0="$(mx_bind)"; : >"$MX_LOG"; out=$(mxa setup mx.example.test --r2 --bucket mx-bucket 2>&1); rc=$?
+check "mm TN-08: a setup --r2 rerun on T2 keeps the binding and PAUSED, under the lease, its body read after the lease" "0 $b0 1 1" \
+  "$rc $(mx_bind) $([[ $(mx_ln '^PUT lock/admin') -lt $(mx_ln "$SG" 2) && $(mx_ln "$SG" 2) -lt $(mx_ln '^API PUT /accounts/acct-dry/workers/scripts/share-mx-example-test$') ]] && echo 1) $(grep -c '^DELETE lock/admin' "$MX_LOG")"
+# TN-09 and the die-point loops: a kill at each step of setup-members and no-members, then a rerun, ends T2 (or T1) with an empty ops/
+fails_dp=""
+for n in 1 2 3 4 5; do
+  mx_load t1
+  mx_kill_at "$MX_ROOT" setup-members "$n" mxa setup mx.example.test --r2 --bucket mx-bucket --members --yes || fails_dp="$fails_dp held$n"
+  out=$(mxa setup mx.example.test --r2 --bucket mx-bucket --members --yes 2>&1) || fails_dp="$fails_dp rerun$n"
+  [[ $(mx_t2_ok) == 1 ]] || fails_dp="$fails_dp end$n"
+  [[ $n != 2 ]] || grep -q 'took over from' <<<"$out" || fails_dp="$fails_dp takeover$n"
+done
+check "mm TN-09: setup-members killed at each step converges on rerun (a dead same-host lease taken over at once), empty ops/" "" "$fails_dp"
+fails_dp=""
+for n in 1 2 3 4 5; do
+  mx_load t2
+  mx_kill_at "$MX_ROOT" no-members "$n" mxa setup mx.example.test --r2 --bucket mx-bucket --no-members || fails_dp="$fails_dp held$n"
+  mxa setup mx.example.test --r2 --bucket mx-bucket --no-members >/dev/null 2>&1 || fails_dp="$fails_dp rerun$n"
+  [[ $(mx_t1_ok) == 1 ]] || fails_dp="$fails_dp end$n"
+done
+check "mm TN-09: no-members killed at each step converges on rerun, empty ops/" "" "$fails_dp"
+mx_load t1; mx_kill_at "$MX_ROOT" setup-members 4 mxa setup mx.example.test --r2 --bucket mx-bucket --members --yes
+out=$(mx_env=(SHARE_ERROR_JSON=1); mxa teardown --yes 2>&1); rc=$?; out2=$(mx_env=(SHARE_ERROR_JSON=1); mxa setup mx.example.test --no-r2 2>&1); rc2=$?
+check "mm TN-09: killed between the marker and the config, teardown and --no-r2 still refuse (they read the marker)" "0 1 members_present 1 members_present" \
+  "$(grep -c '^members=on$' "$MX_CONF") $rc $(mx_jcode "$out") $rc2 $(mx_jcode "$out2")"
+# CC-14: a setup --r2 rerun and a member add, each held at its deploy while the other starts: the second waits for the lease, reads settings after it
+for order in setup-first add-first; do
+  mx_load t2; mkdir -p "$MX/other"
+  if [[ $order == setup-first ]]; then
+    jq -c '(.bindings |= map(if .name == "SHA" then .text = "000000000000" else . end))' "$MX_DRY/.cf/script.json" >"$MX/s.json" && mv "$MX/s.json" "$MX_DRY/.cf/script.json"
+    ( mx_env=(SHARE_R2_DRY_PAUSE='API PUT /accounts/acct-dry/workers/scripts/share-mx-example-test'); mxa setup mx.example.test --r2 --bucket mx-bucket >"$MX/cc14a.out" 2>&1 ) & pa=$!
+    mx_wait_paused
+    ( SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 MX_LEASE_WAIT=30 mxo add an --port $((base + 372)) >"$MX/cc14b.out" 2>&1 ) & pb=$!
+  else
+    jq -c '(.bindings |= map(if .name == "ALIASES" then .text = "old.example.test" else . end))' "$MX_DRY/.cf/script.json" >"$MX/s.json" && mv "$MX/s.json" "$MX_DRY/.cf/script.json"
+    ( mxo_env=(SHARE_R2_DRY_PAUSE='API PUT /accounts/acct-dry/workers/scripts/share-mx-example-test'); SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 mxo add an --port $((base + 372)) >"$MX/cc14b.out" 2>&1 ) & pb=$!
+    mx_wait_paused
+    ( MX_LEASE_WAIT=30 mxa setup mx.example.test --r2 --bucket mx-bucket >"$MX/cc14a.out" 2>&1 ) & pa=$!
+  fi
+  sleep 2; : >"$MX_DRY/.resume"; wait "$pa"; ra=$?; wait "$pb"; rb=$?; rm -f "$MX_DRY/.resume" "$MX_DRY/.paused"
+  check "mm CC-14 ($order): both finish, two deploys, the end deploy holds an's binding, MEMBERS and PAUSED, and the lease is gone" "0 0 2 1 0" \
+    "$ra $rb $(cat "$MX_LOG" "$MX/other/share/r2-calls.log" 2>/dev/null | grep -c '^API PUT /accounts/acct-dry/workers/scripts/share-mx-example-test$') $(mx_bind | grep -c 'MEMBERS=1 M_aaaaaaa1=[^ ]* PAUSED=\[\]') $([[ -e $MX_DRY/lock/admin ]] && echo 1 || echo 0)"
+  : >"$MX/other/share/r2-calls.log" 2>/dev/null
+done
