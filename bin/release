@@ -48,7 +48,9 @@ while IFS= read -r s; do echo "  $s"; done <<<"$commits"
 # regenerate the changelog with the new version section, land it on main,
 # then tag that commit so the tag carries its own section
 bin/changelog --next "$next" >CHANGELOG.md
-git add CHANGELOG.md
+sed -i.bak "s/^SHARE_VERSION=[0-9.]*/SHARE_VERSION=${next#v}/" bin/share && rm -f bin/share.bak   # share version names the tag it ships in
+grep -q "^SHARE_VERSION=${next#v} " bin/share || die "could not set SHARE_VERSION=${next#v} in bin/share"
+git add CHANGELOG.md bin/share
 git commit -q -m "docs: changelog for $next"
 git push https://github.com/dwarvesf/share.git HEAD:main
 

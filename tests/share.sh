@@ -1885,7 +1885,22 @@ if [[ -s $main_bin ]]; then
     "$(grep -cE '^(machine|live) +[a-z]+ +by=[a-z0-9.-]+  https://' "$WORK/compat-new/ls.out") $(grep -cE '^live +site +by=' "$WORK/compat-new/ls.out")"
   check "row 1: state rows gain storage, type, by; the top gains r2: false" "machine false" \
     "$(jq -r '([.shares[] | select(.type and .by) | .storage] | unique | join(" ")) + " " + (.r2 | tostring)' "$WORK/compat-new/state.out")"
+  # SPEC-009 TASK-0b: the Caddyfile serves listed rows only; that change is checked here, then normalized out of the byte diff below
+  check "row 1: the Caddyfile changes only by listed rows, the 404 catch-all and X-Share-Served" "c0a011 c0a012|1|1" \
+    "$(sed -n 's/^	@s\([0-9a-f]*\) path .*/\1/p' "$WORK/compat-new/Caddyfile" | sort | tr '\n' ' ' | sed 's/ $//')|$(grep -c '^		respond "no such link (it may have expired or been removed)" 404$' "$WORK/compat-new/Caddyfile")|$(grep -c '^	header X-Share-Served "caddy"$' "$WORK/compat-new/Caddyfile")"
+  caddy_norm() { # caddy_norm <file>: the Caddyfile without the listed-row handles, the X-Share-Served header, or the catch-all's body (old: the whole pub tree; new: 404)
+    awk '/^	header X-Share-Served "caddy"$/ {next}
+      /^	@(s[0-9a-f]+|probe) path / {next}
+      /^	handle @(s[0-9a-f]+|probe) \{$/ {skip = 1; next}
+      skip && /^	\}$/ {skip = 0; next}
+      skip {next}
+      /^	handle \{$/ {print; print "		CATCHALL"; c = 1; next}
+      c && /^	\}$/ {c = 0; print; next}
+      c {next}
+      {print}' "$1" >"$1.norm" && mv -f "$1.norm" "$1"
+  }
   for c in main new; do   # the listing additions are the one allowed difference, with the groundwork's additive state keys
+    caddy_norm "$WORK/compat-$c/Caddyfile"
     sed -i.bak -E 's/^(machine|live|cloud) +[a-z]+ +by=[a-z0-9.-]+  (https:)/\2/' "$WORK/compat-$c/ls.out"
     jq -S 'del(.r2, .storage_default, .cloud_error, .cloud_more, .codes_v, .role, .tier, .ops) | .shares |= map(del(.storage, .type, .by))' "$WORK/compat-$c/state.out" >"$WORK/compat-$c/state.tmp" && mv -f "$WORK/compat-$c/state.tmp" "$WORK/compat-$c/state.out"
     jq -S '.profiles |= map(if .state then .state |= (del(.r2, .storage_default, .cloud_error, .cloud_more, .codes_v, .role, .tier, .ops) | .shares |= map(del(.storage, .type, .by))) else . end)' "$WORK/compat-$c/profiles.out" >"$WORK/compat-$c/p.tmp" && mv -f "$WORK/compat-$c/p.tmp" "$WORK/compat-$c/profiles.out"
@@ -4543,6 +4558,185 @@ sed 's/^caddy_failed|/brand_new_code|added to code_text only|share status\ncaddy
 check "negative control NC-G5: a code added to code_text with no skill line fails the check" "1|1" "$(bash "$GW/share-new-code" state-fn codes | grep -c '^brand_new_code$')|$(gk_skill_ok "$GW/share-new-code"; echo $?)"
 # shellcheck disable=SC2016 # the backticks are the skill's own markdown
 check "skill lists every role" "7" "$(bash "$SH" skill | grep -cE '^\| `(none|quick|origin|tenant_origin|r2_profile|member|migrated)` \|')"
+
+echo "=== members: phase 0 (version, listed rows, readers, carry-forward, member config keys) ==="
+# OT-19: share version is the newest CHANGELOG heading
+newest="$(sed -n 's/^## \[v\([0-9][0-9.]*\)\].*/\1/p' "$(dirname "$SH")/../CHANGELOG.md" | head -1)"
+check "mm OT-19: share version equals the newest CHANGELOG heading" "$newest" "$(bash "$SH" version)"
+check "mm OT-19: share version is X.Y.Z" "1" "$(bash "$SH" version | grep -cE '^[0-9]+\.[0-9]+\.[0-9]+$')"
+
+# TASK-0b: Caddy serves listed rows only, on its own profile root and port
+MM="$WORK/mm"; mkdir -p "$MM/src/site" "$MM/src/files"
+mm_port=$((base + 350))
+mmc() { SHARE_ROOT="$MM/root" SHARE_CONFIG_DIR="$MM/cfg" SHARE_PORT=$mm_port bash "$SH" "$@"; }
+mmcode() { curl -s -o /dev/null -w '%{http_code}' ${2:+-H "Host: $2"} "http://127.0.0.1:$mm_port$1"; }
+mmhdr() { curl -s -D - -o /dev/null ${3:+-H "Host: $3"} "http://127.0.0.1:$mm_port$1" | tr -d '\r' | awk -v h="$2" 'tolower($0) ~ "^"tolower(h)":" {sub(/^[^:]*: /, ""); print}'; }
+mmrow() { awk -F'\t' -v id="$1" -v o="$2" 'BEGIN {OFS = "\t"} $1 == id {$6 = o} {print}' "$MM/root/index.tsv" >"$MM/i" && mv "$MM/i" "$MM/root/index.tsv"; }
+echo '<p>site</p>' >"$MM/src/site/index.html"; echo f >"$MM/src/files/f.txt"; echo g >"$MM/src/files/g.txt"; echo k >"$MM/src/files/k.txt"
+SHARE_TEST_IDS=5a0001 mmc add --ttl never "$MM/src/site/index.html" >/dev/null 2>&1
+SHARE_TEST_IDS=5c0001 mmc add --ttl never "$MM/src/files/g.txt" >/dev/null 2>&1
+SHARE_TEST_IDS=5e0001 mmc add --ttl never "$MM/src/files/k.txt" >/dev/null 2>&1
+SHARE_TEST_IDS=5f0001 SHARE_HOST_DRY=1 mmc add --ttl never "$MM/src/files/f.txt" --host hm.example.test >/dev/null 2>&1
+SHARE_TEST_IDS=5f0002 mmc add --ttl never "$FIX_PORT" >/dev/null 2>&1
+mkdir -p "$MM/root/pub/5b0001"; echo unlisted >"$MM/root/pub/5b0001/x.txt"   # bytes with no row: a forged or leftover pub/<id>
+mmrow 5c0001 "revoked revoked_by=admin@x.io"
+mmrow 5e0001 "revoked revoked_by=<script>"
+mmc refresh 5a0001 >/dev/null 2>&1   # re-renders the Caddyfile from the rows above
+echo inside >"$MM/root/pub/5a0001/f.txt"   # a second file under the listed id
+echo probe >"$MM/root/pub/_probe-abc123.txt"; echo probe >"$MM/root/pub/_migrate-probe-0a0b0c.txt"   # the files live_check and migrate write
+wait_for_port "$mm_port" >/dev/null
+check "mm SV-01: unlisted bytes answer 404" "404" "$(mmcode /5b0001/x.txt)"
+check "mm SV-01: the root, index.tsv and the pub tree answer 404" "404 404 404" "$(mmcode /) $(mmcode /index.tsv) $(mmcode /pub/5a0001/f.txt)"
+check "mm SV-02: a listed snapshot: /<id>/ 200, /<id> redirects to /<id>/, /<id>/f 200" "200 308 /5a0001/ 200" \
+  "$(mmcode /5a0001/) $(mmcode /5a0001) $(mmhdr /5a0001 Location) $(mmcode /5a0001/f.txt)"
+check "mm SV-03: a revoked row answers 404 and has no handle" "404 0" "$(mmcode /5c0001/g.txt) $(grep -c '@s5c0001' "$MM/root/Caddyfile")"
+check "mm FG-16: a bad revoked_by= reads unknown: still revoked, no handle, still listed" "404 0 1 1" \
+  "$(mmcode /5e0001/k.txt) $(grep -c '5e0001' "$MM/root/Caddyfile") $(mmc ls | grep -c 'id=5e0001') $(SHARE_ROOT="$MM/root" SHARE_CONFIG_DIR="$MM/cfg" bash "$SH" state | jq '[.shares[] | select(.id == "5e0001")] | length')"
+check "mm SV-01: the CLI's own probe files at the pub root still answer (live_check, migrate)" "200 200" "$(mmcode /_probe-abc123.txt) $(mmcode /_migrate-probe-0a0b0c.txt)"
+check "mm SV-01: an unlisted 404 carries the Worker's one body" "no such link (it may have expired or been removed)" "$(curl -s "http://127.0.0.1:$mm_port/5b0001/x.txt")"
+check "mm FG-16: a revoked row with a sound revoked_by= still lists" "1" "$(mmc ls | grep -c 'id=5c0001')"
+check "mm SV-04: a live row keeps its handle_path and a --host row its own site" "1 1 1" \
+  "$(grep -c '^	handle_path /5f0002/\* {$' "$MM/root/Caddyfile") $(grep -c "^http://hm.example.test:$mm_port {$" "$MM/root/Caddyfile") $(grep -c '^	@s5f0001 path /5f0001 /5f0001/\*$' "$MM/root/Caddyfile")"
+check "mm SV-04: the live row still proxies" "200" "$(mmcode /5f0002/hello.txt)"
+check "mm SV-04: the --host row still answers on its own name" "200" "$(mmcode /f.txt hm.example.test)"
+for p in /5a0001/f.txt /5b0001/x.txt /healthz /5f0002/ /x/..%2F5a0001/f.txt; do
+  check "mm SV-05: X-Share-Served on $p" "caddy" "$(mmhdr "$p" X-Share-Served)"
+done
+check "mm SV-05: X-Share-Served on a foreign Host (the catch-all site)" "404 caddy" "$(mmcode /5a0001/f.txt other.example.test) $(mmhdr /5a0001/f.txt X-Share-Served other.example.test)"
+check "mm SV-05: X-Share-Served on the --host site" "caddy" "$(mmhdr /f.txt X-Share-Served hm.example.test)"
+mmrow 5a0001 ""; awk -F'\t' 'BEGIN {OFS = "\t"} $1 == "5a0001" {$5 = 1000} {print}' "$MM/root/index.tsv" >"$MM/i" && mv "$MM/i" "$MM/root/index.tsv"
+SHARE_TEST_IDS=5d0001 mmc add --ttl never "$MM/src/files/f.txt" >/dev/null 2>&1
+check "mm SV-01: an expired row gets no handle at render time" "0 404 200" "$(grep -c '@s5a0001' "$MM/root/Caddyfile") $(mmcode /5a0001/f.txt) $(mmcode /5d0001/f.txt)"
+check "mm SV-01: caddy validates the rendered Caddyfile" "0" "$(caddy validate --config "$MM/root/Caddyfile" --adapter caddyfile >/dev/null 2>&1; echo $?)"
+mmc stop >/dev/null 2>&1
+
+# TASK-0c: readers, on the tenant origin (tn) and a cloud publisher (tm) of the same dry bucket
+rm -rf "$DRYT" "$troot" "$TMH/share/profiles/org"; mkdir -p "$DRYT" "$troot" "$TMH/share/profiles/org"; : >"$tlog"
+v3() { # v3 <id> [jq over the record]: a member pointer in the dry bucket, aged past the 10-minute window
+  jq -nc --arg id "$1" '{v: 3, id: $id, storage: "machine", origin: "m-an-aaaaaaa1", name: "an.txt", by: "an-mac", added: "2026-11-15", expires: 0, opts: "", type: "text"}' |
+    jq -c "${2:-.}" >"$DRYT/m/$1"
+  aged 660 "$DRYT/m/$1"
+}
+mkdir -p "$DRYT/m"
+out=$(SHARE_TEST_IDS=5d1001 tn org add "$tn2" 2>&1)
+v3 5d0001
+v3 5d0002 '.origin = "m-x-../aaaaaaa1"'; v3 5d0003 '.name = "a\tb"'; v3 5d0004 '.opts = "live"'; v3 5d0005 '.expires = "0"'; v3 5d0006 '.own_host = "x.example.test"'
+v3 5d0007 '.expires = 1000'
+mkdir -p "$DRYT/o/9e0001.00000001"; printf 'x\n' >"$DRYT/o/9e0001.00000001/x"; aged 90000 "$DRYT/o/9e0001.00000001/x"
+: >"$tlog"
+out=$(tn org prune 2>&1); rc=$?
+check "mm SV-06: a v:3 pointer never blocks the orphan sweep" "0 1 0" "$rc $(grep -c '^removed orphan upload o/9e0001.00000001/$' <<<"$out") $(grep -c 'orphan sweep skipped' <<<"$out")"
+check "mm OC-01: the origin's reap list stays v:2: no v:3 pointer is deleted" "0" "$(grep -c '^DELETE m/5d000' "$tlog")"
+out=$(tn org ls 2>&1); rc=$?
+check "mm SV-07: the origin's ls shows a member's v:3 row with its origin" "0 1" "$rc $(grep -c "^    id=5d0001  added=2026-11-15  expires=never  origin=an  served by an's machine$" <<<"$out")"
+check "mm SV-08: a malformed or expired v:3 is skipped as forged" "0" "$(grep -cE 'id=5d000[2-7]' <<<"$out")"
+check "mm SV-07: the origin's own row lists once, with no origin" "1 0" "$(grep -c 'id=5d1001' <<<"$out") $(grep 'id=5d1001' <<<"$out" | grep -c origin=)"
+tn org state >"$MM/state.json" 2>/dev/null
+check "mm SV-07: state gives the v:3 row its origin, storage machine" "m-an-aaaaaaa1 machine https://org.example.test/5d0001/an.txt" \
+  "$(jq -r '.shares[] | select(.id == "5d0001") | "\(.origin) \(.storage) \(.url)"' "$MM/state.json")"
+check "mm SV-07: state rows with no origin carry no origin key" "0" "$(jq '[.shares[] | select(.id != "5d0001") | select(has("origin"))] | length' "$MM/state.json")"
+check "mm SV-07: state_schema_ok passes on the v:3 fixture" "0" "$(state_schema_ok "$MM/state.json" "$(jq -r .state "$MM/state.json")"; echo $?)"
+check "mm SV-08: state skips the malformed and expired v:3 rows" "0" "$(jq '[.shares[] | select(.id | test("^5d000[2-7]$"))] | length' "$MM/state.json")"
+out=$(tm ls 2>&1)
+check "mm SV-07: a cloud publisher's ls shows the v:3 row with its origin" "1" "$(grep -c "id=5d0001 .*origin=an  served by an's machine" <<<"$out")"
+tm state >"$MM/state-m.json" 2>/dev/null
+check "mm SV-07: a cloud publisher's state gives the origin" "m-an-aaaaaaa1" "$(jq -r '.shares[] | select(.id == "5d0001") | .origin' "$MM/state-m.json")"
+: >"$mlog"; v3 5d0008 '.expires = 1000'
+out=$(tm prune 2>&1)
+check "mm OC-01: a cloud publisher's prune never deletes a v:3 (its reap list stays v:2)" "0" "$(grep -c '^DELETE m/5d000' "$mlog")"
+mkdir -p "$DRYT/t"; printf '{"v":1,"id":"ad0001","origin":"m-an-aaaaaaa1","by":"admin","at":1}\n' >"$DRYT/t/ad0001"
+: >"$tlog"
+out=$(SHARE_TEST_IDS="ad0001 ad0002" tn org add --cloud "$tn2" 2>&1); rc=$?
+check "mm SV-09: a tombstoned id is never picked" "0 0 1 https://org.example.test/ad0002/note.txt" \
+  "$rc $([[ -f $DRYT/m/ad0001 ]] && echo 1 || echo 0) $(grep -c '^GET t/ad0001$' "$tlog") $(grep '^https://' <<<"$out")"
+
+# TASK-0e: deploy carry-forward, on the R2-on tenant ten.example.test (gwt) left by the groundwork section
+carry_fx() { # carry_fx <jq over script.json>: the deployed Worker gains member bindings (each with its VPC Service file) and an older SHA, so a rerun deploys
+  gt_restore_on
+  mkdir -p "$GT_DRY/.cf/services"
+  local s; for s in svc-a svc-b; do printf '{"service_id":"%s","name":"share-ten-example-test-%s"}\n' "$s" "$s" >"$GT_DRY/.cf/services/$s.json"; done
+  jq -c '(.bindings |= map(if .name == "SHA" then .text = "000000000000" else . end))
+    | .bindings += [{type: "vpc_service", name: "M_aaaaaaa1", service_id: "svc-a"}, {type: "vpc_service", name: "M_bbbbbbb2", service_id: "svc-b"},
+      {type: "plain_text", name: "MEMBERS", text: "1"}, {type: "plain_text", name: "PAUSED", text: "[\"aaaaaaa1\"]"}]' "$GT_DRY/.cf/script.json" | jq -c "${1:-.}" >"$GT_DRY/.cf/script.tmp"
+  mv -f "$GT_DRY/.cf/script.tmp" "$GT_DRY/.cf/script.json"
+  : >"$GT_ROOT/r2-calls.log"
+}
+carried() { jq -r '[.bindings[] | select(.type == "vpc_service" or .name == "MEMBERS" or .name == "PAUSED") | "\(.name)=\(.service_id // .text)"] | sort | join(" ")' "$GT_DRY/.cf/script.json"; }
+nonce_of() { jq -r '[.bindings[] | select(.name == "DEPLOY") | .text] | first // ""' "$GT_DRY/.cf/script.json"; }
+carry_fx; n0="$(nonce_of)"
+out=$(gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1); rc=$?
+check "mm DY-01: a setup --r2 rerun after a CLI bump keeps both bindings, MEMBERS and PAUSED" "0 MEMBERS=1 M_aaaaaaa1=svc-a M_bbbbbbb2=svc-b PAUSED=[\"aaaaaaa1\"]" "$rc $(carried)"
+check "mm DY-01: the rerun deployed this CLI's Worker with a fresh 16-hex DEPLOY" "1 1 1" \
+  "$(grep -c '^API PUT /accounts/acct-dry/workers/scripts/share-ten-example-test$' "$GT_ROOT/r2-calls.log") $(nonce_of | grep -cE '^[0-9a-f]{16}$') $([[ $(nonce_of) != "$n0" ]] && echo 1 || echo 0)"
+check "mm DY-01: each carried binding's VPC Service was read before the deploy" "1" \
+  "$(grep -q 'services/svc-b$' "$GT_ROOT/r2-calls.log" && [[ $(grep -n 'services/svc-b$' "$GT_ROOT/r2-calls.log" | cut -d: -f1) -lt $(grep -n '^API PUT /accounts/acct-dry/workers/scripts/' "$GT_ROOT/r2-calls.log" | cut -d: -f1) ]] && echo 1 || echo 0)"
+: >"$GT_ROOT/r2-calls.log"; out=$(gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1); rc=$?
+check "mm DY-01: a second rerun deploys nothing and keeps every binding" "0 0 MEMBERS=1 M_aaaaaaa1=svc-a M_bbbbbbb2=svc-b PAUSED=[\"aaaaaaa1\"]" \
+  "$rc $(grep -c '^API PUT /accounts/acct-dry/workers/scripts/' "$GT_ROOT/r2-calls.log") $(carried)"
+carry_fx; rm -f "$GT_DRY/.cf/services/svc-b.json"
+out=$(gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1); rc=$?
+check "mm DY-01: a binding whose VPC Service is gone is dropped and named" "0 MEMBERS=1 M_aaaaaaa1=svc-a PAUSED=[\"aaaaaaa1\"] 1" \
+  "$rc $(carried) $(grep -c 'binding M_bbbbbbb2 names VPC Service svc-b, which is gone' <<<"$out")"
+carry_fx; c0="$(cksum <"$GT_DRY/.cf/script.json")"
+out=$(SHARE_R2_DRY_FAIL='API GET */connectivity/directory/services/*' gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1); rc=$?
+check "mm DY-01: a VPC Service read that fails dies before the deploy" "1 $c0 1" "$rc $(cksum <"$GT_DRY/.cf/script.json") $(grep -c 'needs Connectivity Directory Admin' <<<"$out")"
+carry_fx '.bindings |= map(if .name == "DEPLOY" then .text = "1111111111111111" else . end)'; c0="$(cksum <"$GT_DRY/.cf/script.json")"
+out=$(SHARE_R2_DRY_HEALTHZ=old-deploy gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1); rc=$?
+check "mm DY-01: settings that disagree with the served nonce die before the deploy" "1 $c0 3" \
+  "$rc $(cksum <"$GT_DRY/.cf/script.json") $(grep -c '^API GET /accounts/acct-dry/workers/scripts/share-ten-example-test/settings$' "$GT_ROOT/r2-calls.log" | awk '{print ($1 >= 3) ? 3 : $1}')"
+check "mm DY-01: the refusal names the rerun" "1" "$(grep -c 'a stale settings read could drop a member binding, so nothing was changed; rerun the same setup in a minute' <<<"$out")"
+# DY-02: an --alias fold on T2 carries the same set
+afresh; out=$(afold 2>&1)
+jq -c '(.bindings |= map(if .name == "SHA" then .text = "000000000000" else . end))
+  | .bindings += [{type: "vpc_service", name: "M_aaaaaaa1", service_id: "svc-a"}, {type: "plain_text", name: "MEMBERS", text: "1"}, {type: "plain_text", name: "PAUSED", text: "[\"aaaaaaa1\"]"}]' \
+  "$DRYV/.cf/script.json" >"$DRYV/.cf/script.tmp" && mv -f "$DRYV/.cf/script.tmp" "$DRYV/.cf/script.json"
+mkdir -p "$DRYV/.cf/services"; printf '{"service_id":"svc-a"}\n' >"$DRYV/.cf/services/svc-a.json"
+: >"$vlog"; out=$(afold 2>&1); rc=$?
+check "mm DY-02: an --alias fold rerun on T2 keeps the binding, MEMBERS and PAUSED" "0 1 MEMBERS=1 M_aaaaaaa1=svc-a PAUSED=[\"aaaaaaa1\"]" \
+  "$rc $(grep -c '^API PUT /accounts/acct-dry/workers/scripts/share-ten-example-test$' "$vlog") $(jq -r '[.bindings[] | select(.type == "vpc_service" or .name == "MEMBERS" or .name == "PAUSED") | "\(.name)=\(.service_id // .text)"] | sort | join(" ")' "$DRYV/.cf/script.json")"
+# DY-03: setup --force never lowers the Worker version under members
+for fx in binding marker; do
+  if [[ $fx == binding ]]; then carry_fx '(.bindings |= map(if .name == "VERSION" then .text = "9" else . end))'
+  else
+    gt_restore_on; jq -c '(.bindings |= map(if .name == "VERSION" then .text = "9" else . end))' "$GT_DRY/.cf/script.json" >"$GT_DRY/.cf/script.tmp" && mv -f "$GT_DRY/.cf/script.tmp" "$GT_DRY/.cf/script.json"
+    jq -c '.members = true' "$GT_DRY/share.json" >"$GT_DRY/share.tmp" && mv -f "$GT_DRY/share.tmp" "$GT_DRY/share.json"; : >"$GT_ROOT/r2-calls.log"
+  fi
+  c0="$(cksum <"$GT_DRY/.cf/script.json")"
+  out=$(gwt setup ten.example.test --r2 --bucket ok-bucket --force 2>&1); rc=$?
+  check "mm DY-03: setup --force lowering the version with a member $fx is refused, nothing written" "1 $c0 0 1" \
+    "$rc $(cksum <"$GT_DRY/.cf/script.json") $(grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$GT_ROOT/r2-calls.log") $(grep -c 'would break every member link; refused, nothing was changed' <<<"$out")"
+done
+gt_restore_on; jq -c '(.bindings |= map(if .name == "VERSION" then .text = "9" else . end))' "$GT_DRY/.cf/script.json" >"$GT_DRY/.cf/script.tmp" && mv -f "$GT_DRY/.cf/script.tmp" "$GT_DRY/.cf/script.json"
+out=$(gwt setup ten.example.test --r2 --bucket ok-bucket --force 2>&1); rc=$?
+check "mm DY-03: with no member state, --force still downgrades (unchanged)" "0 5" "$rc $(jq -r '.bindings[] | select(.name == "VERSION") | .text' "$GT_DRY/.cf/script.json")"
+# DY-04: 20 bindings in one metadata body
+gt_restore_on; mkdir -p "$GT_DRY/.cf/services"
+b20='[]'; for i in $(seq 1 20); do sx="$(printf 'c%07x' "$i")"; printf '{"service_id":"svc-%s"}\n' "$sx" >"$GT_DRY/.cf/services/svc-$sx.json"
+  b20="$(jq -c --arg n "M_$sx" --arg s "svc-$sx" '. + [{type: "vpc_service", name: $n, service_id: $s}]' <<<"$b20")"; done
+jq -c --argjson b "$b20" '(.bindings |= map(if .name == "SHA" then .text = "000000000000" else . end)) | .bindings += $b' "$GT_DRY/.cf/script.json" >"$GT_DRY/.cf/script.tmp" && mv -f "$GT_DRY/.cf/script.tmp" "$GT_DRY/.cf/script.json"
+: >"$GT_ROOT/r2-calls.log"
+out=$(gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1); rc=$?
+check "mm DY-04: 20 bindings deploy in one metadata body, every one present" "0 1 20" \
+  "$rc $(grep -c '^API PUT /accounts/acct-dry/workers/scripts/share-ten-example-test$' "$GT_ROOT/r2-calls.log") $(jq '[.bindings[] | select(.type == "vpc_service")] | length' "$GT_DRY/.cf/script.json")"
+# DY-05: the deploy answers 200 but /healthz serves the old nonce: the verb waits SHARE_R2_WAIT, then dies naming the rerun
+gt_restore_on; jq -c '(.bindings |= map(if .name == "SHA" then .text = "000000000000" else . end))' "$GT_DRY/.cf/script.json" >"$GT_DRY/.cf/script.tmp" && mv -f "$GT_DRY/.cf/script.tmp" "$GT_DRY/.cf/script.json"
+t0=$SECONDS; out=$(SHARE_R2_DRY_HEALTHZ=old-deploy gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1); rc=$?
+check "mm DY-05: a deploy whose nonce never serves waits, then dies naming the rerun" "1 1 1" \
+  "$rc $([[ $((SECONDS - t0)) -ge 2 ]] && echo 1 || echo 0) $(grep -c 'X-Share-Deploy 0000000000000000, not this deploy.s [0-9a-f]\{16\}; rerun the same setup' <<<"$out")"
+gt_restore_on; out=$(gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1); rc=$?
+check "mm DY-05: with the nonce served, the same rerun converges" "0 1" "$rc $(gt_on)"
+
+# TASK-0f, TN-10: the member keys ride config_put across a setup <host> rerun and an api-token --cmd write
+gu_restore
+printf 'members=on\nrole=member\nmember_id=m-an-aaaaaaa1\nmember_mode=machine\n' >>"$GU_CONF"
+before="$(grep -nE '^(members|role|member_id|member_mode)=' "$GU_CONF")"
+gwu setup gu.example.test --no-service >/dev/null 2>&1; rc=$?
+check "mm TN-10: a setup <host> rerun keeps the four member lines byte for byte, in place" "0|$before" "$rc|$(grep -nE '^(members|role|member_id|member_mode)=' "$GU_CONF")"
+gwu api-token --cmd 'echo t' >/dev/null 2>&1   # its Access preflight has no fake here; the write is what TN-10 checks
+check "mm TN-10: an api-token --cmd write keeps them too" "$before|1" "$(grep -nE '^(members|role|member_id|member_mode)=' "$GU_CONF")|$(grep -c '^api_token_cmd=echo t$' "$GU_CONF")"
+gt_fresh; printf 'members=on\nrole=member\nmember_id=m-an-aaaaaaa1\nmember_mode=machine\n' >>"$GT_CONF"; before="$(grep -nE '^(members|role|member_id|member_mode)=' "$GT_CONF")"
+gwt setup ten.example.test --r2 --bucket ok-bucket >/dev/null 2>&1; rc=$?
+check "mm TN-10: a setup --r2 write (tenant_config) keeps them too" "0|$before" "$rc|$(grep -nE '^(members|role|member_id|member_mode)=' "$GT_CONF")"
 
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then
