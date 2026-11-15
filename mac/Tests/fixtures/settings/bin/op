@@ -1,0 +1,14 @@
+#!/bin/bash
+# A fake 1Password CLI for the Advanced picker's screenshots: `op item list --format json` names and ids only.
+case "$*" in
+  "item list --format json")
+    cat <<'JSON'
+[
+  {"id":"ab12cd34ef56gh78ij90kl12mn","title":"cf-console-labs-admin","vault":{"id":"vt01wx23yz45ab67cd89ef01gh","name":"Toolkit"},"category":"API_CREDENTIAL"},
+  {"id":"op34qr56st78uv90wx12yz34ab","title":"cf-console-labs-minter","vault":{"id":"vt01wx23yz45ab67cd89ef01gh","name":"Toolkit"},"category":"API_CREDENTIAL"},
+  {"id":"cd56ef78gh90ij12kl34mn56op","title":"cf-dfoundation-admin","vault":{"id":"vt01wx23yz45ab67cd89ef01gh","name":"Toolkit"},"category":"API_CREDENTIAL"}
+]
+JSON
+    ;;
+  *) echo "[ERROR] unsupported by the fake op" >&2; exit 1 ;;
+esac

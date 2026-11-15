@@ -1,0 +1,3 @@
+scenario admin
+script tab:members,pause:console:An
+label pause-confirm

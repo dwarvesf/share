@@ -1,0 +1,4 @@
+scenario admin
+script tab:advanced,source:admin:cmd,cmd:admin=security find-generic-password -w -s cf-admin,commit:admin
+expect-argv admin-token --cmd security find-generic-password -w -s cf-admin
+label advanced-command

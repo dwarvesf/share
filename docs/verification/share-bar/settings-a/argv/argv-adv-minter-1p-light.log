@@ -1,0 +1,11 @@
+profiles --json
+profiles --json
+--profile console config ttl
+profiles --json
+--profile console config ttl
+--profile console config storage_default
+--profile console config storage_default
+version
+version
+--profile console admin-token --cmd op read op://vt01wx23yz45ab67cd89ef01gh/ab12cd34ef56gh78ij90kl12mn/credential
+--profile console minter-token --cmd op read op://vt01wx23yz45ab67cd89ef01gh/op34qr56st78uv90wx12yz34ab/credential

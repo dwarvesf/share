@@ -1,0 +1,3 @@
+scenario firstrun
+script add:setup,host=s.example.com
+label add-sheet-setup

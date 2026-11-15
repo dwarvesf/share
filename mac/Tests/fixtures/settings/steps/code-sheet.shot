@@ -1,0 +1,6 @@
+scenario admin
+script tab:members,invite:console,name=linh,source:admin:cmd,cmd:admin=pass show cf-admin,commit:admin,source:minter:cmd,cmd:minter=pass show cf-minter,commit:minter,create-code,wait:1
+expect-argv admin-token --cmd pass show cf-admin
+expect-argv minter-token --cmd pass show cf-minter
+expect-argv member add linh --machine --invite-ttl 7d
+label code-sheet

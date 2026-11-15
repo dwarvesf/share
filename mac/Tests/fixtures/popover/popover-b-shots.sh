@@ -1,6 +1,6 @@
 #!/bin/bash
 # popover-b-shots.sh: render the popover B screens through the app's DEBUG hook, with no pointer or
-# key input on the desktop (SPEC-009 DEC-81). Every scene is `-ShareBarShotsScene <name>` on top of
+# key input on the desktop (SPEC-009 DEC-83). Every scene is `-ShareBarShotsScene <name>` on top of
 # `-ShareBarShotsRender <png>`; light and dark; the fake CLI answers from a scenario copy.
 #
 # Usage: mac/Tests/fixtures/popover/popover-b-shots.sh <out dir> [scene ...]

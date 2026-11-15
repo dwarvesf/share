@@ -406,7 +406,7 @@ mx_spec="$(dirname "$SH")/../docs/specs/SPEC-009-multi-member.md"
 mx_doc="$(awk '/^### Member status transitions/ {f = 1} f && /^\| [a-z0-9 ]+ \| (admin|member) \|/ {print} /^Guards:/ {f = 0}' "$mx_spec")"
 mx_expect() { # mx_expect <status> <verb> <actor> <mode>: yes, no or busy from the doc table plus its stated guards
   local st=$1 vb=$2 ac=$3 md=$4 row from intent all="adding invited joining active pausing paused resuming inviting rotating renewing removing removed left"
-  if [[ $vb == join ]]; then row="$(grep '^| join step 3 |' <<<"$mx_doc")"
+  if [[ $vb == join ]]; then row="$(grep '^| join step 6 |' <<<"$mx_doc")"
   else row="$(awk -F'|' -v v="$vb" '{x = $2; gsub(/ /, "", x)} x == v {print; exit}' <<<"$mx_doc")"; fi
   [[ -n $row ]] || { echo no; return; }
   [[ "$(awk -F'|' '{x = $3; gsub(/ /, "", x); print x}' <<<"$row")" == "$ac" ]] || { echo no; return; }
@@ -738,19 +738,32 @@ mxj; mkdir -p "$MX_DRY/i"; mx_reinvite "$MXC2" m-zz-ccccccc3; k0="$(cat "$MX/kv-
 out=$(mxm_env=(SHARE_ERROR_JSON=1); mxm join mx.example.test "$MXC2" 2>&1); rc=$?; mxm_env=()
 check "mm MB-27: a bundle naming another member_id is refused member_changed before any local write" "1 member_changed 1 1" \
   "$rc $(mx_jcode "$out") $([[ "$(cat "$MX/kv-member"/* | cksum)" == "$k0" ]] && echo 1) $([[ "$(cksum <"$MXM_CONF")" == "$c0" ]] && echo 1)"
-# DP-join-1 to DP-join-6: a die after each step; status names it and the rerun; the bare share join resumes from the journal step
-mx_load invited; mxm_fresh
-mx_kill_at "$MXM_ROOT" join 2 mxm join mx.example.test "$MXC1"
-o1="$(mxm status 2>&1)"; out=$(mxm_env=(SHARE_ERROR_JSON=1); mxm join 2>&1); rc=$?; mxm_env=()
-check "mm DP-join-1: a die after the redeem, before the keys: status names step 2 and the rerun; the code is spent, the bare join says so" "1 1 invite_unavailable 0" \
-  "$(grep -c '^join stopped at step 2 of 6 (keys); rerun: share join$' <<<"$o1") $rc $(mx_jcode "$out") $(find "$MX_DRY/i" -type f | grep -c .)"
-for n in 3 4 5 6; do
+# DP-join-1a to 1d, DP-join-2 to DP-join-6: a die after each step; status names it and the rerun. Steps 2 to 5 (unseal, api-key, conn-key, config) keep the bundle only in memory:
+# a cut there leaves the invite spent and the bare join refuses invite_unavailable; from step 6 on the config is written and the bare share join resumes from the journal step (DEC-82)
+mx_ak="$MX/kv-member/share-api:mx.example.test"; mx_ck="$MX/kv-member/share-tunnel:mx.example.test"
+for cut in "2 unseal 1a 0 0 0" "3 api-key 1b 0 0 0" "4 conn-key 1c 1 0 0" "5 config 1d 1 1 0"; do
+  read -r n nm lab wk wc wf <<<"$cut"
+  mx_load invited; mxm_fresh
+  mx_kill_at "$MXM_ROOT" join "$n" mxm join mx.example.test "$MXC1"
+  o1="$(mxm status 2>&1)"; k1="$([[ -f $mx_ak ]] && echo 1 || echo 0) $([[ -f $mx_ck ]] && echo 1 || echo 0) $([[ -f $MXM_CONF ]] && echo 1 || echo 0)"
+  out=$(mxm_env=(SHARE_ERROR_JSON=1); mxm join 2>&1); rc=$?; mxm_env=()
+  check "mm DP-join-$lab: a die at step $n ($nm): status names it and the rerun; the keys it left are api=$wk conn=$wc config=$wf; the code is spent, the bare join says so" "1 $wk $wc $wf 1 1 invite_unavailable 0" \
+    "$(grep -c "^join stopped at step $n of 9 ($nm); rerun: share join\$" <<<"$o1") $k1 $(grep -c "^share: the join stopped at step $n ($nm), before its config was kept; the invite is spent" <<<"$out") $rc $(mx_jcode "$out") $(find "$MX_DRY/i" -type f | grep -c .)"
+done
+for cut in "6 2" "7 3b" "8 4" "9 6"; do
+  read -r n lab <<<"$cut"
   mx_load invited; mxm_fresh
   mx_kill_at "$MXM_ROOT" join "$n" mxm join mx.example.test "$MXC1"
   o1="$(mxm status 2>&1)"; out=$(mxm join 2>&1); rc=$?; mxm stop >/dev/null 2>&1
-  check "mm DP-join-$((n - 1)): a die after step $((n - 1)): status names step $n and the rerun; the bare share join resumes to active" "1 0 1 active" \
-    "$(grep -c "^join stopped at step $n of 6 ([a-z]*); rerun: share join$" <<<"$o1") $rc $(grep -c "^join:       resuming at step $n" <<<"$out") $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json")"
+  check "mm DP-join-$lab: a die at step $n: status names it and the rerun; the bare share join resumes to active" "1 0 1 active" \
+    "$(grep -c "^join stopped at step $n of 9 ([a-z-]*); rerun: share join\$" <<<"$o1") $rc $(grep -c "^join:       resuming at step $n" <<<"$out") $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json")"
 done
+# DEC-82 on a re-join: a die at the keys or the config of a re-join leaves the old config (role member), yet the bare join still refuses, since the bundle is gone
+mxj; mkdir -p "$MX_DRY/i"; mx_reinvite "$MXC2" m-an-aaaaaaa1
+mx_kill_at "$MXM_ROOT" join 5 mxm join mx.example.test "$MXC2"
+o1="$(mxm status 2>&1)"; out=$(mxm_env=(SHARE_ERROR_JSON=1); mxm join 2>&1); rc=$?; mxm_env=()
+check "mm DP-join-1d (re-join): a die at the config step of a re-join: status names step 5, the bare join refuses invite_unavailable, the old config stays" "1 1 invite_unavailable 1" \
+  "$(grep -c '^join stopped at step 5 of 9 (config); rerun: share join$' <<<"$o1") $rc $(mx_jcode "$out") $([[ -f $MXM_CONF ]] && echo 1 || echo 0)"
 mx_load invited; mxm_fresh
 ( mxm_env=(SHARE_R2_DRY_PAUSE="PUT u/m-an-aaaaaaa1.json" SHARE_ERROR_JSON=1); mxm join mx.example.test "$MXC1" >"$MX/dpj3.out" 2>&1 ) & pa=$!
 mx_wait_paused; jq -c '.status = "removing" | .by = "admin"' "$MX_DRY/u/m-an-aaaaaaa1.json" >"$MX/r" && mv "$MX/r" "$MX_DRY/u/m-an-aaaaaaa1.json"

@@ -1,6 +1,6 @@
 # Popover B: publish and drop, drag out, Quick Look, hotkey
 
-SPEC-009 TASK-4b10 to TASK-4b13. Every capture here comes from the app's own DEBUG hook (`-ShareBarShotsRender` with `-ShareBarShotsScene`), run by `mac/Tests/fixtures/popover/popover-b-shots.sh`: no pointer, key or drag input reached the desktop (owner decision 2026-11-15, SPEC-009 DEC-81). Light and dark. The popover is a fixed 340 pt wide, so 340 pt is also the narrowest width; Quick Look is drawn at 560 pt, the widest the spec allows.
+SPEC-009 TASK-4b10 to TASK-4b13. Every capture here comes from the app's own DEBUG hook (`-ShareBarShotsRender` with `-ShareBarShotsScene`), run by `mac/Tests/fixtures/popover/popover-b-shots.sh`: no pointer, key or drag input reached the desktop (owner decision 2026-11-15, SPEC-009 DEC-83). Light and dark. The popover is a fixed 340 pt wide, so 340 pt is also the narrowest width; Quick Look is drawn at 560 pt, the widest the spec allows.
 
 | Screen (AC) | Capture | How it is reached |
 |---|---|---|

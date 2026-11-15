@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "profiles": [
+    {
+      "name": "han",
+      "state": {
+        "schema": 1,
+        "state": "serving",
+        "ready": false,
+        "mode": "named",
+        "host": "s.han.ws",
+        "hosts": "Mac-mini",
+        "serves_here": true,
+        "service": true,
+        "access_pending": 0,
+        "role": "origin",
+        "tier": "t0",
+        "serve": {
+          "phase": "starting",
+          "reason": "starting"
+        },
+        "ops": [],
+        "shares": [
+          {
+            "id": "c0a0b1",
+            "name": "notes.txt",
+            "url": "https://s.console.so/c0a0b1/notes.txt",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 4102444800,
+            "storage": "machine",
+            "type": "text",
+            "by": "Mac-mini",
+            "link_state": "live"
+          },
+          {
+            "id": "c1a0b1",
+            "name": "brief-v2.pdf",
+            "url": "https://s.console.so/c1a0b1/brief-v2.pdf",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 4102444800,
+            "storage": "machine",
+            "type": "pdf",
+            "by": "Mac-mini",
+            "link_state": "live"
+          },
+          {
+            "id": "c2a0b1",
+            "name": "invoice-nov.pdf",
+            "url": "https://s.console.so/c2a0b1/invoice-nov.pdf",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 4102444800,
+            "storage": "machine",
+            "type": "pdf",
+            "by": "Mac-mini",
+            "link_state": "live"
+          },
+          {
+            "id": "c3a0b1",
+            "name": "roadmap.key",
+            "url": "https://s.console.so/c3a0b1/roadmap.key",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 4102444800,
+            "storage": "machine",
+            "type": "image",
+            "by": "Mac-mini",
+            "link_state": "live"
+          }
+        ]
+      }
+    }
+  ]
+}

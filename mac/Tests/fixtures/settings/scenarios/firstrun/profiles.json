@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "profiles": [
+    {
+      "name": "default",
+      "state": {
+        "schema": 1,
+        "state": "not_setup",
+        "ready": false,
+        "mode": "named",
+        "host": null,
+        "hosts": "",
+        "serves_here": false,
+        "service": false,
+        "access_pending": 0,
+        "role": "none",
+        "shares": []
+      }
+    }
+  ]
+}
