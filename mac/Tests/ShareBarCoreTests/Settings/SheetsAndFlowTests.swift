@@ -209,7 +209,8 @@ final class SheetsAndFlowTests: XCTestCase {
         XCTAssertEqual(JournalRun.argv(op: join, kind: .rollback, profile: "console"), ["--profile", "console", "leave", "--local"])
         let r2 = OpInfo(verb: "setup-r2", step: 13, of: 16, name: "route", alive: false, rerun: "r",
                         rerunArgv: ["setup", "s.d.foundation", "--r2", "--bucket", "share-s-d-foundation"], rollback: "b", rollbackArgv: ["setup", "s.d.foundation", "--no-r2"])
-        XCTAssertEqual(JournalRun.argv(op: r2, kind: .rerun, profile: "dfoundation")?.suffix(5), ["s.d.foundation", "--r2", "--bucket", "share-s-d-foundation"][...].map { $0 }.suffix(5))
+        XCTAssertEqual(JournalRun.argv(op: r2, kind: .rerun, profile: "dfoundation"),
+                       ["--profile", "dfoundation", "setup", "s.d.foundation", "--r2", "--bucket", "share-s-d-foundation"])
         XCTAssertEqual(JournalRun.argv(op: r2, kind: .rollback, profile: "dfoundation")?.suffix(2), ["s.d.foundation", "--no-r2"])
     }
 

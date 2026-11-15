@@ -1,0 +1,3 @@
+scenario admin
+script tab:tenants,select:console,button:stop
+label stop-serving-confirm

@@ -1,0 +1,5 @@
+scenario owners
+script tab:tenants,select:console,button:turnOnMembers,askkey=ask-once-KEYVALUE12345678901234567890,wait:2.5
+hold 3
+expect-env CLOUDFLARE_API_TOKEN=present
+label members-progress

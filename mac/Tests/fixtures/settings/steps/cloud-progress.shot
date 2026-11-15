@@ -1,0 +1,5 @@
+scenario owners
+script tab:tenants,select:han,button:turnOnCloud,askkey=ask-once-KEYVALUE12345678901234567890,wait:3.5
+hold 6
+expect-env CLOUDFLARE_API_TOKEN=present
+label cloud-storage-progress

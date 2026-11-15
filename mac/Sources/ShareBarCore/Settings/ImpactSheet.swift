@@ -15,16 +15,24 @@ public struct ImpactLine: Sendable, Equatable {
 /// The one confirm sheet of the Share Bar (interactions doc 3b): a title, an optional body,
 /// impact lines with real counts, Cancel and one action button (red ink when destructive).
 public struct ImpactSheet: Sendable, Equatable {
+    /// A pop-up inside the sheet (Remove member: what happens to their cloud links).
+    public struct Choice: Sendable, Equatable {
+        public let label: String
+        public let options: [String]
+    }
+
     public let title: String
     public let body: String?
     public let lines: [ImpactLine]
+    public let choice: Choice?
     public let actionTitle: String
     public let destructive: Bool
 
-    public init(title: String, body: String? = nil, lines: [ImpactLine] = [], actionTitle: String, destructive: Bool = false) {
+    public init(title: String, body: String? = nil, lines: [ImpactLine] = [], choice: Choice? = nil, actionTitle: String, destructive: Bool = false) {
         self.title = title
         self.body = body
         self.lines = lines
+        self.choice = choice
         self.actionTitle = actionTitle
         self.destructive = destructive
     }
@@ -89,8 +97,9 @@ public enum Impact {
             body: "Their machine links stop answering now. Their tunnel and key are deleted. Their files stay on their machine.",
             lines: [
                 ImpactLine(.stops, machine > 0 ? "\(links(machine)) on their computer stop answering now" : "Their machine links stop answering now"),
-                ImpactLine(.keeps, cloud > 0 ? "\(links(cloud)) in the cloud: keep until they expire, or delete now" : "Their cloud links: keep until they expire, or delete now"),
+                ImpactLine(.keeps, "Their files stay on their machine"),
             ],
+            choice: ImpactSheet.Choice(label: cloud > 0 ? "Their cloud links (\(cloud))" : "Their cloud links", options: ["Keep until they expire", "Delete now"]),
             actionTitle: "Remove", destructive: true
         )
     }
@@ -209,6 +218,15 @@ public struct InviteForm: Sendable, Equatable {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         return !trimmed.isEmpty && trimmed.count <= 32 && !trimmed.hasPrefix("-")
             && trimmed.unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "_" }
+    }
+
+    /// The code `member add` prints on its one `share join <host> <code>` line.
+    public static func code(fromStdout stdout: String) -> String? {
+        for line in stdout.split(separator: "\n").reversed() {
+            let words = line.split(separator: " ").map(String.init)
+            if words.count >= 4, words[0] == "share", words[1] == "join" { return words[3] }
+        }
+        return nil
     }
 
     /// `member add <name> --machine|--cloud --invite-ttl <n>d`

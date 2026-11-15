@@ -1,0 +1,227 @@
+#!/bin/bash
+# The settings screens' fake share CLI (SPEC-009 TASK-4b14 to 4b18). It wraps the base fake
+# (mac/Tests/fixtures/bin/share), which stays frozen, and adds what Settings runs:
+#
+#   config <ttl|storage_default> [value]    reads and writes scenario/config-<profile>-<key>
+#   admin-token | minter-token --cmd|--clear|--test [--json]
+#   join <host> <code> | join               journaled, six steps; bare join resumes from the journal
+#   setup <host> [--r2 ...] [--members]     journaled: setup-tunnel (8), setup-r2 (16), setup-members (5)
+#   start | stop | leave | teardown         edit the scenario's profiles.json
+#   member add <name> ...                   prints the one `share join <host> <code>` line
+#
+#   SHARE_FAKE_DIR      required, as for the base: scenario/ is the writable copy, argv.log the calls.
+#   SHARE_FAKE_DELAY    seconds between progress lines (default 0.4).
+#   SHARE_FAKE_HOLD_AT  n: after step n the verb waits (until it is stopped), so a capture sees it.
+#   SHARE_PROGRESS=1    print `{"progress":{...}}` lines to stderr.
+#
+# A file `scenario/fail-<verb>` fails that verb with the file's text; `scenario/fail-test-admin-token`
+# and `fail-test-minter-token` fail `--test`. The key a call received is logged as `token-env:` in
+# `$SHARE_FAKE_DIR/env.log` as present or absent, never its value. bash 3.2 safe; needs jq.
+set -u
+
+here="$(cd "$(dirname "$0")" && pwd)"
+base="$here/../../bin/share"
+dir="${SHARE_FAKE_DIR:-}"
+[[ -n $dir && -d $dir/scenario ]] || exec "$base" "$@"
+scn="$dir/scenario"
+orig="$*"
+orig_args=("$@")
+profile=default
+if [[ ${1:-} == --profile ]]; then profile=${2:-default}; shift 2; fi
+verb=${1:-}
+[[ $# -eq 0 ]] || shift
+command -v jq >/dev/null 2>&1 || { echo "share: fake CLI needs jq" >&2; exit 2; }
+
+record() { printf '%s\n' "$orig" >> "$dir/argv.log"; }
+
+fail_with() { # fail_with <code> <message> <next>
+  if [[ ${SHARE_ERROR_JSON:-} == 1 ]]; then
+    echo "share: $2" >&2
+    jq -nc --arg c "$1" --arg m "$2" --arg n "${3:-}" '{error: {code: $c, message: $m, next: $n}}' >&2
+  else
+    echo "share: $2" >&2
+  fi
+  exit 1
+}
+
+edit() { # edit <jq filter> [--arg k v ...]: rewrite the scenario's profiles.json
+  local filter=$1 tmp="$scn/profiles.json.tmp"
+  shift
+  jq "$@" "$filter" "$scn/profiles.json" > "$tmp" && mv -f "$tmp" "$scn/profiles.json"
+}
+
+env_note() { # env_note <variable>: whether the call got it, never the value
+  local var=$1 state=absent
+  [[ -n ${!var:-} ]] && state=present
+  printf '%s=%s\n' "$var" "$state" >> "$dir/env.log"
+}
+
+has_profile() { jq -e --arg p "$profile" '.profiles[] | select(.name == $p)' "$scn/profiles.json" >/dev/null 2>&1; }
+
+host_of() { jq -r --arg p "$profile" '.profiles[] | select(.name == $p) | .state.host // .name' "$scn/profiles.json"; }
+
+# ---- journaled flows ---------------------------------------------------------------------
+
+steps_of() { # steps_of <journal verb>
+  case $1 in
+    join) echo "redeem keys record service probe active" ;;
+    setup-tunnel) echo "auth tunnel route dns token config service live" ;;
+    setup-r2) echo "alias worker bucket alias-domain routes snapshot alias-apps deploy pointers access config marker route alias-bind probe handoff" ;;
+    setup-members) echo "lease deploy marker config release" ;;
+  esac
+}
+
+LAST_STEP=0
+LAST_NAME=""
+STOPPED=0
+on_term() { STOPPED=1; }
+
+# run_flow <journal verb> <from step> : prints progress, holds at SHARE_FAKE_HOLD_AT, returns 1 when stopped
+run_flow() {
+  local jv=$1 from=${2:-1} names total n=0 name
+  names=$(steps_of "$jv")
+  total=$(wc -w <<<"$names" | tr -d ' ')
+  trap on_term TERM INT
+  for name in $names; do
+    n=$((n + 1))
+    [[ $n -ge $from ]] || continue
+    LAST_STEP=$n
+    LAST_NAME=$name
+    if [[ ${SHARE_PROGRESS:-} == 1 ]]; then
+      jq -nc --arg v "$jv" --argjson n "$n" --argjson of "$total" --arg name "$name" '{progress: {verb: $v, step: $n, of: $of, name: $name}}' >&2
+    fi
+    if [[ -n ${SHARE_FAKE_HOLD_AT:-} && $n -eq $SHARE_FAKE_HOLD_AT ]]; then
+      while [[ $STOPPED -eq 0 ]]; do sleep 0.1; done
+    else
+      local waited=0
+      while [[ $STOPPED -eq 0 && $waited -lt ${SHARE_FAKE_TICKS:-4} ]]; do sleep "$(awk -v d="${SHARE_FAKE_DELAY:-0.4}" -v t="${SHARE_FAKE_TICKS:-4}" 'BEGIN { printf "%.3f", d / t }')"; waited=$((waited + 1)); done
+    fi
+    [[ $STOPPED -eq 0 ]] || return 1
+  done
+  return 0
+}
+
+journal_died() { # journal_died <journal verb> <rerun argv json> <rollback argv json>
+  local jv=$1 total
+  total=$(wc -w <<<"$(steps_of "$jv")" | tr -d ' ')
+  edit '(.profiles[] | select(.name == $p) | .state.ops) = [{verb: $v, step: $s, of: $of, name: $nm, alive: false, rerun: ("share " + ($re | join(" "))), rerun_argv: $re, rollback: ("share " + ($rb | join(" "))), rollback_argv: $rb}]' \
+    --arg p "$profile" --arg v "$jv" --argjson s "$LAST_STEP" --argjson of "$total" --arg nm "$LAST_NAME" --argjson re "$2" --argjson rb "$3"
+}
+
+ensure_profile() { # ensure_profile <host> <role> <tier> <phase>
+  has_profile && return 0
+  edit '.profiles += [{name: $p, state: {schema: 1, state: "stopped", ready: false, mode: "named", host: $h, hosts: "Mac-mini", serves_here: true, service: true, access_pending: 0, role: $r, tier: $t, serve: {phase: $ph, reason: "stopped"}, ops: [], shares: []}}]' \
+    --arg p "$profile" --arg h "$1" --arg r "$2" --arg t "$3" --arg ph "$4"
+}
+
+settle() { # settle <role> <tier> <phase> : the tenant as it reads after a finished verb
+  local ph=$3 st=serving ready=true
+  [[ $ph == serving ]] || { st=stopped; ready=false; }
+  edit '(.profiles[] | select(.name == $p) | .state) |= (.role = $r | .tier = $t | .serve = {phase: $ph, reason: "ok"} | .state = $st | .ready = $rd | .ops = [] | (if $t != "t0" then .r2 = true else . end))' \
+    --arg p "$profile" --arg r "$1" --arg t "$2" --arg ph "$3" --arg st "$st" --argjson rd "$ready"
+}
+
+case $verb in
+  config)
+    record
+    key=${1:-}
+    case $key in ttl|storage_default) ;; *) fail_with config_key_unknown "$key is not a setting this verb writes" "share config ttl" ;; esac
+    file="$scn/config-$profile-$key"
+    if [[ $# -ge 2 ]]; then
+      [[ ! -f $scn/fail-config ]] || fail_with config_value_bad "$(cat "$scn/fail-config")" "share config $key"
+      printf '%s\n' "$2" > "$file"
+      echo "$key=$2"
+    elif [[ -f $file ]]; then
+      cat "$file"
+    fi
+    ;;
+  admin-token|minter-token)
+    record
+    kind=${verb%-token}
+    case ${1:-} in
+      --cmd) echo "token:      ${kind}_token_cmd stored (a command, never the token)" ;;
+      --clear) echo "token:      ${kind}_token_cmd removed" ;;
+      --test)
+        if [[ $kind == admin ]]; then env_note CLOUDFLARE_API_TOKEN; else env_note SHARE_MINTER_TOKEN; fi
+        if [[ -f $scn/fail-test-$verb ]]; then fail_with "${kind}_token_cmd_failed" "$(cat "$scn/fail-test-$verb")" "share $verb --test"; fi
+        if [[ -f $scn/test-$verb.json ]]; then cat "$scn/test-$verb.json"
+        elif [[ $kind == admin ]]; then echo '{"source":"cmd","can":{"workers":true,"tunnels":true,"dns":true,"r2":true,"connectivity":true}}'
+        else echo '{"source":"cmd","can":{"list_tokens":true}}'; fi
+        ;;
+    esac
+    ;;
+  join)
+    record
+    env_note CLOUDFLARE_API_TOKEN
+    if [[ $# -ge 2 ]]; then # join <host> <code>
+      host=$1
+      [[ ! -f $scn/fail-join ]] || fail_with invite_unknown_or_used "$(cat "$scn/fail-join")" "ask your admin for a new code"
+      ensure_profile "$host" member t2 stopped
+      if run_flow join 1; then settle member t2 serving; else journal_died join '["join"]' '["leave","--local"]'; exit 143; fi
+    else # bare join: resume from the journal
+      from=$(jq -r --arg p "$profile" '.profiles[] | select(.name == $p) | .state.ops[0].step // 1' "$scn/profiles.json")
+      if run_flow join "$from"; then settle member t2 serving; else journal_died join '["join"]' '["leave","--local"]'; exit 143; fi
+    fi
+    ;;
+  setup)
+    record
+    host=${1:-}
+    [[ $# -eq 0 ]] || shift
+    jv=setup-tunnel
+    for a in "$@"; do
+      case $a in --r2) jv=setup-r2 ;; --members) jv=setup-members ;; esac
+    done
+    [[ $jv == setup-members ]] || true
+    case $jv in setup-r2|setup-members) env_note CLOUDFLARE_API_TOKEN ;; *) env_note CLOUDFLARE_API_TOKEN ;; esac
+    [[ ! -f $scn/fail-setup ]] || fail_with admin_token_missing "$(cat "$scn/fail-setup")" "share admin-token --cmd '<command>'"
+    from=1
+    if has_profile; then
+      stored=$(jq -r --arg p "$profile" --arg v "$jv" '.profiles[] | select(.name == $p) | .state.ops[0] | select(.verb == $v) | .step // 1' "$scn/profiles.json")
+      [[ -z $stored ]] || from=$stored
+    fi
+    ensure_profile "$host" origin t0 stopped
+    bucket="share-$(printf '%s' "$host" | tr -c 'a-z0-9\n' '-')"
+    rerun="[\"setup\",\"$host\"]"
+    case $jv in
+      setup-r2) rerun="[\"setup\",\"$host\",\"--r2\",\"--bucket\",\"$bucket\"]" ;;
+      setup-members) rerun="[\"setup\",\"$host\",\"--r2\",\"--bucket\",\"$bucket\",\"--members\"]" ;;
+    esac
+    if run_flow "$jv" "$from"; then
+      case $jv in
+        setup-tunnel) settle origin t0 serving ;;
+        setup-r2) settle tenant_origin t1 serving ;;
+        setup-members) settle tenant_origin t2 serving ;;
+      esac
+    else
+      journal_died "$jv" "$rerun" "[\"setup\",\"$host\",\"--no-r2\"]"
+      exit 143
+    fi
+    ;;
+  start)
+    record
+    edit '(.profiles[] | select(.name == $p) | .state) |= (.serve = {phase: "serving", reason: "ok"} | .state = "serving" | .ready = true)' --arg p "$profile"
+    ;;
+  stop)
+    record
+    edit '(.profiles[] | select(.name == $p) | .state) |= (.serve = {phase: "stopped", reason: "stopped"} | .state = "stopped" | .ready = false)' --arg p "$profile"
+    ;;
+  leave|teardown)
+    record
+    [[ ! -f $scn/fail-$verb ]] || fail_with members_present "$(cat "$scn/fail-$verb")" "share member ls"
+    edit '.profiles |= map(select(.name != $p))' --arg p "$profile"
+    ;;
+  member)
+    if [[ ${1:-} == add ]]; then
+      record
+      env_note SHARE_MINTER_TOKEN
+      [[ ! -f $scn/fail-member ]] || fail_with minter_token_missing "$(cat "$scn/fail-member")" "share minter-token --cmd '<command>'"
+      echo "share join $(host_of) SHR-7Q4K-M2XD-9PLA-3VTB"
+    else
+      exec "$base" ${orig_args[@]+"${orig_args[@]}"}
+    fi
+    ;;
+  *)
+    exec "$base" ${orig_args[@]+"${orig_args[@]}"}
+    ;;
+esac
+exit 0

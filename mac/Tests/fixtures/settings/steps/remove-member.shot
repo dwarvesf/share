@@ -1,0 +1,3 @@
+scenario admin
+script tab:members,remove-member:console:An
+label remove-member-choice
