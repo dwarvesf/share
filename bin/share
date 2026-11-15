@@ -6161,11 +6161,16 @@ lease_live() { # lease_live: 0 while the lease read last is held by a live holde
   fi
   [[ -n $lease_lm && $(( $(date +%s) - lease_lm )) -le 900 ]]
 }
+lease_jq_clean='{holder: (.holder | if type == "string" and test("^[A-Za-z0-9._-]{1,64}:[0-9]{1,10}:[0-9a-f]{8}$") then . else "(unreadable)" end),
+  verb: (.verb | if type == "string" and test("^(add|sync|rm|purge|pause|resume|invite|rotate|renew|adopt|setup-members|no-members|setup-r2)$") then . else "?" end),
+  member: (.member | if type == "string" and test("^(m-[a-z0-9-]{2,24}-[0-9a-f]{8}|-)$") then . else "?" end),
+  step: (.step | if type == "number" and . >= 0 and . < 100 then floor else 0 end)}'   # lock/admin is member-writable: a forged body never steers a rerun line
 lease_line() { # one display line for the lease read last: holder, verb, member, step, live or stale
   local h v m s
-  IFS=$'\t' read -r h v m s < <(jq -r '[(.holder // "?"), (.verb // "?"), (.member // "?"), ((.step // 0) | tostring)] | map(gsub("[^A-Za-z0-9._:@ -]"; "?")) | @tsv' <<<"$lease_cur" 2>/dev/null) || true
+  IFS=$'\t' read -r h v m s < <(jq -r "$lease_jq_clean"' | [.holder, .verb, .member, (.step | tostring)] | @tsv' <<<"$lease_cur" 2>/dev/null) || true
   local n; n="$(sed 's/^m-//; s/-[0-9a-f]\{8\}$//; s/^-$//' <<<"$m")"
   if lease_live; then echo "$h ($v $m, step $s) (live)"
+  elif [[ $v == \? || $v == setup-* || $v == no-members ]]; then echo "$h ($v $m, step $s) (stale since $(mb_iso "${lease_lm:-0}"))"
   else echo "$h ($v $m, step $s) (stale since $(mb_iso "${lease_lm:-0}"); rerun: share member $v${n:+ $n})"; fi
 }
 lease_take() { # lease_take <verb> <member>: waits up to SHARE_LEASE_WAIT (60) s for a live holder, takes a stale one over with If-Match (CC-10: one taker wins)
@@ -6250,7 +6255,8 @@ reg_jq_valid='def s: type == "string"; def clean: s and (explode | all(. >= 32 a
   and ((.port // 8787) | type == "number" and . >= 1024 and . <= 65535)
   and ((.token // {}) | type == "object" and ((.id // "") | s and test("^[A-Za-z0-9-]{0,64}$")) and ((.expires_on // "") | s and test("^[0-9TZ:.-]{0,32}$")))
   and ((.invite // {}) | type == "object" and ((.hash // "") | s and test("^([0-9a-f]{64})?$")) and ((.expires // 0) | type == "number"))
-  and ((.token_unreachable_until // "") | s and test("^[0-9TZ:.-]{0,32}$")) and ((.by // "") | clean)'
+  and ((.token_unreachable_until // "") | s and test("^[0-9TZ:.-]{0,32}$")) and ((.by // "") | clean)
+  and ((.added // "") | s and test("^[0-9TZ:.-]{0,32}$")) and ((.updated // "") | s and test("^[0-9TZ:.-]{0,32}$")) and ((.joined // "") | s and test("^[0-9TZ:.-]{0,32}$"))'
 reg_valid() { jq -e --arg id "${2:-}" "$reg_jq_valid" <<<"$1" >/dev/null 2>&1; }   # reg_valid <json> [member_id]
 reg_rec="" reg_etag="" reg_id="" reg_refuse_code="" reg_refuse_msg=""
 reg_get() { # reg_get <member_id>: reg_rec and reg_etag; 1 when absent; a record failing validation dies record_invalid (never trusted)
@@ -6312,7 +6318,7 @@ reg_status() { # reg_status <verb> <actor> <to> [step] [jq over the record]: one
   done
   die_code member_changed "u/$reg_id.json changed twice during share member $verb; nothing more was changed" "$me member ls"
 }
-reg_step() { reg_status "$1" admin "$2" "$3"; lease_renew "$3"; op_step "$3"; }   # reg_step <verb> <ing status> <n>: the record, the lease and the journal name step n
+reg_step() { lease_renew "$3"; reg_status "$1" admin "$2" "$3"; op_step "$3"; }   # reg_step <verb> <ing status> <n>: the record, the lease and the journal name step n
 member_new_id() { # member_new_id <name>: m-<name>-<8 hex>, refusing a suffix any record, u/purged.json, binding or account service already uses (DEC-60, FG-13)
   local name=$1 id sx used purged i
   r2_call GET u/purged.json || true
@@ -6519,10 +6525,10 @@ mb_wait_deploy() { # three /healthz answers in a row naming this deploy's nonce 
 # --- member add (DEC-69, seq-member-add): the step table of "### Admin verb write orders" ---
 op_steps_member_add() { printf '%s\n' "1 lease" "2 record" "3 token" "4 tunnel" "5 service" "6 deploy" "7 invite-hash" "8 invite" "9 invited"; }
 cmd_member_add() {
-  local name="" mmode=machine port=8787 ittl=7d tttl=90d argv=("$@") isec tsec usage="usage: share member add <name> [--machine|--cloud] [--port P] [--invite-ttl 7d] [--token-ttl 90d] [--tenant <host>]"
+  local name="" mmode=machine mset=0 port=8787 ittl=7d tttl=90d argv=("$@") isec tsec usage="usage: share member add <name> [--machine|--cloud] [--port P] [--invite-ttl 7d] [--token-ttl 90d] [--tenant <host>]"
   while [[ $# -gt 0 ]]; do
     case $1 in
-      --machine|--cloud) mmode="${1#--}"; shift ;;
+      --machine|--cloud) mmode="${1#--}" mset=1; shift ;;
       --port) port="${2:-}"; shift 2 || die "$usage" ;;
       --invite-ttl) ittl="${2:-}"; shift 2 || die "$usage" ;;
       --token-ttl) tttl="${2:-}"; shift 2 || die "$usage" ;;
@@ -6542,7 +6548,9 @@ cmd_member_add() {
   mine="$(awk -F'\t' '{print $2}' <<<"$reg_all" | jq -rc --arg n "$name" 'select(.name == $n and .status != "removed") | [.member_id, .status, .mode] | @tsv' 2>/dev/null || true)"
   [[ $(grep -c . <<<"$mine") -le 1 ]] || die_code member_name_taken "two records hold the name $name; nothing was changed" "$me member ls"
   if [[ -n $mine ]]; then
+    local want=$mmode
     IFS=$'\t' read -r rid rst mmode <<<"$mine"
+    [[ $mset == 0 || $want == "$mmode" ]] || die_code member_name_taken "$name is a $mmode member ($rid, $rst); a resumed add keeps its mode; nothing was changed" "$me member add $name --$mmode"
     case $rst in adding|invited) echo "member:     resuming $name ($rid, $rst)" ;;
       *) die_code member_name_taken "$name is $rst ($rid); a name is reused only after share member rm; nothing was changed" "$me member ls" ;; esac
   fi
@@ -6646,6 +6654,7 @@ mb_report() { # the per-member report member ls prints and member sync acts on: 
   binds="$(jq -c '[.result.bindings[]? | select(.type == "vpc_service") | {name, service_id}]' <<<"$mc_settings")"
   mb_services_list
   lease_read
+  local lj=null; [[ -z $lease_cur ]] || lj="$(jq -c "$lease_jq_clean" <<<"$lease_cur")"
   ml_json="[]"
   while IFS=$'\t' read -r id rec; do
     [[ -n $id ]] || continue
@@ -6661,7 +6670,7 @@ mb_report() { # the per-member report member ls prints and member sync acts on: 
     fi
     local ofn; ofn="$(op_steps "member-$(mb_ing_verb "$(jq -r .status <<<"$rec")")" | grep -c . || true)"; [[ $(jq -r .status <<<"$rec") != joining ]] || ofn="$(op_steps join | grep -c .)"
     ml_json="$(jq -c --argjson r "$rec" --arg sx "$sx" --argjson paused "$paused" --argjson b "$binds" --argjson now "$now" --argjson of "${ofn:-0}" \
-      --argjson conns "$conns" --argjson svc "$svc" --arg tunnel "$([[ -n $ob_id ]] && echo "$tname")" --argjson lease "${lease_cur:-null}" --arg live "$(lease_live && echo 1 || echo 0)" \
+      --argjson conns "$conns" --argjson svc "$svc" --arg tunnel "$([[ -n $ob_id ]] && echo "$tname")" --argjson lease "$lj" --arg live "$(lease_live && echo 1 || echo 0)" \
       --argjson lm "${lease_lm:-0}" --arg tu "$(jq -r '.token_unreachable_until // ""' <<<"$rec")" --argjson tue "$(mb_epoch "$(jq -r '.token_unreachable_until // ""' <<<"$rec")" | sed 's/^$/0/')" '
       ($b | any(.name == "M_" + $sx)) as $bound | ($paused | index($sx) != null) as $isp
       | ($r.status) as $st | ($st == "invited" and (($r.invite.expires // 0) < $now)) as $expired
@@ -6712,7 +6721,7 @@ cmd_member_ls() {
   jq -r --argjson now "$(date +%s)" --arg host "$host_name" '.[] |
     "\(.name): \(if .expired then "expired" else .status end)"
       + (if .step != null and (.status | endswith("ing")) then ", step \(.step)\(if .of != null then " of \(.of)" else "" end) (\(.step_name // "?"))" else "" end)
-      + (if .lease != null then ", lease held by \(.lease.holder)" + (if .lease.live then " (live)" else " (stale since \(.lease.since | strftime("%Y-%m-%dT%H:%M:%SZ")); rerun: share member \(.lease.verb) \(.name))" end)
+      + (if .lease != null then ", lease held by \(.lease.holder)" + (if .lease.live then " (live)" elif .lease.verb == "?" then " (stale since \(.lease.since | strftime("%Y-%m-%dT%H:%M:%SZ")))" else " (stale since \(.lease.since | strftime("%Y-%m-%dT%H:%M:%SZ")); rerun: share member \(.lease.verb) \(.name))" end)
          elif (.status | endswith("ing")) and .status != "joining" then " (no lease; rerun: share member \(if .status == "adding" then "add" elif .status == "removing" then "rm" else (.status | rtrimstr("ing")) end) \(.name))" else "" end)
       + "\n    id=\(.member_id)  mode=\(.mode // "?")"
       + (if .mode == "machine" then "  \(if .account.connectors > 0 then "online" else "offline" end) (\(.account.connectors) connector(s))  bound=\(.deploy.bound)  paused=\(.deploy.paused)" else "" end)
@@ -6752,7 +6761,7 @@ cmd_member_sync() { # deploy wins for admin-set state, only from active, pausing
       [[ $n =~ ^share-${host_name//./-}-([0-9a-f]{8})(-r[0-9]+)?$ ]] || continue
       sx=${BASH_REMATCH[1]}
       rest="$(jq -r --arg sx "$sx" '[.[] | select(.member_id | endswith("-" + $sx))] | first // {} | .status // ""' <<<"$ml_json")"
-      [[ $rest != removing && $rest != removed ]] || continue
+      [[ $rest != removing && $rest != removed && $s =~ ^[A-Za-z0-9-]{1,64}$ ]] || continue
       jq -e --arg n "M_$sx" --arg s "$s" 'any(.result.bindings[]?; .name == $n and .service_id == $s)' <<<"$mc_settings" >/dev/null && continue
       add_b="$add_b $sx=$s"; echo "rebind:     M_$sx -> $n"
     done <<<"$ms_list"
@@ -6938,7 +6947,7 @@ worker_call() { # worker_call GET|POST <path> [body]: one request to https://<ho
     [[ $wk_code =~ ^[0-9]{3}$ ]] || wk_code=000
     return 0
   fi
-  if [[ $1 == POST ]]; then out="$(curl -sS --max-time 30 -w '\n%{http_code}' -X POST --data-binary @- "https://$host_name$2" <<<"${3:-}" 2>/dev/null)" || true
+  if [[ $1 == POST ]]; then out="$(printf '%s' "${3:-}" | curl -sS --max-time 30 -w '\n%{http_code}' -X POST --data-binary @- "https://$host_name$2" 2>/dev/null)" || true   # the body exactly, no newline: the Worker wants 64 hex
   else out="$(curl -sS --max-time 30 -w '\n%{http_code}' "https://$host_name$2" 2>/dev/null)" || true; fi
   wk_code="${out##*$'\n'}"; wk_body="${out%$'\n'*}"
   [[ $wk_code =~ ^[0-9]{3}$ ]] || wk_code=000
@@ -7093,7 +7102,7 @@ join_probe() { # one probe link (v:3) on this machine, fetched 3 times through t
     if [[ $wk_code == 200 || $wk_code == "$also" ]]; then ok=$((ok + 1)); [[ $ok -lt 3 ]] || break; else ok=0; [[ ${SHARE_R2_DRY:-0} == 1 ]] || sleep 2; fi
   done
   worker_bind=""
-  cmd_rm "$id" >/dev/null 2>&1 || true
+  ( cmd_rm "$id" ) >/dev/null 2>&1 || true   # a subshell: its die never ends the join; prune catches what it leaves
   [[ $ok -ge 3 ]]
 }
 member_add_check() { # a member's add reads its own record first: paused, left, removing or removed adds nothing (WM-01, DEC-16; cooperative)

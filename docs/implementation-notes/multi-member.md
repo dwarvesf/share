@@ -220,3 +220,47 @@ Built on main at f8aba46 (SPEC-010 Phase 1 and Phase 2 shipped, so every row of 
 - P6 (TASK-1d): the marker reaches `state` through a new `.health` key `marker` (`{members, at}`), written by every verb that reads `share.json` (setup --r2, --members, --no-members, member verbs). `profile_role` reads it, so `tier` is `t2` when config `members=on` OR the cached marker says `members:true`, and `state.tier_drift` is true when they disagree (TN-11). `state` stays network free.
 - P7 (TASK-1d, CC-14): the pause verb is TASK-3a's, so CC-14 runs both orders with `member add` as the concurrent deploy path; the end deploy holds the new binding. SG-08 adds the pause variant.
 - P8 (TASK-1f2): the HMAC is computed in bash over `shasum -a 256` (ipad and opad from the derived key, the message on stdin), because `openssl dgst -hmac <key>` and `-macopt` put the key in argv (Q-SEC-6). The cipher's passphrase rides `-pass fd:3` from a process substitution, never a here-string (bash 3.2 writes a here-string to a temp file).
+- P9 (TASK-1f3): `member add` writes the record's `step`/`step_name` before each step's Cloudflare call and its outcome (token id, tunnel id, service id, invite hash) after it, so `member ls` names the step a died add reached. The lease body and the journal name the same step.
+- P10 (TASK-1f3): a member verb never changes the Worker's code: its deploy refuses `worker_mismatch` unless the deployed `VERSION SHA` pair equals this share's. Why: `r2_deploy` uploads this CLI's source, so an admin on an older or newer CLI would otherwise downgrade or upgrade the Worker as a side effect of `member add`. The admin reruns `setup --r2` first.
+- P11 (TASK-1f3, OT-08): the Worker deploy retries a 5xx up to 3 times, on every deploy path (it is a whole-script PUT, so a retry is safe). The dry deploy now honors `SHARE_R2_DRY_FAIL` on the PUT (before, it wrote `script.json` whatever the answer).
+- P12 (TASK-1f3): the sealed bundle also carries `min_cli` (from the marker) and `publisher_key_id` (the token id, the member's S3 access key, so the member needs no verify call). The member cannot read the marker before redeem, so `cli_below_min` is checked after the redeem and before any local write; MB-07 allows a refusal after a 200 redeem.
+- P13 (TASK-1h): join's step 0 checks that need the bundle (mode, `caddy`, `cloudflared`, the invite port) run after the unseal and before any local write: before the redeem the member knows neither its mode nor its port. The code is spent by then; each copy names the admin's next command (OT-04's copy already says so). The 404 copy cannot name the member (unknown before redeem), so it says `<your name>` and names both `rotate` and `invite`.
+- P14 (TASK-1h): the probe of step 5 accepts 200, and also the Worker's paused 503 when the record's `prev_status` is `paused` (a re-join after rotate or invite of a paused member, MB-26, MB-33): the deploy still pauses that member, so no 200 can come back.
+- P15 (TASK-1h): `SHARE_JOIN_SERVICE=0` is a test seam: join skips the login service and starts serve in the background, as `share start` does without one (the suite's stub `launchctl` never starts serve). The keys go to the Keychain only; a member config gains `r2_key_id` and `token_expires` (DEC-79's local expiry) beside the spec's keys.
+- P16 (TASK-1h): a join refusal after the record re-read is `member_changed` (the join table), never `member_not_allowed`: `reg_status` takes the caller's refusal code.
+- P17 (TASK-1g): a member lists its own v:3 rows from its index only; the bucket adds other origins' v:3 rows. A member's `--cloud` record carries `origin`. Its own add reads its own record first (one GET): paused, pausing, left, removing or removed adds nothing (WM-01), and the read refreshes the `.health` `member` key `state.member.status` reads.
+- P18 (TASK-1i): `member ls` shows `step <n> of <m>` with `<m>` from the verb's journal list; `--json` adds `of`, `expired` and `prev_status`. The token slot line prints only with `SHARE_MINTER_TOKEN` in the environment, because `ls` never runs `minter_token_cmd` (TASK-1c1). `member sync` takes the lease and journals as `member-sync`.
+- P19 (TASK-1d): `--no-members` also refuses while any `vpc_service` binding is deployed, and while a `u/` record fails validation, since either may be a member; the docs say which objects stay (REMOVED records, `u/purged.json`, `t/`, `i/`).
+- P20 (TASK-1d): a `setup --r2` rerun on T2 probes the services list (Connectivity Directory Admin) before any write, takes the lease before the deploy, rereads the settings under it (forced freshness check, closing the open LOW), and holds it through the nonce wait.
+- P21: the dry seam's `GET /user/tokens/verify` answers the minter's own id when the CLI calls it as the minter (`api_who=minter`), so the minter's own policies can be read by name.
+- P22: three dry-only test verbs, unlisted: `share r2-api [--minter] METHOD PATH [JSON]`, `share worker-call GET|POST ...`, and `state-fn reg-step|obj|invite-seal|invite-open|hmac|member-can|member-can-all` (the writing ones need `SHARE_STATE_FN_WRITE=1`).
+- P23: the later verbs (`rm`, `purge`, `pause`, `resume`, `invite`, `rotate`, `renew`, `adopt`) already pass their record through `member_can`, so MB-24's `member_busy` refusal is real code; then they die "not built in this version".
+
+### Open questions for the operator
+
+- Q1: TASK-1g's "proof GET 404" on a member's own `rm` is read as "the pointer is gone": `cmd_rm` makes no Worker fetch today. Confirm, or SG-07 adds a fetch through the Worker after the DELETE.
+- Q2: MB-26's rotate, invite and renew steps are later verbs; the test builds the state they leave (`invited`, `prev_status` `paused`) and proves join's half. SG-08 adds the admin half.
+
+### AC to test map (Phase 1)
+
+| AC row | Test (`mm` labels in tests/members.sh) |
+|---|---|
+| TASK-1b seams | `mm seam: ...` (22 rows), `=== members: dry seams ===` |
+| CC-13 | `mm CC-13: ...` (4 rows) |
+| WM-03 | `mm WM-03: ...` |
+| MB-04, OT-16 | `mm MB-04: ...` (2), `mm MB-04, OT-16: ...` |
+| OT-15 | `mm OT-15: ...`, `mm OT-15, OT-06: ...` |
+| TASK-1c1 JSON line, minter command | every refusal row reads `mx_jcode` (the last line is the JSON line, its code in `state-fn codes`); `mm TASK-1c1: member renew runs minter_token_cmd once` |
+| CC-09, CC-10, CC-15, CK-01, FG-10 | `mm CC-09: ...` (2), `mm CC-10: ...`, `mm CC-15: ...`, `mm CK-01: ...`, `mm FG-10: ...` |
+| TN-01 to TN-09, TN-11, TN-12, CC-14 | `mm TN-0n: ...`, `mm TN-11: ...`, `mm TN-12: ...`, `mm CC-14 (setup-first|add-first): ...`; the die-point loops `mm TN-09: setup-members ...`, `mm TN-09: no-members ...` |
+| member_can iteration | `mm member_can: every (status, verb, actor, mode) tuple matches the doc table` (the expectation is parsed from the spec's table) |
+| MB-03, MB-24, MB-25, FG-05 to FG-07, FG-13 | `mm MB-03: ...`, `mm MB-24: ...`, `mm MB-25: ...`, `mm FG-13: ...`; FG-05 and FG-06 under `member ls`; FG-07 is `deploy_unbound_record_live` in `mb_report` |
+| TASK-1f1, FG-15 | `mm TASK-1f1: ...` (6), `mm TASK-1f1, FG-15: ...` |
+| TASK-1f2 | `mm TASK-1f2: ...` (4); the Q-SEC-6 grep is `=== members: no token ... (Q-SEC-6) ===` |
+| MB-01, MB-02, MB-05, CC-01, CC-12, CK-03, DP-add-1 to 9 | `mm MB-01: ...` (4), `mm MB-02: ...`, `mm MB-05: ...` (2), `mm CC-01: ...` (2), `mm CC-12: ...`, `mm CK-03: ...` (4), `mm DP-add-1 to DP-add-9: ...`, `mm DP-add-3: ...`, `mm DP-add-9: ...`, `mm OT-08: ...` |
+| LK-01 to LK-07, LK-13, LK-17, LK-18, WM-01, WM-02, CC-05, OT-05, RC-15, SV-25 | `mm LK-0n: ...`, `mm LK-13: ...`, `mm LK-17, CC-05: ...`, `mm LK-18: ...`, `mm WM-01: ...` (3), `mm WM-02: ...`, `mm OT-05, OT-04: ...`, `mm RC-15: ...`, `mm SV-25: ...` |
+| MB-06, MB-07, MB-26, MB-27, MB-32, DP-join-1 to 6, FG-08, OT-04, OT-06 | `mm MB-06: ...` (3), `mm MB-07: ...` (8, FG-08 among them), `mm MB-26: ...`, `mm MB-27: ...` (2), `mm MB-32: ...`, `mm DP-join-n: ...`, `mm OT-06: ...` |
+| CC-11 | `v5 SV-15: two concurrent redeems of one object: exactly one 200` (tests/worker.mjs) |
+| MB-08, MB-20, MB-22, MB-23, MB-28, MB-29, MB-33, MB-35, OC-03, FG-05, FG-06 | `mm MB-08: ...` (2), `mm MB-20: ...`, `mm MB-22: ...` (2), `mm MB-23: ...`, `mm DEC-75: ...`, `mm MB-28: ...` (2), `mm MB-29: ...`, `mm MB-33: ...` (2), `mm MB-35: ...` (3), `mm OC-03: ...`, `mm FG-05, FG-06 (NC-9): ...` |
+| Q-SEC-6 | `mm Q-SEC-6: ...` (3) |
+| NC-7, NC-9, NC-11 | red runs on mutants of bin/share: CC-01, FG-05 (NC-9), DP-join-3 (NC-11) fail; green in the suite (`docs/verification/members-core.md`) |

@@ -820,6 +820,10 @@ out=$(mxa member ls 2>&1)
 check "mm MB-28: member ls names the step and the lease holder, live while it runs" "1" "$(grep -c '^an: pausing, step 3 (deploy), lease held by otherhost:4242:0badf00d (live)$' <<<"$out")"
 mx_aged 1000 "$MX_DRY/lock/admin"; out=$(mxa member ls 2>&1)
 check "mm MB-28: past 900 s it reads stale since <time>, with the rerun" "1" "$(grep -c '^an: pausing, step 3 (deploy), lease held by otherhost:4242:0badf00d (stale since 20[0-9-]*T[0-9:]*Z; rerun: share member pause an)$' <<<"$out")"
+mkdir -p "$MX_DRY/lock"; printf '{"v":1,"holder":"x\\u001b[2Jy","verb":"rm --cloud-links delete","member":"m-an-aaaaaaa1","step":3}\n' >"$MX_DRY/lock/admin"; mx_aged 1000 "$MX_DRY/lock/admin"
+out=$(mxa member ls 2>&1)
+check "mm MB-28: a forged lock/admin never steers the rerun line nor reaches the terminal raw" "0 0 1" \
+  "$(grep -c 'rerun: share member' <<<"$out") $(grep -c "$(printf '\033')" <<<"$out") $(grep -c 'lease held by (unreadable)' <<<"$out")"
 # MB-29: can[] through member_can for every stored status; a stale ...ing lists finish; removed lists only purge
 mx_load two; rm -f "$MX_DRY"/u/*.json
 for st in adding invited joining active pausing paused resuming inviting rotating renewing removing removed left; do

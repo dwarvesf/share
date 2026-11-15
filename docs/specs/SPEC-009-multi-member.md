@@ -1219,39 +1219,64 @@ Seams: `SHARE_TUNNEL=0`; `SHARE_R2_DRY=1` with `SHARE_R2_DRY_DIR` (a directory b
 | NC-16 | `rand_id` skips the `t/` check | dry `t/ad0001`; `SHARE_TEST_IDS="ad0001 ad0002"` | member `add` | `mm SV-09: a tombstoned id is never picked` (the add lands on `ad0001`) |
 
 ## Review
-Date: 2026-11-15 | Reviewer: /kit:review (scope: Phase 0, TASK-0a to 0f)
+Date: 2026-11-15 | Reviewer: /kit:review (scope: Phase 1, TASK-1b to 1i; the Phase 0 review is in git history)
 
 ### Verdict: SHIP
 
-Re-review after the folds: the two MEDIUM findings are closed (docs updated by `/kit:docs`; proof in `docs/verification/worker-v5.md`). The LOW stays open for TASK-1d.
+Seven findings were fixed in the same branch before this verdict (marked FIXED). One stays open as a TODO; it is not a hole in the paths this phase ships.
 
 ### Findings
 
-## MEDIUM: the docs still describe the whole-tree Caddy handle and Worker v4
-**File:** docs/how-it-works.md:22
-**What:** the serving diagram says `handle → file_server over ~/share/pub`; the Worker tables list v4 rows only; `WORKER_RECORD_V` is 2 at :407.
-**Why:** an operator reading the docs expects unlisted bytes to serve.
-**Fix:** `/kit:docs` scoped to this change: listed rows, X-Share-Served, the v5 rows, X-Share-Deploy and carry-forward, `share version`.
+## HIGH (FIXED): the real redeem POST sent a trailing newline
+**File:** bin/share `worker_call`
+**What:** the real-mode POST fed the body through a here-string, which appends a newline; the Worker reads the body raw and wants exactly 64 hex, so every live join would have died 400 (`invite_unavailable`). The dry seam passes the body as an argument, so the suite could not see it.
+**Fix:** `printf '%s' "$3" | curl --data-binary @-`. Live proof is owed by SG-11 (ML-3).
 **Effort:** S
 
-## MEDIUM: no verification log for the Phase 0 build yet
-**File:** docs/verification/worker-v5.md
-**What:** the suite and the negative controls ran, but no record holds their commands and exits.
-**Why:** done needs the recorded run.
-**Fix:** write it with every `Command:` / `Exit:` / `Verdict:` and the rollback.
+## HIGH (FIXED): a forged `lock/admin` could steer the rerun line
+**File:** bin/share `lease_line`, `mb_report`
+**What:** any publisher token writes `lock/admin`; its `verb` and `holder` reached the `member ls` rerun line and the terminal raw, so a forged body could print `rerun: share member rm ...` or escape sequences.
+**Fix:** `lease_jq_clean` whitelists the verb, shapes the holder and member, and drops the rerun line for an unknown verb. Test: `mm MB-28: a forged lock/admin never steers the rerun line nor reaches the terminal raw`.
 **Effort:** S
 
-## LOW: a stale settings read that holds nothing to carry skips the freshness check
-**File:** bin/share (`r2_carry_fresh`)
-**What:** the check runs only when the settings carry a binding, MEMBERS or PAUSED, so an empty stale read right after `setup --members` would drop MEMBERS.
-**Why:** no Phase 0 path writes MEMBERS; TASK-1d does, under the lease.
-**Fix:** TASK-1d compares the settings `DEPLOY` with the nonce its own deploy wrote before it trusts an empty carry.
+## MEDIUM (FIXED): record date fields reached refusal text unvalidated
+**File:** bin/share `reg_jq_valid`
+**What:** `updated`, `added` and `joined` were printed (the `member_busy` copy) without a shape check.
+**Fix:** each must be an ISO-like string of `[0-9TZ:.-]`, else the record is `record_invalid`.
 **Effort:** S
 
-Fixed during review: a member answer's `Location` on a non-3xx is now dropped (only a checked 3xx keeps one).
+## MEDIUM (FIXED): the join probe's own rm could end the join
+**File:** bin/share `join_probe`
+**What:** `cmd_rm` dies through `exit`, which `|| true` cannot catch, so a failing cleanup would end a join that had just proved its link.
+**Fix:** the rm runs in a subshell.
+**Effort:** S
+
+## LOW (FIXED): `member sync --rebind` put an account service id into a jq program unshaped
+**File:** bin/share `cmd_member_sync`
+**Fix:** a service id outside `[A-Za-z0-9-]{1,64}` is skipped.
+**Effort:** S
+
+## LOW (FIXED): a step's record write came before its lease renew
+**File:** bin/share `reg_step`
+**Fix:** renew first, so a holder that lost the lease writes nothing more (DEC-63).
+**Effort:** S
+
+## MEDIUM (OPEN): teardown without the admin token cannot see a deployed member binding
+**File:** bin/share `cmd_teardown` (`t2_refuse`)
+**What:** with no admin token, teardown reads only the config and the marker; a forged `members:false` plus a dropped config key (TN-12) passes it while bindings are deployed. With the admin token TN-12 holds.
+**Why:** a teardown then deletes the origin tunnel under a members tenant; member links keep working (they ride their own tunnels), the origin's do not.
+**Fix:** require the admin token for teardown of an R2-on origin, or name the gap in the docs. Left for SG-07 (rm and teardown work) to decide.
+**Effort:** S
+
+## LOW (FIXED): `member add <name>` resuming a record ignored `--cloud`/`--machine`
+**File:** bin/share `cmd_member_add`
+**What:** the resumed record's mode won silently.
+**Fix:** a flag naming the other mode refuses `member_name_taken`.
+**Effort:** S
 
 ### Previously rejected
-none
+none (no `docs/verification/rejected-findings.md` in this repo)
 
 ### TODOs (open follow-ups)
-- TASK-1d: freshness of an empty carry (LOW above).
+- Teardown of an R2-on origin without the admin token (MEDIUM above).
+- SG-11: the first live join proves the redeem POST body (ML-3).
