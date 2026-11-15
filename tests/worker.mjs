@@ -25,6 +25,15 @@ const check = (label, want, got) => {
   else { console.log(`  FAIL  ${label}: expected '${want}', got '${got}'`); fails++; }
 };
 
+// node's Response refuses status 101; workerd takes `new Response(null, { status: 101, webSocket })`. This stand-in lets the Worker's 101 path run here
+const RealResponse = globalThis.Response;
+globalThis.Response = class extends RealResponse {
+  constructor(body, init) {
+    if (init && init.status === 101) { super(null, { status: 200, headers: init.headers }); Object.defineProperty(this, "status", { value: 101 }); this.webSocket = init.webSocket; }
+    else super(body, init);
+  }
+};
+
 // the emitted Worker source, byte-identical to what `cat >file` writes
 const awkProg = "/^  cat >\"\\$1\" <<.SHARE_WORKER_JS.$/{f=1;next} /^SHARE_WORKER_JS$/{f=0} f";
 const src = execFileSync("awk", [awkProg, sharePath], { encoding: "utf8" });
@@ -149,7 +158,7 @@ if (process.argv[2] === "--dir") {
   // options after --dir <d> --host <h>: --bind M_<8hex>=127.0.0.1:<port> (a vpc_service binding that reaches a local listener, Host kept),
   // --post <path> <body> (one POST; prints "<code> <path>", then the body). The deployed PAUSED and MEMBERS come from <d>/.cf/script.json.
   // Every bucket change a call makes (the redeem's claim and delete) is written back to <d>, so the dry bucket sees it.
-  const dir = process.argv[3], host = process.argv[5], bucket = new Bucket(), over = { HOST: host }, posts = [], paths = [];
+  const dir = process.argv[3], host = process.argv[5], bucket = new Bucket(), over = { HOST: host }, posts = [], paths = [], wss = [];
   const walk = (d) => readdirSync(d, { withFileTypes: true }).forEach((e) => {
     if (e.name.startsWith(".")) return;   // the dry seam's .cf, .fx, and .resume are not objects
     const f = join(d, e.name);
@@ -178,9 +187,16 @@ if (process.argv[2] === "--dir") {
             res(new Response(nb ? null : Buffer.concat(chunks), { status: resp.statusCode, headers: hs }));
           });
         });
+        r.on("upgrade", (resp, socket) => {   // a WebSocket upgrade: the 101 and its socket go back as the binding's answer, as a Worker binding returns them
+          const hs = new Headers();
+          for (const [k, v] of Object.entries(resp.headers)) hs.set(k, Array.isArray(v) ? v.join(", ") : v);
+          socket.on("error", () => {});
+          res({ status: 101, headers: hs, body: null, webSocket: socket });
+        });
         r.on("error", rej); r.end();
       }) };
     } else if (args[i] === "--post") { posts.push([args[i + 1], args[i + 2]]); i += 2; }
+    else if (args[i] === "--ws") { wss.push(args[++i]); }
     else paths.push(args[i]);
   }
   const worker = await loadWorker(), env = envOf(bucket, over);
@@ -189,6 +205,18 @@ if (process.argv[2] === "--dir") {
     console.log(`${r.status} ${path}`); console.log(await bodyOf(r));
   }
   for (const path of paths) console.log(`${(await call(worker, env, "https://" + host + path)).status} ${path}`);
+  for (const path of wss) {   // --ws <path>: a WebSocket handshake through the Worker; on a 101 one masked text frame goes in and the echo prints
+    const r = await call(worker, env, "https://" + host + path, { headers: { Upgrade: "websocket", Connection: "Upgrade", "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==" } });
+    let echo = "";
+    if (r.status === 101 && r.webSocket) {
+      const sock = r.webSocket, mask = Buffer.from([1, 2, 3, 4]), data = Buffer.from("ping-ws");
+      const body = Buffer.from(data.map((c, i) => c ^ mask[i % 4]));
+      sock.write(Buffer.concat([Buffer.from([0x81, 0x80 | data.length]), mask, body]));
+      echo = await new Promise((resolve) => { const t = setTimeout(() => resolve("no echo"), 4000); sock.once("data", (b) => { clearTimeout(t); resolve(b.subarray(2).toString()); }); });
+      sock.destroy();
+    }
+    console.log(`${r.status} ${path} ws${echo ? " " + echo : ""}`);
+  }
   for (const [k, etag] of before) if (!bucket.m.has(k)) unlinkSync(join(dir, k));
   for (const [k, v] of bucket.m) if (before.get(k) !== v.etag) { mkdirSync(dirname(join(dir, k)), { recursive: true }); writeFileSync(join(dir, k), v.bytes); }
   process.exit(0);
@@ -647,6 +675,59 @@ const rowIs = (label, worker, resp, row) => check(label + " (row)", row, rowOfRe
     const sent = Object.keys((m.calls[0] || {}).headers || {}).sort().join(",");
     check("v5 SV-21: no Access credential reaches a binding", "accept,accept-language,if-none-match,range,user-agent", sent);
     check("v5 SV-21: the member's 206 and its Content-Range pass", "206 bytes 0-3/10 0123", `${r.status} ${r.headers.get("content-range")} ${await bodyOf(r)}`);
+  }
+  // TASK-3f: a v:3 pointer with the live opt forwards a WebSocket upgrade through the binding and returns the 101 untouched (LK-02)
+  {
+    const sock = { webSocket: true }, up101 = (extra = {}) => () => ({ status: 101, headers: new Headers({ upgrade: "websocket", connection: "Upgrade", "sec-websocket-accept": "x", "x-share-served": "caddy", ...extra }), body: null, webSocket: sock });
+    const wsHeaders = { upgrade: "websocket", connection: "Upgrade", "sec-websocket-key": "k", "sec-websocket-version": "13", "sec-websocket-protocol": "p1",
+      cookie: "a=1", authorization: "Bearer t", "cf-access-jwt-assertion": "jwt", "user-agent": "ua/1" };
+    const mk = (opts, ans) => { const b = new Bucket(), m = binding(ans), env = v5env(b, { ["M_" + SFX]: m }); b.put("m/" + V3ID, JSON.stringify(v3rec({ opts }))); return { m, env }; };
+    let { m, env } = mk("live", up101());
+    let r = await tget(worker, env, `/${V3ID}/`, { headers: wsHeaders });
+    check("v5 LK-02: a live v:3 upgrade answers 101 with the binding's own socket", "101 true", `${r.status} ${r.webSocket === sock}`);
+    rowIs("v5 LK-02 upgrade", worker, r, R.V3_SERVED);
+    check("v5 LK-02: the binding sees only the handshake headers and the allowlist, GET, on http://HOST/<id>/", `GET http://s.test/${V3ID}/ connection,sec-websocket-key,sec-websocket-protocol,sec-websocket-version,upgrade,user-agent`,
+      `${(m.calls[0] || {}).method} ${(m.calls[0] || {}).url} ${Object.keys((m.calls[0] || {}).headers || {}).sort().join(",")}`);
+    ({ m, env } = mk("noindex live", up101()));
+    r = await tget(worker, env, `/${V3ID}/`, { headers: wsHeaders });
+    check("v5 LK-02: live beside noindex still upgrades", 101, r.status);
+    ({ m, env } = mk("", caddy("plain page", 200, { "content-type": "text/html" })));
+    r = await tget(worker, env, `/${V3ID}/`, { headers: wsHeaders });
+    check("v5 LK-02: a v:3 without live never forwards the handshake: a plain GET with no Upgrade header", "200 upgrade,connection gone", `${r.status} ${["upgrade", "connection", "sec-websocket-key"].some((h) => h in ((m.calls[0] || {}).headers || {})) ? "upgrade,connection kept" : "upgrade,connection gone"}`);
+    ({ m, env } = mk("noindex", up101()));
+    r = await tget(worker, env, `/${V3ID}/`, { headers: wsHeaders });
+    check("v5 LK-02: a v:3 with noindex only is never answered 101, even by a machine that offers one: the 503 offline page", "503 false", `${r.status} ${r.status === 101}`);
+    ({ m, env } = mk("live", caddy("app page", 200, { "content-type": "text/html; charset=utf-8", "x-app": "1" })));
+    r = await tget(worker, env, `/${V3ID}/app.js`);
+    check("v5 LK-02: a live GET keeps the app's own type, with nosniff and the sandbox", "200 text/html; charset=utf-8 nosniff csp", `${r.status} ${r.headers.get("content-type")} ${r.headers.get("x-content-type-options")} ${r.headers.get("content-security-policy") ? "csp" : "none"}`);
+    ({ m, env } = mk("live", () => frozen(new Response(new Uint8Array([120]), { status: 200, headers: { "x-share-served": "caddy" } }))));
+    r = await tget(worker, env, `/${V3ID}/blob`);
+    check("v5 LK-02: a live answer with no type is octet-stream and sandboxed", "application/octet-stream csp", `${r.headers.get("content-type")} ${r.headers.get("content-security-policy") ? "csp" : "none"}`);
+    ({ m, env } = mk("live", () => { throw new Error("down"); }));
+    r = await tget(worker, env, `/${V3ID}/`, { headers: wsHeaders });
+    check("v5 LK-02: an upgrade to a machine that is down answers the 503 offline page", "503 the machine serving this link is offline; try again later", `${r.status} ${await bodyOf(r)}`);
+    ({ m, env } = mk("live", up101({ "set-cookie": "x=1; Path=/; Domain=s.test", "strict-transport-security": "max-age=1", "sec-websocket-protocol": "p1", "x-app": "1" })));
+    r = await tget(worker, env, `/${V3ID}/`, { headers: wsHeaders });
+    check("v5 LK-02: the 101 is a fresh one: only the chosen subprotocol rides along, no Set-Cookie, HSTS or other machine header", "101 p1 null null null", `${r.status} ${r.headers.get("sec-websocket-protocol")} ${r.headers.get("set-cookie")} ${r.headers.get("strict-transport-security")} ${r.headers.get("x-app")}`);
+    ({ m, env } = mk("live", () => ({ status: 101, headers: new Headers({ upgrade: "websocket" }), body: null, webSocket: sock })));
+    r = await tget(worker, env, `/${V3ID}/`, { headers: wsHeaders });
+    check("v5 LK-02: a 101 Caddy did not mark (no X-Share-Served) is a machine that is not serving this link: 503", "503", String(r.status));
+    ({ m, env } = mk("live", caddy("a", 200, { "content-type": "image/png, text/html" })));
+    r = await tget(worker, env, `/${V3ID}/`);
+    check("v5 LK-02: a live answer with a list of types is octet-stream and sandboxed (INERT tests only a prefix)", "application/octet-stream csp", `${r.headers.get("content-type")} ${r.headers.get("content-security-policy") ? "csp" : "none"}`);
+    ({ m, env } = mk("live", caddy("a", 200, { "content-type": "image/png" })));
+    r = await tget(worker, env, `/${V3ID}/`);
+    check("v5 LK-02: a live image answer keeps its type and needs no sandbox", "image/png none", `${r.headers.get("content-type")} ${r.headers.get("content-security-policy") ? "csp" : "none"}`);
+    ({ m, env } = mk("live", caddy("no upgrade", 400, {})));
+    r = await tget(worker, env, `/${V3ID}/`, { headers: wsHeaders });
+    check("v5 LK-02: a refused handshake (a 400) passes as the machine's own answer, never a 101", "400", String(r.status));
+    ({ m, env } = mk("live", up101()));
+    r = await tget(worker, env, `/${V3ID}/`, { method: "POST", body: "x" });
+    check("v5 LK-02: a POST to a live row is still 405 with no binding call", "405 0", `${r.status} ${m.calls.length}`);
+    ({ m, env } = mk("live", up101()));
+    env = v5env(env.BUCKET, { ["M_" + SFX]: m, PAUSED: JSON.stringify([SFX]) });
+    r = await tget(worker, env, `/${V3ID}/`, { headers: wsHeaders });
+    check("v5 LK-02: a paused member's live row answers 503 with no binding call", "503 0", `${r.status} ${m.calls.length}`);
   }
   // SV-22: an answer without X-Share-Served, a throw, and a hang each read as offline (NC-15)
   {

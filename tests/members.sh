@@ -646,11 +646,10 @@ check "mm LK-13: with the member machine down the Worker answers its generic 503
 check "mm LK-06: refresh of an own row re-copies, with no S3 write" "0 0" "$rc $(mxm_writes)"
 out=$(SHARE_TEST_IDS=a10002 mxm add --cloud "$MX/f.txt" 2>&1); rc=$?
 check "mm LK-03: a member's --cloud add is a v:1 record with origin" "0 1 m-an-aaaaaaa1" "$rc $(jq -r .v "$MX_DRY/m/a10002") $(jq -r .origin "$MX_DRY/m/a10002")"
-for a in "--access email:x@y.test|gated links are added by the admin" "--host z.example.test|--host needs DNS and an ingress rule" "3000|live port shares stay on the origin"; do
+for a in "--access email:x@y.test|gated links are added by the admin" "--host z.example.test|--host needs DNS and an ingress rule"; do
   # shellcheck disable=SC2086 # the flag and its value split on purpose
   : >"$MXM_LOG"; out=$(mxm add ${a%%|*} "$MX/f.txt" 2>&1); rc=$?
-  [[ ${a%%|*} != 3000 ]] || out=$(mxm add 3000 2>&1)
-  check "mm LK-02, LK-04, LK-05: member add ${a%%|*} is refused before any write" "1 1 0" "$rc $(grep -c "^share: .*${a#*|}" <<<"$out") $(mxm_writes)"
+  check "mm LK-04, LK-05: member add ${a%%|*} is refused before any write" "1 1 0" "$rc $(grep -c "^share: .*${a#*|}" <<<"$out") $(mxm_writes)"
 done
 : >"$MXM_LOG"; out=$(mxm rm a10001 2>&1); rc=$?
 check "mm LK-07: a member rm of its own row deletes its v:3, trashes the bytes and the row" "0 1 0 0 0" \
@@ -1460,6 +1459,148 @@ p3_load p3; mx_lease "otherhost:4242:0badf00d" pause m-an-aaaaaaa1 2
 out=$(mx_env=(SHARE_R2_DRY_VANISH="GET lock/admin"); mxa member pause an 2>&1); rc=$?
 check "mm CC-14 (vanished lease): a lock/admin released between the read and its body reads as absent; the take retries and the verb runs" "0 0 paused 1" \
   "$rc $(grep -c 'needs the admin S3 pair' <<<"$out") $(p3_an .status) $([[ -f $MX_DRY/.fx/vanish.done ]] && echo 1)"
+fi
+
+if section "members: adopt and min_cli (TASK-3e, 4a)"; then
+AD_B='com.cloudflare.edge.r2.bucket.acct-dry_default_mx-bucket'; AD_Z='com.cloudflare.api.account.zone.zone-dry'
+AD_W='{"id":"pg-r2-item-write","name":"Workers R2 Storage Bucket Item Write"}'; AD_R='{"id":"pg-zone-read","name":"Zone Read"}'
+AD_OK='[{"effect":"allow","resources":{"'$AD_B'":"*"},"permission_groups":['$AD_W']},{"effect":"allow","resources":{"'$AD_Z'":"*"},"permission_groups":['$AD_R']}]'
+ad_tok() { # ad_tok <id> <policies json> [minter token]: an R5 publisher's user token in that user's dry token store
+  local u; u="$(printf '%s' "${3:-mintertoken}" | cksum | cut -d' ' -f1)"; mkdir -p "$MX_DRY/.cf/tokens/$u"
+  jq -nc --arg id "$1" --argjson p "$2" '{id: $id, name: ("share publisher " + $id), status: "active", expires_on: "2027-03-01T00:00:00Z", policies: $p}' >"$MX_DRY/.cf/tokens/$u/$1.json"
+}
+ad_names() { find "$MX_DRY/.cf/tokens" -name '*.json' -exec cat {} + 2>/dev/null | jq -rs '[.[].name] | sort | join(",")'; }
+ad_rec() { jq -r "$1" "$MX_DRY/u/m-pu-cccccccc.json"; }
+ad_forge() { jq -c '.min_cli = "99.0.0"' "$MX_DRY/share.json" >"$MX/s" && mv "$MX/s" "$MX_DRY/share.json"; }
+ad_clean() { [[ ! -e $MX_DRY/lock/admin && -z "$(mx_ops "$MX_ROOT")" ]] && echo 1 || echo 0; }
+ad_adopt() { SHARE_TEST_MEMBER_IDS=m-pu-cccccccc mxa member adopt "$@"; }
+ad_save() { mx_save "$1"; rm -rf "$MX/snap.$1/member" "$MX/snap.$1/kvm"; [[ ! -d $MXM_HOME ]] || cp -R "$MXM_HOME" "$MX/snap.$1/member"; [[ ! -d $MX/kv-member ]] || cp -R "$MX/kv-member" "$MX/snap.$1/kvm"; }
+ad_load() { mx_load "$1"; mxm stop >/dev/null 2>&1; rm -rf "$MXM_HOME" "$MX/kv-member"; mkdir -p "$MXM_HOME"
+  [[ ! -d $MX/snap.$1/member ]] || { rm -rf "$MXM_HOME"; cp -R "$MX/snap.$1/member" "$MXM_HOME"; }; [[ ! -d $MX/snap.$1/kvm ]] || cp -R "$MX/snap.$1/kvm" "$MX/kv-member"; [[ ! -d ${MXM_LOG%/*} ]] || : >"$MXM_LOG"; }
+WM="node $(dirname "$SH")/../tests/worker.mjs --dir $MX_DRY --host mx.example.test"
+ad_get() { $WM "$1" 2>/dev/null | awk '/^[0-9]{3} \// {print $1}'; }   # ad_get <path>: the Worker's answer
+
+# --- TASK-3e: adopt (MB-17, OC-07) ---
+mx_load t2; ad_tok tokR5own "$AD_OK"; : >"$MX_LOG"
+# a v0.9 publisher's link: a v:1 pointer by "peer", with no member record
+mkdir -p "$MX_DRY/o/aa0001.00000000" "$MX_DRY/m"; echo hello >"$MX_DRY/o/aa0001.00000000/f.txt"
+printf '{"v":1,"id":"aa0001","name":"f.txt","src":"/x","added":"2026-10-01","expires":0,"opts":"","prefix":"o/aa0001.00000000/","by":"peer"}\n' >"$MX_DRY/m/aa0001"
+before="$(cksum <"$MX_DRY/m/aa0001")"
+check "mm OC-07: an unregistered v0.9 publisher's link serves on a T2 tenant, and member ls lists no member for it" "200 0" "$(ad_get /aa0001/f.txt) $(mxa member ls 2>&1 | grep -c 'pu')"
+out=$(ad_adopt pu --token-id tokR5own --by peer 2>&1); rc=$?
+check "mm MB-17: adopt of the own bucket-scoped token: an active cloud member, the token renamed in place with its expiry and policies, no lease, empty ops/" "0 active cloud tokR5own share_mx.example.test_m-pu-cccccccc 2027-03-01T00:00:00Z 2 1" \
+  "$rc $(ad_rec .status) $(ad_rec .mode) $(ad_rec .token.id) $(ad_rec .token.name | tr ' ' _) $(ad_rec .token.expires_on) $(find "$MX_DRY/.cf/tokens" -name 'tokR5own.json' -exec jq -r '.policies | length' {} +) $(ad_clean)"
+check "mm MB-17: --by lists the v:1 link by peer; the link keeps its by and bytes (never rewritten)" "1 1 $before" \
+  "$(grep -c '^link:       aa0001 by peer' <<<"$out") $(jq -r 'select(.by == "peer") | 1' "$MX_DRY/m/aa0001") $(cksum <"$MX_DRY/m/aa0001")"
+check "mm OC-07: after adopt the same link still serves, and member ls lists pu active" "200 1" "$(ad_get /aa0001/f.txt) $(mxa member ls 2>&1 | grep -c '^pu.*active')"
+mxa member rm pu >/dev/null 2>&1
+check "mm MB-17: member rm of the adopted member revokes its token by the new name" "removed " "$(ad_rec .status) $(ad_names)"
+# refusals: each before any write
+fails=""
+ad_try() { # ad_try <label> <want code> <setup eval> <adopt args...>
+  local label=$1 want=$2 setup=$3 o r; shift 3
+  mx_load t2; eval "$setup"; : >"$MX_LOG"
+  o=$(mx_env=(SHARE_ERROR_JSON=1); ad_adopt "$@" 2>&1); r=$?
+  [[ "$r $(mx_jcode "$o") $(mx_writes) $([[ -f $MX_DRY/u/m-pu-cccccccc.json ]] && echo rec || echo norec)" == "1 $want 0 norec" ]] || fails="$fails $label($r,$(mx_jcode "$o"),$(mx_writes))"
+}
+ad_try other-user adopt_token_scope 'ad_tok tokOther "$AD_OK" otherminter' pu --token-id tokOther
+ad_try unknown-id adopt_token_scope 'true' pu --token-id tokNone
+ad_try account-wide adopt_token_scope 'ad_tok tokWide "[{\"effect\":\"allow\",\"resources\":{\"com.cloudflare.api.account.acct-dry\":\"*\"},\"permission_groups\":[$AD_W]}]"' pu --token-id tokWide
+ad_try wide-plus-bucket adopt_token_scope 'ad_tok tokWB "[{\"effect\":\"allow\",\"resources\":{\"$AD_B\":\"*\",\"com.cloudflare.api.account.acct-dry\":\"*\"},\"permission_groups\":[$AD_W]}]"' pu --token-id tokWB
+ad_try other-bucket adopt_token_scope 'ad_tok tokOB "[{\"effect\":\"allow\",\"resources\":{\"com.cloudflare.edge.r2.bucket.acct-dry_default_other\":\"*\"},\"permission_groups\":[$AD_W]}]"' pu --token-id tokOB
+ad_try zone-edit adopt_token_scope 'ad_tok tokZE "[{\"effect\":\"allow\",\"resources\":{\"$AD_B\":\"*\"},\"permission_groups\":[$AD_W]},{\"effect\":\"allow\",\"resources\":{\"$AD_Z\":\"*\"},\"permission_groups\":[{\"id\":\"pg-zone-edit\",\"name\":\"Zone Edit\"}]}]"' pu --token-id tokZE
+ad_try name-taken member_name_taken 'ad_tok tokR5own "$AD_OK"; mx_put_rec active m-pu-11111111 ".mode = \"cloud\""' pu --token-id tokR5own
+ad_try bad-name member_name_bad 'ad_tok tokR5own "$AD_OK"' P --token-id tokR5own
+ad_try admin-group adopt_token_scope 'ad_tok tokAG "[{\"effect\":\"allow\",\"resources\":{\"$AD_B\":\"*\"},\"permission_groups\":[{\"id\":\"pg-r2-admin\",\"name\":\"Workers R2 Storage Write\"}]},{\"effect\":\"allow\",\"resources\":{\"$AD_Z\":\"*\"},\"permission_groups\":[$AD_R]}]"' pu --token-id tokAG
+ad_try empty-resources adopt_token_scope 'ad_tok tokER "[{\"effect\":\"allow\",\"resources\":{},\"permission_groups\":[$AD_W]},{\"effect\":\"allow\",\"resources\":{\"$AD_B\":\"*\"},\"permission_groups\":[$AD_W]}]"' pu --token-id tokER
+ad_try token-owned 'adopt_token_scope' 'ad_tok tokR5own "$AD_OK"; mx_put_rec active m-pv-22222222 ".mode = \"cloud\" | .token = {id: \"tokR5own\"}"' pu --token-id tokR5own
+check "mm MB-17: adopt refuses another user's token, an unknown id, an account-wide token, a bucket plus account token, another bucket, a Zone Edit token, an admin-class bucket group, an empty resource, a token another member holds, a taken name and a bad name, each before any write" "" "$fails"
+out=$(mx_env=(SHARE_ERROR_JSON=1); mxa member adopt pu 2>&1); rc=$?
+check "mm TASK-3e: adopt without --token-id prints its usage line" "1 1" "$rc $(grep -c '^share: usage: share member adopt <name> --token-id <id>' <<<"$out")"
+# the journal: a die between the rename and the record; the rerun finishes on the same token
+mx_load t2; ad_tok tokR5own "$AD_OK"; out=$(mx_env=(SHARE_R2_DRY_FAIL='PUT u/m-pu-cccccccc.json'); ad_adopt pu --token-id tokR5own 2>&1); rc=$?
+renamed="$(ad_names)"
+out2=$(ad_adopt pu --token-id tokR5own 2>&1); rc2=$?
+check "mm TASK-3e: a die before the record: the token is renamed, no record; the rerun adopts on the same token (one token, one record)" "1 share_mx.example.test_m-pu-cccccccc 0 active tokR5own 1" \
+  "$rc $(tr ' ' _ <<<"$renamed") $rc2 $(ad_rec .status) $(ad_rec .token.id) $(ad_clean)"
+
+# --- TASK-4a: min_cli (OC-04, FG-09) ---
+mx_load t2; mxm_fresh
+SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 SHARE_TEST_CODE=$MXC1 mxa member add an --cloud >/dev/null 2>&1
+mxm join mx.example.test "$MXC1" >/dev/null 2>&1; echo hello >"$MX/f.txt"
+ad_save base
+ad_load base; : >"$MXM_LOG"; SHARE_TEST_IDS=f40001 mxm add --cloud "$MX/f.txt" >/dev/null 2>&1; rc=$?
+check "mm TASK-4a: at the marker's own min_cli a member's write goes through, and the marker is read once" "0 1" "$rc $(grep -c '^GET share.json' "$MXM_LOG")"
+ad_load base; ad_forge; : >"$MXM_LOG"; out=$(mxm_env=(SHARE_ERROR_JSON=1); SHARE_TEST_IDS=f40002 mxm add --cloud "$MX/f.txt" 2>&1); rc=$?
+check "mm OC-04: a member CLI below min_cli: add --cloud is refused cli_below_min, the last stderr line is the JSON line, no PUT or DELETE reached the bucket" "1 cli_below_min 0 1" \
+  "$rc $(mx_jcode "$out") $(grep -cE '^(PUT|DELETE) ' "$MXM_LOG") $(tail -1 <<<"$out" | jq -r 'select(.error.code == "cli_below_min") | 1')"
+check "mm OC-04: the refusal names the version to upgrade to" "1" "$(grep -c 'upgrade share to 99.0.0; mx.example.test requires it' <<<"$out" | awk '{print ($1 > 0)}')"
+mxm ls >/dev/null 2>&1; rc=$?; mxm status >/dev/null 2>&1; rc2=$?; mxm stop >/dev/null 2>&1
+check "mm OC-04: reads are allowed below min_cli (ls, status)" "0 0" "$rc $rc2"
+ad_load base; ad_forge; : >"$MX_LOG"; out=$(mx_env=(SHARE_ERROR_JSON=1); SHARE_TEST_MEMBER_IDS=m-bo-bbbbbbb2 mxa member add bo --cloud 2>&1); rc=$?
+rl=$(mxa member ls >/dev/null 2>&1; echo $?)
+check "mm OC-04: an admin verb below min_cli dies cli_below_min before its journal and lease; member ls still reads" "1 cli_below_min 0 0 0" "$rc $(mx_jcode "$out") $(mx_writes) $(mx_ops "$MX_ROOT" | grep -c .) $rl"
+# FG-09: share.json stays writable, setup --members repairs the forged marker, and writes work again
+ad_load base; ad_forge; out=$(mxa setup mx.example.test --r2 --bucket mx-bucket --members --yes 2>&1); rc=$?
+check "mm FG-09: setup --members rerun resets a forged min_cli to this share's version and says so" "0 $(bash "$SH" version) 1" "$rc $(jq -r .min_cli "$MX_DRY/share.json") $(grep -c 'min_cli was 99.0.0, above this share, and is reset' <<<"$out")"
+out=$(SHARE_TEST_MEMBER_IDS=m-bo-bbbbbbb2 SHARE_TEST_CODE=$MXC2 mxa member add bo --cloud 2>&1); rc=$?
+check "mm FG-09: after the repair a write verb runs again" "0 invited" "$rc $(jq -r .status "$MX_DRY/u/m-bo-bbbbbbb2.json" 2>/dev/null)"
+ad_load base; : >"$MX_LOG"; out=$(mxa setup mx.example.test --r2 --bucket mx-bucket --members --yes 2>&1); rc=$?
+check "mm FG-09: a rerun at an unforged marker writes nothing to share.json" "0 0" "$rc $(grep -c '^PUT share.json' "$MX_LOG")"
+ad_load base; ad_forge; : >"$MX_LOG"; out=$(mxa setup mx.example.test --r2 --bucket mx-bucket --members 2>&1 </dev/null); rc=$?
+check "mm FG-09: without --yes the repair is refused (a deliberate newer min_cli is not lowered on a bare rerun): no write, the marker unchanged" "1 1 99.0.0 0" "$rc $(grep -c 'rerun with --yes to confirm' <<<"$out") $(jq -r .min_cli "$MX_DRY/share.json") $(mx_writes)"
+ad_load base; ad_forge; mxa member rm an >/dev/null 2>&1; rc=$?
+check "mm OC-04: member rm is never held back by a forged marker (a hostile member could write it)" "0 removed" "$rc $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json")"
+ad_load base; ad_forge; mxm leave >/dev/null 2>&1; rc=$?
+check "mm OC-04: a member's leave is never held back by a forged marker" "0 left" "$rc $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json")"
+mx_load t1; jq -c '.min_cli = "99.0.0"' "$MX_DRY/share.json" >"$MX/s" && mv "$MX/s" "$MX_DRY/share.json"; echo hello >"$MX/g.txt"
+out=$(SHARE_TEST_IDS=a20001 mxa add --cloud "$MX/g.txt" 2>&1); rc=$?
+check "mm OC-04: a min_cli on a tenant with members off means nothing: the origin's cloud add goes through" "0 1" "$rc $([[ -e $MX_DRY/m/a20001 ]] && echo 1 || echo 0)"
+mxa stop >/dev/null 2>&1
+# negative control: the guard removed, the same forged marker lets the write through (so the rows above are not vacuous)
+sed 's/^  r2_min_guard "\$1" "\$2"$/  : # guard removed/' "$SH" >"$MX/share-noguard"
+ad_load base; ad_forge; : >"$MXM_LOG"; (MXM_SH="$MX/share-noguard"; SHARE_TEST_IDS=f40003 mxm add --cloud "$MX/f.txt" >/dev/null 2>&1); rc=$?
+check "mm NC TASK-4a: with the guard line removed, the same forged marker lets add --cloud write" "0 1" "$rc $(grep -cE '^PUT m/f40003' "$MXM_LOG" | awk '{print ($1 > 0)}')"
+mxm stop >/dev/null 2>&1
+fi
+
+if section "members: live port shares (TASK-3f)"; then
+# TASK-3f passed live on Console Labs (docs/verification/members-adopt-mincli.md): a Worker binding carries a WebSocket upgrade and a streamed body, so a member's
+# `add <port>` is allowed, its v:3 pointer carries opts `live`, and the Worker forwards the upgrade. A local app with a WebSocket echo stands in for the member's server
+cat >"$MX/lk-app.mjs" <<'LKEOF'
+import http from "node:http";
+import crypto from "node:crypto";
+const s = http.createServer((q, r) => { r.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }); r.end("<p>live-app " + q.url + "</p>"); });
+s.on("upgrade", (q, sock) => {
+  const acc = crypto.createHash("sha1").update(q.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+  sock.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + acc + "\r\n\r\n");
+  sock.on("data", (b) => { const n = b[1] & 127, m = b.subarray(2, 6), d = Buffer.from(b.subarray(6, 6 + n)); for (let i = 0; i < n; i++) d[i] ^= m[i % 4]; sock.write(Buffer.concat([Buffer.from([0x81, n + 5]), Buffer.from("echo:"), d])); });
+  sock.on("error", () => {});
+});
+s.listen(+process.argv[2], "127.0.0.1");
+LKEOF
+LKP=$((base + 383)); LKW="node $(dirname "$SH")/../tests/worker.mjs --dir $MX_DRY --host mx.example.test --bind M_aaaaaaa1=127.0.0.1:$MP"
+node "$MX/lk-app.mjs" "$LKP" & LKPID=$!
+mx_load t2; mxm_fresh
+SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 SHARE_TEST_CODE=$MXC1 mxa member add an --port "$MP" >/dev/null 2>&1
+mxm join mx.example.test "$MXC1" >/dev/null 2>&1; mxm start >/dev/null 2>&1; sleep 1
+: >"$MXM_LOG"; out=$(SHARE_TEST_IDS=f50001 mxm add "$LKP" 2>&1); rc=$?
+check "mm LK-02: a member's add <port> publishes a live row: one v:3 pointer with opts live and type site, written before the row" "0 3 live site m-an-aaaaaaa1 1" \
+  "$rc $(jq -r .v "$MX_DRY/m/f50001") $(jq -r .opts "$MX_DRY/m/f50001") $(jq -r .type "$MX_DRY/m/f50001") $(jq -r .origin "$MX_DRY/m/f50001") $(grep -c "^PUT m/f50001" "$MXM_LOG")"
+check "mm LK-02: the row is live and Caddy renders handle_path /<id>/* to the port" "1 1" \
+  "$(awk -F'\t' '$1 == "f50001" && $6 ~ /(^| )live( |$)/' "$MXM_ROOT/index.tsv" | grep -c .) $(grep -A1 'handle_path /f50001/\*' "$MXM_ROOT/Caddyfile" | grep -c "reverse_proxy http://127.0.0.1:$LKP")"
+check "mm LK-02: the Worker forwards a GET through the binding to the app" "200" "$($LKW /f50001/x 2>/dev/null | awk '/^[0-9]{3} \// {print $1}')"
+check "mm LK-02: the Worker forwards the upgrade, answers 101, and a frame echoes through it" "101 /f50001/ws ws echo:ping-ws" "$($LKW --ws /f50001/ws 2>/dev/null | tail -1)"
+# negative control: the Worker without the live branch answers the same upgrade with no 101
+sed 's/const ws = d.live === true && /const ws = false \&\& /' "$SH" >"$MX/share-oldworker"
+check "mm NC LK-02: with the live upgrade branch off in the Worker (a v5 Worker), the same upgrade is not a 101" "no101" "$(SHARE_WORKER_SRC="$MX/share-oldworker" $LKW --ws /f50001/ws 2>/dev/null | tail -1 | awk '{print ($1 == 101) ? "101" : "no101"}')"
+out=$(SHARE_TEST_IDS=f50002 mxm add --cloud "$LKP" 2>&1); rc=$?
+check "mm LK-02: --cloud with a port is refused (live links stay on a machine), no pointer written" "1 1 0" "$rc $(grep -c 'live links and --host stay on the origin' <<<"$out") $([[ -e $MX_DRY/m/f50002 ]] && echo 1 || echo 0)"
+out=$(SHARE_TEST_IDS=f50003 mxm add --host x.example.test "$LKP" 2>&1); rc=$?
+check "mm LK-05: --host with a port is refused, no pointer written" "1 0" "$rc $([[ -e $MX_DRY/m/f50003 ]] && echo 1 || echo 0)"
+mxm rm f50001 >/dev/null 2>&1
+check "mm LK-02: rm of the live row deletes its pointer and its handle" "0 0" "$([[ -e $MX_DRY/m/f50001 ]] && echo 1 || echo 0) $(grep -c 'f50001' "$MXM_ROOT/Caddyfile")"
+mxm stop >/dev/null 2>&1; kill "$LKPID" 2>/dev/null; wait "$LKPID" 2>/dev/null
 fi
 
 if section "members: no token, key or code in argv, files or output (Q-SEC-6)"; then

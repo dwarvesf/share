@@ -93,6 +93,7 @@ revoke_needs_admin|rm of a link on the machine of another member: only the tenan
 member_busy|the member is mid another verb; the message names the rerun|the rerun the message names
 member_not_allowed|the status of the member does not allow this verb|{me} member ls
 member_cloud|pause, resume and rotate run on machine members only; a cloud member has no tunnel or binding|{me} member invite <name>
+adopt_token_scope|adopt takes only a token this minter made whose policy names this bucket plus Zone Read|{me} member add <name>
 member_changed|the member record changed under this verb (the admin changed it during a join, or two writes lost)|{me} member ls
 record_invalid|a u/ record fails validation (forged, or written by a newer share); it is never used|{me} member ls
 lease_held|another admin verb holds the tenant lease (lock/admin); this one waited 60 s|wait for it, then rerun
@@ -664,7 +665,6 @@ cmd_add() {
   if [[ $role == member ]]; then   # a member machine (R7): snapshots on this machine (v:3) or --cloud; every refusal before any write
     [[ -z $access ]] || die "gated links are added by the admin of $host_name; nothing was published"
     [[ -z $host_fqdn ]] || die "--host needs DNS and an ingress rule, which members do not hold; nothing was published"
-    [[ "$(parse_target "$target" 2>/dev/null || true)" == snapshot ]] || die "a member shares files and folders; live port shares stay on the origin; nothing was published"
     [[ -n $storage ]] || storage=local   # storage_default is the origin's knob, never a member's
     member_add_check
   fi
@@ -3320,8 +3320,8 @@ access_open_url() { # the platform opener, backgrounded; skipped over ssh or wit
 # port=r2 sentinel: an older share dies on that port at load, so it can never
 # write pub/ or an Access app against an r2 profile.
 
-WORKER_VERSION=5            # bump on every Worker source change; deploys refuse a downgrade without --force
-WORKER_SHA=682fa73390b1     # first 12 hex of the emitted source's sha256; the suite fails when it drifts
+WORKER_VERSION=6            # bump on every Worker source change; deploys refuse a downgrade without --force
+WORKER_SHA=84d2d06b7992     # first 12 hex of the emitted source's sha256; the suite fails when it drifts
 WORKER_COMPAT_DATE=2026-09-30   # moves only with a WORKER_VERSION bump
 WORKER_RECORD_V=3           # the record schema this source understands: v:1 cloud records, v:2 and v:3 machine pointers; a newer record answers 404
 worker_meta() { printf '%s\n' "$WORKER_VERSION" "$WORKER_SHA" "$WORKER_COMPAT_DATE" "$WORKER_RECORD_V"; }   # one line, four fields, for the deploy and sweep paths
@@ -3484,7 +3484,8 @@ function decide(request, env, rec, now = Date.now() / 1000) { // pure: the row f
     const b = env["M_" + sfx];
     if (!b || typeof b.fetch !== "function") return { row: ROW.V3_UNBOUND, status: 404 };
     if (!getish(request)) return { row: ROW.V3_METHOD, status: 405 };
-    return { row: ROW.V3_SERVED, status: "bind", binding: "M_" + sfx };
+    const live = typeof rec.opts === "string" && rec.opts.split(" ").includes("live");   // a live port share: its upgrade goes through, its type is the app's own
+    return { row: ROW.V3_SERVED, status: "bind", binding: "M_" + sfx, live };
   }
   // a cloud record is v:1 with no storage key; any other shape answers 404 and never reaches the origin
   if (!obj || rec.v !== 1 || "storage" in rec || rec.id !== id || typeof rec.prefix !== "string" ||
@@ -3585,9 +3586,11 @@ async function redeem(request, env) { // row 3: POST /_share/redeem with h; the 
 async function member(request, env, d, id) { // row 15: GET or HEAD through the member's binding, with only content-negotiation headers
   const tail = tailOf(request).split("#")[0], path = tail.split("?")[0];
   const headers = new Headers();
+  const ws = d.live === true && (request.headers.get("upgrade") || "").toLowerCase() === "websocket";
   for (const [k, v] of request.headers) {
     const n = k.toLowerCase();
     if (n === "range" || n.startsWith("if-") || n.startsWith("accept") || n === "user-agent") headers.set(k, v);
+    else if (ws && (n === "upgrade" || n === "connection" || n.startsWith("sec-websocket-"))) headers.set(k, v);   // TASK-3f: only the handshake of a live row
   }
   const ac = new AbortController(), timer = setTimeout(() => ac.abort(), V3_WAIT_MS);
   let r;
@@ -3595,6 +3598,16 @@ async function member(request, env, d, id) { // row 15: GET or HEAD through the 
     r = await env[d.binding].fetch(new Request("http://" + env.HOST + tail, { method: request.method, headers, redirect: "manual", signal: ac.signal }),
       { signal: ac.signal });   // TASK-1a(d) sampled fetch(req, {signal}); the Request carries it too
   } catch { r = null; } finally { clearTimeout(timer); }   // cleared once the headers arrive: a long body is never cut at the timer
+  if (r && r.status === 101) {   // only a live row's handshake may upgrade, and only an answer Caddy marked; any other 101 is a machine that is not serving this link
+    if (!(ws && r.webSocket && r.headers.has("x-share-served"))) r = null;
+    else {
+      const h = new Headers(), proto = r.headers.get("sec-websocket-protocol");
+      if (proto) h.set("Sec-WebSocket-Protocol", proto);
+      const up = new Response(null, { status: 101, webSocket: r.webSocket, headers: h });   // a fresh 101: nothing else the machine put in its answer (a Set-Cookie) reaches the browser
+      passed.add(up);
+      return tag(ROW.V3_SERVED, up);
+    }
+  }
   const s = settleV3(r, id, path);
   if (s.row === ROW.V3_DOWN) {
     return tag(s.row, new Response(OFFLINE, { status: 503, headers: { "Retry-After": "60", "Content-Type": "text/plain; charset=utf-8" } }));
@@ -3605,10 +3618,14 @@ async function member(request, env, d, id) { // row 15: GET or HEAD through the 
   const out = new Response(s.status === 502 ? null : r.body, { status: s.status, statusText: s.status === 502 ? "" : r.statusText, headers: keep });
   // the member's Caddy never picks the type: XHTML, XML or a sniffed answer would run script on this origin. The sandbox goes on
   // unless both the path's type and the type the machine answered are inert (an answer with no type is not inert)
-  const type = typeOf(path), said = ((r && r.headers.get("content-type")) || "").split(";")[0].trim().toLowerCase();
+  // a live row answers with its app's own type (an app's .js and API answers carry no useful extension); the sandbox rule is the same
+  // a type is taken only when it is one media type (no comma: a browser reads the last of a list, and INERT tests only a prefix); anything else is octet-stream and sandboxed
+  const raw = (r && r.headers.get("content-type")) || "", one = /^[a-z0-9.+-]+[/][a-z0-9.+-]+ *(;[^,]*)?$/i.test(raw);
+  const said = (d.live === true && !one) ? "" : raw.split(";")[0].trim().toLowerCase();
+  const type = d.live === true ? (one ? raw : "application/octet-stream") : typeOf(path);
   out.headers.set("Content-Type", type);
   out.headers.set("X-Content-Type-Options", "nosniff");
-  if (!INERT.test(type) || !INERT.test(said)) out.headers.set("Content-Security-Policy", SANDBOX);
+  if (!INERT.test(d.live === true ? said : type) || !INERT.test(said)) out.headers.set("Content-Security-Policy", SANDBOX);
   out.headers.set("Cache-Control", "no-store");
   out.headers.set("X-Robots-Tag", "noindex, nofollow");
   passed.add(out);   // never counted as a hit
@@ -3936,7 +3953,8 @@ r2_pointer_write() { # r2_pointer_write <id> <name> <type> <expires> <opts> <gat
   if [[ $role == member ]]; then
     jq -nc --arg id "$1" --arg name "$2" --arg by "$(r2_by)" --arg added "$7" --argjson exp "$4" --arg type "$3" --arg o "$(cfg member_id)" \
       '{v: 3, id: $id, storage: "machine", origin: $o, name: $name, by: $by, added: $added, expires: $exp, opts: "", type: $type}' >"$rec"
-    if [[ " $po " == *" noindex "* ]]; then jq -c '.opts = "noindex"' "$rec" >"$rec.t" && mv -f "$rec.t" "$rec"; fi
+    po="${po% gated}"   # a member adds no gated link; noindex and live are the v:3 opts (TASK-3f)
+    if [[ -n $po ]]; then jq -c --arg o "$po" '.opts = $o' "$rec" >"$rec.t" && mv -f "$rec.t" "$rec"; fi
     r2_call PUT "m/$1" "$rec" -H 'If-None-Match: *' || true
     rm -f "$rec"; return 0
   fi
@@ -4391,7 +4409,7 @@ r2_take() { # r2_take <snap> <m/ key> <json>: one record into the cloud rows, th
           and ((.own_host // "") | type == "string" and test("^$|^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\\.[a-z][a-z]+$")))
         or (.v == 3 and (.expires | type == "number")
           and (.origin | type == "string" and test("^m-[a-z0-9-]{2,24}-[0-9a-f]{8}$"))
-          and (.opts | type == "string" and (split(" ") | all(. == "" or . == "noindex")))
+          and (.opts | type == "string" and (split(" ") | all(. == "" or . == "noindex" or . == "live")))
           and (has("own_host") | not))))
     | [.id, .name, .added, (.expires | tostring), (.opts + (if (.own_host // "") == "" then "" else " host=" + .own_host end)), .type, .by,
        (if .v == 3 then .origin else "" end)] | @tsv' <<<"$3" 2>/dev/null)"$'\n' || true
@@ -4678,9 +4696,29 @@ r2_creds() { # r2_creds: the publisher pair into r2_key_id/r2_secret; the token 
   r2_secret="$(printf '%s' "$tok" | shasum -a 256 | cut -d' ' -f1)"
 }
 
+r2_min_state="" r2_min_need=""   # TASK-4a: "" the marker is unread this process, ok, or refuse (r2_min_need holds the tenant's min_cli)
+r2_min_set() { # r2_min_set <marker json|empty>: refuse every later write below the marker's min_cli; a marker that says nothing, or is no marker, refuses nothing
+  local m=""
+  [[ -z $1 ]] || m="$(jq -r 'if .members == true then (.min_cli // "" | strings) else "" end' <<<"$1" 2>/dev/null || true)"   # min_cli means something only where members are on
+  r2_min_state=ok r2_min_need=""
+  if [[ $m =~ ^[0-9]+(\.[0-9]+)*$ ]] && ver_lt "$SHARE_VERSION" "$m"; then r2_min_state=refuse r2_min_need=$m; fi
+}
+r2_min_guard() { # r2_min_guard <METHOD> <KEY>: a PUT or DELETE of any key but share.json itself reads the marker once per process and dies cli_below_min below
+  # its min_cli (DEC-35, FG-09: share.json stays writable so the admin repairs a forged marker with setup --members). Reads never check. A marker that cannot be
+  # read (404, a 5xx, no key) lets the write go on: it then fails on its own cause, and a down bucket must not read as "upgrade share"
+  [[ $1 == PUT || $1 == DELETE ]] || return 0
+  [[ $2 != share.json ]] || return 0
+  if [[ -z $r2_min_state ]]; then
+    r2_min_state=ok   # set first: the read below goes through r2_call
+    r2_call GET share.json || true
+    if [[ $cf_code == 200 ]]; then r2_min_set "$cf_body"; fi
+  fi
+  [[ $r2_min_state != refuse ]] || die_code cli_below_min "upgrade share to $r2_min_need; $host_name requires it (this is $SHARE_VERSION); writes are refused, reads still work" "upgrade share"
+}
 r2_call() { # r2_call METHOD KEY [ARG] [curl args...]: one S3 call on cf_try's globals; LIST takes <prefix> [continuation]; 429 and 5xx retried, Retry-After capped at 30s
+  [[ $backend == r2 || $r2on == 1 ]] || { cf_body="" cf_code=000 cf_err=backend r2_etag=""; return 1; }
+  r2_min_guard "$1" "$2"
   cf_body="" cf_code=000 cf_err="" r2_etag=""
-  [[ $backend == r2 || $r2on == 1 ]] || { cf_err=backend; return 1; }
   if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then
     if [[ $tunnel != 0 || $host_name != *.test ]]; then
       echo "share: SHARE_R2_DRY=1 is a test seam for SHARE_TUNNEL=0 and a .test hostname only; the r2 call was refused; unset it" >&2
@@ -6300,6 +6338,8 @@ member_context() { # member_context <verb>: the tenant, the admin token proven b
   [[ $mc_bucket =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] || die "Worker $mc_worker is not share's tenant Worker for $host_name (no HOST or BUCKET binding); nothing was changed"
   admin_pair_set "$mc_bucket"   # the admin's own S3 pair: r2_creds refuses an admin token as a publisher (DEC-74)
   mc_marker_read
+  [[ -z $mc_marker ]] || r2_min_set "$mc_marker"   # TASK-4a: the marker is read once here, so a write verb dies before its journal and lease; ls stays a read
+  case $verb in ls) ;; rm|purge) r2_min_state=ok ;; *) r2_min_guard PUT - ;; esac   # a removal is never blocked by a forged marker (a member holding a bucket key can write it)
   [[ $mc_t2 == 1 ]] || die_code members_off "$host_name has members off (share.json has no members:true); nothing was changed" "$me setup $host_name --r2 --bucket $mc_bucket --members"
   for b in tunnels connectivity; do   # scope probes: each missing scope named, before any write
     if [[ $b == tunnels ]]; then r2_api GET "/accounts/$acct/cfd_tunnel?per_page=1"; else r2_api GET "/accounts/$acct/connectivity/directory/services?per_page=1"; fi
@@ -7566,6 +7606,7 @@ cmd_leave() { # cmd_leave [--local]: the service stopped, own pointers deleted, 
   local lonly=0 a id mid st rc
   for a in "$@"; do case $a in --local) lonly=1 ;; *) die "usage: share [--profile <name>] leave [--local]" ;; esac; done
   [[ $role == member ]] || die "share leave runs on a member machine; this profile is ${role}; nothing was changed"
+  r2_min_state=ok   # a member leaving is never held back by the marker: this share's own records are what it deletes
   mid="$(cfg member_id)"; reg_id=$mid
   op_begin leave leave "$@"
   [[ ${op_prev_step:-0} -lt 4 ]] || lonly=1   # a leave that died in step 4 already forgot its keys: the rest is local
@@ -7630,6 +7671,97 @@ member_status_check() { # the status verb on a member (R7): one read of the own 
   return 0
 }
 
+op_steps_member_adopt() { printf '%s\n' "1 lease" "2 token" "3 record"; }
+ad_name="" ad_tid="" ad_by="" ad_exp="" ad_body="" ad_cur=""
+ad_guard() { # the refusals of adopt, run before the journal and again under the lease: the name is free, the token is this minter's and in scope (MB-17).
+  # Sets ad_cur (the token's own name), ad_exp and ad_body (the token as Cloudflare returned it)
+  local page=1 pages found="" b z zr
+  reg_list
+  [[ -z "$(awk -F'\t' '{print $2}' <<<"$reg_all" | jq -rc --arg n "$ad_name" 'select(.name == $n and .status != "removed") | .member_id' 2>/dev/null)" ]] \
+    || die_code member_name_taken "$ad_name is already a member of $host_name; adopt registers a name once; nothing was changed" "$me member ls"
+  [[ -z "$(awk -F'\t' '{print $2}' <<<"$reg_all" | jq -rc --arg t "$ad_tid" 'select(.token.id == $t and .status != "removed") | .name' 2>/dev/null | head -1)" ]] \
+    || die_code adopt_token_scope "token $ad_tid already belongs to a member of $host_name; one token, one member; nothing was changed" "$me member ls"
+  while :; do   # the id must be in the minter's own list: only its own user's token is one rm can revoke
+    as_minter r2_api GET "/user/tokens?per_page=50&page=$page"
+    [[ $cf_code == 200 ]] || die "listing the minter's tokens answered HTTP $cf_code; nothing was changed"
+    found="$(jq -r --arg i "$ad_tid" '[.result[]? | select(.id == $i)] | length' <<<"$cf_body")"
+    [[ $found == 0 ]] || break
+    pages="$(jq -r '.result_info.total_pages // 1' <<<"$cf_body")"
+    [[ $page -lt $pages ]] || break
+    page=$((page + 1))
+  done
+  [[ $found != 0 ]] || die_code adopt_token_scope "token $ad_tid is not in the minter's token list (another user's token, or none); only a token this minter made can be revoked by member rm; nothing was changed" "$me minter-token --test"
+  as_minter r2_api GET "/user/tokens/$ad_tid"
+  [[ $cf_code == 200 ]] || die "reading token $ad_tid answered HTTP $cf_code; nothing was changed"
+  ad_body=$cf_body
+  as_minter r2_api GET /user/tokens/permission_groups
+  zr="$(jq -r '[.result[]? | select(.name == "Zone Read") | .id] | first // ""' <<<"$cf_body")"
+  b="com.cloudflare.edge.r2.bucket.${acct}_default_$r2_bucket" z="com.cloudflare.api.account.zone.$zone_id"
+  jq -e --arg b "$b" --arg z "$z" --arg za "com.cloudflare.api.account.zone.*" --arg zr "$zr" '.result
+    | .status == "active" and ((.policies // []) | length > 0)
+      and all(.policies[]; .effect == "allow" and ((.resources | length) > 0) and ((.resources | keys) - [$b, $z, $za] | length == 0)
+        and (if (.resources | has($z) or has($za)) then ((.permission_groups // []) | all(.name == "Zone Read" or (.id == $zr and $zr != ""))) else true end)
+        and (if (.resources | has($b)) then ((.permission_groups // []) | length > 0 and all(.name | tostring | test("^Workers R2 Storage Bucket Item (Read|Write)$"))) else true end))
+      and any(.policies[]; .resources | has($b))' <<<"$ad_body" >/dev/null 2>&1 \
+    || die_code adopt_token_scope "token $ad_tid is not scoped to bucket $r2_bucket plus Zone Read (this zone or every zone, read only): an account-wide token, another bucket, or an extra permission is refused; nothing was changed" "$me member add $ad_name"
+  ad_cur="$(jq -r '.result.name // ""' <<<"$ad_body")" ad_exp="$(jq -r '.result.expires_on // ""' <<<"$ad_body")"
+  [[ -z $ad_exp || $ad_exp =~ ^[0-9TZ:.-]{1,32}$ ]] || die_code adopt_token_scope "token $ad_tid has an expires_on this share cannot read; nothing was changed" "$me member add $ad_name"
+}
+cmd_member_adopt() { # adopt <name> --token-id <id> [--by <label>]: an R5 publisher's bucket-scoped token becomes an active cloud member; its links keep their by and origin
+  local usage="usage: share member adopt <name> --token-id <id> [--by <label>] [--tenant <host>]" argv=("$@") rid now k
+  ad_name="" ad_tid="" ad_by=""
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --token-id) ad_tid="${2:-}"; shift 2 || die "$usage" ;;
+      --by) ad_by="${2:-}"; shift 2 || die "$usage" ;;
+      --tenant) member_tenant="${2:-}"; shift 2 || die "$usage" ;;
+      -*) die "$usage" ;;
+      *) [[ -z $ad_name ]] || die "$usage"; ad_name=$1; shift ;;
+    esac
+  done
+  mb_name_ok "$ad_name" || die_code member_name_bad "member name '$ad_name' is not 2 to 24 of a-z, 0-9 and -; nothing was changed" "$me member adopt <name> --token-id <id>"
+  [[ $ad_tid =~ ^[A-Za-z0-9-]{1,64}$ ]] || die "$usage"
+  [[ -z $ad_by || $ad_by =~ ^[a-z0-9.-]{1,64}$ ]] || die "--by needs a record's by label (a-z, 0-9, . and -); nothing was changed"
+  member_minter=1; member_context adopt
+  ad_guard
+  op_begin member-adopt member adopt ${argv[@]+"${argv[@]}"}
+  op_step 1
+  lease_take adopt "$ad_name"
+  ( ad_guard ) || { lease_release; op_done; exit 1; }   # the refusals again on what the lease holder sees now
+  ad_guard
+  rid="$(member_new_id "$ad_name")"; reg_id=$rid
+  echo "member:     adopting $ad_name as $rid (cloud) on token $ad_tid"
+  # step 2: the token takes the name member rm, renew and invite find it by (DEC-78); the same PUT body renew sends, so policies and expiry stay
+  op_step 2; lease_renew 2
+  if [[ $ad_cur != "$(mb_token_name "$rid")" ]]; then
+    ad_body="$(jq -c --arg n "$(mb_token_name "$rid")" '.result | {name: $n, policies, status: (if .status == "disabled" then "disabled" else "active" end)}
+      + (if .expires_on then {expires_on} else {} end) + (if .not_before then {not_before} else {} end) + (if .condition then {condition} else {} end)' <<<"$ad_body")"
+    as_minter r2_api_retry PUT "/user/tokens/$ad_tid" "$ad_body"
+    [[ $cf_code == 200 ]] || die "renaming token $ad_tid answered HTTP $cf_code; rerun the same verb"
+  fi
+  # step 3: the record, If-None-Match; a name that took it meanwhile loses (412)
+  op_step 3; lease_renew 3
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  reg_put "$(jq -nc --arg id "$rid" --arg n "$ad_name" --arg now "$now" --arg by "$(r2_by)" --arg ti "$ad_tid" --arg tn "$(mb_token_name "$rid")" --arg te "$ad_exp" \
+    '{v: 1, member_id: $id, name: $n, mode: "cloud", status: "active", rotation: 0, added: $now, updated: $now, joined: $now, by: $by, token: ({id: $ti, name: $tn} + (if $te == "" then {} else {expires_on: $te} end))}')"
+  [[ $cf_code == 200 ]] || die "writing u/$rid.json answered HTTP $cf_code (412: another adopt took the id); the token was renamed, rerun the same verb"
+  lease_release
+  op_done
+  echo "adopted:    $ad_name ($rid) is an active cloud member; token $ad_tid is now named $(mb_token_name "$rid"), so member rm revokes it"
+  if [[ -n $ad_by ]]; then   # records keep by and origin; the list is what the admin asked for, nothing is rewritten
+    local n=0
+    r2_list m/
+    while IFS= read -r k; do
+      [[ $k =~ ^m/[0-9a-f]{6}$ ]] || continue
+      r2_call GET "$k" || continue
+      [[ $cf_code == 200 ]] || continue
+      jq -e --arg b "$ad_by" '.v == 1 and .by == $b' <<<"$cf_body" >/dev/null 2>&1 || continue
+      echo "link:       ${k#m/} by $ad_by ($(jq -r '.name // "?"' <<<"$cf_body" | tr -cd 'A-Za-z0-9._ -'))"; n=$((n + 1))
+    done <<<"$r2_list_out"
+    echo "links:      $n v:1 link(s) by $ad_by keep their by and origin; none was rewritten"
+  fi
+}
+
 cmd_member() { # cmd_member <verb> ...: the admin verbs; every refusal of member_context comes before any write
   local verb="${1:-}" a; shift || true
   local args=()
@@ -7647,17 +7779,8 @@ cmd_member() { # cmd_member <verb> ...: the admin verbs; every refusal of member
     invite) cmd_member_invite ${args[@]+"${args[@]}"} ;;
     rotate) cmd_member_rotate ${args[@]+"${args[@]}"} ;;
     renew) cmd_member_renew ${args[@]+"${args[@]}"} ;;
-    adopt)   # TASK-3e: the admin context and the minter (DEC-80), the record through member_can, then a plain refusal
-      member_minter=1
-      member_context "$verb"
-      if [[ -n ${args[0]:-} ]] && mb_name_ok "${args[0]}"; then
-        local rc=0
-        mb_pick "${args[0]}"
-        member_can "$(jq -r .status <<<"$reg_rec")" "$verb" admin "$(jq -r .mode <<<"$reg_rec")" || rc=$?
-        [[ $rc == 0 ]] || die_code member_not_allowed "${args[0]} is $(jq -r .status <<<"$reg_rec"); share member $verb does not run from there; nothing was changed" "$me member ls"
-      fi
-      die "share member $verb is not built in this version" ;;
-    *) a="usage: share member add|ls|sync|rm|purge|pause|resume|invite|rotate|renew [args] [--tenant <host>]"; die "$a" ;;
+    adopt) cmd_member_adopt ${args[@]+"${args[@]}"} ;;
+    *) a="usage: share member add|ls|sync|rm|purge|pause|resume|invite|rotate|renew|adopt [args] [--tenant <host>]"; die "$a" ;;
   esac
 }
 
@@ -7719,6 +7842,22 @@ cmd_setup_members() { # cmd_setup_members <bucket> <yes> --members|--no-members:
   [[ $cf_code == 200 ]] || pr="${pr:+$pr, }Connectivity Directory Admin"
   [[ -z $pr ]] || die_code admin_token_scope "the admin token lacks $pr (account scope), which members need; nothing was changed" "$me admin-token --test"
   mc_marker_read
+  local mc_fix=0 mc_min   # FG-09: a members marker whose min_cli is above this share cannot be written under by this share, so the rerun resets it
+  if [[ $mc_t2 == 1 ]]; then
+    mc_min="$(jq -r '.min_cli // "" | strings' <<<"$mc_marker" 2>/dev/null || true)"
+    [[ ! $mc_min =~ ^[0-9]+(\.[0-9]+)*$ ]] || ! ver_lt "$SHARE_VERSION" "$mc_min" || mc_fix=1
+  fi
+  r2_min_set "$mc_marker"
+  if [[ $mc_fix == 1 && $on == 1 ]]; then   # FG-09: the repair of a marker this share cannot write under; the guard is off for this run only after the admin says so
+    if [[ $yes == 0 ]]; then
+      local warn="share.json says min_cli $mc_min, above this share ($SHARE_VERSION): a forged value, or a newer admin's. Resetting it to $SHARE_VERSION lowers the tenant's requirement"
+      [[ -t 0 ]] || die "$warn; rerun with --yes to confirm; nothing was changed"
+      read -rp "$warn. Reset it? [y/N] " a
+      [[ $a == y* || $a == Y* ]] || die "aborted; nothing was changed"
+    fi
+    r2_min_state=ok
+  fi
+  r2_min_guard PUT -
   if [[ $on == 1 ]]; then
     local id; for id in $(rows | cut -f1); do   # every local row has its pointer, so no older publisher can draw its id
       r2_call GET "m/$id"
@@ -7755,7 +7894,7 @@ cmd_setup_members() { # cmd_setup_members <bucket> <yes> --members|--no-members:
     mb_deploy 'map(select(.name != "MEMBERS" and .name != "PAUSED"))'
   fi
   op_step 3; lease_renew 3   # the marker, If-Match on the copy read above
-  if [[ $mc_t2 != "$on" ]]; then
+  if [[ $mc_t2 != "$on" || ( $mc_fix == 1 && $on == 1 ) ]]; then
     local mf; mf="$(mktemp "$root/.marker.XXXXXX")"
     if [[ $on == 1 ]]; then jq -c --arg v "$SHARE_VERSION" '. + {members: true, min_cli: $v}' <<<"$mc_marker" >"$mf"
     else jq -c 'del(.members, .min_cli)' <<<"$mc_marker" >"$mf"; fi
@@ -7763,7 +7902,7 @@ cmd_setup_members() { # cmd_setup_members <bucket> <yes> --members|--no-members:
     rm -f "$mf"
     [[ $cf_code == 200 ]] || die "writing $bucket/share.json answered HTTP $cf_code (412: it changed since it was read); rerun the same setup"
     marker_cache "$on"
-    echo "marker:     share.json $([[ $on == 1 ]] && echo "has members:true (min_cli $SHARE_VERSION)" || echo "has members off")"
+    echo "marker:     share.json $([[ $on == 1 ]] && echo "has members:true (min_cli $SHARE_VERSION)" || echo "has members off")$([[ $mc_fix == 0 || $on == 0 ]] || echo "; min_cli was $mc_min, above this share, and is reset")"
   fi
   op_step 4
   if [[ $on == 1 ]]; then [[ "$(cfg members || true)" == on ]] || config_put members members=on
@@ -8084,6 +8223,7 @@ A refusal ends with `share: <message>` on stderr and exit 1. Set `SHARE_ERROR_JS
 | `member_busy` | the member is mid another verb; run the rerun the message names |
 | `member_not_allowed` | the member's status does not allow this verb (`share member ls` shows `can`) |
 | `member_cloud` | pause, resume and rotate run on machine members only; a cloud member gets a new code with `share member invite <name>` |
+| `adopt_token_scope` | `member adopt` takes only a token the minter made whose policy names this bucket plus Zone Read; another user's token, an account-wide one or another bucket's is refused |
 | `member_changed` | the member record changed under this verb; nothing was kept |
 | `record_invalid` | a `u/` record fails validation; it is never used |
 | `lease_held` | another admin verb holds the tenant lease; wait, then rerun |
@@ -8109,7 +8249,7 @@ A refusal ends with `share: <message>` on stderr and exit 1. Set `SHARE_ERROR_JS
 | Command | Effect |
 |---|---|
 | `share add <file\|dir>` | Snapshot copy; prints the link and copies it to the clipboard |
-| `share add <port>` | Live proxy `https://<host>/<id>/` -> `127.0.0.1:<port>` (also `localhost:port`, `http://localhost:port`) |
+| `share add <port>` | Live proxy `https://<host>/<id>/` -> `127.0.0.1:<port>` (also `localhost:port`, `http://localhost:port`). On a member machine it goes through the member's VPC Service binding: GET, streamed bodies and WebSocket upgrades work, other methods answer 405, and the page runs sandboxed. `--cloud`, `--host` and `--access` are refused there |
 | `share add ... --host <name>.<zone>` | Own hostname, e.g. `dev.example.com`; needed for apps that emit absolute asset paths, and for SPA deep links |
 | `share add <dir> --no-index` | No generated file listing at the folder link |
 | `share add ... --access email:<a>,<b>` / `--access domain:<d>` / `--access group:<name>` | A login gate (Cloudflare Access, one-time PIN by email): only those addresses, everyone at that domain, or the members of an Access rule group can open the link. The link prints once the edge enforces it (minutes on a first app). Named setup only, never quick mode |
@@ -8125,6 +8265,7 @@ A refusal ends with `share: <message>` on stderr and exit 1. Set `SHARE_ERROR_JS
 | `share member pause <name>` / `share member resume <name>` | Stop or restart serving a machine member's links (admin token): its machine links answer 503 paused, its cloud links keep serving. A cloud member is refused `member_cloud` |
 | `share member invite <name> [--port P] [--invite-ttl 7d]` / `share member rotate <name>` | A new code (admin and minter tokens). `invite` replaces the token and the code (for an invited, joining or left member). `rotate` also replaces a machine member's tunnel and VPC Service; its links and pause stay. Each prints one `share join <host> <code>` line; the member runs it and comes back to the status it had (`rotate` of a paused member stays paused) |
 | `share member renew <name> [--token-ttl 90d]` | Move the member token's expiry in place (admin and minter tokens); the member keeps its key. A token this minter cannot find is refused `token_unreachable`: rotate the member (invite a cloud member) instead. `member ls` and the member's `share status` warn within 14 days of expiry |
+| `share member adopt <name> --token-id <id> [--by <label>]` | Register an unregistered R5 publisher as an active cloud member (admin and minter tokens). The token must be one the minter made, scoped to this bucket plus Zone Read; it is renamed in place so `member rm` finds it. `--by` lists the v:1 links with that `by`; they keep their `by` and `origin`. Refused `adopt_token_scope` otherwise |
 | `share join <host> <code>` | Join a tenant as a member on this Mac; a bare `share join` resumes a join that stopped. A refusal's code names the admin's next command |
 | `share leave [--local]` | On a member machine: stop serving, delete this machine's pointers, mark the record left, forget the keys, and move the profile (links included) to the Trash. `--local` makes no bucket call (use it once removed). `share status` there reads the member's own record: `removed` only from a record that says so; a refused key reads "your key stopped working; ask the admin" |
 | `share setup <hostname> --backend r2 --bucket <name>` | An R2 profile: a Worker serves links from a private bucket, so they stay up while this machine is off, and several people publish to one hostname. Live shares, `--host`, `start`, and `stop` are refused there; `share rm <id>` unpublishes |
@@ -8252,7 +8393,7 @@ case "${1:-status}" in
   hits) cmd_hits "$(id_of "${2:-}")" ;;
   prune) if [[ ${2:-} == --loop ]]; then cmd_prune --loop; else cmd_prune; fi ;;
   leave) shift; cmd_leave "$@" ;;
-  r2-call) shift; rc=0; r2_call "$@" || rc=$?; printf 'code=%s etag=%s\n' "$cf_code" "$r2_etag"; [[ -n $cf_body ]] && printf '%s\n' "$cf_body"; exit "$rc" ;;
+  r2-call) shift; rc=0; r2_min_state=ok; r2_call "$@" || rc=$?; printf 'code=%s etag=%s\n' "$cf_code" "$r2_etag"; [[ -n $cf_body ]] && printf '%s\n' "$cf_body"; exit "$rc" ;;
   r2-api) shift; [[ ${SHARE_R2_DRY:-0} == 1 ]] || die "r2-api is a test verb of the dry seam (SHARE_R2_DRY=1)"; api_token="${CLOUDFLARE_API_TOKEN:-}"; [[ ${1:-} != --minter ]] || { shift; api_token="${SHARE_MINTER_TOKEN:-}" api_who=minter; }
     r2_api "$@"; printf 'code=%s err=%s\n' "$cf_code" "$cf_err"; [[ -z $cf_body ]] || printf '%s\n' "$cf_body" ;;
   worker-call) shift; [[ ${SHARE_R2_DRY:-0} == 1 ]] || die "worker-call is a test verb of the dry seam (SHARE_R2_DRY=1)"; if [[ ${1:-} == GET ]]; then worker_bind="${3:-}"; worker_call GET "${2:-}"; else worker_call "$@"; fi   # GET <path> [M_<hex>=127.0.0.1:<port>] | POST <path> <body>

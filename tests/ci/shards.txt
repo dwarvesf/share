@@ -8,4 +8,4 @@
 # members-a, members-b: the members sections that run alone, balanced by the timing table (about 235 s and 215 s on a Mac mini).
 chain	^(members: phase 0|worker \()
 members-a	^members: (member rm and member purge|revoke and reconcile|leave and the member|tenant T1 to T2|dry seams|pause, resume, invite)
-members-b	^members: (member add|member machine|member ls and member sync|the registry|the admin lease|no token, key or code|Cloudflare object helpers|admin context|the invite seal)
+members-b	^members: (adopt and min_cli|live port shares|member add|member machine|member ls and member sync|the registry|the admin lease|no token, key or code|Cloudflare object helpers|admin context|the invite seal)
