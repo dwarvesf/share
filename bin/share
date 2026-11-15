@@ -33,7 +33,7 @@
 #   share setup <hostname> --r2 --bucket <name> [--storage-default local|cloud] [--alias <old-host>]   on the origin: R2 on, per-link storage
 #   share setup <hostname> --no-r2   on the origin: R2 off again (refuses while an alias is set)
 #   share setup <hostname> --r2 --bucket <name> --members|--no-members [--yes]   on the origin: members on (T2) or off again
-#   share member add|ls|sync|rm|purge [args] [--tenant <host>]   the tenant admin's member verbs (admin token; add and rm also the minter token)
+#   share member add|ls|sync|rm|purge|pause|resume|invite|rotate|renew [args] [--tenant <host>]   the tenant admin's member verbs (admin token; add, rm, invite, rotate and renew also the minter token)
 #   share join <host> <code>   join a tenant as a member with the code the admin sent; bare share join resumes a stopped join
 #   share leave [--local]     on a member machine: remove its links, service, keys and profile; --local makes no bucket call
 #   share setup <hostname> --backend r2 --bucket <name>   an R2 profile: a private bucket and a Worker
@@ -92,6 +92,7 @@ member_unknown|no member of that name on the tenant|{me} member ls
 revoke_needs_admin|rm of a link on the machine of another member: only the tenant admin revokes it (the admin token)|ask the tenant admin to run {me} rm <id>
 member_busy|the member is mid another verb; the message names the rerun|the rerun the message names
 member_not_allowed|the status of the member does not allow this verb|{me} member ls
+member_cloud|pause, resume and rotate run on machine members only; a cloud member has no tunnel or binding|{me} member invite <name>
 member_changed|the member record changed under this verb (the admin changed it during a join, or two writes lost)|{me} member ls
 record_invalid|a u/ record fails validation (forged, or written by a newer share); it is never used|{me} member ls
 lease_held|another admin verb holds the tenant lease (lock/admin); this one waited 60 s|wait for it, then rerun
@@ -970,12 +971,17 @@ member_record_read() { # mr_code: one GET of this member's own record. 200: the 
   r2_call GET "u/$mid.json" || return 0
   mr_code=$cf_code
   case $cf_code in
-    200) if reg_valid "$cf_body" "$mid"; then reg_rec=$cf_body; member_health_put; health_token_put ok "$(cfg token_expires || true)"; else mr_code=invalid; fi ;;
+    200) if reg_valid "$cf_body" "$mid"; then reg_rec=$cf_body; member_health_put; member_token_expires; health_token_put ok "$(cfg token_expires || true)"; else mr_code=invalid; fi ;;
     401|403) health_token_put invalid "$(cfg token_expires || true)" ;;
   esac
   return 0
 }
 mr_code=000
+member_token_expires() { # the token's expires_on as the admin last recorded it (the server's date: a renew moves it, CK-04) becomes the local token_expires
+  local te; te="$(jq -r '.token.expires_on // ""' <<<"$reg_rec")"
+  [[ $te =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$ && -n "$(mb_epoch "$te")" && $te != "$(cfg token_expires || true)" ]] || return 0
+  config_put "token_expires" "token_expires=$te"
+}
 
 add_sweep() { # a dead add's journal: with its row in the index the add finished (the file goes); with no row the add stopped part way (its copy goes to the Trash, its pointer is dropped; Access lines stay for access_sweep)
   local f id
@@ -2811,7 +2817,7 @@ health_worker_put() { # health_worker_put: the Worker pair the last healthz answ
 # file at the step it reached; the next run of the verb reports it and runs from step 1 again, each step
 # skipping what is already in place. The file never holds a token, a secret, or a single-use code.
 op_verb="" op_file="" op_of=0 op_n=0 op_name="" op_started=0 op_conc=0 op_rerun_json='[]' op_rerun="" op_rollback_json="" op_rollback=""
-op_prev_step="" op_prev_name=""   # op_prev_name: the step name a resuming verb reads (SPEC-009's join)
+op_prev_step="" op_prev_name="" op_prev_rerun=""   # op_prev_name: the step name a resuming verb reads (SPEC-009's join)
 op_steps_setup_tunnel() { printf '%s\n' "1 auth" "2 tunnel" "3 route" "4 dns" "5 token" "6 config" "7 service" "8 live"; }
 op_steps_setup_r2() { printf '%s\n' "1 alias" "2 worker" "3 bucket" "4 alias-domain" "5 routes" "6 snapshot" "7 alias-apps" "8 deploy" \
   "9 pointers" "10 access" "11 config" "12 marker" "13 route" "14 alias-bind" "15 probe" "16 handoff"; }
@@ -2865,7 +2871,7 @@ op_begin() { # op_begin <verb> [--concurrent] <rerun args...> [-- <rollback args
     if [[ $inrb == 0 && $a == -- ]]; then inrb=1; elif [[ $inrb == 1 ]]; then rb+=("$a"); else rerun+=("$a"); fi
   done
   [[ -z $profile ]] || pfx=(--profile "$profile")
-  op_verb=$verb op_n=0 op_name="" op_prev_step="" op_prev_name="" op_started="$(date +%s)"
+  op_verb=$verb op_n=0 op_name="" op_prev_step="" op_prev_name="" op_prev_rerun="" op_started="$(date +%s)"
   op_of="$(op_steps "$verb" | grep -c . || true)"
   op_rerun_json="$(op_argv_json ${pfx[@]+"${pfx[@]}"} ${rerun[@]+"${rerun[@]}"})"
   op_rerun="$(op_display ${pfx[@]+"${pfx[@]}"} ${rerun[@]+"${rerun[@]}"})"
@@ -2886,7 +2892,7 @@ op_begin() { # op_begin <verb> [--concurrent] <rerun args...> [-- <rollback args
         fi
         echo "previous $verb died at step $op_r_step ($op_r_name); continuing"
         # shellcheck disable=SC2034 # op_prev_name is read by the resuming verbs SPEC-009 adds
-        if [[ -z $op_prev_step || $op_r_step -gt $op_prev_step ]]; then op_prev_step=$op_r_step op_prev_name=$op_r_name; fi
+        if [[ -z $op_prev_step || $op_r_step -gt $op_prev_step ]]; then op_prev_step=$op_r_step op_prev_name=$op_r_name op_prev_rerun=$op_r_rerun; fi
       fi
       rm -f "$f"   # transient bookkeeping, like the pidfile: never to the Trash (DEC-24)
     done
@@ -4708,7 +4714,7 @@ r2_call() { # r2_call METHOD KEY [ARG] [curl args...]: one S3 call on cf_try's g
 }
 
 r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "METHOD key" line per call; etags and conditional headers honored
-  local meth=$1 key=$2 arg3=${3:-} d="${SHARE_R2_DRY_DIR:-$root/r2-dry}" f h k rest
+  local meth=$1 key=$2 arg3=${3:-} d="${SHARE_R2_DRY_DIR:-$root/r2-dry}" f h k rest cur lm et sz
   mkdir -p "$d" "$root"
   if [[ ${SHARE_R2_DRY_PAUSE:-} == "$meth $key" ]]; then
     local w=0
@@ -4733,7 +4739,7 @@ r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "
         case "$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')" in
           -h) ;;
           if-none-match:\ \*) [[ -e $f ]] && { cf_code=412 cf_err=PreconditionFailed; return 0; } ;;
-          if-match:*) [[ -e $f && $h == *"$(r2_md5 "$f")"* ]] || { cf_code=412 cf_err=PreconditionFailed; return 0; } ;;
+          if-match:*) cur="$(r2_md5 "$f" 2>/dev/null)" || cur=""; [[ -n $cur && $h == *"$cur"* ]] || { cf_code=412 cf_err=PreconditionFailed; return 0; } ;;
         esac
       done
       if [[ ${SHARE_R2_DRY_PUT:-} == 500-once && ! -f $d/.fx/p500.done ]]; then
@@ -4745,7 +4751,10 @@ r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "
       r2_etag="$(r2_md5 "$f")" ;;
     GET) [[ ${SHARE_R2_DRY_FAIL:-} != "GET $key" ]] || { cf_code=500 cf_err=InternalError; return 0; }
       [[ -e $f ]] || { cf_code=404 cf_err=NoSuchKey; return 0; }
-      cf_body="$(cat "$f")"; r2_etag="$(r2_md5 "$f")" ;;
+      # SHARE_R2_DRY_VANISH="GET <key>": another process deletes the object between this check and the read, once (a lease release racing a lease read)
+      if [[ ${SHARE_R2_DRY_VANISH:-} == "GET $key" && ! -f $d/.fx/vanish.done ]]; then mkdir -p "$d/.fx"; : >"$d/.fx/vanish.done"; rm -f "$f"; fi
+      # an object deleted under the read answers 404, as R2 does: a GET is atomic there
+      { cf_body="$(cat "$f" 2>/dev/null)" && r2_etag="$(r2_md5 "$f" 2>/dev/null)"; } || { cf_body="" r2_etag="" cf_code=404 cf_err=NoSuchKey; return 0; } ;;
     HEAD) [[ -e $f ]] || { cf_code=404 cf_err=NoSuchKey; return 0; }
       r2_etag="$(r2_md5 "$f")" ;;
     DELETE) [[ ${SHARE_R2_DRY_DELETE:-} == lost ]] && { cf_code=000; return 0; }
@@ -4761,7 +4770,8 @@ r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "
       while IFS= read -r k; do
         [[ -n $k ]] || continue
         if [[ $count -ge 1000 ]]; then urlenc "$last"; cf_body+='<IsTruncated>true</IsTruncated><NextContinuationToken>'"$urlenc_out"'</NextContinuationToken>'; break; fi
-        urlenc "$k"; cf_body+='<Contents><Key>'"$urlenc_out"'</Key><LastModified>'"$(date -u -r "$d/$k" +%Y-%m-%dT%H:%M:%S.000Z)"'</LastModified><ETag>"'"$(r2_md5 "$d/$k")"'"</ETag><Size>'"$(wc -c <"$d/$k" | tr -d ' ')"'</Size></Contents>'
+        { lm="$(date -u -r "$d/$k" +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null)" && et="$(r2_md5 "$d/$k" 2>/dev/null)" && sz="$(wc -c 2>/dev/null <"$d/$k" | tr -d ' ')"; } || continue   # deleted under the listing: not listed
+        urlenc "$k"; cf_body+='<Contents><Key>'"$urlenc_out"'</Key><LastModified>'"$lm"'</LastModified><ETag>"'"$et"'"</ETag><Size>'"$sz"'</Size></Contents>'
         last="$k"; count=$((count + 1))
       done <<<"$all"
       [[ $count -lt 1000 ]] && cf_body+='<IsTruncated>false</IsTruncated>'
@@ -6474,7 +6484,7 @@ reg_jq_valid='def s: type == "string"; def clean: s and (explode | all(. >= 32 a
   and ((.token_unreachable_until // "") | s and test("^[0-9TZ:.-]{0,32}$")) and ((.by // "") | clean)
   and ((.added // "") | s and test("^[0-9TZ:.-]{0,32}$")) and ((.updated // "") | s and test("^[0-9TZ:.-]{0,32}$")) and ((.joined // "") | s and test("^[0-9TZ:.-]{0,32}$"))'
 reg_valid() { jq -e --arg id "${2:-}" "$reg_jq_valid" <<<"$1" >/dev/null 2>&1; }   # reg_valid <json> [member_id]
-reg_rec="" reg_etag="" reg_id="" reg_refuse_code="" reg_refuse_msg=""
+reg_rec="" reg_etag="" reg_id="" reg_refuse_code="" reg_refuse_msg="" reg_guard=""
 reg_get() { # reg_get <member_id>: reg_rec and reg_etag; 1 when absent; a record failing validation dies record_invalid (never trusted)
   reg_id=$1 reg_rec="" reg_etag=""
   r2_call GET "u/$1.json" || die "reading u/$1.json needs the admin S3 pair"
@@ -6518,6 +6528,9 @@ reg_status() { # reg_status <verb> <actor> <to> [step] [jq over the record]: one
     fi
     [[ $rc == 0 ]] || { [[ -z $reg_refuse_code ]] || die_code "$reg_refuse_code" "$reg_refuse_msg" "ask the tenant admin"
       die_code member_not_allowed "$(jq -r .name <<<"$reg_rec") is $cur; share member $verb does not run from there; nothing more was changed" "$me member ls"; }
+    # reg_guard: a jq test the record must still pass on every read (join: the invite it redeemed is still the record's, so a rotate or invite that
+    # landed between the redeem and this write wins; CC-03)
+    [[ -z $reg_guard ]] || jq -e "$reg_guard" <<<"$reg_rec" >/dev/null 2>&1 || die_code "${reg_refuse_code:-member_changed}" "${reg_refuse_msg:-u/$reg_id.json changed during share member $verb; nothing more was changed}" "ask the tenant admin"
     new="$(jq -c --arg to "$to" --arg cur "$cur" --arg s "$step" --arg sn "$sname" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg by "$(r2_by)" '
       .status = $to | .updated = $now | .by = $by
       | if ($to | endswith("ing")) then
@@ -6937,6 +6950,19 @@ cmd_member_ls() {
   for a in "$@"; do case $a in --json) json=1 ;; *) die "usage: share member ls [--json] [--tenant <host>]" ;; esac; done
   member_context ls
   mb_report
+  if [[ -n ${SHARE_MINTER_TOKEN:-} ]]; then
+    local page=1 tl="[]" pages
+    while :; do
+      as_minter r2_api GET "/user/tokens?per_page=50&page=$page"
+      [[ $cf_code == 200 ]] || break
+      tl="$(jq -c --argjson a "$tl" '$a + [.result[]? | {name, expires_on}]' <<<"$cf_body")"
+      pages="$(jq -r '.result_info.total_pages // 1' <<<"$cf_body")"
+      [[ $pages =~ ^[0-9]+$ && $page -lt $pages && $page -lt 50 ]] || break
+      page=$((page + 1))
+    done
+    ml_json="$(jq -c --argjson t "$tl" --arg h "$host_name" 'map(. as $m | ([$t[] | select(.name == "share " + $h + " " + $m.member_id) | .expires_on | select(type == "string" and test("^[0-9TZ:.-]{1,32}$"))] | first) as $e
+      | if $e then .token_expires = $e else . end)' <<<"$ml_json")"
+  fi
   # can[]: through member_can, so the Share Bar never mirrors the table (DEC-53)
   o="[]"
   while IFS= read -r l; do
@@ -6954,11 +6980,14 @@ cmd_member_ls() {
     "\(.name): \(if .expired then "expired" else .status end)"
       + (if .step != null and (.status | endswith("ing")) then ", step \(.step)\(if .of != null then " of \(.of)" else "" end) (\(.step_name // "?"))" else "" end)
       + (if .lease != null then ", lease held by \(.lease.holder)" + (if .lease.live then " (live)" elif .lease.verb == "?" then " (stale since \(.lease.since | strftime("%Y-%m-%dT%H:%M:%SZ")))" else " (stale since \(.lease.since | strftime("%Y-%m-%dT%H:%M:%SZ")); rerun: share member \(.lease.verb) \(.name))" end)
-         elif (.status | endswith("ing")) and .status != "joining" then " (no lease; rerun: share member \(if .status == "adding" then "add" elif .status == "removing" then "rm" else (.status | rtrimstr("ing")) end) \(.name))" else "" end)
+         elif (.status | endswith("ing")) and .status != "joining" then " (no lease; rerun: share member \({adding: "add", removing: "rm", pausing: "pause", resuming: "resume", inviting: "invite", rotating: "rotate", renewing: "renew"}[.status] // "ls") \(.name))" else "" end)
       + "\n    id=\(.member_id)  mode=\(.mode // "?")"
       + (if .mode == "machine" then "  \(if .account.connectors > 0 then "online" else "offline" end) (\(.account.connectors) connector(s))  bound=\(.deploy.bound)  paused=\(.deploy.paused)" else "" end)
       + (if .token_expires != null then "  token expires \(.token_expires)" else "" end)
       + (if .status == "invited" and .invite_expires != null then "  invite expires \(.invite_expires | strftime("%Y-%m-%dT%H:%M:%SZ"))" else "" end)
+      + ((.token_expires // "" | try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null) as $te
+         | if $te != null and (.status == "active" or .status == "paused" or .status == "invited") and $te - $now <= 1209600 then
+             "\n    warn: token \(if $te <= $now then "expired" else "expires" end) \(.token_expires)\(if $te > $now then ", within 14 days" else "" end); renew: share member renew \(.name)" else "" end)
       + (if (.drift | length) > 0 then "\n    drift: \(.drift | join(" "))" + (if (.drift | index("extra_connector")) then " (extra connector: rotate now)" else "" end) else "" end)' <<<"$ml_json"
   [[ -z ${SHARE_MINTER_TOKEN:-} ]] || { as_minter r2_api GET "/user/tokens?per_page=1"; [[ $cf_code != 200 ]] || echo "token slots: $(( 50 - $(jq -r '.result_info.total_count // 0' <<<"$cf_body") )) of 50 free for the minting user"; }
   if [[ $mc_own == 1 && $mc_t2 == 1 && "$(cfg members || true)" != on ]]; then
@@ -6989,15 +7018,17 @@ cmd_member_sync() { # deploy wins for admin-set state, only from active, pausing
   done < <(jq -r '.[] | select(.status != "invalid") | [.member_id, .status, (.member_id | split("-") | last), (.deploy.bound | tostring), (.deploy.paused | tostring)] | @tsv' <<<"$ml_json")
   if [[ $rebind == 1 ]]; then   # account VPC Services are admin-only objects, so they are a trusted rebuild source; records marked paused restore PAUSED
     local n s rest
-    while IFS=$'\t' read -r n s _ _; do
+    while IFS=$'\t' read -r n s; do   # the newest -r<n> of each suffix only: a rotate that died before its old deletes leaves two
       [[ $n =~ ^share-${host_name//./-}-([0-9a-f]{8})(-r[0-9]+)?$ ]] || continue
       sx=${BASH_REMATCH[1]}
       rest="$(jq -r --arg sx "$sx" '[.[] | select(.member_id | endswith("-" + $sx))] | first // {} | .status // ""' <<<"$ml_json")"
+      [[ $rest != rotating ]] || { echo "rebind:     M_$sx skipped: its rotate did not finish; rerun share member rotate first"; continue; }
       [[ $rest != removing && $rest != removed && $s =~ ^[A-Za-z0-9-]{1,64}$ ]] || continue
       jq -e --arg n "M_$sx" --arg s "$s" 'any(.result.bindings[]?; .name == $n and .service_id == $s)' <<<"$mc_settings" >/dev/null && continue
       add_b="$add_b $sx=$s"; echo "rebind:     M_$sx -> $n"
-    done <<<"$ms_list"
-    add_p="$add_p $(jq -r '[.[] | select(.status == "paused") | .member_id | split("-") | last] | join(" ")' <<<"$ml_json")"
+    done < <(awk -F'\t' -v p="share-${host_name//./-}-" 'index($1, p) == 1 {r = 0; if (match($1, /-r[0-9]+$/)) r = substr($1, RSTART + 2) + 0
+      print substr($1, length(p) + 1, 8) "\t" r "\t" $1 "\t" $2}' <<<"$ms_list" | sort -t$'\t' -k1,1 -k2,2n | awk -F'\t' '{last[$1] = $3 "\t" $4} END {for (k in last) print last[k]}')
+    add_p="$add_p $(jq -r '[.[] | select(.status == "paused" or (.status == "invited" and .prev_status == "paused")) | .member_id | split("-") | last] | join(" ")' <<<"$ml_json")"
   fi
   op_step 3
   local delta=". " b
@@ -7228,6 +7259,307 @@ cmd_member_purge() { # REMOVED only: the id goes into u/purged.json first, then 
   echo "purged:     $name ($rid); its id stays reserved in u/purged.json"
 }
 
+# --- pause, resume, invite, rotate, renew (TASK-3a to 3d): the write orders of "### Admin verb write orders"; every object found by its name (DEC-58) ---
+op_steps_member_pause() { printf '%s\n' "1 lease" "2 pausing" "3 deploy" "4 paused"; }
+op_steps_member_resume() { printf '%s\n' "1 lease" "2 resuming" "3 deploy" "4 active"; }
+op_steps_member_invite() { printf '%s\n' "1 lease" "2 inviting" "3 token" "4 connections" "5 service" "6 invite-hash" "7 invite" "8 invited"; }
+op_steps_member_rotate() { printf '%s\n' "1 lease" "2 rotating" "3 tunnel" "4 service" "5 deploy" "6 old" "7 token" "8 invite-hash" "9 invite" "10 invited"; }
+op_steps_member_renew() { printf '%s\n' "1 lease" "2 renewing" "3 token" "4 record" "5 restored"; }
+mb_ing() { case $1 in pause) echo pausing ;; resume) echo resuming ;; invite) echo inviting ;; rotate) echo rotating ;; renew) echo renewing ;; esac; }
+mb_rid="" mb_sx="" mb_name="" mb_mode=""
+mb_pre() { # mb_pre <verb> <name|member_id>: the record, then the refusals that write nothing, before the journal
+  mb_pick "$2"; mb_rid=$reg_id mb_name="$(jq -r .name <<<"$reg_rec")" mb_sx="$(mb_suffix "$reg_id")" mb_mode="$(jq -r .mode <<<"$reg_rec")"
+  mb_refuse "$1" pre
+}
+mb_take() { # mb_take <verb> [argv...]: the journal, the lease, and the same refusals again on a fresh read under it (another admin may have held it first)
+  local verb=$1; shift
+  op_begin "member-$verb" member "$verb" "$@"
+  op_step 1
+  lease_take "$verb" "$mb_rid"
+  reg_get "$mb_rid" || { op_done; die_code member_changed "u/$mb_rid.json went away before share member $verb began; nothing was changed" "$me member ls"; }
+  mb_mode="$(jq -r .mode <<<"$reg_rec")"
+  mb_refuse "$verb" lease
+}
+mb_refuse() { # mb_refuse <verb> pre|lease: member_cloud for a cloud member on pause, resume and rotate; member_not_allowed; member_busy, except before the
+  # lease while a live holder runs (it finishes first, then the check runs again under the lease: CC-02). Under the lease a refusal ends the journal first
+  local verb=$1 when=$2 st rc=0
+  st="$(jq -r .status <<<"$reg_rec")"
+  if [[ $mb_mode == cloud ]]; then
+    case $verb in pause|resume|rotate) [[ $when == pre ]] || op_done
+      die_code member_cloud "$mb_name is a cloud member: share member $verb runs on machine members only (a cloud member has no tunnel or binding); nothing was changed" "$me member invite $mb_name" ;; esac
+  fi
+  member_can "$st" "$verb" admin "$mb_mode" || rc=$?
+  [[ $rc != 0 ]] || return 0
+  if [[ $rc == 2 && $when == pre ]]; then lease_read; ! lease_live || return 0; fi
+  [[ $when == pre ]] || op_done
+  [[ $rc != 2 ]] || reg_status "$verb" admin "$(mb_ing "$verb")"   # dies member_busy, worded by reg_status
+  die_code member_not_allowed "$mb_name is $st; share member $verb does not run from there (share member ls lists what can); nothing was changed" "$me member ls"
+}
+mb_args() { # mb_args <verb> <usage> <args...>: mb_who, the one name or member_id; any other argument dies the usage line
+  local verb=$1 usage=$2 a; shift 2; mb_who=""
+  for a in "$@"; do case $a in -*) die "$usage" ;; *) [[ -z $mb_who ]] || die "$usage"; mb_who=$a ;; esac; done
+  mb_name_ok "$mb_who" || [[ $mb_who =~ ^m-[a-z0-9-]{2,24}-[0-9a-f]{8}$ ]] || die "$usage"
+}
+mb_who=""
+cmd_member_pause() { mb_pause_resume pause "$@"; }
+cmd_member_resume() { mb_pause_resume resume "$@"; }
+mb_pause_resume() { # the member's 8-hex suffix into PAUSED (pause) or out of it (resume); every other binding carried forward (invariant 2)
+  local verb=$1 ing delta; shift
+  mb_args "$verb" "usage: share member $verb <name|member_id> [--tenant <host>]" "$@"
+  member_context "$verb"
+  mb_pre "$verb" "$mb_who"
+  mb_take "$verb" "$@"
+  ing="$(mb_ing "$verb")"
+  # step 2: pausing or resuming (prev_status written from active or paused, never on a rerun: DEC-41)
+  reg_step "$verb" "$ing" 2
+  echo "member:     $ing $mb_name ($mb_rid)"
+  # step 3: the deploy; skipped when PAUSED already says so
+  reg_step "$verb" "$ing" 3
+  if [[ $verb == pause ]]; then
+    delta="(if any(.[]; .name == \"PAUSED\") then . else . + [{type: \"plain_text\", name: \"PAUSED\", text: \"[]\"}] end)
+      | map(if .name == \"PAUSED\" then .text = (((.text | fromjson?) // []) + [\"$mb_sx\"] | unique | tojson) else . end)"
+  else
+    delta="map(if .name == \"PAUSED\" then .text = (((.text | fromjson?) // []) - [\"$mb_sx\"] | tojson) else . end)"
+  fi
+  mb_deploy "$delta"
+  # step 4: the resting status
+  op_step 4; lease_renew 4
+  if [[ $verb == pause ]]; then reg_status pause admin paused; else reg_status resume admin active; fi
+  lease_release
+  op_done
+  if [[ $verb == pause ]]; then echo "paused:     $mb_name ($mb_rid): its machine links answer 503 paused; its cloud links keep serving; undo: $me member resume $mb_name"
+  else echo "resumed:    $mb_name ($mb_rid): its machine links serve again"; fi
+}
+mb_token_fresh() { # mb_token_fresh <verb> <ing> <n> <ttl secs>: the token named share <host> <member_id> in the current minter's list is deleted (none: the
+  # token_unreachable line and field, DEC-78), then a new one is minted under this minter; the record notes each, so a rerun re-mints (its value was never sealed)
+  local verb=$1 ing=$2 n=$3 te
+  ob_token_find "$(mb_token_name "$mb_rid")"
+  if [[ -n $tk_id ]]; then
+    reg_status "$verb" admin "$ing" "$n" '.token.id = ""'
+    ob_token_delete "$tk_id"
+    echo "token:      deleted the old $(mb_token_name "$mb_rid")"
+  elif [[ "$(jq -r '.token.id // "x"' <<<"$reg_rec")" != "" ]]; then
+    te="$(jq -r '.token.expires_on // ""' <<<"$reg_rec")"
+    echo "token not reachable by this minter; it expires ${te:-(unknown)}"
+    [[ -z $te ]] || reg_status "$verb" admin "$ing" "$n" ".token_unreachable_until = \"$te\""
+  fi
+  ob_token_mint "$(mb_token_name "$mb_rid")" "$(mb_iso $(( $(date +%s) + $4 )))"
+  reg_status "$verb" admin "$ing" "$n" "$(jq -nc --arg i "$tk_id" --arg n "$(mb_token_name "$mb_rid")" --arg e "$tk_expires" '{id: $i, name: $n, expires_on: $e}' | sed 's/^/.token = /')"
+  echo "token:      minted $(mb_token_name "$mb_rid") (expires $tk_expires)"
+}
+mb_invites_drop() { # mb_invites_drop <keep hash>: every i/ whose envelope names this member goes, but the one kept (the record's hash is a hint only)
+  local k
+  r2_list i/
+  while IFS= read -r k; do
+    [[ $k =~ ^i/[0-9a-f]{64}$ && $k != "i/$1" ]] || continue
+    r2_call GET "$k" || true
+    [[ $cf_code == 200 && "$(jq -r '.member_id // ""' <<<"$cf_body" 2>/dev/null)" == "$mb_rid" ]] || continue
+    r2_call DELETE "$k" || true
+    [[ $cf_code == 20? || $cf_code == 404 ]] || die "deleting the invite $k answered HTTP $cf_code; rerun the same verb"
+    echo "invite:     deleted the old ${k#i/}"
+  done <<<"$r2_list_out"
+}
+mb_invite_new() { # mb_invite_new <verb> <ing> <n> <port> <tunnel_id> <connector token> <ttl secs>: step n records the new hash and drops the old i/,
+  # step n+1 puts the sealed envelope (If-None-Match); a rerun draws a new code, so only the newest i/ remains
+  local verb=$1 ing=$2 n=$3 iexp
+  reg_step "$verb" "$ing" "$n"
+  invite_code
+  iexp=$(( $(date +%s) + $7 ))
+  reg_status "$verb" admin "$ing" "$n" ".invite = {hash: \"$inv_hash\", expires: $iexp}"
+  mb_invites_drop "$inv_hash"
+  reg_step "$verb" "$ing" $((n + 1))
+  mb_invite_put "$mb_rid" "$mb_name" "$mb_mode" "$4" "$5" "$6" "$iexp"
+  mb_iexp=$iexp
+}
+mb_iexp=0
+mb_ctok="" mb_tid="" mb_tname=""
+mb_tunnel_newest() { # mb_tunnel_newest: mb_tid and mb_tname of the live tunnel of the member's suffix with the highest rotation (by name; the record's rotation is a hint only); 1 when none
+  local l
+  mb_tunnels_of "$mb_sx"
+  l="$(awk -F'\t' 'NF == 2 {r = 0; if (match($2, /-r[0-9]+$/)) r = substr($2, RSTART + 2) + 0; print r "\t" $1 "\t" $2}' <<<"$mt_ids" | sort -n | tail -1)"
+  [[ -n $l ]] || return 1
+  IFS=$'\t' read -r _ mb_tid mb_tname <<<"$l"
+}
+mb_tunnel_token() { # mb_tunnel_token <tunnel id> <name>: the connector token into mb_ctok, in memory only
+  r2_api_retry GET "/accounts/$acct/cfd_tunnel/$1/token"
+  mb_ctok="$(jq -r '.result // empty' <<<"$cf_body")"; cf_body=""
+  [[ $cf_code == 200 && $mb_ctok =~ ^[A-Za-z0-9+/=_.-]+$ ]] || { mb_ctok=""; die "reading tunnel $2's token answered HTTP $cf_code; rerun the same verb"; }
+}
+mb_invite_done() { # the resting write, the lease, the journal, and the code printed once
+  reg_status "$1" admin invited
+  lease_release
+  op_done
+  echo "invited:    $mb_name until $(mb_iso "$mb_iexp"); send this line to them once (it works once):"
+  echo "share join $host_name $inv_code"
+  inv_code="" mb_ctok="" tk_value=""
+}
+cmd_member_invite() { # a new code for invited, joining or left; the old token and every old i/ go; machine: the tunnel's connections go, --port moves the service
+  local port="" ittl=7d isec tname sid argv=("$@") rest=() usage="usage: share member invite <name|member_id> [--port P] [--invite-ttl 7d] [--tenant <host>]"
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --port) port="${2:-}"; shift 2 || die "$usage" ;;
+      --invite-ttl) ittl="${2:-}"; shift 2 || die "$usage" ;;
+      *) rest+=("$1"); shift ;;
+    esac
+  done
+  mb_args invite "$usage" ${rest[@]+"${rest[@]}"}
+  [[ -z $port || ( $port =~ ^[0-9]{4,5}$ && $port -ge 1024 && $port -le 65535 ) ]] || die "--port needs a number from 1024 to 65535; nothing was changed"
+  isec="$(mb_dur "$ittl")"
+  [[ -n $isec && $isec -gt 0 && $isec -le 2592000 ]] || die_code invite_ttl_bad "--invite-ttl $ittl is not a duration of at most 30 days (the Worker reads an envelope further ahead as forged); nothing was changed" "$me member invite $mb_who --invite-ttl 7d"
+  member_minter=1; member_context invite
+  mb_pre invite "$mb_who"
+  [[ -z $port || $mb_mode == machine ]] || die "--port is for a machine member; $mb_name is a cloud member; nothing was changed"
+  mb_take invite ${argv[@]+"${argv[@]}"}
+  # step 2: inviting (from invited, joining or left: prev_status kept, DEC-41). From left (which cleared prev_status) while the deploy still pauses
+  # the member, prev_status becomes paused, so the re-join lands paused as the deploy is (leave cannot unpause; DEC-75)
+  local extra=.
+  if [[ "$(jq -r .status <<<"$reg_rec")" == left ]]; then
+    mb_settings_reread
+    jq -e --arg s "$mb_sx" 'any(.result.bindings[]?; .name == "PAUSED" and (((.text // "[]") | fromjson? // []) | index($s) != null))' <<<"$mc_settings" >/dev/null 2>&1 && extra='.prev_status = "paused"'
+  fi
+  lease_renew 2; reg_status invite admin inviting 2 "$extra"; op_step 2
+  echo "member:     inviting $mb_name ($mb_rid, $mb_mode)"
+  # step 3: the old token by name goes, a new one is minted under the current minter
+  reg_step invite inviting 3
+  mb_token_fresh invite inviting 3 7776000
+  mb_tid="" mb_ctok=""
+  if [[ $mb_mode == machine ]]; then
+    # step 4: the member's newest tunnel, by name; its connections go (a code someone else redeemed connects no more until it reconnects)
+    reg_step invite inviting 4
+    if mb_tunnel_newest; then tname=$mb_tname
+    else   # deleted outside share: made again under the record's name (the new code carries its connector token; the service and binding follow below)
+      tname="$(mb_obj_name "$mb_sx" "$(jq -r 'if (.rotation // 0) > 0 then .rotation else "" end' <<<"$reg_rec")")"
+      ob_tunnel_ensure "$tname"; mb_tid=$ob_id
+      echo "tunnel:     $tname made again (it was gone from the account)"
+    fi
+    r2_api_retry DELETE "/accounts/$acct/cfd_tunnel/$mb_tid/connections"
+    [[ $cf_code == 200 || $cf_code == 404 ]] || die "deleting tunnel $tname's connections answered HTTP $cf_code; rerun the same verb"
+    mb_tunnel_token "$mb_tid" "$tname"
+    # step 5: the VPC Service of that name to 127.0.0.1:<port> (--port moves it); a service made anew is rebound
+    reg_step invite inviting 5
+    port="${port:-$(jq -r '.port // 8787' <<<"$reg_rec")}"
+    ob_service_ensure "$tname" "$mb_tid" "$port"; sid=$ob_id
+    reg_status invite admin inviting 5 ".port = $port | .vpc_service_id = \"$sid\" | .tunnel_id = \"$mb_tid\" | .tunnel_name = \"$tname\""
+    echo "service:    $tname -> 127.0.0.1:$port"
+    mb_settings_reread
+    jq -e --arg n "M_$mb_sx" --arg s "$sid" 'any(.result.bindings[]?; .name == $n and .service_id == $s)' <<<"$mc_settings" >/dev/null 2>&1 ||
+      mb_deploy "map(select(.name != \"M_$mb_sx\")) + [{type: \"vpc_service\", name: \"M_$mb_sx\", service_id: \"$sid\"}]"
+  fi
+  # steps 6 and 7: the new invite; every older i/ of this member goes
+  mb_invite_new invite inviting 6 "${port:-8787}" "$mb_tid" "$mb_ctok" "$isec"
+  op_step 8
+  mb_invite_done invite
+}
+cmd_member_rotate() { # a new tunnel and VPC Service of the next rotation, the same binding M_<8hex> rebound to them, the old ones gone, a new token and code;
+  # ends invited with prev_status kept, so the re-join restores it (DEC-30); a forged rotation hides no old tunnel (every one of the suffix goes)
+  local argv=("$@") rot hi tname sid port k id
+  mb_args rotate "usage: share member rotate <name|member_id> [--tenant <host>]" "$@"
+  member_minter=1; member_context rotate
+  mb_pre rotate "$mb_who"
+  mb_take rotate ${argv[@]+"${argv[@]}"}
+  # step 2: rotating, with the next rotation: above the record's and above every name on the account. Only a rerun of this machine's own dead
+  # rotate of this member (its journal) keeps the rotation the record holds: u/ is member-writable, so a forged rotating record would otherwise
+  # point it at the live tunnel
+  rot="$(jq -r '.rotation // 0' <<<"$reg_rec")"
+  if [[ "$(jq -r .status <<<"$reg_rec")" != rotating || -z $op_prev_step || $op_prev_step -lt 2 ||
+        ( " $op_prev_rerun " != *" $mb_name "* && " $op_prev_rerun " != *" $mb_rid "* ) ]]; then
+    mb_services_list; mb_tunnels_of "$mb_sx"
+    hi="$(printf '%s\n%s\n' "$(cut -f1 <<<"$ms_list")" "$(cut -f2 <<<"$mt_ids")" | sed -n "s/^share-${host_name//./-}-$mb_sx-r\([0-9]\{1,3\}\)$/\1/p" | sort -n | tail -1)"
+    [[ -z $hi || $hi -lt $rot ]] || rot=$hi
+    rot=$((rot + 1))
+  fi
+  [[ $rot -le 999 ]] || { op_done; die_code member_not_allowed "$mb_name would reach rotation $rot, past the 999 a record holds (a forged rotation?); nothing was changed" "$me member rm $mb_name"; }
+  lease_renew 2; reg_status rotate admin rotating 2 ".rotation = $rot"; op_step 2
+  tname="$(mb_obj_name "$mb_sx" "$rot")"
+  echo "member:     rotating $mb_name ($mb_rid) to $tname"
+  # step 3: the new tunnel, found by its name on a rerun; its connector token stays in memory
+  reg_step rotate rotating 3
+  ob_tunnel_ensure "$tname"; mb_tid=$ob_id
+  mb_tunnel_token "$mb_tid" "$tname"
+  reg_status rotate admin rotating 3 ".tunnel_id = \"$mb_tid\" | .tunnel_name = \"$tname\""
+  echo "tunnel:     $tname"
+  # step 4: the new VPC Service of that name, on the same port
+  reg_step rotate rotating 4
+  port="$(jq -r '.port // 8787' <<<"$reg_rec")"
+  ob_service_ensure "$tname" "$mb_tid" "$port"; sid=$ob_id
+  reg_status rotate admin rotating 4 ".vpc_service_id = \"$sid\""
+  echo "service:    $tname -> 127.0.0.1:$port"
+  # step 5: the same binding name on the new service, so links and PAUSED stay; the old service is unbound before it goes (a deploy naming a deleted service fails)
+  reg_step rotate rotating 5
+  mb_deploy "map(select(.name != \"M_$mb_sx\")) + [{type: \"vpc_service\", name: \"M_$mb_sx\", service_id: \"$sid\"}]"
+  # step 6: every other service and tunnel of the suffix: connections, then the tunnel; 404 is done
+  reg_step rotate rotating 6
+  mb_services_list
+  while IFS=$'\t' read -r k id _ _; do
+    [[ $k =~ ^share-${host_name//./-}-$mb_sx(-r[0-9]+)?$ && $k != "$tname" && $id =~ ^[A-Za-z0-9-]{1,64}$ ]] || continue
+    r2_api_retry DELETE "/accounts/$acct/connectivity/directory/services/$id"
+    [[ $cf_code == 200 || ( $cf_code == 404 && $cf_err == 5104 ) ]] || die "deleting VPC Service $k answered HTTP $cf_code; rerun the same verb"
+    echo "service:    deleted $k"
+  done <<<"$ms_list"
+  mb_tunnels_of "$mb_sx"
+  while IFS=$'\t' read -r id k; do
+    [[ -n $id && $k != "$tname" ]] || continue
+    r2_api_retry DELETE "/accounts/$acct/cfd_tunnel/$id/connections"
+    [[ $cf_code == 200 || $cf_code == 404 ]] || die "deleting tunnel $k's connections answered HTTP $cf_code; rerun the same verb"
+    r2_api_retry DELETE "/accounts/$acct/cfd_tunnel/$id"
+    [[ $cf_code == 200 || $cf_code == 404 ]] || die "deleting tunnel $k answered HTTP $cf_code; rerun the same verb"
+    echo "tunnel:     deleted $k (its connectors stop)"
+  done <<<"$mt_ids"
+  # step 7: the token, as invite replaces it
+  reg_step rotate rotating 7
+  mb_token_fresh rotate rotating 7 7776000
+  # steps 8 and 9: the new invite; step 10: invited, prev_status kept (DEC-30)
+  mb_invite_new rotate rotating 8 "$port" "$mb_tid" "$mb_ctok" 604800
+  op_step 10
+  mb_invite_done rotate
+}
+mb_token_reach() { # mb_token_reach [lease]: tk_id of the token named share <host> <member_id> in the current minter's list; none dies token_unreachable
+  # naming its expires_on and rotate (invite for a cloud member), before any record write (DEC-78)
+  local te nx
+  ob_token_find "$(mb_token_name "$mb_rid")"
+  [[ -z $tk_id ]] || return 0
+  te="$(jq -r '.token.expires_on // ""' <<<"$reg_rec")"
+  nx="rotate"; [[ $mb_mode != cloud ]] || nx="invite"
+  [[ ${1:-} != lease ]] || op_done
+  die_code token_unreachable "the current minter cannot find $(mb_token_name "$mb_rid") (it expires ${te:-on an unknown date}); renew updates only a token this minter holds; replace it with a new token and code: share member $nx $mb_name; nothing was changed" "$me member $nx $mb_name"
+}
+cmd_member_renew() { # the token's expires_on moved in place (PUT, same id, same policies); the record goes back to the status it started from
+  local tttl=90d tsec argv=("$@") rest=() from body exp usage="usage: share member renew <name|member_id> [--token-ttl 90d] [--tenant <host>]"
+  while [[ $# -gt 0 ]]; do
+    case $1 in --token-ttl) tttl="${2:-}"; shift 2 || die "$usage" ;; *) rest+=("$1"); shift ;; esac
+  done
+  mb_args renew "$usage" ${rest[@]+"${rest[@]}"}
+  tsec="$(mb_dur "$tttl")"; [[ -n $tsec && $tsec -gt 0 ]] || die "--token-ttl needs a duration such as 90d; nothing was changed"
+  member_minter=1; member_context renew
+  mb_pre renew "$mb_who"
+  mb_token_reach
+  mb_take renew ${argv[@]+"${argv[@]}"}
+  mb_token_reach lease
+  # step 2: renewing; "the status it started from" is invited while the record holds an invite, else prev_status (DEC-41)
+  reg_step renew renewing 2
+  from="$(jq -r 'if (.invite.hash // "") != "" then "invited" else (.prev_status // "active") end' <<<"$reg_rec")"
+  echo "member:     renewing $mb_name ($mb_rid); back to $from after"
+  # step 3: the same token, the same policies, the new expires_on
+  reg_step renew renewing 3
+  as_minter r2_api GET "/user/tokens/$tk_id"
+  [[ $cf_code == 200 ]] || die "reading the member token answered HTTP $cf_code; rerun the same verb"
+  body="$(jq -c --arg e "$(mb_iso $(( $(date +%s) + tsec )))" '.result | {name, policies, expires_on: $e, status: (if .status == "disabled" then "disabled" else "active" end)}
+    + (if .not_before then {not_before} else {} end) + (if .condition then {condition} else {} end)' <<<"$cf_body")"
+  as_minter r2_api_retry PUT "/user/tokens/$tk_id" "$body"
+  [[ $cf_code == 200 ]] || die "updating the member token answered HTTP $cf_code; rerun the same verb"
+  exp="$(jq -r '.result.expires_on // empty' <<<"$cf_body")"; cf_body=""   # the server's date, never this clock's (CK-04)
+  [[ $exp =~ ^[0-9TZ:.-]{1,32}$ ]] || exp="$(jq -r .expires_on <<<"$body")"
+  # step 4: the record notes it
+  reg_step renew renewing 4
+  reg_status renew admin renewing 4 ".token.expires_on = \"$exp\" | .token.id = \"$tk_id\""
+  # step 5: back to the status it started from
+  op_step 5; lease_renew 5
+  reg_status renew admin "$from"
+  lease_release
+  op_done
+  echo "renewed:    $(mb_token_name "$mb_rid") now expires $exp; $mb_name keeps its key (no re-join)"
+}
+
 # --- leave and the member's own status (TASK-2e): removal is shown only from a record read as removed; a 401 is a key problem (DEC-79) ---
 op_steps_leave() { printf '%s\n' "1 service" "2 links" "3 record" "4 local"; }
 cmd_leave() { # cmd_leave [--local]: the service stopped, own pointers deleted, the record left, then the keys, the config and the profile root with every row's bytes
@@ -7293,6 +7625,9 @@ member_status_check() { # the status verb on a member (R7): one read of the own 
     invalid) echo "record: your member record fails validation; it was not used; ask the admin" ;;
     *) echo "record: your member record could not be read (HTTP $mr_code); this shows the last one read" ;;
   esac
+  token_state   # a warning only: this clock may be wrong, and the server's expires_on is what counts (CK-04)
+  [[ $tok_status != expiring ]] || echo "key: your key expires $tok_expires (within 14 days); ask the admin: share member renew $n"
+  return 0
 }
 
 cmd_member() { # cmd_member <verb> ...: the admin verbs; every refusal of member_context comes before any write
@@ -7307,18 +7642,22 @@ cmd_member() { # cmd_member <verb> ...: the admin verbs; every refusal of member
     sync) cmd_member_sync ${args[@]+"${args[@]}"} ;;
     rm) cmd_member_rm ${args[@]+"${args[@]}"} ;;
     purge) cmd_member_purge ${args[@]+"${args[@]}"} ;;
-    invite|rotate|renew|adopt|pause|resume)   # later verbs: the admin context (and the minter on its paths, DEC-80), the record through member_can, then a plain refusal
-      case $verb in invite|rotate|renew|adopt) member_minter=1 ;; esac
+    pause) cmd_member_pause ${args[@]+"${args[@]}"} ;;
+    resume) cmd_member_resume ${args[@]+"${args[@]}"} ;;
+    invite) cmd_member_invite ${args[@]+"${args[@]}"} ;;
+    rotate) cmd_member_rotate ${args[@]+"${args[@]}"} ;;
+    renew) cmd_member_renew ${args[@]+"${args[@]}"} ;;
+    adopt)   # TASK-3e: the admin context and the minter (DEC-80), the record through member_can, then a plain refusal
+      member_minter=1
       member_context "$verb"
       if [[ -n ${args[0]:-} ]] && mb_name_ok "${args[0]}"; then
         local rc=0
         mb_pick "${args[0]}"
         member_can "$(jq -r .status <<<"$reg_rec")" "$verb" admin "$(jq -r .mode <<<"$reg_rec")" || rc=$?
-        [[ $rc != 2 ]] || reg_status "$verb" admin "${verb}ing"   # the busy refusal, worded by reg_status
         [[ $rc == 0 ]] || die_code member_not_allowed "${args[0]} is $(jq -r .status <<<"$reg_rec"); share member $verb does not run from there; nothing was changed" "$me member ls"
       fi
       die "share member $verb is not built in this version" ;;
-    *) a="usage: share member add|ls|sync|rm|purge [args] [--tenant <host>]"; die "$a" ;;
+    *) a="usage: share member add|ls|sync|rm|purge|pause|resume|invite|rotate|renew [args] [--tenant <host>]"; die "$a" ;;
   esac
 }
 
@@ -7553,6 +7892,10 @@ cmd_join() { # cmd_join [<host> <code>]: the bare form resumes a died join from 
   if [[ $start -le 6 ]]; then
     op_step 6
     if ! reg_get "$mid"; then join_local_undo; op_done; die_code member_changed "the admin changed this member during the join (its record is gone); nothing was kept here" "ask the tenant admin"; fi
+    [[ -z $inv_hash ]] || reg_guard="(.invite.hash // \"\") == \"$inv_hash\""   # a rotate or invite after this redeem made a new code: this one lost
+    if [[ -n $reg_guard ]] && ! jq -e "$reg_guard" <<<"$reg_rec" >/dev/null 2>&1; then
+      join_local_undo; op_done; die_code member_changed "the admin changed this member during the join (a newer invite replaced this one); nothing was kept here" "ask the tenant admin"
+    fi
     case "$(jq -r .status <<<"$reg_rec")" in
       invited) reg_status_join joining 6 ;;
       joining) ;;
@@ -7576,10 +7919,13 @@ cmd_join() { # cmd_join [<host> <code>]: the bare form resumes a died join from 
   # step 9: the status it held before rotate or invite, else active; joined; prev_status, invite and step go (DEC-30)
   op_step 9
   reg_get "$mid" || { op_done; die_code member_changed "the record of $mid is gone; nothing more was changed" "ask the tenant admin"; }
-  if [[ "$(jq -r .status <<<"$reg_rec")" == joining ]]; then
-    reg_status_join "$(jq -r '.prev_status // "active"' <<<"$reg_rec")" ""
-  fi
+  case "$(jq -r .status <<<"$reg_rec")" in
+    joining) reg_status_join "$(jq -r '.prev_status // "active"' <<<"$reg_rec")" "" ;;
+    active|paused) ;;   # a resumed step 9 whose write landed
+    *) op_done; die_code member_changed "the admin changed this member during the join (its record reads $(jq -r .status <<<"$reg_rec")); this machine keeps its config; ask the admin for the new code" "ask the tenant admin" ;;
+  esac
   member_health_put
+  health_token_put ok "$(cfg token_expires || true)"   # the probe proved the key; state.token reads its expiry from here (DEC-39)
   op_done
   echo "joined as $mid"
 }
@@ -7611,7 +7957,7 @@ join_probe() { # one probe link (v:3) on this machine, fetched 3 times through t
   [[ "$(jq -r '.prev_status // ""' <<<"$reg_rec")" != paused ]] || also=503
   for i in $(seq 1 "${SHARE_JOIN_PROBES:-20}"); do
     worker_call GET "/$id/$name"
-    if [[ $wk_code == 200 || $wk_code == "$also" ]]; then ok=$((ok + 1)); [[ $ok -lt 3 ]] || break; else ok=0; [[ ${SHARE_R2_DRY:-0} == 1 ]] || sleep 2; fi
+    if [[ $wk_code == 200 || $wk_code == "$also" ]]; then ok=$((ok + 1)); [[ $ok -lt 3 ]] || break; else ok=0; if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then sleep 0.2; else sleep 2; fi; fi   # a loaded test host starts Caddy late
   done
   worker_bind=""
   ( cmd_rm "$id" ) >/dev/null 2>&1 || true   # a subshell: its die never ends the join; prune catches what it leaves
@@ -7737,6 +8083,7 @@ A refusal ends with `share: <message>` on stderr and exit 1. Set `SHARE_ERROR_JS
 | `revoke_needs_admin` | `rm` of a link on another member's machine: only the tenant admin revokes it (with the admin token) |
 | `member_busy` | the member is mid another verb; run the rerun the message names |
 | `member_not_allowed` | the member's status does not allow this verb (`share member ls` shows `can`) |
+| `member_cloud` | pause, resume and rotate run on machine members only; a cloud member gets a new code with `share member invite <name>` |
 | `member_changed` | the member record changed under this verb; nothing was kept |
 | `record_invalid` | a `u/` record fails validation; it is never used |
 | `lease_held` | another admin verb holds the tenant lease; wait, then rerun |
@@ -7775,6 +8122,9 @@ A refusal ends with `share: <message>` on stderr and exit 1. Set `SHARE_ERROR_JS
 | `share member add <name> [--machine\|--cloud]` / `share member ls [--json]` / `share member sync [--rebind]` | The tenant admin's member verbs (admin token; `add` also the minter token). `add` prints one `share join <host> <code>` line; send it to the member once. `ls --json` lists each member's `can[]` (the verbs allowed now) and `drift[]` codes |
 | `share member rm <name> [--cloud-links keep\|delete]` / `share member purge <name>` | Remove a member (admin and minter tokens): its binding, tunnel, VPC Service, token and invites go, found by name; its machine links are tombstoned (the bytes stay on its machine); its cloud links stay until they expire unless `delete`. A token this minter cannot reach is named with its expiry. `purge` deletes a removed member's record and reserves its id. Name a member by its id (`m-<name>-<8 hex>`) when two records share a name |
 | `share rm <id>` of another member's link | The tenant admin's revoke (admin token): a tombstone, then the pointer goes; the link 404s at once and the owner's machine drops it at its next loop. Without the admin token it is refused `revoke_needs_admin` |
+| `share member pause <name>` / `share member resume <name>` | Stop or restart serving a machine member's links (admin token): its machine links answer 503 paused, its cloud links keep serving. A cloud member is refused `member_cloud` |
+| `share member invite <name> [--port P] [--invite-ttl 7d]` / `share member rotate <name>` | A new code (admin and minter tokens). `invite` replaces the token and the code (for an invited, joining or left member). `rotate` also replaces a machine member's tunnel and VPC Service; its links and pause stay. Each prints one `share join <host> <code>` line; the member runs it and comes back to the status it had (`rotate` of a paused member stays paused) |
+| `share member renew <name> [--token-ttl 90d]` | Move the member token's expiry in place (admin and minter tokens); the member keeps its key. A token this minter cannot find is refused `token_unreachable`: rotate the member (invite a cloud member) instead. `member ls` and the member's `share status` warn within 14 days of expiry |
 | `share join <host> <code>` | Join a tenant as a member on this Mac; a bare `share join` resumes a join that stopped. A refusal's code names the admin's next command |
 | `share leave [--local]` | On a member machine: stop serving, delete this machine's pointers, mark the record left, forget the keys, and move the profile (links included) to the Trash. `--local` makes no bucket call (use it once removed). `share status` there reads the member's own record: `removed` only from a record that says so; a refused key reads "your key stopped working; ask the admin" |
 | `share setup <hostname> --backend r2 --bucket <name>` | An R2 profile: a Worker serves links from a private bucket, so they stay up while this machine is off, and several people publish to one hostname. Live shares, `--host`, `start`, and `stop` are refused there; `share rm <id>` unpublishes |
