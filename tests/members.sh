@@ -200,6 +200,7 @@ mx_wait_paused; held="$(mx_body "$(mx_api GET "$A/cfd_tunnel?name=p1&is_deleted=
 check "mm seam: SHARE_R2_DRY_PAUSE holds an API call until .resume (a kill point)" "0 1" "$held $(mx_body "$(mx_api GET "$A/cfd_tunnel?name=p1&is_deleted=false")" | jq '.result | length')"
 o=$(SHARE_TEST_CODE=ABCDEFGHIJKLMNOPQRST mx_fn invite-seal <<<'{"x":1}' 2>&1); o2=$(SHARE_TEST_CODE=ABCDEFGHIJKLMNOPQRST mx_fn invite-seal <<<'{"x":1}' 2>&1)
 check "mm seam: SHARE_TEST_CODE fixes the invite code, so its i/ hash is fixed" "$(printf 'share-invite-id:ABCDEFGHIJKLMNOPQRST' | shasum -a 256 | cut -c1-64) 1" "$(cut -d' ' -f1 <<<"$o") $([[ $(cut -d' ' -f1 <<<"$o") == $(cut -d' ' -f1 <<<"$o2") ]] && echo 1)"
+check "mm invite code: drawn from bounded bytes, never an unbounded /dev/urandom pipe (it spins where SIGPIPE is ignored)" "0" "$(grep -c '</dev/urandom' "$SH")"
 mx_t2; mx_save t2
 o=$(SHARE_TEST_MEMBER_IDS="m-x-aaaaaaa1 m-x-bbbbbbb2" mxa member add an --cloud 2>&1); o2=$(SHARE_TEST_MEMBER_IDS="m-x-ccccccc3" mxa member add bo --cloud 2>&1)
 check "mm seam: SHARE_TEST_MEMBER_IDS makes member ids deterministic, in order" "1 1" "$([[ -f $MX_DRY/u/m-an-aaaaaaa1.json ]] && echo 1) $([[ -f $MX_DRY/u/m-bo-ccccccc3.json ]] && echo 1)"
