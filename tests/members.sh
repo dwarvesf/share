@@ -2,6 +2,7 @@
 # tests/members.sh: SPEC-009 Phase 1 (TASK-1b to 1i), sourced by tests/share.sh (it reads check, SH, WORK, base and h from there).
 # Every Cloudflare call goes to the dry account (SHARE_R2_DRY=1, state files under <bucket>/.cf), every bucket call to the dry bucket.
 # shellcheck disable=SC2154 # check, SH, WORK, base and h come from tests/share.sh
+# shellcheck disable=SC2016,SC2086 # fixture programs run later through eval or jq; a few argument lists split on purpose
 
 echo "=== members: shared fixtures ==="
 MX="$WORK/mx"; mkdir -p "$MX/bin" "$MX/kv"
@@ -81,7 +82,7 @@ mx_fn() { mx_env=(SHARE_STATE_FN_WRITE=1); mxa state-fn "$@"; local rc=$?; mx_en
 mxo() { # mxo <verb...>: another admin machine with no profile, --tenant mx.example.test, on the same dry account and bucket
   env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS \
     HOME="$MX/other" PATH="$MX/bin:$PATH" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$MX_DRY" SHARE_R2_WAIT=2 SHARE_LEASE_WAIT="${MX_LEASE_WAIT:-2}" \
-    CLOUDFLARE_API_TOKEN=admintoken SHARE_MINTER_TOKEN=mintertoken ${mxo_env[@]+"${mxo_env[@]}"} bash "$SH" member "$@" --tenant mx.example.test
+    CLOUDFLARE_API_TOKEN=admintoken SHARE_MINTER_TOKEN=mintertoken ${mxo_env[@]+"${mxo_env[@]}"} bash "${MX_SH:-$SH}" member "$@" --tenant mx.example.test
 }
 mxo_env=()
 mx_aged() { local t=$(($(date +%s) - $1)) s; s="$(date -r "$t" +%Y%m%d%H%M.%S 2>/dev/null || date -d "@$t" +%Y%m%d%H%M.%S)"; touch -t "$s" "${@:2}"; }
@@ -216,6 +217,7 @@ fi
 if mx_on "admin context"; then
 echo "=== members: admin context ==="
 mx_load t2
+# shellcheck disable=SC2016 # literal source for the stub
 printf '#!/bin/bash\necho x >>"%s/mark-admin"\necho "${MX_CMD_OUT:-admintoken}"\nexit "${MX_CMD_RC:-0}"\n' "$MX" >"$MX/bin/admin-cmd"
 printf '#!/bin/bash\necho x >>"%s/mark-minter"\necho mintertoken\n' "$MX" >"$MX/bin/minter-cmd"
 chmod +x "$MX/bin/admin-cmd" "$MX/bin/minter-cmd"
@@ -306,6 +308,7 @@ check "mm TN-01: T2 is the marker (members:true, min_cli), the config, and the W
   "$(mx_t2_ok) $(jq -r '.bindings[] | select(.name == "VERSION") | .text' "$MX_DRY/.cf/script.json")"
 check "mm TN-01: the deploy carries a fresh DEPLOY nonce that /healthz served 3x" "1" "$(jq -r '[.bindings[] | select(.name == "DEPLOY") | .text] | first' "$MX_DRY/.cf/script.json" | grep -cE '^[0-9a-f]{16}$')"
 mx_save t2
+# shellcheck disable=SC2086 # an empty mxr_yes drops --yes on purpose
 mxr() { mx_load t1; "$@"; : >"$MX_LOG"; out=$(mx_env=(${mxr_env[@]+"${mxr_env[@]}"} SHARE_ERROR_JSON=1); mxa setup mx.example.test --r2 --bucket mx-bucket --members ${mxr_yes---yes} 2>&1); rc=$?; mxr_env=(); unset mxr_yes; }
 mxr_env=(SHARE_R2_DRY_DENY='API GET */cfd_tunnel*'); mxr :
 check "mm TN-02: a missing Tunnel scope is named; nothing written" "1 1 0" "$rc $(grep -c '^share: .*lacks Cloudflare Tunnel Write' <<<"$out") $(mx_writes)"
@@ -313,6 +316,7 @@ mxr_env=(SHARE_R2_DRY_DENY='API GET */connectivity/directory/services*'); mxr :
 check "mm TN-02: a services list 403 names Connectivity Directory Admin; nothing written" "1 1 0" "$rc $(grep -c '^share: .*lacks Connectivity Directory Admin' <<<"$out") $(mx_writes)"
 mxr rm -f "$MX_DRY/m/0c0001"
 check "mm TN-02: a local row without its pointer refuses; nothing written" "1 1 0" "$rc $(grep -c '^share: local link 0c0001 has no pointer' <<<"$out") $(mx_writes)"
+# shellcheck disable=SC2016 # eval runs it later, on purpose
 mxr eval 'printf "{\"v\":1,\"host\":\"other.example.test\"}\n" >"$MX_DRY/share.json"'
 check "mm TN-02: a marker naming another host refuses; nothing written" "1 1 0" "$rc $(grep -c "^share: bucket mx-bucket's share.json names another hostname" <<<"$out") $(mx_writes)"
 mxr_yes=""; mxr :
@@ -580,9 +584,9 @@ for n in 1 2 3 4 5 6 7 8 9; do
   mx_load t2
   SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 SHARE_TEST_CODE=$MXC1 mx_kill_at "$MX_ROOT" member-add "$n" mxa member add an --port $((base + 374)) || { dp_bad="$dp_bad held$n"; continue; }
   if [[ $n -ge 3 ]]; then
-    e=$n; [[ $n != 9 ]] || e=8
+    es=$n; [[ $n != 9 ]] || es=8
     ls_out="$(mxa member ls 2>&1)"
-    grep -q "^an: adding, step $e of 9 ([a-z-]*), lease held by $mx_this:[0-9]*:[0-9a-f]* (stale since .*; rerun: share member add an)$" <<<"$ls_out" || dp_bad="$dp_bad ls$n"
+    grep -q "^an: adding, step $es of 9 ([a-z-]*), lease held by $mx_this:[0-9]*:[0-9a-f]* (stale since .*; rerun: share member add an)$" <<<"$ls_out" || dp_bad="$dp_bad ls$n"
   else
     w=lease; [[ $n != 2 ]] || w=record
     grep -q "^member-add stopped at step $n of 9 ($w); rerun: share --profile ten member add an --port $((base + 374))" <<<"$(mxa status 2>&1)" || dp_bad="$dp_bad status$n"
@@ -634,7 +638,7 @@ out=$(SHARE_TEST_IDS=a10001 mxm add "$MX/f.txt" 2>&1); rc=$?
 check "mm LK-01: a member add writes m/<id> v:3 with origin, If-None-Match, before the bytes; a row; a Caddy handle" "0 3 m-an-aaaaaaa1 1 1" \
   "$rc $(jq -r .v "$MX_DRY/m/a10001") $(jq -r .origin "$MX_DRY/m/a10001") $(grep -c '^a10001'$'\t' "$MXM_ROOT/index.tsv") $(grep -c '@sa10001 path' "$MXM_ROOT/Caddyfile")"
 check "mm LK-01: the pointer PUT precedes the publish; the link answers 200 through the Worker and the member binding" "1 200" \
-  "$([[ -n "$(grep -n '^PUT m/a10001' "$MXM_LOG")" ]] && echo 1) $(node "$(dirname "$SH")/../tests/worker.mjs" --dir "$MX_DRY" --host mx.example.test --bind "M_aaaaaaa1=127.0.0.1:$MP" /a10001/f.txt 2>/dev/null | awk '/^[0-9]{3} \// {print $1}')"
+  "$(grep -q '^PUT m/a10001' "$MXM_LOG" && echo 1) $(node "$(dirname "$SH")/../tests/worker.mjs" --dir "$MX_DRY" --host mx.example.test --bind "M_aaaaaaa1=127.0.0.1:$MP" /a10001/f.txt 2>/dev/null | awk '/^[0-9]{3} \// {print $1}')"
 mxm stop >/dev/null 2>&1
 check "mm LK-13: with the member machine down the Worker answers its generic 503 offline page" "503" \
   "$(node "$(dirname "$SH")/../tests/worker.mjs" --dir "$MX_DRY" --host mx.example.test --bind "M_aaaaaaa1=127.0.0.1:$MP" /a10001/f.txt 2>/dev/null | awk '/^[0-9]{3} \// {print $1}')"
@@ -643,6 +647,7 @@ check "mm LK-06: refresh of an own row re-copies, with no S3 write" "0 0" "$rc $
 out=$(SHARE_TEST_IDS=a10002 mxm add --cloud "$MX/f.txt" 2>&1); rc=$?
 check "mm LK-03: a member's --cloud add is a v:1 record with origin" "0 1 m-an-aaaaaaa1" "$rc $(jq -r .v "$MX_DRY/m/a10002") $(jq -r .origin "$MX_DRY/m/a10002")"
 for a in "--access email:x@y.test|gated links are added by the admin" "--host z.example.test|--host needs DNS and an ingress rule" "3000|live port shares stay on the origin"; do
+  # shellcheck disable=SC2086 # the flag and its value split on purpose
   : >"$MXM_LOG"; out=$(mxm add ${a%%|*} "$MX/f.txt" 2>&1); rc=$?
   [[ ${a%%|*} != 3000 ]] || out=$(mxm add 3000 2>&1)
   check "mm LK-02, LK-04, LK-05: member add ${a%%|*} is refused before any write" "1 1 0" "$rc $(grep -c "^share: .*${a#*|}" <<<"$out") $(mxm_writes)"
@@ -790,8 +795,9 @@ check "mm MB-22, FG-05, FG-06: a forged active record of a paused member and a r
   "deploy_paused_record_active deploy_bound_record_removed 2" \
   "$(jq -r '.[] | select(.name == "an") | .drift | join(" ")' <<<"$js") $(jq -r '.[] | select(.name == "bo") | .drift | join(" ")' <<<"$js") $(grep -c '^    drift: ' <<<"$out")"
 check "mm MB-22: member ls writes nothing to the bucket or Cloudflare" "0" "$(mx_writes)"
-b0="$(mx_bind)"; out=$(SHARE_TEST_MEMBER_IDS=m-cl-ccccccc3 mxa member add cl --cloud 2>&1)
-check "mm FG-05, FG-06 (NC-9): a later verb never unpauses the forged active member nor drops the removed member's binding" "$b0" "$(mx_bind)"
+out=$(SHARE_TEST_MEMBER_IDS=m-cl-ccccccc3 mxa member add cl --port $((base + 380)) 2>&1); rc=$?
+check "mm FG-05, FG-06 (NC-9): a later deploying verb never unpauses the forged active member nor drops the removed member's binding" "0 1 1 1" \
+  "$rc $(mx_bind | grep -c 'PAUSED=\["aaaaaaa1"\]') $(mx_bind | grep -c 'M_bbbbbbb2=') $(mx_bind | grep -c 'M_ccccccc3=')"
 out=$(mxa member sync 2>&1); rc=$?
 check "mm MB-23: member sync makes the record paused (the deploy wins); the removed-but-bound member is reported, not changed" "0 paused removed 1" \
   "$rc $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json") $(jq -r .status "$MX_DRY/u/m-bo-bbbbbbb2.json") $(grep -c 'm-bo-bbbbbbb2 is removed and still bound: reported, not changed' <<<"$out")"

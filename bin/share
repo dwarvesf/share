@@ -6130,7 +6130,7 @@ minter_probe() { # the minter's scopes before any write: API Tokens Read (a list
 as_minter() { api_token="$SHARE_MINTER_TOKEN" api_who=minter; "$@"; local rc=$?; api_token="$CLOUDFLARE_API_TOKEN" api_who=admin; return $rc; }
 
 # --- the admin lease: lock/admin in the bucket (DEC-20, DEC-36, DEC-63) ---
-lease_held=0 lease_etag="" lease_holder="" lease_verb="" lease_member="" lease_step=0
+lease_held=0 lease_etag="" lease_holder="" lease_verb="" lease_member=""
 lease_cur="" lease_cur_etag="" lease_lm=""
 lease_put() { # lease_put <step> [etag]: the body names verb, member and step; If-Match on the etag, else If-None-Match
   local f; f="$(mktemp "$root/.lease.XXXXXX")"
@@ -6192,14 +6192,14 @@ lease_take() { # lease_take <verb> <member>: waits up to SHARE_LEASE_WAIT (60) s
     fi
     sleep "$nap"; waited="$(awk -v w="$waited" -v n="$nap" 'BEGIN {print w + n}')"
   done
-  lease_etag=$r2_etag lease_held=1 lease_step=0
+  lease_etag=$r2_etag lease_held=1
   trap release_locks EXIT
 }
 lease_renew() { # lease_renew <step>: before each Cloudflare step; If-Match on this holder's own last etag, so a holder that slept past a takeover dies here (DEC-63)
   [[ $lease_held == 1 ]] || return 0
   lease_put "$1" "$lease_etag"
   case $cf_code in
-    200) lease_etag=$r2_etag lease_step=$1 ;;
+    200) lease_etag=$r2_etag ;;
     412) lease_held=0; die_code lease_lost "another admin verb took lock/admin over while this one held it (stale past 900 s); nothing more was changed" "rerun: share member $lease_verb ${lease_member#m-}" ;;
     *) die "renewing lock/admin answered HTTP $cf_code; rerun the same verb" ;;
   esac
@@ -6239,6 +6239,7 @@ member_can() { # member_can <status|none> <verb> <admin|member> [machine|cloud]:
   return 1
 }
 mb_ing_verb() { case $1 in adding) echo add ;; joining) echo join ;; pausing) echo pause ;; resuming) echo resume ;; inviting) echo invite ;; rotating) echo rotate ;; renewing) echo renew ;; removing) echo rm ;; *) echo "" ;; esac; }
+# shellcheck disable=SC2016 # a jq program: its $id is jq's
 reg_jq_valid='def s: type == "string"; def clean: s and (explode | all(. >= 32 and . != 127));
   def st: s and (. as $x | ["adding","invited","joining","active","pausing","paused","resuming","inviting","rotating","renewing","removing","removed","left"] | index($x) != null);
   type == "object" and .v == 1 and (.member_id | s and test("^m-[a-z0-9-]{2,24}-[0-9a-f]{8}$")) and (.name | s and test("^[a-z0-9-]{2,24}$"))
@@ -7085,11 +7086,11 @@ join_probe() { # one probe link (v:3) on this machine, fetched 3 times through t
   write_caddyfile; caddy_reload || true
   lock_release index
   worker_bind="M_$(mb_suffix "$(cfg member_id)")=127.0.0.1:$port"
-  local want=200   # a paused member coming back (rotate or invite from paused, DEC-30): the Worker answers its paused 503 before the binding
-  [[ "$(jq -r '.prev_status // ""' <<<"$reg_rec")" != paused ]] || want=503
+  local also=200   # a paused member coming back (rotate or invite from paused, DEC-30): the Worker may answer its paused 503 before the binding
+  [[ "$(jq -r '.prev_status // ""' <<<"$reg_rec")" != paused ]] || also=503
   for i in $(seq 1 "${SHARE_JOIN_PROBES:-20}"); do
     worker_call GET "/$id/$name"
-    if [[ $wk_code == "$want" ]]; then ok=$((ok + 1)); [[ $ok -lt 3 ]] || break; else ok=0; [[ ${SHARE_R2_DRY:-0} == 1 ]] || sleep 2; fi
+    if [[ $wk_code == 200 || $wk_code == "$also" ]]; then ok=$((ok + 1)); [[ $ok -lt 3 ]] || break; else ok=0; [[ ${SHARE_R2_DRY:-0} == 1 ]] || sleep 2; fi
   done
   worker_bind=""
   cmd_rm "$id" >/dev/null 2>&1 || true
@@ -7326,10 +7327,10 @@ cmd_state_fn() { # the hidden test verb (unlisted, like r2-rows): one state owne
       [[ ${SHARE_STATE_FN_WRITE:-} == 1 ]] || die "state-fn obj may write Cloudflare objects; it runs only with SHARE_STATE_FN_WRITE=1"
       member_minter=1; member_context obj
       case ${2:-} in
-        tunnel-ensure) ob_tunnel_ensure "$3"; echo "$ob_id" ;; tunnel-find) ob_tunnel_find "$3"; echo "${ob_id:--}" ;; tunnel-gone) ob_tunnel_gone "$3"; echo done ;;
+        tunnel-ensure) ob_tunnel_ensure "$3"; echo "$ob_id" ;; tunnel-find) ob_tunnel_find "$3"; echo "${ob_id:--}" ;; tunnel-gone) ob_tunnel_gone "$3"; echo "done" ;;
         tunnel-hint) if ob_tunnel_hint "$3" "$4"; then echo used; else echo ignored; fi ;;
-        service-ensure) ob_service_ensure "$3" "$4" "$5"; echo "$ob_id" ;; service-find) ob_service_find "$3"; echo "${ob_id:--}" ;; service-gone) ob_service_gone "$3"; echo done ;;
-        token-find) ob_token_find "$3"; echo "${tk_id:--} ${tk_expires:--}" ;; token-mint) ob_token_mint "$3" "$4"; tk_value=""; echo "$tk_id" ;; token-delete) ob_token_delete "$3"; echo done ;;
+        service-ensure) ob_service_ensure "$3" "$4" "$5"; echo "$ob_id" ;; service-find) ob_service_find "$3"; echo "${ob_id:--}" ;; service-gone) ob_service_gone "$3"; echo "done" ;;
+        token-find) ob_token_find "$3"; echo "${tk_id:--} ${tk_expires:--}" ;; token-mint) ob_token_mint "$3" "$4"; tk_value=""; echo "$tk_id" ;; token-delete) ob_token_delete "$3"; echo "done" ;;
         *) die "usage: share state-fn obj <op> <args>" ;;
       esac ;;
     invite-seal)   # invite-seal: the plaintext on stdin, the code from SHARE_TEST_CODE; prints "<hash> <sealed> <mac>"

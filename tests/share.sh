@@ -5058,6 +5058,10 @@ gt_fresh; printf 'members=on\nrole=member\nmember_id=m-an-aaaaaaa1\nmember_mode=
 gwt setup ten.example.test --r2 --bucket ok-bucket >/dev/null 2>&1; rc=$?
 check "mm TN-10: a setup --r2 write (tenant_config) keeps them too" "0|$before" "$rc|$(grep -nE '^(members|role|member_id|member_mode)=' "$GT_CONF")"
 
+# SPEC-009 Phase 1 (TASK-1b to 1i): its own file, sourced here; MX_ONLY=<section words> runs one section of it
+# shellcheck disable=SC1091 # tests/members.sh is linted on its own (ci.yml)
+. "$(dirname "$SH")/../tests/members.sh"
+
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then
   wout="$(node "$(dirname "$SH")/../tests/worker.mjs" 2>&1)"; wrc=$?
