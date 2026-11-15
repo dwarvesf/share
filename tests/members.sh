@@ -111,8 +111,9 @@ mx_wait_step() { # mx_wait_step <root> <verb> <n>: the pid of a run held at step
 mx_kill_at() { # mx_kill_at <root> <verb> <n> <runner> <args...>: run held at step n, then kill -9; 0 when it was held and killed
   local root=$1 verb=$2 n=$3 run=$4 pid; shift 4
   ( mx_env=(SHARE_OP_PAUSE="$verb:$n"); mxm_env=(SHARE_OP_PAUSE="$verb:$n"); "$run" "$@" >/dev/null 2>&1 ) &
-  pid="$(mx_wait_step "$root" "$verb" "$n")" || { wait; return 1; }
-  kill -9 "$pid" 2>/dev/null; wait 2>/dev/null; mx_gone "$pid"
+  local sp=$!   # wait for this subshell only: a bare wait would also wait for the suite's live-port backend
+  pid="$(mx_wait_step "$root" "$verb" "$n")" || { wait "$sp"; return 1; }
+  kill -9 "$pid" 2>/dev/null; wait "$sp" 2>/dev/null; mx_gone "$pid"
 }
 mx_ops() { find "$1/ops" -name '*.json' 2>/dev/null | sed 's|.*/||' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//'; }
 mx_t2_ok() { # 1 when T2 is in place as a clean setup --members leaves it: marker, config, MEMBERS and PAUSED deployed, no lease, an empty ops/
@@ -138,8 +139,8 @@ mx_add_ok() { # mx_add_ok <member_id> [machine|cloud]: 1 when the add finished: 
   fi
   [[ ! -e $MX_DRY/lock/admin && -z "$(mx_ops "$MX_ROOT")" && -f $MX_DRY/i/$(jq -r .invite.hash <<<"$r") ]] && echo 1 || echo 0
 }
-mx_seal() { SHARE_TEST_CODE=${2:-ABCDEFGHIJKLMNOPQRST} bash "$SH" state-fn invite-seal <<<"$1"; }
-mx_open() { SHARE_TEST_CODE=${3:-ABCDEFGHIJKLMNOPQRST} SHARE_ERROR_JSON=1 bash "$SH" state-fn invite-open "$1" "$2" 2>&1; }
+mx_seal() { SHARE_R2_DRY=1 SHARE_TEST_CODE=${2:-ABCDEFGHIJKLMNOPQRST} bash "$SH" state-fn invite-seal <<<"$1"; }
+mx_open() { SHARE_R2_DRY=1 SHARE_TEST_CODE=${3:-ABCDEFGHIJKLMNOPQRST} SHARE_ERROR_JSON=1 bash "$SH" state-fn invite-open "$1" "$2" 2>&1; }
 mx_on() { [[ -z ${MX_ONLY:-} || $1 == *"$MX_ONLY"* ]]; }
 mx_fresh; mx_save t1; mx_t2; mx_save t2   # the two base tenants every section loads   # MX_ONLY=<words of a section title> runs that section alone (the fixtures still run)
 
@@ -252,7 +253,7 @@ check "mm OT-15: an admin verb with no --tenant on a machine with no profile is 
 out=$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_HOSTNAME -u SHARE_PROFILE -u XDG_CONFIG_HOME HOME="$MX/nohome" SHARE_R2_DRY=1 PATH="$MX/bin:$PATH" SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$MX_DRY" CLOUDFLARE_API_TOKEN=admintoken bash "$SH" member ls --tenant mx.example.test 2>&1); rc=$?
 check "mm OT-15, OT-06: --tenant on a machine with no profile reads the tenant (admin token from the environment)" "0 1" "$rc $(grep -c '^an: \|^no members on mx.example.test' <<<"$out")"
 mx_fresh; : >"$MX_LOG"; out=$(mx_env=(SHARE_ERROR_JSON=1); mxa member ls 2>&1); rc=$?
-check "mm TASK-1c1: a T1 tenant (no members:true) refuses tenant_not_t2 naming setup --members" "1 tenant_not_t2 1 0" "$rc $(mx_jcode "$out") $(grep -c -- '--members' <<<"$out") $(mx_writes)"
+check "mm TASK-1c1: a T1 tenant (no members:true) refuses members_off naming setup --members" "1 members_off 1 0" "$rc $(mx_jcode "$out") $(grep -c -- '--members' <<<"$out") $(mx_writes)"
 fi
 if mx_on "the admin lease"; then
 echo "=== members: the admin lease ==="
@@ -326,7 +327,7 @@ check "mm TN-03: a rerun on T2 writes no marker and skips an equal deploy" "0 0 
   "$rc $(grep -c '^PUT share.json' "$MX_LOG") $(grep -c '^API PUT /accounts/acct-dry/workers/scripts/' "$MX_LOG") $(mx_t2_ok)"
 # TN-04, TN-05: back to T1 only with every record removed or purged
 mx_load t2; mkdir -p "$MX_DRY/u"
-printf '{"v":1,"member_id":"m-an-aaaaaaa1","name":"an","mode":"cloud","status":"invited","rotation":0,"added":"x","updated":"x","by":"a"}\n' >"$MX_DRY/u/m-an-aaaaaaa1.json"
+printf '{"v":1,"member_id":"m-an-aaaaaaa1","name":"an","mode":"cloud","status":"invited","rotation":0,"added":"2026-11-15T00:00:00Z","updated":"2026-11-15T00:00:00Z","by":"a"}\n' >"$MX_DRY/u/m-an-aaaaaaa1.json"
 out=$(mx_env=(SHARE_ERROR_JSON=1); mxa setup mx.example.test --r2 --bucket mx-bucket --no-members 2>&1); rc=$?
 check "mm TN-04: --no-members with a record not removed is refused naming the member" "1 members_present 1 0" "$rc $(mx_jcode "$out") $(grep -c '^share: member an (invited) is not removed' <<<"$out") $(mx_writes)"
 jq -c '.status = "removed"' "$MX_DRY/u/m-an-aaaaaaa1.json" >"$MX/r.json" && mv "$MX/r.json" "$MX_DRY/u/m-an-aaaaaaa1.json"
@@ -336,8 +337,8 @@ mx_load t2; out=$(mx_env=(SHARE_ERROR_JSON=1); mxa setup mx.example.test --no-r2
 check "mm TN-06: --no-r2 on T2 is refused, naming --no-members first" "1 members_present 1 0" "$rc $(mx_jcode "$out") $(grep -c '^share: .*--no-members first' <<<"$out") $(mx_writes)"
 mx_load t2; out=$(mx_env=(SHARE_ERROR_JSON=1); mxa teardown --yes 2>&1); rc=$?
 check "mm TN-07: teardown of a T2 origin dies members_present before any change" "1 members_present 0 1" "$rc $(mx_jcode "$out") $(mx_writes) $([[ -f $MX_CONF ]] && echo 1 || echo 0)"
-out=$(mxa migrate --to nowhere.example.test 2>&1); rc=$?
-check "mm TN-07: migrate of a T2 origin is refused before any change" "1 0 1" "$rc $(mx_writes) $(grep -c '^share: R2 is on' <<<"$out")"
+out=$(mx_env=(SHARE_ERROR_JSON=1); mxa migrate --to nowhere.example.test 2>&1); rc=$?
+check "mm TN-07: migrate of a T2 origin is refused members_present before any change" "1 0 members_present" "$rc $(mx_writes) $(mx_jcode "$out")"
 # TN-11: the marker says members:true and the config lost members=on (an older CLI's rerun)
 mx_load t2; sed -i.bak '/^members=on$/d' "$MX_CONF"
 st="$(mxa state 2>/dev/null)"; out=$(mxa status 2>&1)
@@ -576,6 +577,11 @@ out=$(SHARE_TEST_MEMBER_IDS=m-bo-bbbbbbb2 SHARE_TEST_CODE=$MXC2 MX_LEASE_WAIT=1 
 : >"$MX_DRY/.resume"; wait "$pa"; ra=$?; rm -f "$MX_DRY/.resume" "$MX_DRY/.paused"
 check "mm CC-01: add bo while add an holds the lease at its i/ PUT waits, then refuses naming the holder; nothing of bo is written" "1 1 0" \
   "$rb $(grep -c '^share: lease held by .*(add m-an-aaaaaaa1, step 8) (live)' <<<"$out") $([[ -e $MX_DRY/u/m-bo-bbbbbbb2.json ]] && echo 1 || echo 0)"
+mx_load t2
+( mx_env=(SHARE_R2_DRY_PAUSE="PUT i/$(mx_h $MXC1)"); SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 SHARE_TEST_CODE=$MXC1 mxa member add an --port $((base + 374)) >/dev/null 2>&1 ) & pa=$!
+mx_wait_paused; out=$(mx_env=(SHARE_ERROR_JSON=1); mxa member add bo --cloud 2>&1); rb=$?
+: >"$MX_DRY/.resume"; wait "$pa"; rm -f "$MX_DRY/.resume" "$MX_DRY/.paused"
+check "mm CC-01 (one profile): a second add on the same profile refuses op_running at once; the lease serializes admins across profiles and machines" "1 op_running" "$rb $(mx_jcode "$out")"
 out=$(SHARE_TEST_MEMBER_IDS=m-bo-bbbbbbb2 SHARE_TEST_CODE=$MXC2 mxo add bo --port $((base + 375)) 2>&1); rb=$?
 check "mm CC-01: after an finishes, bo succeeds and both bindings are deployed" "0 0 M_aaaaaaa1 M_bbbbbbb2" "$ra $rb $(mx_bind | grep -o 'M_[0-9a-f]*' | tr '\n' ' ' | sed 's/ $//')"
 # DP-add-1 to DP-add-9: a kill at each step, member ls (or status) names the step and the rerun, the rerun converges with no orphan
@@ -726,7 +732,7 @@ mx_reinvite() { # mx_reinvite <code> <member_id>: as rotate or invite would leav
   b="$(jq -nc --arg id "$2" --argjson p "$MP" '{v: 1, host: "mx.example.test", bucket: "mx-bucket", r2_endpoint: "https://acct-dry.r2.cloudflarestorage.com", member_id: $id,
     name: "an", mode: "machine", port: $p, tunnel_id: "00000000-0000-4000-8000-000000000001", publisher_token: "msec-77-x", publisher_key_id: "00000000000000000000000000000077",
     connector_token: "ctok-SECRET-77", token_expires_on: "2027-03-01T00:00:00Z", min_cli: ""}')"
-  read -r h sealed mac <<<"$(SHARE_TEST_CODE=$1 bash "$SH" state-fn invite-seal <<<"$b")"
+  read -r h sealed mac <<<"$(SHARE_R2_DRY=1 SHARE_TEST_CODE=$1 bash "$SH" state-fn invite-seal <<<"$b")"
   jq -nc --arg id "$2" --argjson x $(( $(date +%s) + 3600 )) --arg s "$sealed" --arg m "$mac" '{v: 1, member_id: $id, expires: $x, sealed: $s, mac: $m}' >"$MX_DRY/i/$h"
   jq -c --arg h "$h" '.status = "invited" | .prev_status = "active" | .invite = {hash: $h, expires: 1}' "$MX_DRY/u/m-an-aaaaaaa1.json" >"$MX/r" && mv "$MX/r" "$MX_DRY/u/m-an-aaaaaaa1.json"
 }

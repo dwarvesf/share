@@ -76,7 +76,7 @@ stopped|serve exit record: the stop verb ended serving|{me} start
 cloudflared_died|serve exit record: the cloudflared child exited|{me} status; see serve.log
 caddy_failed|serve exit record: caddy failed to start or exited|{me} status; see caddy.log
 member_no_tenant|an admin verb ran with no --tenant on a machine with no profile for one|{me} member ls --tenant <host>
-tenant_not_t2|the tenant has members off (no Worker, no share.json, or no members:true in it)|{me} setup <host> --r2 --bucket <bucket> --members
+members_off|the tenant has members off (no Worker, no share.json, or no members:true in it)|{me} setup <host> --r2 --bucket <bucket> --members
 admin_token_scope|the admin token lacks a scope a member verb needs (named in the message)|{me} admin-token --test
 minter_token_scope|the minter token lacks API Tokens Read or API Tokens Write|{me} minter-token --test
 token_limit|the minting user holds 50 tokens, the Cloudflare limit per user|use a dedicated Cloudflare user as the minter
@@ -1185,6 +1185,7 @@ cmd_migrate() {
   need_host
   [[ $mode != quick ]] || die "migrate needs a named tunnel; quick mode has no hostname to move to another machine"
   [[ $role != member ]] || die "a member machine moves by share leave and a new join, never by migrate"
+  [[ $tier != t2 ]] || die_code members_present "$host_name has members; migrate is refused; nothing was changed" "$me member ls"
   [[ $backend != r2 && $r2on == 0 ]] || die "R2 is on for $host_name; moving its origin also moves the pointers and the publisher token, which this version does not do"
   host_ok || die "$(this_host) is not $host_name's serving host ($hosts); migrate runs on the origin"
   local hostrow; hostrow="$(rows | awk -F'\t' '$6 ~ /(^| )host=/ {print $1; exit}')"
@@ -6067,7 +6068,7 @@ member_context() { # member_context <verb>: the tenant, the admin token proven b
   case $cf_code in
     200) ;;
     401|403) die_code admin_token_not_admin "the token cannot read Worker $mc_worker's settings (HTTP $cf_code): only the tenant admin runs share member $verb; nothing was changed" "$me admin-token --cmd '<command>'" ;;
-    404) die_code tenant_not_t2 "$host_name has no share Worker ($mc_worker): R2 and members are off; nothing was changed" "$me setup $host_name --r2 --bucket <bucket> --members" ;;
+    404) die_code members_off "$host_name has no share Worker ($mc_worker): R2 and members are off; nothing was changed" "$me setup $host_name --r2 --bucket <bucket> --members" ;;
     *) die "reading Worker $mc_worker's settings answered HTTP $cf_code; nothing was changed" ;;
   esac
   mc_settings=$cf_body
@@ -6076,7 +6077,7 @@ member_context() { # member_context <verb>: the tenant, the admin token proven b
   [[ $mc_bucket =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] || die "Worker $mc_worker is not share's tenant Worker for $host_name (no HOST or BUCKET binding); nothing was changed"
   admin_pair_set "$mc_bucket"   # the admin's own S3 pair: r2_creds refuses an admin token as a publisher (DEC-74)
   mc_marker_read
-  [[ $mc_t2 == 1 ]] || die_code tenant_not_t2 "$host_name has members off (share.json has no members:true); nothing was changed" "$me setup $host_name --r2 --bucket $mc_bucket --members"
+  [[ $mc_t2 == 1 ]] || die_code members_off "$host_name has members off (share.json has no members:true); nothing was changed" "$me setup $host_name --r2 --bucket $mc_bucket --members"
   for b in tunnels connectivity; do   # scope probes: each missing scope named, before any write
     if [[ $b == tunnels ]]; then r2_api GET "/accounts/$acct/cfd_tunnel?per_page=1"; else r2_api GET "/accounts/$acct/connectivity/directory/services?per_page=1"; fi
     case $cf_code in
@@ -6094,7 +6095,7 @@ mc_marker_read() { # the marker share.json: mc_marker, mc_marker_etag, mc_t2; it
   r2_call GET share.json || die "reading $r2_bucket/share.json needs the admin S3 pair; nothing was changed"
   case $cf_code in
     200) mc_marker=$cf_body mc_marker_etag=$r2_etag ;;
-    404) die_code tenant_not_t2 "bucket $r2_bucket has no share.json: R2 is not on for $host_name; nothing was changed" "$me setup $host_name --r2 --bucket $r2_bucket" ;;
+    404) die_code members_off "bucket $r2_bucket has no share.json: R2 is not on for $host_name; nothing was changed" "$me setup $host_name --r2 --bucket $r2_bucket" ;;
     *) die "reading $r2_bucket/share.json answered HTTP $cf_code; nothing was changed" ;;
   esac
   jq -e --arg h "$host_name" 'type == "object" and .v == 1 and .host == $h' <<<"$mc_marker" >/dev/null 2>&1 ||
@@ -6205,7 +6206,8 @@ lease_renew() { # lease_renew <step>: before each Cloudflare step; If-Match on t
   lease_put "$1" "$lease_etag"
   case $cf_code in
     200) lease_etag=$r2_etag ;;
-    412) lease_held=0; die_code lease_lost "another admin verb took lock/admin over while this one held it (stale past 900 s); nothing more was changed" "rerun: share member $lease_verb ${lease_member#m-}" ;;
+    412) lease_held=0; local n; n="$(sed 's/^m-//; s/-[0-9a-f]\{8\}$//; s/^-$//' <<<"$lease_member")"
+         die_code lease_lost "another admin verb took lock/admin over while this one held it (stale past 900 s); nothing more was changed" "rerun the same command${n:+ for $n}" ;;
     *) die "renewing lock/admin answered HTTP $cf_code; rerun the same verb" ;;
   esac
 }
@@ -6250,7 +6252,8 @@ reg_jq_valid='def s: type == "string"; def clean: s and (explode | all(. >= 32 a
   type == "object" and .v == 1 and (.member_id | s and test("^m-[a-z0-9-]{2,24}-[0-9a-f]{8}$")) and (.name | s and test("^[a-z0-9-]{2,24}$"))
   and ((.member_id | sub("-[0-9a-f]{8}$"; "")) == "m-" + .name) and ($id == "" or .member_id == $id)
   and (.mode == "machine" or .mode == "cloud") and (.status | st) and ((.prev_status // "active") | st)
-  and ((.step // 0) | type == "number") and ((.step_name // "") | s and test("^[a-z-]{0,24}$")) and ((.rotation // 0) | type == "number" and . >= 0 and . < 1000)
+  and ((.step // 0) | type == "number" and . >= 0 and . < 100 and floor == .) and ((.step_name // "") | s and test("^[a-z-]{0,24}$"))
+  and ((.rotation // 0) | type == "number" and . >= 0 and . < 1000 and floor == .)
   and ((.tunnel_id // "") | s and test("^[A-Za-z0-9-]{0,64}$")) and ((.vpc_service_id // "") | s and test("^[A-Za-z0-9-]{0,64}$"))
   and ((.port // 8787) | type == "number" and . >= 1024 and . <= 65535)
   and ((.token // {}) | type == "object" and ((.id // "") | s and test("^[A-Za-z0-9-]{0,64}$")) and ((.expires_on // "") | s and test("^[0-9TZ:.-]{0,32}$")))
@@ -6327,7 +6330,7 @@ member_new_id() { # member_new_id <name>: m-<name>-<8 hex>, refusing a suffix an
   used+=$'\n'"$(jq -r '.result.bindings[]? | select(.type == "vpc_service") | .name | ltrimstr("M_")' <<<"$mc_settings" 2>/dev/null || true)"
   mb_services_list; used+=$'\n'"$(sed -n "s/^share-${host_name//./-}-\([0-9a-f]\{8\}\)\(-r[0-9]*\)\{0,1\}"$'\t'".*/\1/p" <<<"$ms_list")"
   for i in 1 2 3 4 5; do
-    if [[ -n ${SHARE_TEST_MEMBER_IDS:-} ]]; then
+    if [[ -n ${SHARE_TEST_MEMBER_IDS:-} && ${SHARE_R2_DRY:-0} == 1 ]]; then
       id="${SHARE_TEST_MEMBER_IDS%% *}"
       [[ $SHARE_TEST_MEMBER_IDS == "$id" ]] && SHARE_TEST_MEMBER_IDS="" || SHARE_TEST_MEMBER_IDS="${SHARE_TEST_MEMBER_IDS#* }"
       id="m-$name-${id##*-}"
@@ -6455,7 +6458,7 @@ ob_token_mint() { # ob_token_mint <name> <expires_on>: Bucket Item Write on this
 # --- the invite: a 100-bit code, sealed with AES-256-CBC (PBKDF2, 200,000 rounds) then MACed with HMAC-SHA256 (DEC-14); keys and code never in argv ---
 inv_code="" inv_hash=""
 invite_code() { # inv_code: 20 characters of RFC 4648 base32 from /dev/urandom (SHARE_TEST_CODE in tests); inv_hash: the i/ object id
-  if [[ -n ${SHARE_TEST_CODE:-} ]]; then inv_code=$SHARE_TEST_CODE
+  if [[ -n ${SHARE_TEST_CODE:-} && ${SHARE_R2_DRY:-0} == 1 ]]; then inv_code=$SHARE_TEST_CODE   # a test seam only beside the dry one
   else inv_code="$(LC_ALL=C tr -dc 'A-Z2-7' </dev/urandom 2>/dev/null | head -c 20 || true)"; fi
   [[ $inv_code =~ ^[A-Z2-7]{20}$ ]] || die "could not draw an invite code; nothing more was changed"
   inv_hash="$(printf 'share-invite-id:%s' "$inv_code" | shasum -a 256 | cut -c1-64)"
@@ -6524,6 +6527,32 @@ mb_wait_deploy() { # three /healthz answers in a row naming this deploy's nonce 
 
 # --- member add (DEC-69, seq-member-add): the step table of "### Admin verb write orders" ---
 op_steps_member_add() { printf '%s\n' "1 lease" "2 record" "3 token" "4 tunnel" "5 service" "6 deploy" "7 invite-hash" "8 invite" "9 invited"; }
+member_add_guard() { # the name, cap and token-count refusals of member add (the caller's name, mmode, mset, want, rid, rst); run before the journal,
+  # then again under the lease on a fresh read, so a second admin's add that won the lease first is seen (two records of a name, a 21st member)
+  local mine n_mach n_bound
+  reg_list
+  mine="$(awk -F'\t' '{print $2}' <<<"$reg_all" | jq -rc --arg n "$name" 'select(.name == $n and .status != "removed") | [.member_id, .status, .mode] | @tsv' 2>/dev/null || true)"
+  [[ $(grep -c . <<<"$mine") -le 1 ]] || die_code member_name_taken "two records hold the name $name; nothing was changed" "$me member ls"
+  rid="" rst="" mmode=$want
+  if [[ -n $mine ]]; then
+    IFS=$'\t' read -r rid rst mmode <<<"$mine"
+    [[ $mset == 0 || $want == "$mmode" ]] || die_code member_name_taken "$name is a $mmode member ($rid, $rst); a resumed add keeps its mode; nothing was changed" "$me member add $name --$mmode"
+    case $rst in adding|invited) ;;
+      *) die_code member_name_taken "$name is $rst ($rid); a name is reused only after share member rm; nothing was changed" "$me member ls" ;; esac
+  fi
+  if [[ $mmode == machine ]]; then   # the cap counts records and bindings, whichever is larger (a forged record cannot lower it)
+    n_mach="$(awk -F'\t' '{print $2}' <<<"$reg_all" | jq -r --arg id "$rid" 'select(.mode == "machine" and .status != "removed" and .member_id != $id) | .member_id' 2>/dev/null | grep -c . || true)"
+    n_bound="$(jq -r --arg s "M_${rid##*-}" '[.result.bindings[]? | select(.type == "vpc_service" and .name != $s)] | length' <<<"$mc_settings")"
+    [[ $n_bound -gt $n_mach ]] && n_mach=$n_bound
+    [[ $n_mach -lt $member_cap ]] || die_code member_cap "$host_name has $n_mach machine members, the cap of $member_cap; nothing was changed" "$me member ls"
+  fi
+  [[ $mt_total -lt 50 ]] || die_code token_limit "the minting user holds $mt_total tokens; Cloudflare allows 50 per user; nothing was changed" "use a dedicated Cloudflare user as the minter, or delete its unused tokens"
+}
+mb_settings_reread() { # mc_settings again, under the lease
+  r2_api GET "/accounts/$acct/workers/scripts/$mc_worker/settings"
+  [[ $cf_code == 200 ]] || die "reading Worker $mc_worker's settings under the lease answered HTTP $cf_code; rerun the same verb"
+  mc_settings=$cf_body
+}
 cmd_member_add() {
   local name="" mmode=machine mset=0 port=8787 ittl=7d tttl=90d argv=("$@") isec tsec usage="usage: share member add <name> [--machine|--cloud] [--port P] [--invite-ttl 7d] [--token-ttl 90d] [--tenant <host>]"
   while [[ $# -gt 0 ]]; do
@@ -6543,27 +6572,14 @@ cmd_member_add() {
   [[ -n $isec && $isec -gt 0 && $isec -le 2592000 ]] || die_code invite_ttl_bad "--invite-ttl $ittl is not a duration of at most 30 days (the Worker reads an envelope further ahead as forged); nothing was changed" "$me member add $name --invite-ttl 7d"
   tsec="$(mb_dur "$tttl")"; [[ -n $tsec && $tsec -gt 0 ]] || die "--token-ttl needs a duration such as 90d; nothing was changed"
   member_minter=1; member_context add
-  reg_list
-  local rid="" rst="" mine n_mach n_bound
-  mine="$(awk -F'\t' '{print $2}' <<<"$reg_all" | jq -rc --arg n "$name" 'select(.name == $n and .status != "removed") | [.member_id, .status, .mode] | @tsv' 2>/dev/null || true)"
-  [[ $(grep -c . <<<"$mine") -le 1 ]] || die_code member_name_taken "two records hold the name $name; nothing was changed" "$me member ls"
-  if [[ -n $mine ]]; then
-    local want=$mmode
-    IFS=$'\t' read -r rid rst mmode <<<"$mine"
-    [[ $mset == 0 || $want == "$mmode" ]] || die_code member_name_taken "$name is a $mmode member ($rid, $rst); a resumed add keeps its mode; nothing was changed" "$me member add $name --$mmode"
-    case $rst in adding|invited) echo "member:     resuming $name ($rid, $rst)" ;;
-      *) die_code member_name_taken "$name is $rst ($rid); a name is reused only after share member rm; nothing was changed" "$me member ls" ;; esac
-  fi
-  if [[ $mmode == machine ]]; then   # the cap counts records and bindings, whichever is larger (a forged record cannot lower it)
-    n_mach="$(awk -F'\t' '{print $2}' <<<"$reg_all" | jq -r --arg id "$rid" 'select(.mode == "machine" and .status != "removed" and .member_id != $id) | .member_id' 2>/dev/null | grep -c . || true)"
-    n_bound="$(jq -r --arg s "M_${rid##*-}" '[.result.bindings[]? | select(.type == "vpc_service" and .name != $s)] | length' <<<"$mc_settings")"
-    [[ $n_bound -gt $n_mach ]] && n_mach=$n_bound
-    [[ $n_mach -lt $member_cap ]] || die_code member_cap "$host_name has $n_mach machine members, the cap of $member_cap; nothing was changed" "$me member ls"
-  fi
-  [[ $mt_total -lt 50 ]] || die_code token_limit "the minting user holds $mt_total tokens; Cloudflare allows 50 per user; nothing was changed" "use a dedicated Cloudflare user as the minter, or delete its unused tokens"
+  local rid="" rst="" want=$mmode
+  member_add_guard
+  [[ -z $rid ]] || echo "member:     resuming $name ($rid, $rst)"
   op_begin member-add member add ${argv[@]+"${argv[@]}"}
   op_step 1
   lease_take add "${rid:-$name}"
+  mb_settings_reread; ( member_add_guard ) || { op_done; exit 1; }   # the refusals again on what the lease holder sees now
+  member_add_guard
   # step 2: the record, If-None-Match; an adding or invited record of the name resumes with its member_id
   op_step 2
   if [[ -z $rid ]]; then
@@ -6899,6 +6915,12 @@ cmd_setup_members() { # cmd_setup_members <bucket> <yes> --members|--no-members:
   op_begin "$verb" setup "$host_name" --r2 --bucket "$bucket" "$flag" --yes
   op_step 1
   lease_take "$verb" "-"
+  if [[ $on == 0 ]]; then   # under the lease, on a fresh read: an add that held the lease while the refusals ran is seen now
+    reg_list; mb_settings_reread
+    a="$(awk -F'\t' '{print $2}' <<<"$reg_all" | jq -r 'select(.status != "removed") | "\(.name) (\(.status))"' 2>/dev/null | head -1)"
+    [[ -z $a && -z $reg_bad && -z "$(jq -r '[.result.bindings[]? | select(.type == "vpc_service") | .name] | join(" ")' <<<"$mc_settings")" ]] ||
+      { op_done; die_code members_present "a member came in while --no-members waited for the lease (${a:-a binding or an unreadable record}); nothing was changed" "$me member ls"; }
+  fi
   op_step 2; lease_renew 2
   if [[ $on == 1 ]]; then
     mb_deploy '(if any(.[]; .name == "MEMBERS") then . else . + [{type: "plain_text", name: "MEMBERS", text: "1"}] end)
@@ -7052,7 +7074,7 @@ cmd_join() { # cmd_join [<host> <code>]: the bare form resumes a died join from 
     op_step 4
     mk_root; mkdir -p "$pub"
     lock_take index; write_caddyfile; lock_release index
-    # SHARE_JOIN_SERVICE=0 (test seam): no login service; serve starts in the background as share start does without one
+    # SHARE_JOIN_SERVICE=0 (test seam): no login service; serve starts in the background, as the start verb does with no service installed
     if [[ ${SHARE_JOIN_SERVICE:-1} == 1 ]] && { [[ $(uname -s) == Darwin ]] || command -v systemctl >/dev/null; }; then svc_install; echo "service:    runs at login ($svc_label)"; fi
     running || cmd_start >/dev/null
   fi
@@ -7213,7 +7235,7 @@ A refusal ends with `share: <message>` on stderr and exit 1. Set `SHARE_ERROR_JS
 | `cloudflared_died` | serve exit record: the tunnel process exited |
 | `caddy_failed` | serve exit record: the web server failed to start or exited |
 | `member_no_tenant` | an admin verb ran with no `--tenant` on a machine with no profile for one |
-| `tenant_not_t2` | the tenant has members off; the admin runs `share setup <host> --r2 --bucket <bucket> --members` |
+| `members_off` | the tenant has members off; the admin runs `share setup <host> --r2 --bucket <bucket> --members` |
 | `admin_token_scope` | the admin token lacks a scope a member verb needs; the message names it |
 | `minter_token_scope` | the minter token lacks API Tokens Read or Write |
 | `token_limit` | the minting user holds 50 tokens (Cloudflare's limit per user); use a dedicated minter user |
@@ -7383,9 +7405,9 @@ case "${1:-status}" in
   hits) cmd_hits "$(id_of "${2:-}")" ;;
   prune) cmd_prune ;;
   r2-call) shift; rc=0; r2_call "$@" || rc=$?; printf 'code=%s etag=%s\n' "$cf_code" "$r2_etag"; [[ -n $cf_body ]] && printf '%s\n' "$cf_body"; exit "$rc" ;;
-  r2-api) shift; api_token="${CLOUDFLARE_API_TOKEN:-}"; [[ ${1:-} != --minter ]] || { shift; api_token="${SHARE_MINTER_TOKEN:-}" api_who=minter; }
+  r2-api) shift; [[ ${SHARE_R2_DRY:-0} == 1 ]] || die "r2-api is a test verb of the dry seam (SHARE_R2_DRY=1)"; api_token="${CLOUDFLARE_API_TOKEN:-}"; [[ ${1:-} != --minter ]] || { shift; api_token="${SHARE_MINTER_TOKEN:-}" api_who=minter; }
     r2_api "$@"; printf 'code=%s err=%s\n' "$cf_code" "$cf_err"; [[ -z $cf_body ]] || printf '%s\n' "$cf_body" ;;
-  worker-call) shift; if [[ ${1:-} == GET ]]; then worker_bind="${3:-}"; worker_call GET "${2:-}"; else worker_call "$@"; fi   # GET <path> [M_<hex>=127.0.0.1:<port>] | POST <path> <body>
+  worker-call) shift; [[ ${SHARE_R2_DRY:-0} == 1 ]] || die "worker-call is a test verb of the dry seam (SHARE_R2_DRY=1)"; if [[ ${1:-} == GET ]]; then worker_bind="${3:-}"; worker_call GET "${2:-}"; else worker_call "$@"; fi   # GET <path> [M_<hex>=127.0.0.1:<port>] | POST <path> <body>
     printf 'code=%s\n' "$wk_code"; [[ -z $wk_body ]] || printf '%s\n' "$wk_body" ;;
   r2-list) r2_list "${2:-}"; printf '%s' "$r2_list_out" ;;
   r2-put-tree) shift; r2_put_tree "$@" ;;

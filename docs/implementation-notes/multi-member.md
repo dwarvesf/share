@@ -236,6 +236,13 @@ Built on main at f8aba46 (SPEC-010 Phase 1 and Phase 2 shipped, so every row of 
 - P22: three dry-only test verbs, unlisted: `share r2-api [--minter] METHOD PATH [JSON]`, `share worker-call GET|POST ...`, and `state-fn reg-step|obj|invite-seal|invite-open|hmac|member-can|member-can-all` (the writing ones need `SHARE_STATE_FN_WRITE=1`).
 - P23: the later verbs (`rm`, `purge`, `pause`, `resume`, `invite`, `rotate`, `renew`, `adopt`) already pass their record through `member_can`, so MB-24's `member_busy` refusal is real code; then they die "not built in this version".
 
+- P24 (CC-01, advisor round): two `member add` runs on ONE profile do not wait on the lease: the step journal refuses the second at once with `op_running`. The lease serializes admins across profiles and machines, which is what CC-01's test drives (`mm CC-01 (one profile): ...` pins the single-profile answer).
+- P25 (advisor round): `member add` runs its name, cap and token-count refusals again right after `lease_take`, on a fresh `reg_list` and settings read, and `--no-members` reruns its `members_present` refusals under the lease. Why: an add on another machine that held the lease while these refusals ran would otherwise yield two records of one name, a 21st member, or a T1 tenant with a live member. The spec's "refusals first; lease" order holds for the first pass.
+- P26 (advisor round): `SHARE_TEST_CODE` and `SHARE_TEST_MEMBER_IDS` are honored only with `SHARE_R2_DRY=1`, and the `r2-api` and `worker-call` test verbs refuse without it, so an exported test variable can never fix a live invite code or print a live token.
+- P27: the code for a tenant with members off is `members_off`, not `tenant_not_t2`: the suite's code-table check reads codes as `[a-z_]+`, so a digit split the name.
+- P28: SPEC-008's TN-10 fixture (SG-03) put `role=member` in an origin config; with TASK-1g that profile is a member and `setup` refuses it ("share leave first"), so the fixture keeps `members=on`, `member_id` and `member_mode` without `role=member`. TN-10's intent (unowned keys survive) is unchanged.
+- P29: `reg_jq_valid` requires integer `step` and `rotation` and ISO-like `added`, `updated` and `joined`; `migrate` on a T2 origin dies `members_present` (before, the older R2-on refusal with no code).
+
 ### Open questions for the operator
 
 - Q1: TASK-1g's "proof GET 404" on a member's own `rm` is read as "the pointer is gone": `cmd_rm` makes no Worker fetch today. Confirm, or SG-07 adds a fetch through the Worker after the DELETE.
