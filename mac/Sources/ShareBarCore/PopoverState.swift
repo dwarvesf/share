@@ -243,6 +243,7 @@ public struct PopoverState: Sendable, Equatable {
             guard draggingOut == nil else { break }
             switch mode {
             case .firstRun, .dropTarget: break
+            case .quickLook(_, let prev): mode = .dropTarget(prev: prev)
             default: mode = .dropTarget(prev: mode)
             }
 
@@ -251,7 +252,7 @@ public struct PopoverState: Sendable, Equatable {
 
         case .drop(let file, let of):
             if case .dropTarget(let prev) = mode {
-                publishing.append(Publish(file: file, step: 0, of: of))
+                if !publishing.contains(where: { $0.file == file }) { publishing.append(Publish(file: file, step: 0, of: of)) }
                 mode = prev
             } else if mode == .firstRun {
                 // No tenant: nothing is published, the first-run panel is the answer.

@@ -282,17 +282,19 @@ struct PopoverDropDelegate: DropDelegate {
         guard !providers.isEmpty else { return false }
         let group = DispatchGroup()
         let lock = NSLock()
-        var urls: [URL] = []
-        for provider in providers {
+        var found: [Int: URL] = [:]
+        for (index, provider) in providers.enumerated() {
             group.enter()
             provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, _ in
-                if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) {
-                    lock.lock(); urls.append(url); lock.unlock()
-                }
+                var url: URL?
+                if let data = item as? Data { url = URL(dataRepresentation: data, relativeTo: nil) } else if let item = item as? URL { url = item }
+                if let url { lock.lock(); found[index] = url; lock.unlock() }
                 group.leave()
             }
         }
         group.notify(queue: .main) {
+            // In the order the files were dropped; an empty result still leaves `dropTarget`.
+            let urls = found.sorted { $0.key < $1.key }.map(\.value)
             MainActor.assumeIsolated { store.publish(paths: urls.map(\.path), dropped: true) }
         }
         return true

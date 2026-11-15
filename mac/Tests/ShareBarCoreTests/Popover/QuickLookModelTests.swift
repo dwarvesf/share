@@ -36,6 +36,9 @@ final class QuickLookModelTests: XCTestCase {
         XCTAssertEqual(source(row(own: false, origin: "m-an-1a2b3c4d"), files: [pub]), .glyph("doc.text"), "another member's machine, no fetch")
         XCTAssertEqual(source(row(servesHere: false), files: [pub]), .glyph("doc.text"), "a Mac that does not serve the tenant")
         XCTAssertEqual(source(row()), .glyph("doc.text"), "the file is gone: the glyph, not an error")
+        let escape = "/Users/h/share/profiles/console/pub/c4c2a0/../../../.ssh/id"
+        XCTAssertEqual(source(row(name: "../../../.ssh/id"), files: [escape]), .glyph("doc.text"), "a title is never a path")
+        XCTAssertEqual(source(row(name: ".."), dirs: ["/Users/h/share/profiles/console/pub/c4c2a0/.."]), .glyph("doc.text"))
         let model = QuickLookModel(row: row(name: "localhost:3000", kind: "live", type: nil))
         XCTAssertEqual(model.liveDetail, "Visitors see whatever answers on localhost:3000 right now.")
         XCTAssertEqual(model.copyTitle, "Copy link")

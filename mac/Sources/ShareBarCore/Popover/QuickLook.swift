@@ -50,6 +50,9 @@ public struct QuickLookModel: Sendable, Equatable {
         let here = row.own && row.servesHere && row.storage != "cloud" && row.state != .revoked
         guard here else { return .glyph(row.glyph) }
         // `pub/<id>` is the served tree: a file share holds `<name>`, a folder share holds `<name>/`.
+        // The row title is display text: it names a file only when it is one plain path component.
+        guard !row.title.isEmpty, !row.title.contains("/"), row.title != ".", row.title != "..",
+              row.id.allSatisfy({ $0.isLetter || $0.isNumber }) else { return .glyph(row.glyph) }
         let path = FinderPath.pub(profile: row.profile, id: row.id, home: home) + "/" + row.title
         guard exists(path) else { return .glyph(row.glyph) }
         return isDirectory(path) ? .folder(path: path) : .file(path: path)

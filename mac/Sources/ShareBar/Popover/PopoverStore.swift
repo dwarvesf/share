@@ -300,9 +300,20 @@ final class PopoverStore: ObservableObject {
 
     /// Files released on the status item or the popover (`dropTarget`), or chosen with +.
     func publish(paths: [String], dropped: Bool) {
-        guard !paths.isEmpty else { return }
-        guard !isFirstRun, let profile = currentProfile else {
+        var seen = Set(state.publishing.map(\.file))
+        let paths = paths.filter { seen.insert($0).inserted }
+        guard !paths.isEmpty else {
+            if case .dropTarget = state.mode { send(.dragLeave) }
+            return
+        }
+        if isFirstRun {
             send(dropped ? .drop(file: paths[0], of: 0) : .publishStarted(file: paths[0]))
+            return
+        }
+        guard let profile = currentProfile else {
+            // Profiles have not loaded: no placeholder, no add, an answer in the footer.
+            if case .dropTarget = state.mode { send(.dragLeave) }
+            state.footer = Footer(text: "Couldn't publish: Share Bar has not read your tenants yet. Try again in a moment.", kind: .failure)
             return
         }
         for (index, path) in paths.enumerated() {
@@ -322,7 +333,8 @@ final class PopoverStore: ObservableObject {
         let before = Set(rows(of: profile).map(\.id))
         let relay = ProgressRelay { [weak self] line in
             Task { @MainActor in
-                guard let self, let parsed = PublishProgress.parse(line), parsed.verb == "add" else { return }
+                guard let self, self.state.publishing.contains(where: { $0.file == path }),
+                      let parsed = PublishProgress.parse(line), parsed.verb == "add" else { return }
                 self.stepNames[path] = parsed.name
                 if let event = PublishProgress.event(file: path, line: line) { self.send(event) }
             }
@@ -330,11 +342,16 @@ final class PopoverStore: ObservableObject {
         let result = await runPublish(argv) { relay.feed($0) }
         onChanged()
         // The CLI prints no link on some versions: the new row is the one the re-read adds.
-        let fresh = await newRowURL(profile: profile, before: before)
+        let fresh = result.status == 0 && !hasPrintedLink(result.stdout)
+            ? await newRowURL(profile: profile, before: before, title: (path as NSString).lastPathComponent) : nil
         stepNames[path] = nil
         let outcome = PublishOutcome.result(status: result.status, stdout: result.stdout, stderr: result.stderr, fallbackURL: fresh?.url)
         send(.publishFinished(file: path, result: outcome, now: Date()))
         if case .copied = outcome, let id = fresh?.id { flash(id) }
+    }
+
+    private func hasPrintedLink(_ stdout: String) -> Bool {
+        stdout.split(separator: "\n").contains { $0.hasPrefix("https://") || $0.hasPrefix("http://") }
     }
 
     private func rows(of profile: String) -> [Share] {
@@ -342,10 +359,11 @@ final class PopoverStore: ObservableObject {
     }
 
     /// Waits for the post-publish re-read (a few polls), then returns the row it added.
-    private func newRowURL(profile: String, before: Set<String>) async -> (id: String, url: String)? {
+    private func newRowURL(profile: String, before: Set<String>, title: String) async -> (id: String, url: String)? {
         for _ in 0..<12 {
             try? await Task.sleep(nanoseconds: 250_000_000)
-            if let share = rows(of: profile).first(where: { !before.contains($0.id) }) { return (share.id, share.url) }
+            let added = rows(of: profile).filter { !before.contains($0.id) }
+            if let share = added.first(where: { $0.name == title }) ?? added.first { return (share.id, share.url) }
         }
         return nil
     }
@@ -414,6 +432,7 @@ final class PopoverStore: ObservableObject {
             case .open(let text):
                 if let url = URL(string: text) { NSWorkspace.shared.open(url) }
             case .focus(let id):
+                guard visible else { break }
                 searchFocused = id == "search"
                 focusedRow = id == "search" ? nil : id
                 if id != "search" { keyboardFocus = true }
@@ -466,7 +485,7 @@ final class PopoverStore: ObservableObject {
 
 /// Turns a stream of text chunks into whole lines for `onLine`; callable from any thread.
 final class ProgressRelay: @unchecked Sendable {
-    private var buffer = LineBuffer()
+    private var buffer = ProgressScanner()
     private let lock = NSLock()
     private let onLine: @Sendable (String) -> Void
 

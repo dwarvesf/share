@@ -51,6 +51,16 @@ final class DragOutTests: XCTestCase {
         XCTAssertEqual(over.reduce(.dragOutBegan(id: "c4c2a0")).state.mode, .list(scope: .mine, query: ""))
     }
 
+    func testADragEnteringOverQuickLookLeavesItAndTheSameFileIsNotListedTwice() {
+        let look = PopoverState().reduce(.toggleQuickLook(id: "a1")).state
+        XCTAssertEqual(look.reduce(.dragEnter).state.mode, .dropTarget(prev: .list(scope: .mine, query: "")))
+        var state = PopoverState().reduce(.dragEnter).state
+        state = state.reduce(.drop(file: "/tmp/a.pdf", of: 0)).state
+        state = state.reduce(.dragEnter).state
+        state = state.reduce(.drop(file: "/tmp/a.pdf", of: 0)).state
+        XCTAssertEqual(state.publishing.count, 1)
+    }
+
     func testTheFooterReadsTheHintOnlyWhileARowIsInTheAir() {
         let rows = [row("live")]
         var state = PopoverState()

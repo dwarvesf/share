@@ -11,7 +11,7 @@ final class PublishFlowTests: XCTestCase {
         state = state.reduce(.dragEnter).state
         state = state.reduce(.drop(file: file, of: 0)).state
         XCTAssertEqual(state.publishing, [Publish(file: file, step: 0, of: 0)])
-        var buffer = LineBuffer()
+        var buffer = ProgressScanner()
         let stream = "{\"progress\":{\"verb\":\"add\",\"step\":1,\"of\":3,\"name\":\"stage\"}}\n{\"progress\":{\"verb\":\"add\",\"step\":2,\"of\":3,\"name\":\"upload\"}}\n"
         // The stream arrives in arbitrary chunks: a line split across two chunks still parses once.
         let chunks = [String(stream.prefix(40)), String(stream.dropFirst(40))]
@@ -29,6 +29,12 @@ final class PublishFlowTests: XCTestCase {
         XCTAssertNil(PublishProgress.event(file: file, line: "{\"progress\":{\"verb\":\"setup\",\"step\":1,\"of\":9,\"name\":\"check\"}}"),
                      "another verb's line moves nothing")
         XCTAssertNil(PublishProgress.event(file: file, line: "share: something"), "a plain line is not progress")
+        // Output of the other stream landing between two chunks does not break a progress object.
+        var scanner = ProgressScanner()
+        let object = "{\"progress\":{\"verb\":\"add\",\"step\":3,\"of\":3,\"name\":\"row\"}}"
+        XCTAssertEqual(scanner.feed("noise {\"progress\":{\"verb\":\"a"), [])
+        XCTAssertEqual(scanner.feed("dd\",\"step\":3,\"of\":3,\"name\":\"row\"}}\nhttps://s.test/x\n"), [object])
+        XCTAssertEqual(scanner.feed("https://s.test/y\n"), [], "a link on stdout is never a progress object")
     }
 
     func testADropWithNoTenantIsRefusedWithTheFirstRunPanel() {

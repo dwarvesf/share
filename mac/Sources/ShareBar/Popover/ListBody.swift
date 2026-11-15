@@ -72,6 +72,7 @@ struct ListBody: View {
                     }
                 }
                 .focused($searchField)
+                .onAppear { if store.searchFocused { searchField = true } }
                 .onChange(of: store.searchFocused) { searchField = $0 }
                 .onChange(of: searchField) { if !$0 { store.searchFocused = false } }
                 .accessibilityIdentifier("search")

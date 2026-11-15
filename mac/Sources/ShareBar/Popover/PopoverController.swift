@@ -13,6 +13,7 @@ final class PopoverController: NSObject, NSPopoverDelegate {
     private var scrollMonitor: Any?
     private var clock: Timer?
     private var terminateObserver: NSObjectProtocol?
+    private var resignObserver: NSObjectProtocol?
     private let hotkeys = HotkeyCenter(registrar: CarbonHotkeyRegistrar())
     private var quickLook: QuickLookPanelController!
     /// Called right before the popover shows: the controller re-reads `profiles`.
@@ -33,6 +34,14 @@ final class PopoverController: NSObject, NSPopoverDelegate {
         quickLook.anchorWindow = { [weak self] in self?.popover.contentViewController?.view.window }
         // A click on the Quick Look panel must not dismiss the popover under it (decision D19).
         quickLook.onVisibilityChange = { [weak self] up in self?.popover.behavior = up ? .applicationDefined : .transient }
+        // While Quick Look holds the popover open, losing the app's focus must still dismiss both.
+        resignObserver = NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.store.quickLook != nil else { return }
+                self.store.send(.closeQuickLook)
+                self.close()
+            }
+        }
         store.hotkeyStatus = hotkeys.register { [weak self] in
             MainActor.assumeIsolated { self?.hotkeyPressed() }
         }
@@ -46,6 +55,7 @@ final class PopoverController: NSObject, NSPopoverDelegate {
 
     deinit {
         if let terminateObserver { NotificationCenter.default.removeObserver(terminateObserver) }
+        if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
     }
 
     func attach(to button: NSStatusBarButton) {
@@ -64,6 +74,8 @@ final class PopoverController: NSObject, NSPopoverDelegate {
     /// too, closing an open menu or Quick Look (TASK-4b13).
     func hotkeyPressed() {
         if !popover.isShown { show() }
+        NSApp.activate(ignoringOtherApps: true)
+        popover.contentViewController?.view.window?.makeKey()
         openForHotkey()
     }
 

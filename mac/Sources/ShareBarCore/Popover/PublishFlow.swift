@@ -50,17 +50,32 @@ public enum PublishProgress {
     }
 }
 
-/// Splits a streamed chunk into whole lines: a chunk may end inside a line.
-public struct LineBuffer: Sendable {
+/// Pulls whole progress objects out of a streamed chunk: a chunk may end inside one, and the
+/// CLI's stdout and stderr arrive interleaved on one callback, so lines are not a safe unit.
+public struct ProgressScanner: Sendable {
     private var pending = ""
+    private static let maxPending = 4096
 
     public init() {}
 
+    /// The complete `{"progress":{...}}` objects the text now holds, oldest first.
     public mutating func feed(_ chunk: String) -> [String] {
         pending += chunk
-        var lines = pending.components(separatedBy: "\n")
-        pending = lines.removeLast()
-        return lines
+        var found: [String] = []
+        while let start = pending.range(of: "{\"progress\""), let end = pending.range(of: "}}", range: start.upperBound..<pending.endIndex) {
+            found.append(String(pending[start.lowerBound..<end.upperBound]))
+            pending = String(pending[end.upperBound...])
+        }
+        // Keep only a possible start of the next object; drop everything else.
+        if let start = pending.range(of: "{\"progress\"") {
+            pending = String(pending[start.lowerBound...])
+        } else if let brace = pending.lastIndex(of: "{") {
+            pending = String(pending[brace...])
+        } else {
+            pending = ""
+        }
+        if pending.count > Self.maxPending { pending = "" }
+        return found
     }
 }
 

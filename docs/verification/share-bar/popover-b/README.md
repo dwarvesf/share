@@ -14,7 +14,7 @@ SPEC-009 TASK-4b10 to TASK-4b13. Every capture here comes from the app's own DEB
 
 ## Design parity
 
-`parity/<scene>-<theme>-parity.png` has the revision 8 render (headless Chromium, `popover-b-parity.sh`) on the left and the build on the right. `parity/run.txt` holds the sRGB samples of every screen; `parity/samples.txt` the same without the headers. All 18 runs read `every sample within its allowance`: 6 steps, the search placeholder 16 (the deliberate darker tertiary of the popover parity run).
+`parity/<scene>-<theme>-parity.png` has the revision 8 render (headless Chromium, `popover-b-parity.sh`) on the left and the build on the right. `parity/run.txt` holds the sRGB samples of every screen. All 18 runs read `every sample within its allowance`: 6 steps, the search placeholder 16 (the deliberate darker tertiary of the popover parity run).
 
 ## Deliberate deviations
 

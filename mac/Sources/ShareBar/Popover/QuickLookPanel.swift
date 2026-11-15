@@ -92,11 +92,15 @@ enum PortProbe {
         guard let value = UInt16(port), let nwPort = NWEndpoint.Port(rawValue: value) else { return false }
         let connection = NWConnection(host: "127.0.0.1", port: nwPort, using: .tcp)
         return await withCheckedContinuation { continuation in
-            final class Once: @unchecked Sendable { var done = false }
+            final class Once: @unchecked Sendable {
+                private let lock = NSLock()
+                private var done = false
+                /// True for the first caller only.
+                func first() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done = true; return true }
+            }
             let once = Once()
             @Sendable func finish(_ result: Bool) {
-                guard !once.done else { return }
-                once.done = true
+                guard once.first() else { return }
                 connection.cancel()
                 continuation.resume(returning: result)
             }
@@ -124,6 +128,8 @@ struct LocalPreview: NSViewRepresentable {
         view.previewItem = URL(fileURLWithPath: path) as NSURL
         return view
     }
+
+    static func dismantleNSView(_ view: QLPreviewView, coordinator: ()) { view.close() }
 
     func updateNSView(_ view: QLPreviewView, context: Context) {
         if (view.previewItem as? NSURL)?.path != path { view.previewItem = URL(fileURLWithPath: path) as NSURL }
