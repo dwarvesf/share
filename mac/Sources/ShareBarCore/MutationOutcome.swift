@@ -19,12 +19,56 @@ public struct MutationAlert: Sendable, Equatable {
     public let detail: String?
     /// Set only for `.privateWarning`: the share id its Remove button removes.
     public let removeShareID: String?
+    /// The command the CLI's JSON error line names as the way through (`next`), shown as
+    /// text a person can copy; nil when the CLI sent none.
+    public let next: String?
 
-    public init(kind: Kind, message: String, detail: String? = nil, removeShareID: String? = nil) {
+    public init(kind: Kind, message: String, detail: String? = nil, removeShareID: String? = nil, next: String? = nil) {
         self.kind = kind
         self.message = message
         self.detail = detail
         self.removeShareID = removeShareID
+        self.next = next
+    }
+}
+
+/// The CLI's `{"error":{"code","message","next"}}` stderr line, printed last under
+/// `SHARE_ERROR_JSON=1` (SPEC-010 G1). It never starts with `share: `.
+public struct ErrorLine: Sendable, Equatable {
+    public let code: String
+    public let message: String
+    public let next: String?
+
+    private struct Envelope: Decodable {
+        struct Body: Decodable {
+            let code: String?
+            let message: String
+            let next: String?
+        }
+        let error: Body
+    }
+
+    /// Reads one stderr line; nil for anything that is not an error line.
+    public static func parse(line: String) -> ErrorLine? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("{\"error\""), let data = trimmed.data(using: .utf8),
+              let body = (try? JSONDecoder().decode(Envelope.self, from: data))?.error,
+              !body.message.isEmpty else { return nil }
+        let next = body.next.flatMap { $0.isEmpty ? nil : $0 }
+        return ErrorLine(code: body.code ?? "", message: body.message, next: next)
+    }
+
+    /// The last error line of a stderr buffer.
+    public static func last(inStderr stderr: String) -> ErrorLine? {
+        stderr.split(separator: "\n", omittingEmptySubsequences: true).reversed().lazy
+            .compactMap { parse(line: String($0)) }.first
+    }
+
+    /// True for the lines a mutation's stderr carries that are machine-readable, not for
+    /// a person: this error line and the progress line.
+    static func isMachineLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return trimmed.hasPrefix("{\"error\"") || trimmed.hasPrefix("{\"progress\"")
     }
 }
 
@@ -47,10 +91,22 @@ public enum MutationOutcome {
         notServingHere: Bool
     ) -> MutationAlert? {
         if result.status != 0 {
+            // A JSON error line wins: its message and `next` are the CLI's own contract.
+            // Without one (an older CLI, or a failure that is not a `die_code`), today's
+            // last `share: ` line.
+            let human = humanStderr(result.stderr)
+            if let error = ErrorLine.last(inStderr: result.stderr) {
+                return MutationAlert(
+                    kind: .failure,
+                    message: error.message,
+                    detail: detailText(human, excludingMessage: error.message),
+                    next: error.next
+                )
+            }
             return MutationAlert(
                 kind: .failure,
-                message: dieLine(result.stderr) ?? result.lastErrorLine,
-                detail: detailText(result.stderr)
+                message: dieLine(human) ?? CLIResult(status: result.status, stdout: "", stderr: human, timedOut: false).lastErrorLine,
+                detail: detailText(human)
             )
         }
         if let warningShareID, let warning = warningLine(result.stderr) {
@@ -91,6 +147,28 @@ public enum MutationOutcome {
             .last { $0.hasPrefix("share: ") }
     }
 
+    /// The stderr a person reads: every line but the machine-readable error and progress
+    /// lines, which only `SHARE_ERROR_JSON` and `SHARE_PROGRESS` add.
+    private static func humanStderr(_ stderr: String) -> String {
+        stderr
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+            .filter { !ErrorLine.isMachineLine($0) }
+            .joined(separator: "\n")
+    }
+
+    /// The detail when the CLI's JSON message is what the alert already says: the human
+    /// lines other than the `share: <message>` line it repeats; nil when none remain
+    /// beyond a second.
+    private static func detailText(_ stderr: String, excludingMessage message: String) -> String? {
+        let remaining = stderr
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+            .filter { $0 != "share: \(message)" }
+            .joined(separator: "\n")
+        return detailText(remaining)
+    }
+
     /// The whole stderr verbatim (trailing newlines trimmed) when it holds two or more
     /// non-empty lines; nil otherwise.
     private static func detailText(_ stderr: String) -> String? {
@@ -111,4 +189,11 @@ public enum StopWaiting {
     public static let confirmText =
         "The share may be left half-published; run it again from the terminal to finish. " +
         "If sharing was starting, this also stops it."
+    /// What Stop Waiting says while an `add` runs: the add stops where it is and a bare
+    /// `share prune` finishes or removes what it left (SPEC-010 G9).
+    public static let addConfirmText = "The add stops where it is; share prune cleans up what it left."
+
+    public static func confirmText(isAdd: Bool) -> String {
+        isAdd ? addConfirmText : confirmText
+    }
 }

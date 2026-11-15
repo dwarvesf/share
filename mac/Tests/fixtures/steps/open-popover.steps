@@ -1,0 +1,4 @@
+# The state a person reaches by clicking the status item (today an NSMenu; the popover shell is a later task).
+scenario calm
+click status-item
+shot open-popover

@@ -1,0 +1,89 @@
+{
+  "schema": 1,
+  "profiles": [
+    {
+      "name": "console",
+      "state": {
+        "schema": 1,
+        "state": "serving",
+        "ready": true,
+        "mode": "named",
+        "host": "s.console.so",
+        "hosts": "Mac-mini",
+        "serves_here": false,
+        "service": false,
+        "access_pending": 0,
+        "r2": true,
+        "storage_default": "cloud",
+        "role": "member",
+        "tier": "t2",
+        "serve": {
+          "phase": "serving",
+          "reason": "ok"
+        },
+        "ops": [],
+        "token": {
+          "source": "keychain",
+          "status": "ok",
+          "expires_on": "2027-01-15"
+        },
+        "compat": {
+          "cli": "0.10.0",
+          "worker": "5 a1b2c3d4e5f6",
+          "status": "ok",
+          "min_cli": "0.10.0"
+        },
+        "member": {
+          "id": "m-an-1a2b3c4d",
+          "name": "an",
+          "mode": "machine",
+          "status": "active",
+          "step": null,
+          "token_expires": "2027-01-15"
+        },
+        "shares": [
+          {
+            "id": "7f3a21",
+            "name": "playdate-uat-run.mov",
+            "url": "https://s.console.so/7f3a21/playdate-uat-run.mov",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 4102444800,
+            "storage": "machine",
+            "type": "video",
+            "by": "An's MacBook",
+            "link_state": "live",
+            "origin": "m-an-1a2b3c4d"
+          },
+          {
+            "id": "2be8d0",
+            "name": "bao-cao-thang-10.pdf",
+            "url": "https://s.console.so/2be8d0/bao-cao-thang-10.pdf",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 4102444800,
+            "storage": "cloud",
+            "type": "pdf",
+            "by": "An's MacBook",
+            "link_state": "live",
+            "origin": "m-an-1a2b3c4d",
+            "views": 3
+          },
+          {
+            "id": "e5517c",
+            "name": "old-pitch.pdf",
+            "url": "https://s.console.so/e5517c/old-pitch.pdf",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 1700000000,
+            "storage": "cloud",
+            "type": "pdf",
+            "by": "An's MacBook",
+            "link_state": "expired",
+            "origin": "m-an-1a2b3c4d"
+          }
+        ]
+      }
+    }
+  ]
+}

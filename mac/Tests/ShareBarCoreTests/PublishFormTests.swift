@@ -208,7 +208,7 @@ final class PublishFormTests: XCTestCase {
         ))
         let form = PublishForm(profiles: makeProfiles([member]), lastProfile: nil, lastRules: [:])
 
-        XCTAssertEqual(form.storageField, .member)
+        XCTAssertEqual(form.storageField, .cloudOnly)
         XCTAssertNil(form.storageFlag, "a member adds cloud links with no flag")
     }
 

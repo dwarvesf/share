@@ -1,0 +1,5 @@
+# Negative control: the second step names a control that does not exist.
+scenario calm
+click status-item
+click No Such Control
+shot never-written
