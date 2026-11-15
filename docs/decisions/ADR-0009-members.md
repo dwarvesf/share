@@ -1,6 +1,6 @@
 # ADR-0009: members serve from their own machines behind the tenant hostname, through Workers VPC
 
-Status: proposed
+Status: accepted
 Date: 2026-11-13
 
 ## Context

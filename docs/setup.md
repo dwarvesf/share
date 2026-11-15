@@ -220,7 +220,7 @@ For an external monitor (vps-mon or any uptime checker), watch `https://<hostnam
 
 ## 4g. R2 backend: a teammate joins
 
-A teammate can publish to a tenant only when its R2 is on (section 4h); with R2 off the origin is the only publisher. On a tenant with R2 on, the join line below uses the tenant's own hostname, and the teammate publishes cloud links only.
+A teammate can publish to a tenant only when its R2 is on (section 4h); with R2 off the origin is the only publisher. This section is the by-hand route: the admin makes the token in the dashboard. On a tenant with members on, section 4i replaces it with one pasted line. On a tenant with R2 on, the join line below uses the tenant's own hostname, and the teammate publishes cloud links only.
 
 Every publisher gets their own token, scoped to the share bucket, with an expiry. Never hand out an account-wide R2 token: it reaches every bucket on the account. `share api-token` refuses one.
 
@@ -310,6 +310,70 @@ CLOUDFLARE_API_TOKEN=<token with Tunnel Edit, DNS Edit, Zone Read> share migrate
 
 It copies every snapshot link with its id, name, dates, expiry, and gate, switches the hostname to a new tunnel on the new machine, checks every link through the public hostname, and only then moves the old rows aside (`~/share/index.migrated` and `~/share/migrated/<id>`; nothing is deleted). Expect up to about a minute of 530 during the switch. Live links and `--host` links do not move: `migrate` lists live ones, refuses while a `--host` row exists, and refuses a tenant with R2 on. If the switch or the verify fails, it prints the rollback line, `share setup <host> --tunnel-name <old tunnel> --force`, to run on the old machine.
 
+## 4i. Members: one line to onboard a teammate's machine
+
+A member is a named teammate registered in the tenant's bucket. A machine member keeps their links on their own machine, under your hostname, with no new subdomain and no dashboard visit. A cloud member publishes cloud links only. Design: [ADR-0009](decisions/ADR-0009-members.md); model: [how-it-works.md](how-it-works.md#members-one-hostname-many-machines). Members are named teammates only: every member's HTML runs under your origin, and the bucket token cannot tell members apart.
+
+**Before you start (admin, once).**
+
+| Need | Detail |
+|---|---|
+| A tenant with R2 on (4h) | `share setup <host> --r2 --bucket <name>` already ran |
+| The admin token | `CLOUDFLARE_API_TOKEN`, or `share admin-token --cmd '<command>'`; with Cloudflare Tunnel Write and Connectivity Directory Admin added |
+| A minter token | `SHARE_MINTER_TOKEN`, or `share minter-token --cmd '<command>'`: a user token with API Tokens Read and Write and nothing else, kept apart from the admin token. `share minter-token --test` probes it |
+| Room for tokens | a user holds at most 50 API tokens, shared with everything they hold; `member ls` shows the free slots when `SHARE_MINTER_TOKEN` is set, and `add` refuses before the limit |
+
+Workers VPC is in beta. Members are therefore off until you turn them on, and `--no-members` turns them off again once every member is removed:
+
+```sh
+share setup s.example.com --r2 --bucket share-s --members --yes     # T1 to T2, on the origin
+```
+
+**Add a member (admin).** One command prints one line:
+
+```sh
+share member add an --machine        # or --cloud; also --port, --invite-ttl 7d, --token-ttl 90d
+# share join s.example.com <20 characters>
+```
+
+Send that line to the member once. The code is shown once and holds 100 bits; the invite expires after `--invite-ttl` (default 7 days, at most 30). A died `add` is named by `share member ls` with its step and the exact rerun line.
+
+**Join (the member).** Paste the line on the member's Mac:
+
+```sh
+share join s.example.com <code>      # joined as m-an-<8 hex>
+share add ./report.pdf               # https://s.example.com/<id>/report.pdf, served from this machine
+```
+
+Join redeems the code once, stores two tokens in the Keychain, starts Caddy and cloudflared on its own tunnel, proves a probe link three times through the tenant hostname, and marks the member active. A stopped join resumes with a bare `share join`. Use `share --profile <name> join ...` for a non-default profile. The member needs the Keychain (a machine without one is refused `member_needs_keychain`) and a free port. Trust note: an account admin with Connectivity Directory Admin can bind more services to the member's tunnel and reach what that machine reaches, so give the member a dedicated user or a host firewall. `member ls` lists every VPC Service on each member tunnel.
+
+| Join refusal (code) | Meaning | Fix |
+|---|---|---|
+| `invite_unknown_or_used` | the code was used or never existed | the admin runs `share member rotate <name>` for a machine member |
+| `invite_expired` | the code is past its expiry | the admin runs `share member invite <name>` |
+| `invite_unavailable` | the Worker could not release it; it may be spent | the admin runs `share member invite <name>` |
+| `invite_tampered`, `member_changed` | the sealed bytes or the record changed | ask the admin for a new code |
+| `port_busy` | the invite's port is taken on this machine | the admin runs `share member invite <name> --port <free port>` |
+| `profile_not_empty` | the profile already publishes or serves | `share profiles`, then join with `--profile <new name>` |
+| `cli_below_min` | this `share` is older than the tenant's `min_cli` | upgrade `share` |
+
+**Run the member lifecycle (admin).** `member ls [--json]` lists every member with status, step, token expiry, drift and the verbs allowed now. `pause`, `resume`, `invite`, `rotate`, `renew` and `adopt` are specified and not built yet (not built yet: the CLI answers "not built in this version"); the rows below describe them from the spec.
+
+| Verb | Does | Notes |
+|---|---|---|
+| `member pause <name>` / `resume <name>` | the member's links answer 503 within the verb; resume restores 200 | machine members only |
+| `member invite <name> [--port P]` | a new code for a lost or expired one; the old token and code die | from `invited`, `joining` or `left` |
+| `member rotate <name>` | a new tunnel, service and tokens; same id and links; the member must `join` again with the new code | machine members only; a paused member returns paused |
+| `member renew <name> [--token-ttl 90d]` | extends the token's expiry in place; no re-join | needs the minter that made the token |
+| `member adopt <name> --token-id <id>` | registers an existing publisher token as a cloud member | optional |
+| `member sync [--rebind]` | repairs records from the deploy, never unpauses a paused member | |
+| `member rm <name> [--cloud-links keep\|delete]` | removes the tunnel, service, binding, token, invites and pointers; the bytes stay on the member's machine | the verb for a leaver |
+| `member purge <name>` | deletes a removed member's record and keeps its id from reuse | |
+
+A verb that needs the minter token and cannot find the token by name dies `token_unreachable`, naming the expiry and the recovery. `share rm <id>` by the admin on a member's link writes a tombstone and deletes the pointer, so the link 404s at once; the owner's machine drops it within an hour.
+
+**Leave (the member).** `share leave` stops serving, deletes this machine's pointers, marks the record `left`, forgets both keys and moves the profile root, links included, to the Trash. `share leave --local` makes no bucket call. `share status` on a member says removed only when the record reads `removed`; a key the bucket refuses reads "your key stopped working; ask the admin", and an expired token names `share member renew <name>`.
+
 ## 5. Serve from a different machine
 
 Only machines listed in `hosts` serve. Two machines on one tunnel would split requests between two different `~/share` folders, so links would fail at random.
@@ -379,3 +443,7 @@ R2 backend:
 | `expired gated share <id> waits for a publisher with the Access token` | `ls` or `prune` without Access: Apps and Policies Edit. The Worker already answers 404 for it. | A gated publisher runs `share prune`. |
 | `orphan sweep skipped: m/<id> is unreadable or newer than this share` (`status`: `orphan sweep blocked by m/<id>`) | A record this share cannot read: a newer release wrote it, or it is corrupt. | Upgrade share. A corrupt record goes only through `teardown --purge` or a delete in the dashboard. |
 | `hits needs an API token with Account Analytics: Read` / `the Analytics Engine query answered HTTP 403` | The stored token lacks the optional analytics scope. | Add Account Analytics: Read to the token. |
+| `member add`: `members_off` | the tenant has members off | `share setup <host> --r2 --bucket <b> --members --yes` (4i) |
+| `member ...`: `token_unreachable` | the token was minted by another user than the current minter | use that user's minter token, or `rotate` (`invite` for a cloud member) |
+| `member ...`: `member_busy` | another verb of that member died mid-step | run the rerun line `member ls` prints |
+| `setup`, `teardown`, `migrate`: `members_present` | the tenant has members | `member rm` each, then `setup --no-members` |
