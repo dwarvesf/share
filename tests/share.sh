@@ -1054,7 +1054,7 @@ for _ in $(seq 1 400); do kill -0 "$cf_pid" 2>/dev/null || break; sleep 0.1; don
 pkill -f "$WORK/fakecurl/curl" 2>/dev/null
 wait "$cf_pid" 2>/dev/null
 cf_elapsed=$(( $(date +%s) - cf_start ))
-check "cf() with a sleeping curl still returns within 35s" "1" "$([[ $cf_elapsed -le 35 ]] && awk '$1 !~ /^[0-9]+$/ || $1 > 35 {bad = 1} END {exit (NR == 0 || bad)}' "$WORK/fakecurl/mt.log" && echo 1 || echo 0)"   # returned, and every call carried a --max-time of 35 s or less
+check "cf() with a sleeping curl still returns within 35s" "1" "$([[ $cf_elapsed -le 35 ]] && awk '$1 !~ /^[0-9]+$/ || $1 > 35 {bad = 1} END {exit bad}' "$WORK/fakecurl/mt.log" && echo 1 || echo 0)"   # returned, and every call that reached curl carried a --max-time of 35 s or less (a host where setup dies before any call, such as a runner with no cloudflared, logs none)
 rm -rf "$WORK/fakecurl"
 
 echo "--- rand_id loops past a collision ---"
