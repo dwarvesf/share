@@ -14,6 +14,11 @@ Exit: 0
 Output: Executed 336 tests, with 0 failures (0 unexpected) in 6.501 (6.524) seconds
 Verdict: pass. 16 new rows: PublishFlowTests (5), DragOutTests (5), QuickLookModelTests (2), HotkeyTests (4), plus the existing PopoverStateTests row for the hotkey from `issues`.
 
+Command: swift test --package-path mac (after merging origin/main, which brought the Settings tasks)
+Exit: 0
+Output: Executed 378 tests, with 0 failures (0 unexpected) in 7.097 (7.132) seconds
+Verdict: pass
+
 Command: bash mac/build.sh 0.0.0
 Exit: 0
 Output: mac/build/Share-Bar-0.0.0.zip
