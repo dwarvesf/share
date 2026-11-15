@@ -22,3 +22,12 @@ Delta from SPEC-009 TASK-4b6 to TASK-4b9. The spec rows are not restated. Founda
 - `mac/shots.sh` exits 1 with no message when `SHOTS_OUT` does not exist (its `find` fails under `set -e`). Create the directory first. SG-16 owns the fix.
 - The first launch after another run sometimes reports "status item never appeared"; a second run passes. Stale `Share Bar.app` processes under `mac/build/shots` make it more likely; kill them first.
 - `row-menu-other` clicked `more-7f3a21` once before the Team list rendered. A `find row-7f3a21` before the click would remove that race.
+
+## Design parity pass (revision 8)
+
+- D8. Surface: the popover root paints the design's rendered window color (`#eff0f3`, dark `#2b2c31`) opaque, held in `Theme.surface`; `primitive.window` stays the contrast reference. A tint over the material would still follow the wallpaper.
+- D9. Placeholder: drawn as an overlay `Text` in the tertiary ink; SwiftUI ignores a color on `prompt:`. The darker tertiary (`#6b6b70`) is kept, so the placeholder sits 15 steps from the design in light by intent.
+- D10. Trailing age (supersedes D3 in part): the spec lists a relative age on every row, the design's "Nd left" is the meta line, so both show. `Share` decodes an optional `added` (lenient); `RowAge` turns the day into `today`, `Nd`, `Nw`, `Nmo`, `Ny`. `share state` does not print `added` yet, so a live tenant shows no age until `bin/share` adds the key (open, outside Touches).
+- D11. Row menu: the popover's measured height was always zero (a preference that never fired), so the menu flipped to the top. The overlay now reads its own size, and the popover grows (`minHeight`) to hold the menu under the row. The first item is lit on open and the highlight follows the pointer.
+- D12. Native arrow kept; the root fill is opaque inside the arrow-less body.
+- D13. Capture without input: DEBUG-only `-ShareBarShotsRender <png> [-ShareBarShotsMenuRow <id>]` draws `ShareBarView` offscreen. `Snapshot.swift` gained one field outside the listed touches because the age needs it.
