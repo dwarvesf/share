@@ -4416,6 +4416,21 @@ gt_fresh; gt_kill_at setup-r2 13 9 setup ten.example.test --r2 --bucket ok-bucke
 out="$(gwt setup ten.example.test --no-r2 2>&1)"; rc=$?
 check "JN-11 --no-r2 after a dead setup-r2: exit 0, ops/ empty, state.ops [], no dead-op line" "0||[]|0" \
   "$rc|$(gw_ops "$GT_ROOT")|$(gwt state 2>/dev/null | jq -c .ops)|$(gwt status 2>/dev/null | grep -c 'stopped at step')"
+# JN-16: a dead setup-r2 at step 11 or 12 (config or marker not yet written) refuses a cloud add with op_interrupted; next is the rerun; nothing is written
+jn16="$GW/jn16.txt"; printf 'jn16\n' >"$jn16"
+for n in 11 12; do
+  gt_fresh; gt_kill_at setup-r2 "$n" 9 setup ten.example.test --r2 --bucket ok-bucket >/dev/null
+  out="$(SHARE_ERROR_JSON=1 gwt add --cloud "$jn16" 2>&1)"; rc=$?
+  check "JN-16 add --cloud over a dead setup-r2 at step $n: refused op_interrupted, next is the rerun, nothing written, the journal stays" \
+    "1|op_interrupted|share --profile ten setup ten.example.test --r2 --bucket ok-bucket|0|setup-r2.*.json" \
+    "$rc|$(tail -1 <<<"$out" | jq -r .error.code 2>/dev/null)|$(tail -1 <<<"$out" | jq -r .error.next 2>/dev/null)|$(find "$GT_DRY/o" -type f 2>/dev/null | grep -c .)|$(gw_ops "$GT_ROOT" | sed 's/setup-r2\.[0-9]*\.json/setup-r2.*.json/')"
+done
+out="$(gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1)"; rc=$?
+out2="$(gwt add --cloud "$jn16" 2>&1)"; rc2=$?
+check "JN-16 after the rerun finishes the same add --cloud works and publishes to the bucket" "0 0 1" "$rc $rc2 $([[ $(find "$GT_DRY/o" -type f 2>/dev/null | grep -c .) -ge 1 ]] && echo 1 || echo 0)"
+gt_fresh; gt_kill_at setup-r2 13 9 setup ten.example.test --r2 --bucket ok-bucket >/dev/null
+out="$(gwt add --cloud "$jn16" 2>&1)"; rc=$?
+check "JN-16 a dead setup-r2 past step 12 (config and marker written) does not refuse a cloud add" "0" "$rc"
 # tenant_rollback: a die after the config write, against HEAD's own bin/share
 gt_fresh; o="$(SHARE_R2_DRY_FAIL='API POST /zones/*/workers/routes' GT_SH="$GW_OLD" gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1 >/dev/null)"; orc=$?
 gt_fresh; n="$(SHARE_R2_DRY_FAIL='API POST /zones/*/workers/routes' gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1 >/dev/null)"; nrc=$?
@@ -4827,6 +4842,16 @@ check "LS-04 state then reads gate_missing for it, and live for the gated row wh
 check "LS-04 the check is cached in .health under gates, with no secret" "a1a1a1 0" "$(jq -r '.gates.missing | join(" ")' "$GU_HOME/.config/share/.health") $(grep -c 'faketoken' "$GU_HOME/.config/share/.health")"
 jq '.gates.at = 1' "$GU_HOME/.config/share/.health" >"$GU_HOME/.config/share/.health.new" && mv "$GU_HOME/.config/share/.health.new" "$GU_HOME/.config/share/.health"
 check "LS-04 a check older than a week no longer says gate_missing" "live/-" "$(lsf "$(gwu state 2>/dev/null)" a1a1a1)"
+# LS-06: the bare prune verb runs the same check, from an exported token only
+gh_file="$GU_HOME/.config/share/.health"; rm -f "$gh_file"
+out="$(SHARE_ACCESS_DRY=1 GU_TOK=faketoken gwu prune 2>&1)"
+check "LS-06 prune with an exported token finds the gone app, stores it under gates, and keeps the token out of .health" "1 a1a1a1 0" \
+  "$(grep -c 'Access app for a1a1a1 is gone; the link is PUBLIC' <<<"$out") $(jq -r '.gates.missing | join(" ")' "$gh_file" 2>/dev/null) $(grep -c 'faketoken' "$gh_file" 2>/dev/null || true)"
+rm -f "$gh_file"; printf 'api_token_cmd=echo cmdtoken\n' >>"$GU_CONF"
+out="$(unset GU_TOK; gwu prune 2>&1)"
+check "LS-06 prune with only an api_token_cmd (no exported token) runs no check: no message, no gates in .health" "0 nogates" \
+  "$(grep -c 'is gone' <<<"$out") $([[ -f $gh_file ]] && jq -r 'if has("gates") then "gates" else "nogates" end' "$gh_file" || echo nogates)"
+sed -i.bak '/^api_token_cmd=echo cmdtoken$/d' "$GU_CONF"; rm -f "$GU_CONF.bak"
 printf 'c3c3c3\tr.txt\t/src/r.txt\t2026-10-01\t0\trevoked revoked_by=bob\n' >>"$GU_ROOT/index.tsv"
 check "LS revoked: link_state revoked, reason revoked_by=bob" "revoked/revoked_by=bob" "$(lsf "$(gwu state 2>/dev/null)" c3c3c3)"
 check "G7 state-fn link prints id, link_state, reason" "1" "$(gwu state-fn link 2>/dev/null | grep -c '^c3c3c3 revoked revoked_by=bob$')"
@@ -4991,6 +5016,25 @@ check "TK-06 the r2 teardown of a named profile: the dir is gone" "0" "$([[ -e $
 rm -rf "$GP_HOME" "$GP_DRY"; mkdir -p "$GP_HOME" "$GP_DRY"; GP_TOK=admintoken gwp setup pg.example.test --backend r2 --bucket ok-bucket >/dev/null 2>&1; echo '{"token":{}}' >"$tkp/.health"
 GP_TOK=admintoken gwp teardown --yes --purge >/dev/null 2>&1
 check "TK-06 the purge of a named profile: the dir is gone" "0" "$([[ -e $tkp ]] && echo 1 || echo 0)"
+# TK-07: a cloud add that fails with 401 or 403 (the upload, or the record) stores token.verify invalid; state then reads token.status invalid
+tk7_run() { # tk7_run <label> <fail glob> <code>: a fresh r2 profile, one failing add; prints "<add rc> <stored verify> <state token.status>"
+  local rc vv
+  rm -rf "$GP_HOME" "$GP_DRY"; mkdir -p "$GP_HOME" "$GP_DRY"; GP_TOK=admintoken gwp setup pg.example.test --backend r2 --bucket ok-bucket >/dev/null 2>&1
+  SHARE_R2_DRY_FAIL="$2" SHARE_R2_DRY_FAIL_CODE="$3" gwp add "$GW/f.txt" >/dev/null 2>&1; rc=$?
+  vv="$(jq -r '.token.verify // empty' "$GP_HOME/.config/share/profiles/pg/.health" 2>/dev/null || true)"
+  echo "$rc ${vv:-none} $(gwp state 2>/dev/null | jq -r '.token.status // "none"')"
+}
+check "TK-07 the upload answers 401: the add fails, .health token.verify invalid, state token.status invalid" "1 invalid invalid" "$(tk7_run upload 'PUT o/*' 401)"
+check "TK-07 the upload answers 403: the same" "1 invalid invalid" "$(tk7_run upload 'PUT o/*' 403)"
+check "TK-07 the record PUT m/<id> answers 401: the same" "1 invalid invalid" "$(tk7_run record 'PUT m/*' 401)"
+check "TK-07 the record PUT answers 500: the add fails and .health gains no token verdict" "1 none unchecked" "$(tk7_run record 'PUT m/*' 500)"
+gt_fresh; gwt setup ten.example.test --r2 --bucket ok-bucket >/dev/null 2>&1; SHARE_R2_DRY_FAIL='PUT m/*' SHARE_R2_DRY_FAIL_CODE=401 gwt add "$GW/f.txt" >/dev/null 2>&1; rc=$?
+check "TK-07 a local add on an origin with R2 on whose pointer PUT answers 401: the add fails, token.verify invalid" "1 invalid invalid" "$rc $(jq -r '.token.verify // empty' "$GT_HOME/.config/share/profiles/ten/.health" 2>/dev/null) $(gwt state 2>/dev/null | jq -r '.token.status // "none"')"
+tk7_keep() { jq -r '.token.expires_on // empty' "$GP_HOME/.config/share/profiles/pg/.health" 2>/dev/null; }
+rm -rf "$GP_HOME" "$GP_DRY"; mkdir -p "$GP_HOME" "$GP_DRY"; GP_TOK=admintoken gwp setup pg.example.test --backend r2 --bucket ok-bucket >/dev/null 2>&1
+exp="$(tk_iso 40)"; jq -nc --arg e "$exp" --argjson t "$(date +%s)" '{token: {source: "env", verified_at: $t, verify: "ok", expires_on: $e}}' >"$GP_HOME/.config/share/profiles/pg/.health"
+SHARE_R2_DRY_FAIL='PUT o/*' SHARE_R2_DRY_FAIL_CODE=401 gwp add "$GW/f.txt" >/dev/null 2>&1
+check "TK-07 the verdict keeps the expires_on the cache already held" "$exp" "$(tk7_keep)"
 fi
 
 if section "state groundwork: G14"; then
