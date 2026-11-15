@@ -4,7 +4,7 @@
 # shellcheck disable=SC2154 # check, SH, WORK, base and h come from tests/share.sh
 # shellcheck disable=SC2016,SC2086 # fixture programs run later through eval or jq; a few argument lists split on purpose
 
-echo "=== members: shared fixtures ==="
+section_always "members: shared fixtures"
 MX="$WORK/mx"; mkdir -p "$MX/bin" "$MX/kv"
 MX_HOME="$MX/home"; MX_DRY="$MX/bucket"; MX_ROOT="$MX_HOME/share/profiles/ten"; MX_CONF="$MX_HOME/.config/share/profiles/ten/config"
 MX_LOG="$MX_ROOT/r2-calls.log"
@@ -143,11 +143,9 @@ mx_add_ok() { # mx_add_ok <member_id> [machine|cloud]: 1 when the add finished: 
 }
 mx_seal() { SHARE_R2_DRY=1 SHARE_TEST_CODE=${2:-ABCDEFGHIJKLMNOPQRST} bash "$SH" state-fn invite-seal <<<"$1"; }
 mx_open() { SHARE_R2_DRY=1 SHARE_TEST_CODE=${3:-ABCDEFGHIJKLMNOPQRST} SHARE_ERROR_JSON=1 bash "$SH" state-fn invite-open "$1" "$2" 2>&1; }
-mx_on() { [[ -z ${MX_ONLY:-} || $1 == *"$MX_ONLY"* ]]; }
-mx_fresh; mx_save t1; mx_t2; mx_save t2   # the two base tenants every section loads   # MX_ONLY=<words of a section title> runs that section alone (the fixtures still run)
+mx_fresh; mx_save t1; mx_t2; mx_save t2   # the two base tenants every section loads   # SHARE_TEST_ONLY=<regex of section names> runs only those sections (the fixtures still run)
 
-if mx_on "dry seams"; then
-echo "=== members: dry seams ==="
+if section "members: dry seams"; then
 mx_fresh
 A=/accounts/acct-dry
 o=$(mx_api POST $A/cfd_tunnel '{"name":"share-mx-example-test-aaaaaaa1","config_src":"cloudflare"}'); t1="$(mx_body "$o" | jq -r .result.id)"
@@ -218,8 +216,7 @@ o2=$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_HOSTNAME -u XDG_CONFIG_HOME 
 check "mm seam: the dry account and the dry Worker refuse outside SHARE_TUNNEL=0 (no file written)" "1 code=000 1 0" \
   "$(grep -c 'test seam for SHARE_TUNNEL=0' <<<"$o") $(grep '^code=' <<<"$o2") $(grep -c 'SHARE_R2_DRY_WORKER, with SHARE_TUNNEL=0' <<<"$o2") $(mx_body "$(mx_api GET "$A/cfd_tunnel?name=z&is_deleted=false")" | jq '.result | length')"
 fi
-if mx_on "admin context"; then
-echo "=== members: admin context ==="
+if section "members: admin context"; then
 mx_load t2
 # shellcheck disable=SC2016 # literal source for the stub
 printf '#!/bin/bash\necho x >>"%s/mark-admin"\necho "${MX_CMD_OUT:-admintoken}"\nexit "${MX_CMD_RC:-0}"\n' "$MX" >"$MX/bin/admin-cmd"
@@ -258,8 +255,7 @@ check "mm OT-15, OT-06: --tenant on a machine with no profile reads the tenant (
 mx_fresh; : >"$MX_LOG"; out=$(mx_env=(SHARE_ERROR_JSON=1); mxa member ls 2>&1); rc=$?
 check "mm TASK-1c1: a T1 tenant (no members:true) refuses members_off naming setup --members" "1 members_off 1 0" "$rc $(mx_jcode "$out") $(grep -c -- '--members' <<<"$out") $(mx_writes)"
 fi
-if mx_on "the admin lease"; then
-echo "=== members: the admin lease ==="
+if section "members: the admin lease"; then
 mx_load t2; mkdir -p "$MX_DRY/lock"
 mx_lease "otherhost:4242:0badf00d" add m-bo-bbbbbbb2 3
 out=$(mxa member ls 2>&1); rc=$?
@@ -300,8 +296,7 @@ mxa member sync >"$MX/cc15b.out" 2>&1; rb=$?
 check "mm CC-15: the first holder resumes after a takeover and dies lease_lost before its next Cloudflare call; the second's lease stays" "1 lease_lost 0 0 otherhost:7:12345678" \
   "$ra $(mx_jcode "$(cat "$MX/cc15a.out")") $rb $(grep -c 'connectivity/directory/services$' "$MX_LOG") $(jq -r .holder "$MX_DRY/lock/admin")"
 fi
-if mx_on "tenant T1 to T2 and back"; then
-echo "=== members: tenant T1 to T2 and back ==="
+if section "members: tenant T1 to T2 and back"; then
 mx_fresh; mx_save t1
 out=$(mxa setup mx.example.test --r2 --bucket mx-bucket --members --yes 2>&1); rc=$?
 SG="API GET /accounts/acct-dry/workers/scripts/share-mx-example-test/settings"
@@ -405,8 +400,7 @@ for order in setup-first add-first; do
   : >"$MX/other/share/r2-calls.log" 2>/dev/null
 done
 fi
-if mx_on "the registry (member_can, reg_status, member ids)"; then
-echo "=== members: the registry (member_can, reg_status, member ids) ==="
+if section "members: the registry (member_can, reg_status, member ids)"; then
 # the doc table of "### Member status transitions", read from the spec, is the expectation; member_can must answer every tuple the same
 mx_spec="$(dirname "$SH")/../docs/specs/SPEC-009-multi-member.md"
 mx_doc="$(awk '/^### Member status transitions/ {f = 1} f && /^\| [a-z0-9 ]+ \| (admin|member) \|/ {print} /^Guards:/ {f = 0}' "$mx_spec")"
@@ -495,8 +489,7 @@ out=$(SHARE_TEST_MEMBER_IDS="m-x-aaaaaaa1 m-x-bbbbbbb2 m-x-ccccccc3 m-x-ddddddd4
 check "mm FG-13: a forged u/purged.json cannot free a suffix: a binding, a service (-r1 too) and any record still hold theirs" "0 1" \
   "$rc $([[ -f $MX_DRY/u/m-bo-ddddddd4.json ]] && echo 1 || echo 0)"
 fi
-if mx_on "Cloudflare object helpers"; then
-echo "=== members: Cloudflare object helpers ==="
+if section "members: Cloudflare object helpers"; then
 mx_load t2
 o1=$(mx_fn obj tunnel-ensure share-mx-example-test-ab12cd34 2>&1); o2=$(mx_fn obj tunnel-ensure share-mx-example-test-ab12cd34 2>&1)
 tid="$(tail -1 <<<"$o1")"
@@ -525,8 +518,7 @@ out2=$(mx_fn obj tunnel-ensure share-mx-example-test-ef56ab78 2>&1); rc2=$?
 check "mm TASK-1f1: a create that committed but answered 500 is never retried; the rerun finds it by name (one tunnel)" "1 1 0 1" \
   "$rc $(grep -c '^API POST /accounts/acct-dry/cfd_tunnel$' "$MX_LOG") $rc2 $(cat "$MX_DRY"/.cf/tunnels/*.json | jq -s '[.[] | select(.name == "share-mx-example-test-ef56ab78")] | length')"
 fi
-if mx_on "the invite seal"; then
-echo "=== members: the invite seal ==="
+if section "members: the invite seal"; then
 read -r h1 sealed mac <<<"$(mx_seal '{"v":1,"publisher_token":"msec-9-x"}')"
 check "mm TASK-1f2: seal then open is a roundtrip, with this host's openssl ($(openssl version 2>/dev/null | cut -d' ' -f1-2))" '{"v":1,"publisher_token":"msec-9-x"}' "$(mx_open "$sealed" "$mac")"
 flip() { local s=$1 i=$2 c; c="${s:i:1}"; if [[ $c == A ]]; then c=B; else c=A; fi; printf '%s' "${s:0:i}$c${s:i+1}"; }
@@ -538,8 +530,7 @@ check "mm TASK-1f2: the in-shell HMAC equals openssl's (fixture key and message)
   "$(printf 'hello' | bash "$SH" state-fn hmac "$mx_hk")"
 check "mm TASK-1f2: h1 is the domain-separated sha256 of the code" "$(printf 'share-invite-id:ABCDEFGHIJKLMNOPQRST' | shasum -a 256 | cut -c1-64)" "$h1"
 fi
-if mx_on "member add"; then
-echo "=== members: member add ==="
+if section "members: member add"; then
 mx_load t2
 out=$(SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 SHARE_TEST_CODE=$MXC1 mxa member add an --port $((base + 374)) 2>&1); rc=$?
 ord="$(mx_ln '^PUT lock/admin') $(mx_ln '^PUT u/m-an-aaaaaaa1.json') $(mx_ln '^API POST /user/tokens$') $(mx_ln '^API POST /accounts/acct-dry/cfd_tunnel$') $(mx_ln '^API POST /accounts/acct-dry/connectivity/directory/services$') $(mx_ln '^API PUT /accounts/acct-dry/workers/scripts/share-mx-example-test$') $(mx_ln "^PUT i/$(mx_h $MXC1)") $(mx_ln '^DELETE lock/admin')"
@@ -623,8 +614,7 @@ st8="$(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json" 2>/dev/null)"
 out2=$(SHARE_TEST_CODE=$MXC1 mxa member add an --port $((base + 374)) 2>&1); rc2=$?
 check "mm OT-08: a deploy that keeps failing (3 tries) dies with the record adding; the rerun converges" "1 adding 3 0 1" "$rc $st8 $(grep -c 'retrying\|answered HTTP 500' <<<"$out") $rc2 $(mx_add_ok m-an-aaaaaaa1)"
 fi
-if mx_on "member machine"; then
-echo "=== members: member machine (R7) and join ==="
+if section "members: member machine (R7) and join"; then
 mxm_writes() { grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$MXM_LOG" 2>/dev/null || true; }
 mx_load t2; mxm_fresh
 SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 SHARE_TEST_CODE=$MXC1 mxa member add an --port "$MP" >/dev/null 2>&1; mx_save invited
@@ -778,8 +768,7 @@ check "mm DP-join-5: a probe that fails leaves the record joining; the message n
 out=$(mxm join 2>&1); rc=$?; mxm stop >/dev/null 2>&1
 check "mm DP-join-5: the bare join retries the probe and ends active" "0 active" "$rc $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json")"
 fi
-if mx_on "member ls"; then
-echo "=== members: member ls and member sync ==="
+if section "members: member ls and member sync"; then
 mx_load t2
 SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 SHARE_TEST_CODE=$MXC1 mxa member add an --port $((base + 377)) >/dev/null 2>&1
 SHARE_TEST_MEMBER_IDS=m-bo-bbbbbbb2 SHARE_TEST_CODE=$MXC2 mxa member add bo --port $((base + 378)) >/dev/null 2>&1
@@ -872,7 +861,8 @@ check "mm OC-03: after a downgrade lost the bindings, sync --rebind restores bot
   "0 MEMBERS M_aaaaaaa1 M_bbbbbbb2 PAUSED 1" "$rc $(mx_bind | sed 's/=[^ ]*//g') $(mx_bind | grep -c 'PAUSED=\["aaaaaaa1"\]')"
 fi
 
-if mx_on "revoke and reconcile" || mx_on "member rm" || mx_on "leave and status"; then
+if sec_match "members: revoke and reconcile (TASK-2a, 2b, 2c)" || sec_match "members: member rm and member purge (TASK-2d)" || sec_match "members: leave and the member's status (TASK-2e)"; then
+sec_mark "members: phase 2 fixtures (shared by revoke, rm, leave)"
 # SPEC-009 Phase 2 (TASK-2a to 2e): a joined member an (rj), and an invited one (ri), each a snapshot of both HOMEs
 mx_load t2; mxm_fresh
 SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 SHARE_TEST_CODE=$MXC1 mxa member add an --port "$MP" >/dev/null 2>&1; mx_save ri
@@ -890,8 +880,7 @@ rx_loop() { local e=(SHARE_API_TOKEN_OFF=1 ${mxm_env[@]+"${mxm_env[@]}"}); mxm_e
 rx_wk() { node "$(dirname "$SH")/../tests/worker.mjs" --dir "$MX_DRY" --host mx.example.test --bind "M_aaaaaaa1=127.0.0.1:$MP" "$1" 2>/dev/null | awk '/^[0-9]{3} \// {print $1}'; }
 fi
 
-if mx_on "revoke and reconcile"; then
-echo "=== members: revoke and reconcile (TASK-2a, 2b, 2c) ==="
+if section "members: revoke and reconcile (TASK-2a, 2b, 2c)"; then
 # TASK-2a: the admin revoke of another machine's link
 rxj; echo hello >"$MX/f.txt"; SHARE_TEST_IDS=a20001 mxm add "$MX/f.txt" >/dev/null 2>&1; mxm stop >/dev/null 2>&1; : >"$MX_LOG"
 out=$(mxa rm a20001 2>&1); rc=$?
@@ -1026,8 +1015,7 @@ check "mm FG-03, FG-11: forged pointers for an unlisted, a revoked and an alread
 mxm stop >/dev/null 2>&1
 fi
 
-if mx_on "member rm"; then
-echo "=== members: member rm and member purge (TASK-2d) ==="
+if section "members: member rm and member purge (TASK-2d)"; then
 mx_set() { jq -c "$2" "$MX_DRY/u/$1.json" >"$MX/r" && mv "$MX/r" "$MX_DRY/u/$1.json"; }
 mx_paused() { jq -c --arg p "$1" '(.bindings |= map(if .name == "PAUSED" then .text = $p else . end))' "$MX_DRY/.cf/script.json" >"$MX/s" && mv "$MX/s" "$MX_DRY/.cf/script.json"; }
 # rl: the joined member with two machine links and one cloud link
@@ -1135,8 +1123,7 @@ check "mm OT-12: 500 rows render 500 handles; the reload succeeds and the 500th 
 mxm stop >/dev/null 2>&1
 fi
 
-if mx_on "leave and status"; then
-echo "=== members: leave and the member's status (TASK-2e) ==="
+if section "members: leave and the member's status (TASK-2e)"; then
 mx_set() { jq -c "$2" "$MX_DRY/u/$1.json" >"$MX/r" && mv "$MX/r" "$MX_DRY/u/$1.json"; }
 rxl() { rxj; echo hello >"$MX/f.txt"; SHARE_TEST_IDS=e20001 mxm add "$MX/f.txt" >/dev/null 2>&1; SHARE_TEST_IDS=e20002 mxm add "$MX/f.txt" >/dev/null 2>&1; : >"$MXM_LOG"; }
 lv_done() { # 1 when the member left cleanly: pointers gone, record left, no config, no keys, no serve, the root trashed
@@ -1184,8 +1171,7 @@ check "mm TASK-2e: a record gone (404) is reported, never read as removal (a del
   "$(grep -c '^record: your member record is gone from mx.example.test; ask the admin$' <<<"$out") $(mxm state 2>/dev/null | jq -r .member.status)"
 fi
 
-if mx_on "secrets"; then
-echo "=== members: no token, key or code in argv, files or output (Q-SEC-6) ==="
+if section "members: no token, key or code in argv, files or output (Q-SEC-6)"; then
 # every argv of jq, openssl, security, curl and cloudflared is logged by a shim on PATH; then the argv log, both call logs, every
 # output and every file under both HOMEs (the Keychain stand-in apart) are searched for the code, the minted and connector tokens, and the keys
 mkdir -p "$MX/argv"; : >"$MX/argv.log"
