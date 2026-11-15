@@ -829,9 +829,9 @@ check "mm MB-33: the re-join with the new code ends paused" "0 paused" "$rc $(jq
 mx_load two; mx_set m-an-aaaaaaa1 '.status = "pausing" | .step = 3 | .step_name = "deploy" | .prev_status = "active"'
 mx_lease "otherhost:4242:0badf00d" pause m-an-aaaaaaa1 3
 out=$(mxa member ls 2>&1)
-check "mm MB-28: member ls names the step and the lease holder, live while it runs" "1" "$(grep -c '^an: pausing, step 3 (deploy), lease held by otherhost:4242:0badf00d (live)$' <<<"$out")"
+check "mm MB-28: member ls names the step and the lease holder, live while it runs" "1" "$(grep -c '^an: pausing, step 3 of 4 (deploy), lease held by otherhost:4242:0badf00d (live)$' <<<"$out")"
 mx_aged 1000 "$MX_DRY/lock/admin"; out=$(mxa member ls 2>&1)
-check "mm MB-28: past 900 s it reads stale since <time>, with the rerun" "1" "$(grep -c '^an: pausing, step 3 (deploy), lease held by otherhost:4242:0badf00d (stale since 20[0-9-]*T[0-9:]*Z; rerun: share member pause an)$' <<<"$out")"
+check "mm MB-28: past 900 s it reads stale since <time>, with the rerun" "1" "$(grep -c '^an: pausing, step 3 of 4 (deploy), lease held by otherhost:4242:0badf00d (stale since 20[0-9-]*T[0-9:]*Z; rerun: share member pause an)$' <<<"$out")"
 mkdir -p "$MX_DRY/lock"; printf '{"v":1,"holder":"x\\u001b[2Jy","verb":"rm --cloud-links delete","member":"m-an-aaaaaaa1","step":3}\n' >"$MX_DRY/lock/admin"; mx_aged 1000 "$MX_DRY/lock/admin"
 out=$(mxa member ls 2>&1)
 check "mm MB-28: a forged lock/admin never steers the rerun line nor reaches the terminal raw" "0 0 1" \
@@ -1182,6 +1182,242 @@ check "mm MB-30: a 401 after the local token_expires: token expired, the copy na
 rxj; rm -f "$MX_DRY/u/m-an-aaaaaaa1.json"; mxm status >/dev/null 2>&1; out=$(mxm status 2>&1)
 check "mm TASK-2e: a record gone (404) is reported, never read as removal (a deleted record is a write any publisher can forge)" "1 active" \
   "$(grep -c '^record: your member record is gone from mx.example.test; ask the admin$' <<<"$out") $(mxm state 2>/dev/null | jq -r .member.status)"
+fi
+
+if section "members: pause, resume, invite, rotate, renew (TASK-3a to 3d)"; then
+mx_set() { jq -c "$2" "$MX_DRY/u/$1.json" >"$MX/r" && mv "$MX/r" "$MX_DRY/u/$1.json"; }
+MX3C=CCCCCCCCCCCCCCCCCCC3 MX4C=DDDDDDDDDDDDDDDDDDD4
+WM="node $(dirname "$SH")/../tests/worker.mjs --dir $MX_DRY --host mx.example.test"
+p3_get() { $WM --bind "M_aaaaaaa1=127.0.0.1:$MP" "$1" 2>/dev/null | awk '/^[0-9]{3} \// {print $1}'; }   # p3_get <path>: the Worker's answer
+p3_save() { mx_save "$1"; rm -rf "$MX/snap.$1/member" "$MX/snap.$1/kvm"; [[ ! -d $MXM_HOME ]] || cp -R "$MXM_HOME" "$MX/snap.$1/member"; [[ ! -d $MX/kv-member ]] || cp -R "$MX/kv-member" "$MX/snap.$1/kvm"; }
+p3_load() { mx_load "$1"; mxm stop >/dev/null 2>&1; rm -rf "$MXM_HOME" "$MX/kv-member"; mkdir -p "$MXM_HOME"
+  [[ ! -d $MX/snap.$1/member ]] || { rm -rf "$MXM_HOME"; cp -R "$MX/snap.$1/member" "$MXM_HOME"; }; [[ ! -d $MX/snap.$1/kvm ]] || cp -R "$MX/snap.$1/kvm" "$MX/kv-member"; [[ ! -d ${MXM_LOG%/*} ]] || : >"$MXM_LOG"; }
+p3_an() { jq -r "$1" "$MX_DRY/u/m-an-aaaaaaa1.json"; }   # p3_an <jq>: a field of an's record
+p3_inv() { local f n=0; for f in "$MX_DRY"/i/*; do [[ -f $f ]] && [[ "$(jq -r .member_id "$f")" == "${1:-m-an-aaaaaaa1}" ]] && n=$((n + 1)); done; echo "$n"; }   # i/ objects of a member
+p3_tok() { find "$MX_DRY/.cf/tokens" -name '*.json' -exec cat {} + 2>/dev/null | jq -rs --arg n "share mx.example.test ${1:-m-an-aaaaaaa1}" '[.[] | select(.name == $n)] | length'; }   # tokens of that name, every minter user
+p3_clean() { [[ ! -e $MX_DRY/lock/admin && -z "$(mx_ops "$MX_ROOT")" ]] && echo 1 || echo 0; }   # no lease, an empty ops/
+# the base: an (machine, port MP) joined and active with one machine link f30001 and one cloud link f30002; bo (cloud) invited
+mx_load t2; mxm_fresh
+SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 SHARE_TEST_CODE=$MXC1 mxa member add an --port "$MP" >/dev/null 2>&1
+SHARE_TEST_MEMBER_IDS=m-bo-bbbbbbb2 SHARE_TEST_CODE=$MXC2 mxa member add bo --cloud >/dev/null 2>&1
+p3_save inv
+mxm join mx.example.test "$MXC1" >/dev/null 2>&1; echo hello >"$MX/f.txt"
+SHARE_TEST_IDS=f30001 mxm add "$MX/f.txt" >/dev/null 2>&1; SHARE_TEST_IDS=f30002 mxm add --cloud "$MX/f.txt" >/dev/null 2>&1; mxm stop >/dev/null 2>&1
+check "mm TASK-3a fixture: an active with a machine and a cloud link, bo invited (cloud)" "active invited m-an-aaaaaaa1 m-an-aaaaaaa1" \
+  "$(p3_an .status) $(jq -r .status "$MX_DRY/u/m-bo-bbbbbbb2.json") $(jq -r .origin "$MX_DRY/m/f30001") $(jq -r .origin "$MX_DRY/m/f30002")"
+p3_save p3
+
+# --- TASK-3a: pause, resume ---
+p3_load p3; out=$(mxa member pause an 2>&1); rc=$?
+check "mm MB-10: member pause: record paused (prev_status cleared, no step), PAUSED holds the suffix, the lease and journal gone" "0 paused null null 1 1" \
+  "$rc $(p3_an .status) $(p3_an .prev_status) $(p3_an .step) $(mx_bind | grep -c 'PAUSED=\["aaaaaaa1"\]') $(p3_clean)"
+check "mm MB-10, LK-14: paused, the machine link answers 503 and the cloud link 200 through the Worker" "503 200" "$(p3_get /f30001/f.txt) $(p3_get /f30002/f.txt)"
+: >"$MXM_LOG"; o2=$(mxm add "$MX/f.txt" 2>&1); r2=$?
+check "mm MB-10: the paused member's CLI refuses add before any write" "1 1 0" "$r2 $(grep -c 'paused this member' <<<"$o2") $(grep -cE '^(PUT|DELETE) ' "$MXM_LOG")"
+p3_save paused
+out=$(mxa member resume an 2>&1); rc=$?; mxm start >/dev/null 2>&1
+check "mm MB-11, LK-14: member resume: record active, PAUSED without the suffix, the machine link 200 again" "0 active 1 200 1" \
+  "$rc $(p3_an .status) $(mx_bind | grep -c 'PAUSED=\[\]') $(p3_get /f30001/f.txt) $(p3_clean)"
+mxm stop >/dev/null 2>&1
+p3_load p3; out=$(mx_env=(SHARE_ERROR_JSON=1); mxa member pause bo 2>&1); rc=$?; out2=$(mx_env=(SHARE_ERROR_JSON=1); mxa member rotate bo 2>&1); rc2=$?
+check "mm TASK-3a: a cloud member is refused member_cloud by pause and rotate, before any write" "1 member_cloud 1 member_cloud 0" "$rc $(mx_jcode "$out") $rc2 $(mx_jcode "$out2") $(mx_writes)"
+p3_load p3; out=$(mx_env=(SHARE_ERROR_JSON=1); mxa member resume an 2>&1); rc=$?
+check "mm TASK-3a: resume of an active member is refused member_not_allowed before any write" "1 member_not_allowed 0" "$rc $(mx_jcode "$out") $(mx_writes)"
+# DP-pause-1, -2: killed after each step; member ls names the step and the rerun; the rerun completes; the record equals the deploy
+fails_dp=""
+for n in 1 2 3 4; do
+  p3_load p3; mx_kill_at "$MX_ROOT" member-pause "$n" mxa member pause an || fails_dp="$fails_dp held$n"
+  [[ $n == 1 ]] || { mxa member ls >"$MX/dpls.out" 2>&1; grep -q 'rerun: share member pause an)$' "$MX/dpls.out"; } || { fails_dp="$fails_dp ls$n"; head -2 "$MX/dpls.out"; }
+  [[ $n == 1 || $(p3_an .prev_status) == active ]] || fails_dp="$fails_dp prev$n"
+  mxa member pause an >/dev/null 2>&1 || fails_dp="$fails_dp rerun$n"
+  [[ "$(p3_an .status) $(p3_an .prev_status) $(mx_bind | grep -c 'PAUSED=\["aaaaaaa1"\]') $(p3_clean)" == "paused null 1 1" ]] || fails_dp="$fails_dp end$n"
+done
+check "mm DP-pause-1, DP-pause-2: pause killed after each step: member ls names the rerun; the rerun ends paused, PAUSED holds it, no lease, empty ops/" "" "$fails_dp"
+fails_dp=""
+for n in 2 3 4; do
+  p3_load paused; mx_kill_at "$MX_ROOT" member-resume "$n" mxa member resume an || fails_dp="$fails_dp held$n"
+  { mxa member ls >"$MX/dpls.out" 2>&1; grep -q 'rerun: share member resume an)$' "$MX/dpls.out"; } || { fails_dp="$fails_dp ls$n"; head -2 "$MX/dpls.out"; }
+  mxa member resume an >/dev/null 2>&1 || fails_dp="$fails_dp rerun$n"
+  [[ "$(p3_an .status) $(mx_bind | grep -c 'PAUSED=\[\]') $(p3_clean)" == "active 1 1" ]] || fails_dp="$fails_dp end$n"
+done
+check "mm DP-resume: resume killed after each step converges on its rerun" "" "$fails_dp"
+# CC-02: pause held at its deploy while resume starts from another shell: resume waits for the lease, then runs on the record pause left
+p3_load p3; mkdir -p "$MX/other"
+( mx_env=(SHARE_R2_DRY_PAUSE='API PUT /accounts/acct-dry/workers/scripts/share-mx-example-test'); mxa member pause an >"$MX/cc02a.out" 2>&1 ) & pa=$!
+mx_wait_paused
+( MX_LEASE_WAIT=30 mxo resume an >"$MX/cc02b.out" 2>&1 ) & pb=$!
+sleep 1; : >"$MX_DRY/.resume"; wait "$pa"; ra=$?; wait "$pb"; rb=$?; rm -f "$MX_DRY/.resume" "$MX_DRY/.paused"
+[[ $ra == 0 && $rb == 0 ]] || { echo "--- CC-02 pause:"; tail -3 "$MX/cc02a.out"; echo "--- resume:"; tail -3 "$MX/cc02b.out"; }
+check "mm CC-02: pause and resume from two shells are serialized by the lease; the record equals the deploy (active, PAUSED [])" "0 0 active 1 1" \
+  "$ra $rb $(p3_an .status) $(mx_bind | grep -c 'PAUSED=\[\]') $([[ ! -e $MX_DRY/lock/admin ]] && echo 1)"
+
+# --- TASK-3b: member invite ---
+p3_load inv; ot="$(p3_an .token.id)"; oh="$(p3_an .invite.hash)"; tid="$(p3_an .tunnel_id)"; echo 1 >"$MX_DRY/.cf/tunnels/$tid.conns"
+out=$(SHARE_TEST_CODE=$MX3C mxa member invite an --port $((base + 382)) 2>&1); rc=$?
+check "mm MB-09 (invited): old token deleted, connections deleted, new token, service port moved, old i/ deleted, new i/, new code" \
+  "0 1 1 0 $((base + 382)) $((base + 382)) 0 1 1 invited 1" \
+  "$rc $([[ $(p3_an .token.id) != "$ot" ]] && echo 1) $(p3_tok) $([[ -f $MX_DRY/.cf/tunnels/$tid.conns ]] && echo 1 || echo 0) $(p3_an .port) \
+$(jq -r '.http_port' "$MX_DRY"/.cf/services/*.json) $([[ -f $MX_DRY/i/$oh ]] && echo 1 || echo 0) $([[ -f $MX_DRY/i/$(mx_h $MX3C) ]] && echo 1) $(p3_inv) $(p3_an .status) \
+$(grep -c "^share join mx.example.test $MX3C\$" <<<"$out")"
+check "mm MB-09: the old token is gone from the minter's list and the record's invite is the new code's" "1 $(mx_h $MX3C) 1" \
+  "$([[ ! -f $MX_DRY/.cf/tokens/$(printf '%s' mintertoken | cksum | cut -d' ' -f1)/$ot.json ]] && echo 1) $(p3_an .invite.hash) $(p3_clean)"
+p3_load inv; oh="$(p3_an .invite.hash)"; mx_set m-an-aaaaaaa1 '.invite.expires = 1000'; jq -c '.expires = 1000' "$MX_DRY/i/$oh" >"$MX/e" && mv "$MX/e" "$MX_DRY/i/$oh"
+ex="$(mxa member ls 2>&1 | grep -c '^an: expired$')"
+out=$(SHARE_TEST_CODE=$MX3C mxa member invite an 2>&1); rc=$?
+check "mm MB-09 (expired): invite from EXPIRED: one new i/, the expired one gone, invited until a fresh expiry" "1 0 1 0 1 invited 1" \
+  "$ex $rc $(p3_inv) $([[ -f $MX_DRY/i/$oh ]] && echo 1 || echo 0) $(p3_tok) $(p3_an .status) $([[ $(p3_an .invite.expires) -gt $(date +%s) ]] && echo 1)"
+mxm_fresh; out=$(mxm join mx.example.test "$MX3C" 2>&1); rc=$?; mxm stop >/dev/null 2>&1
+check "mm MB-09: the new code joins" "0 active" "$rc $(p3_an .status)"
+p3_load p3; ob="$(jq -r .token.id "$MX_DRY/u/m-bo-bbbbbbb2.json")"; : >"$MX_LOG"
+out=$(SHARE_TEST_CODE=$MX3C mxa member invite bo 2>&1); rc=$?
+check "mm TASK-3b: a cloud member's invite: a new token and one i/, no tunnel, service or deploy call" "0 1 1 1 0 invited" \
+  "$rc $([[ $(jq -r .token.id "$MX_DRY/u/m-bo-bbbbbbb2.json") != "$ob" ]] && echo 1) $(p3_tok m-bo-bbbbbbb2) $(p3_inv m-bo-bbbbbbb2) \
+$(grep -cE '^API (POST|PUT|DELETE) /accounts/' "$MX_LOG") $(jq -r .status "$MX_DRY/u/m-bo-bbbbbbb2.json")"
+p3_load p3; out=$(mx_env=(SHARE_ERROR_JSON=1); mxa member invite an 2>&1); rc=$?
+check "mm TASK-3b: invite of an active member is refused member_not_allowed before any write" "1 member_not_allowed 0" "$rc $(mx_jcode "$out") $(mx_writes)"
+# DP-invite-1 to -3: killed after each step (token delete, connections, i/ PUT among them); the rerun leaves one token and one i/
+fails_dp=""
+for n in 2 3 4 5 6 7 8; do
+  p3_load inv; ( SHARE_TEST_CODE=$MX4C; export SHARE_TEST_CODE; mx_kill_at "$MX_ROOT" member-invite "$n" mxa member invite an ) || fails_dp="$fails_dp held$n"
+  { mxa member ls >"$MX/dpls.out" 2>&1; grep -q 'rerun: share member invite an)$' "$MX/dpls.out"; } || { fails_dp="$fails_dp ls$n"; head -2 "$MX/dpls.out"; }
+  SHARE_TEST_CODE=$MX3C mxa member invite an >"$MX/dpi.out" 2>&1 || fails_dp="$fails_dp rerun$n"
+  [[ "$(p3_tok) $(p3_inv) $(p3_an .status) $(p3_an .invite.hash) $(p3_clean)" == "1 1 invited $(mx_h $MX3C) 1" ]] || fails_dp="$fails_dp end$n"
+done
+check "mm DP-invite-1 to DP-invite-3: invite killed after each step: member ls names the rerun; the rerun leaves one token, one i/, invited" "" "$fails_dp"
+
+# --- TASK-3c: member rotate ---
+p3_load p3; os="$(p3_an .vpc_service_id)"; otid="$(p3_an .tunnel_id)"; echo 2 >"$MX_DRY/.cf/tunnels/$otid.conns"
+out0=$(mxa member ls --json 2>&1)
+out=$(SHARE_TEST_CODE=$MX3C mxa member rotate an 2>&1); rc=$?
+ns="$(p3_an .vpc_service_id)"
+check "mm MB-12 (active): a new tunnel and service -r1, the binding M_aaaaaaa1 on the new service, old ones gone; record invited, prev_status active" \
+  "0 tunnels=[share-mx-example-test-aaaaaaa1-r1] services=[share-mx-example-test-aaaaaaa1-r1] 1 1 invited active 1 1" \
+  "$rc $(mx_objs | sed 's/ tokens=.*//') $([[ $ns != "$os" ]] && echo 1) $(mx_bind | grep -c "M_aaaaaaa1=$ns") $(p3_an .status) $(p3_an .prev_status) $(p3_an .rotation) $(p3_clean)"
+check "mm OT-14: member ls flagged the extra connector; rotate deleted the old tunnel, so the replica stops" "extra_connector 1" \
+  "$(jq -r '.[] | select(.name == "an") | .drift | join(" ")' <<<"$out0") $(jq -r '.deleted_at != null' "$MX_DRY/.cf/tunnels/$otid.json" | grep -c true)"
+check "mm MB-12: rotate keeps the member's links: the v:3 pointer stays; one token and one i/ for an" "1 1 1" "$([[ -f $MX_DRY/m/f30001 ]] && echo 1) $(p3_tok) $(p3_inv)"
+out=$(mxm join mx.example.test "$MX3C" 2>&1); rc=$?; mxm stop >/dev/null 2>&1
+check "mm MB-12 (active): the re-join replaces the keys in place and restores active; prev_status and invite dropped" "0 active null null ctok-SECRET-$(p3_an '.tunnel_id | split("-") | last') $(p3_an .tunnel_id)" \
+  "$rc $(p3_an .status) $(p3_an .prev_status) $(p3_an .invite) $(cat "$MX/kv-member/share-tunnel:mx.example.test") $(sed -n 's/^tunnel_id=//p' "$MXM_CONF")"
+p3_load paused; out=$(SHARE_TEST_CODE=$MX3C mxa member rotate an 2>&1); rc=$?
+check "mm MB-12 (paused): rotate of a paused member: invited with prev_status paused; PAUSED still holds it" "0 invited paused 1" \
+  "$rc $(p3_an .status) $(p3_an .prev_status) $(mx_bind | grep -c 'PAUSED=\["aaaaaaa1"\]')"
+out=$(mxm join mx.example.test "$MX3C" 2>&1); rc=$?; mxm stop >/dev/null 2>&1
+check "mm MB-12 (paused): the re-join ends paused (Done=: rotate of a paused member, then a re-join, ends paused)" "0 paused null null" \
+  "$rc $(p3_an .status) $(p3_an .prev_status) $(p3_an .invite)"
+# MB-26: a paused member: rotate, invite (a lost code), renew, then a join with the newest code ends paused
+p3_load paused; r=""
+SHARE_TEST_CODE=$MX3C mxa member rotate an >/dev/null 2>&1; r="$r $(p3_an .status)/$(p3_an .prev_status)"
+SHARE_TEST_CODE=$MX4C mxa member invite an >/dev/null 2>&1; r="$r $(p3_an .status)/$(p3_an .prev_status)"
+mxa member renew an >/dev/null 2>&1; r="$r $(p3_an .status)/$(p3_an .prev_status)"
+o1=$(mxm join mx.example.test "$MX3C" 2>&1); r1=$?
+out=$(mxm join mx.example.test "$MX4C" 2>&1); rc=$?; mxm stop >/dev/null 2>&1
+check "mm MB-26 (verbs): invited/paused after rotate, invite and renew; the older code is spent; the newest joins and ends paused" \
+  " invited/paused invited/paused invited/paused 1 0 paused null null" "$r $r1 $rc $(p3_an .status) $(p3_an .prev_status) $(p3_an .invite)"
+# MB-36: the code redeemed by someone else, while invited and again after that redeemer reached joining: rotate proceeds from both; the new code joins
+p3_load inv; $WM --post /_share/redeem "$(mx_h "$MXC1")" >/dev/null 2>&1; otid="$(p3_an .tunnel_id)"
+out=$(mxm join mx.example.test "$MXC1" 2>&1); r1=$?
+out=$(SHARE_TEST_CODE=$MX3C mxa member rotate an 2>&1); rc=$?
+check "mm MB-36 (invited): a spent code reads used; rotate from invited proceeds; the old tunnel is gone" "1 1 0 invited 1" \
+  "$r1 $(grep -c 'already used or never existed; ask the admin: share member rotate' <<<"$(mxm join mx.example.test "$MXC1" 2>&1)") $rc $(p3_an .status) $(jq -r '.deleted_at != null' "$MX_DRY/.cf/tunnels/$otid.json" | grep -c true)"
+mx_set m-an-aaaaaaa1 '.status = "joining" | .step = 6 | .step_name = "record"'; otid="$(p3_an .tunnel_id)"
+out=$(SHARE_TEST_CODE=$MX4C mxa member rotate an 2>&1); rc=$?
+mxm_fresh; out2=$(mxm join mx.example.test "$MX4C" 2>&1); r2=$?; mxm stop >/dev/null 2>&1
+check "mm MB-36 (joining): rotate from joining proceeds, the other redeemer's tunnel is gone, the new code joins" "0 1 0 active" \
+  "$rc $(jq -r '.deleted_at != null' "$MX_DRY/.cf/tunnels/$otid.json" | grep -c true) $r2 $(p3_an .status)"
+p3_load p3; $WM --post /_share/redeem "$(mx_h "$MXC2")" >/dev/null 2>&1
+out=$(HOME="$MX/thief" mxm join mx.example.test "$MXC2" 2>&1)
+check "mm MB-36: the 404 copy names invite for a cloud member" "1" "$(grep -c 'share member invite <your name> for a cloud member' <<<"$out")"
+# OT-10: the minting user left: rotate (machine) and invite (cloud) under a new minter find no old token, print token_unreachable with its expiry, mint and invite
+p3_load p3; te="$(p3_an .token.expires_on)"; tb="$(jq -r .token.expires_on "$MX_DRY/u/m-bo-bbbbbbb2.json")"
+out=$(MX_MINT=newminter SHARE_TEST_CODE=$MX3C mxa member rotate an 2>&1); rc=$?
+out2=$(MX_MINT=newminter SHARE_TEST_CODE=$MX4C mxa member invite bo 2>&1); rc2=$?
+check "mm OT-10: under a new minter rotate and invite print token not reachable with the expiry, record it, mint anew, and give a code" "0 1 $te 0 1 $tb 2 2" \
+  "$rc $(grep -c "^token not reachable by this minter; it expires $te\$" <<<"$out") $(p3_an .token_unreachable_until) $rc2 $(grep -c "^token not reachable by this minter; it expires $tb\$" <<<"$out2") \
+$(jq -r .token_unreachable_until "$MX_DRY/u/m-bo-bbbbbbb2.json") $(p3_tok) $(p3_tok m-bo-bbbbbbb2)"
+js=$(MX_MINT=newminter mxa member ls --json 2>&1)
+out=$(mxm join mx.example.test "$MX3C" 2>&1); rc=$?; mxm stop >/dev/null 2>&1
+check "mm OT-10: member ls shows token_unreachable; the re-join recovers the member" "token_unreachable 0 active" \
+  "$(jq -r '.[] | select(.name == "an") | .drift | join(" ")' <<<"$js") $rc $(p3_an .status)"
+# CC-03: join while rotate runs
+p3_load inv
+( mxm_env=(SHARE_R2_DRY_PAUSE="PUT u/m-an-aaaaaaa1.json" SHARE_ERROR_JSON=1); mxm join mx.example.test "$MXC1" >"$MX/cc03a.out" 2>&1 ) & pa=$!
+mx_wait_paused; rm -f "$MX_DRY/.paused"
+out=$(SHARE_TEST_CODE=$MX3C mxa member rotate an 2>&1); rc=$?
+: >"$MX_DRY/.resume"; wait "$pa"; ra=$?; rm -f "$MX_DRY/.resume" "$MX_DRY/.paused"
+check "mm CC-03 (join loses): a join whose record write lands after a rotate loses its If-Match and rolls back; the record stays invited for the new code" \
+  "0 1 member_changed 0 0 invited" \
+  "$rc $ra $(mx_jcode "$(cat "$MX/cc03a.out")") $([[ -f $MXM_CONF ]] && echo 1 || echo 0) $(find "$MX/kv-member" -type f 2>/dev/null | grep -c .) $(p3_an .status)"
+out=$(mxm join mx.example.test "$MX3C" 2>&1); rc=$?; mxm stop >/dev/null 2>&1
+check "mm CC-03 (join loses): the new code then joins" "0 active" "$rc $(p3_an .status)"
+p3_load inv
+( mx_env=(SHARE_R2_DRY_PAUSE="PUT u/m-an-aaaaaaa1.json"); SHARE_TEST_CODE=$MX3C mxa member rotate an >"$MX/cc03b.out" 2>&1 ) & pa=$!
+mx_wait_paused; rm -f "$MX_DRY/.paused"
+mxm join mx.example.test "$MXC1" >/dev/null 2>&1; r1=$?; mxm stop >/dev/null 2>&1
+: >"$MX_DRY/.resume"; wait "$pa"; ra=$?; rm -f "$MX_DRY/.resume" "$MX_DRY/.paused"
+check "mm CC-03 (rotate re-reads): a rotate whose record write loses to the join re-reads once and proceeds: invited, prev_status active, rotation 1" \
+  "0 0 invited active 1 1" "$r1 $ra $(p3_an .status) $(p3_an .prev_status) $(p3_an .rotation) $(p3_clean)"
+# DP-rotate-1 to -4: killed after each step; the rerun leaves one tunnel, one service, the binding on the new service, one token, one i/
+fails_dp=""
+for n in 1 2 3 4 5 6 7 8 9 10; do
+  p3_load p3; ( SHARE_TEST_CODE=$MX4C; export SHARE_TEST_CODE; mx_kill_at "$MX_ROOT" member-rotate "$n" mxa member rotate an ) || fails_dp="$fails_dp held$n"
+  [[ $n == 1 ]] || { mxa member ls >"$MX/dpls.out" 2>&1; grep -q 'rerun: share member rotate an)$' "$MX/dpls.out"; } || { fails_dp="$fails_dp ls$n"; head -2 "$MX/dpls.out"; }
+  SHARE_TEST_CODE=$MX3C mxa member rotate an >"$MX/dpr.out" 2>&1 || { fails_dp="$fails_dp rerun$n"; tail -2 "$MX/dpr.out"; }
+  [[ "$(mx_objs | sed 's/ tokens=.*//') $(mx_bind | grep -c "M_aaaaaaa1=$(p3_an .vpc_service_id)") $(p3_tok) $(p3_inv) $(p3_an .status)/$(p3_an .prev_status)/$(p3_an .rotation) $(p3_clean)" == \
+    "tunnels=[share-mx-example-test-aaaaaaa1-r1] services=[share-mx-example-test-aaaaaaa1-r1] 1 1 1 invited/active/1 1" ]] || fails_dp="$fails_dp end$n"
+done
+check "mm DP-rotate-1 to DP-rotate-4: rotate killed after each step: member ls names the rerun; the rerun ends with one of each, bound to the new service" "" "$fails_dp"
+p3_load p3; mx_set m-an-aaaaaaa1 '.rotation = 0'; SHARE_TEST_CODE=$MX3C mxa member rotate an >/dev/null 2>&1; mx_set m-an-aaaaaaa1 '.rotation = 0'
+out=$(SHARE_TEST_CODE=$MX4C mxa member rotate an 2>&1); rc=$?
+check "mm DEC-58: a forged rotation never reuses a live tunnel name: the next rotation is above every name on the account" \
+  "0 tunnels=[share-mx-example-test-aaaaaaa1-r2] 2" "$rc $(mx_objs | sed 's/ services=.*//') $(p3_an .rotation)"
+
+# --- TASK-3d: member renew and expiry warnings ---
+p3_load p3; tk="$(p3_an .token.id)"; mu="$(printf '%s' mintertoken | cksum | cut -d' ' -f1)"; pol0="$(jq -c .policies "$MX_DRY/.cf/tokens/$mu/$tk.json")"; : >"$MX_LOG"
+out=$(mxa member renew an --token-ttl 30d 2>&1); rc=$?
+ne="$(jq -r .expires_on "$MX_DRY/.cf/tokens/$mu/$tk.json")"; d=$(( $(jq -rn --arg s "$ne" '$s | fromdateiso8601') - $(date +%s) ))
+check "mm MB-18: renew PUTs the same token id with the same policies and a new expires_on; the record notes it and goes back to active" \
+  "0 1 $tk 1 1 $ne active null 1" \
+  "$rc $(grep -c "^API PUT /user/tokens/$tk\$" "$MX_LOG") $(p3_an .token.id) $([[ "$(jq -c .policies "$MX_DRY/.cf/tokens/$mu/$tk.json")" == "$pol0" ]] && echo 1) \
+$([[ $d -gt 2500000 && $d -le 2592000 ]] && echo 1) $(p3_an .token.expires_on) $(p3_an .status) $(p3_an .prev_status) $(p3_clean)"
+out=$(mxm status 2>&1); out2=$(SHARE_TEST_IDS=f30003 mxm add "$MX/f.txt" 2>&1); rc2=$?; mxm stop >/dev/null 2>&1
+check "mm MB-18, CK-04: the member keeps working; its status takes the server's expires_on from the record (no re-join)" "0 $ne" "$rc2 $(sed -n 's/^token_expires=//p' "$MXM_CONF")"
+p3_load paused; mxa member renew an >/dev/null 2>&1; r1="$(p3_an .status)/$(p3_an .prev_status)"
+out=$(mxa member renew bo 2>&1); rc=$?
+check "mm TASK-3d: renew goes back to the status it started from: paused, and invited for a member with a pending invite" "paused/null 0 invited" \
+  "$r1 $rc $(jq -r .status "$MX_DRY/u/m-bo-bbbbbbb2.json")"
+# MB-19: a token 10 days from expiry: member ls and the member's status warn; state.token on the member reads expiring with expires_on
+p3_load p3; mxa member renew an --token-ttl 10d >/dev/null 2>&1; ne="$(p3_an .token.expires_on)"
+out=$(mxa member ls 2>&1); o2=$(mxm status 2>&1); n0="$(grep -c . "$MXM_LOG")"; st="$(mxm state 2>/dev/null)"; n1="$(tail -n +$((n0 + 1)) "$MXM_LOG" | grep -cE '^(API |PUT |DELETE |POST )' || true)"; mxm stop >/dev/null 2>&1
+check "mm MB-19: member ls and member status warn; state.token reads expiring with expires_on; state writes nothing and makes no Cloudflare call" \
+  "1 1 expiring $ne 0" \
+  "$(grep -c "^    warn: token expires $ne, within 14 days; renew: share member renew an\$" <<<"$out") $(grep -c "^key: your key expires $ne (within 14 days); ask the admin: share member renew an\$" <<<"$o2") \
+$(jq -r .token.status <<<"$st") $(jq -r .token.expires_on <<<"$st") $n1"
+p3_load p3; mxm status >/dev/null 2>&1; sed -i.bak 's/^token_expires=.*/token_expires=2020-01-01T00:00:00Z/' "$MXM_CONF"
+out=$(mxm status 2>&1); out2=$(SHARE_TEST_IDS=f30004 mxm add "$MX/f.txt" 2>&1); rc2=$?; mxm stop >/dev/null 2>&1
+check "mm CK-04: a member clock (or cache) that reads the key as expired never blocks it: the record's server date wins, add works" "$(p3_an .token.expires_on) 0" \
+  "$(sed -n 's/^token_expires=//p' "$MXM_CONF") $rc2"
+# MB-37: renew under a minter of another user: dies token_unreachable naming the expiry and rotate (invite for a cloud member); the record unchanged
+p3_load p3; c0="$(cksum <"$MX_DRY/u/m-an-aaaaaaa1.json")"; cb="$(cksum <"$MX_DRY/u/m-bo-bbbbbbb2.json")"; te="$(p3_an .token.expires_on)"
+out=$(mx_env=(SHARE_ERROR_JSON=1); MX_MINT=otherminter mxa member renew an 2>&1); rc=$?
+out2=$(mx_env=(SHARE_ERROR_JSON=1); MX_MINT=otherminter mxa member renew bo 2>&1); rc2=$?
+check "mm MB-37: renew with another user's minter dies token_unreachable naming the expiry and rotate (invite for cloud); records unchanged, nothing written" \
+  "1 token_unreachable 1 1 token_unreachable 1 1 1 0" \
+  "$rc $(mx_jcode "$out") $(grep -c "^share: .*(it expires $te).*share member rotate an; nothing was changed" <<<"$out") $rc2 $(mx_jcode "$out2") $(grep -c '^share: .*share member invite bo; nothing was changed' <<<"$out2") \
+$([[ "$(cksum <"$MX_DRY/u/m-an-aaaaaaa1.json")" == "$c0" ]] && echo 1) $([[ "$(cksum <"$MX_DRY/u/m-bo-bbbbbbb2.json")" == "$cb" ]] && echo 1) $(mx_writes)"
+# MB-30 (last clause): an expired key; after the admin's renew the member publishes again with no re-join
+p3_load p3; mxm status >/dev/null 2>&1; sed -i.bak 's/^token_expires=.*/token_expires=2020-01-01T00:00:00Z/' "$MXM_CONF"
+mxm_env=(SHARE_R2_DRY_AUTH=401); mxm status >/dev/null 2>&1; mxm_env=(); s1="$(mxm state 2>/dev/null | jq -r .token.status)"
+mxa member renew an >/dev/null 2>&1; mxm status >/dev/null 2>&1; s2="$(mxm state 2>/dev/null | jq -r .token.status)"
+out=$(SHARE_TEST_IDS=f30005 mxm add "$MX/f.txt" 2>&1); rc=$?; mxm stop >/dev/null 2>&1
+check "mm MB-30 (renew): expired before the renew; after it the member reads the new expiry and publishes, with no re-join" "expired 1 0" \
+  "$s1 $([[ $s2 == ok || $s2 == unchecked ]] && echo 1) $rc"
+
+# --- CC-14 (setup-first) flake: a lease read that races a release reads the vanished lock/admin as absent and retries the take ---
+p3_load p3; mx_lease "otherhost:4242:0badf00d" pause m-an-aaaaaaa1 2
+out=$(mx_env=(SHARE_R2_DRY_VANISH="GET lock/admin"); mxa member pause an 2>&1); rc=$?
+check "mm CC-14 (vanished lease): a lock/admin released between the read and its body reads as absent; the take retries and the verb runs" "0 0 paused 1" \
+  "$rc $(grep -c 'needs the admin S3 pair' <<<"$out") $(p3_an .status) $([[ -f $MX_DRY/.fx/vanish.done ]] && echo 1)"
 fi
 
 if section "members: no token, key or code in argv, files or output (Q-SEC-6)"; then
