@@ -67,3 +67,14 @@ None in this sub-goal: its scope is dry seams only (no live Cloudflare call). Th
 - A tenant turned to T2 goes back with `share setup <host> --r2 --bucket <name> --no-members` once every member is removed (it drops `MEMBERS`, `PAUSED`, the marker keys and `members=on`).
 - The code: revert the squash commit. A T1 tenant holds no member object, so nothing persists; a v0.9 CLI on a T2 tenant fails closed on member records (OC-01 to OC-06).
 - Nothing was deployed by this sub-goal.
+
+## Linux CI fix (follow-up)
+
+Main CI run 43662746971 on 218de0d failed `test (ubuntu-latest)`: join checks that `cloudflared` exists, Linux CI has none, so every join row died `missing: cloudflared`. The member fixtures now put a `cloudflared` stand-in on their PATH.
+
+```
+Command: MX_ONLY="member machine" SHARE_TEST_PORT_BASE=26500 <scratch>/run.sh   (the suite header, then that section of tests/members.sh)
+Exit:    0
+Output:  45 checks, PASS
+Verdict: PASS
+```

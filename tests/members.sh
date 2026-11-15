@@ -24,7 +24,9 @@ exit 0
 EOF
 # shellcheck disable=SC2016 # literal source for the stub
 printf '#!/bin/bash\nmkdir -p "%s/trashed"; mv -f "$1" "%s/trashed/$(basename "$1").$$.$RANDOM"\n' "$MX" "$MX" >"$MX/bin/trash"
-chmod +x "$MX/bin/security" "$MX/bin/trash"
+# join checks that cloudflared exists (SHARE_TUNNEL=0 never runs it); Linux CI has none, so a stand-in sits on the fixtures' PATH
+printf '#!/bin/bash\nexit 0\n' >"$MX/bin/cloudflared"
+chmod +x "$MX/bin/security" "$MX/bin/trash" "$MX/bin/cloudflared"
 mx_env=()   # extra VAR=value pairs for the next mxa call (cleared by mxa)
 mxa() { # mxa <verb...>: the tenant origin profile ten of mx.example.test, R2 and Access dry; the admin token unless MX_TOK=- , the minter unless MX_MINT=-
   local e=(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u CLOUDFLARE_API_TOKEN -u SHARE_MINTER_TOKEN
@@ -396,6 +398,7 @@ for order in setup-first add-first; do
     ( MX_LEASE_WAIT=30 mxa setup mx.example.test --r2 --bucket mx-bucket >"$MX/cc14a.out" 2>&1 ) & pa=$!
   fi
   sleep 2; : >"$MX_DRY/.resume"; wait "$pa"; ra=$?; wait "$pb"; rb=$?; rm -f "$MX_DRY/.resume" "$MX_DRY/.paused"
+  [[ $ra == 0 && $rb == 0 ]] || { echo "--- CC-14 ($order) setup:"; tail -5 "$MX/cc14a.out"; echo "--- add:"; tail -5 "$MX/cc14b.out"; }   # a red row shows why
   check "mm CC-14 ($order): both finish, two deploys, the end deploy holds an's binding, MEMBERS and PAUSED, and the lease is gone" "0 0 2 1 0" \
     "$ra $rb $(cat "$MX_LOG" "$MX/other/share/r2-calls.log" 2>/dev/null | grep -c '^API PUT /accounts/acct-dry/workers/scripts/share-mx-example-test$') $(mx_bind | grep -c 'MEMBERS=1 M_aaaaaaa1=[^ ]* PAUSED=\[\]') $([[ -e $MX_DRY/lock/admin ]] && echo 1 || echo 0)"
   : >"$MX/other/share/r2-calls.log" 2>/dev/null
