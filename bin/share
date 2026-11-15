@@ -59,6 +59,7 @@ profile_migrated|this profile moved to another machine (share migrate); nothing 
 op_running|another run of the same multi-step verb is still alive|wait for it, then {me} state
 quick_has_named_tunnel|setup --quick on a profile that already has a named tunnel|{me} teardown, then {me} setup --quick
 tenant_rollback|setup --r2 died after its config write; the message names the rollback|rerun the same setup, or the rollback it names
+op_interrupted|a dead setup --r2 sits at its config or marker step; a cloud link waits for its rerun|the rerun line of the dead setup (the message names it)
 config_value_bad|a config value holds a line break, or is not a value the key takes; nothing was written|fix the value, then rerun
 cloud_token_missing|the menu reads cloud links only with a stored publisher token|{me} api-token
 admin_token_missing|an admin path found neither CLOUDFLARE_API_TOKEN nor admin_token_cmd|{me} admin-token --cmd '"'"'<command>'"'"'
@@ -658,6 +659,7 @@ cmd_add() {
     esac
   done
   [[ $ntargets == 1 ]] || die "$usage"
+  [[ $storage != cloud ]] || op_interrupted_guard   # before the R2-off refusal: a setup killed before its config has none yet
   if [[ $role == member ]]; then   # a member machine (R7): snapshots on this machine (v:3) or --cloud; every refusal before any write
     [[ -z $access ]] || die "gated links are added by the admin of $host_name; nothing was published"
     [[ -z $host_fqdn ]] || die "--host needs DNS and an ingress rule, which members do not hold; nothing was published"
@@ -688,6 +690,7 @@ cmd_add() {
   pt="$(parse_target "$target")" || die "$usage"
   if [[ $backend == r2 || $storage == cloud ]]; then   # every r2 refusal before any write; a cloud add on an origin runs the same path
     [[ $pt == snapshot && -z $host_fqdn ]] || die "live shares and --host need a tunnel profile; this profile serves from R2"
+    op_interrupted_guard   # a storage_default=cloud add and an r2 profile reach here without the flag
     need_host
     cmd_add_r2 "$(ttl_secs "$ttl")" "$noindex" "$target" "$access"
     return
@@ -932,7 +935,7 @@ cmd_prune() { # cmd_prune [quiet|listing|--loop]: unpublish every share past its
     access_account soft && access_sweep
   fi
   [[ -n ${1:-} ]] || add_sweep   # the prune verb and serve's hourly loop: a dead add is finished or rolled back
-  [[ -s $index ]] || return 0
+  [[ -s $index ]] || { [[ -n ${1:-} ]] || access_ls_check; return 0; }   # no rows: the check clears an older gone-gate list
   local now ids id
   now="$(date +%s)"
   # a for loop, not `| while`: bash 5.3 skips the EXIT trap of a lock taken in a while-loop subshell
@@ -940,6 +943,7 @@ cmd_prune() { # cmd_prune [quiet|listing|--loop]: unpublish every share past its
   for id in $ids; do
     cmd_rm "$id" prune | sed 's/$/ (expired)/' || true   # a listing never dies on one row
   done
+  [[ -n ${1:-} ]] || access_ls_check   # the prune verb: the gate check ls runs, from an exported token only (serve's hourly run resolves none)
 }
 
 prune_loop_member() { # prune --loop on a member machine (TASK-2c): the publisher key from the Keychain item only (never api_token_cmd or the environment);
@@ -2928,6 +2932,17 @@ ops_dead() { # ops_dead <verb>: 0 when a dead journal of that verb is on disk
   done
   return 1
 }
+op_interrupted_guard() { # a cloud publish dies op_interrupted while a dead setup-r2 journal sits at step 11 (config) or 12 (marker); next is that journal's rerun line
+  local f
+  for f in "$root/ops/setup-r2".*.json; do
+    [[ -e $f ]] || continue
+    op_read "$f" || continue
+    owner_live "$op_r_pid" "$op_r_start" && continue
+    [[ $op_r_step == 11 || $op_r_step == 12 ]] || continue
+    die_code op_interrupted "setup of ${host_name:-this profile} died at step $op_r_step of $op_r_of ($op_r_name), so its config or marker is not whole; nothing was published; rerun: $op_r_rerun" "$op_r_rerun"
+  done
+  return 0
+}
 ops_json() { # state.ops: [{verb, step, of, name, alive, rerun, rerun_argv, rollback?, rollback_argv?}]; reads only
   local f o alive out=""
   for f in "$root/ops/"*.json; do
@@ -3926,6 +3941,14 @@ r2_pointer_write() { # r2_pointer_write <id> <name> <type> <expires> <opts> <gat
   rm -f "$rec"
 }
 
+r2_auth_verdict() { # a bucket call that just answered 401 or 403: the publisher token is bad, so .health says so (state reads it; it makes no call); any other answer changes nothing
+  local e
+  case $cf_code in 401|403) ;; *) return 0 ;; esac
+  e="$(cfg token_expires || true)"   # the verdict keeps the expiry date the cache already holds
+  [[ -n $e || ! -f $health ]] || e="$(jq -r '.token.expires_on // empty' "$health" 2>/dev/null || true)"
+  health_token_put invalid "$e"
+  return 0
+}
 r2_pointer_put() { # r2_pointer_put <kind> <name> <src> <expires> <opts> [rule]: the origin's v:2 machine record for cmd_add's $id, If-None-Match: *
   # a 412 means the bucket holds the id: cmd_add's id moves to a fresh one; any other answer dies before anything is served.
   # The add lock on the id tells the reconcile that this pointer has a row on the way.
@@ -3937,7 +3960,7 @@ r2_pointer_put() { # r2_pointer_put <kind> <name> <src> <expires> <opts> [rule]:
     case $cf_code in
       200) return 0 ;;
       412) lock_release "add-$id"; id="$(rand_id)" || exit 1 ;;
-      *) die "R2 did not take the pointer record m/$id (HTTP $cf_code${cf_err:+, $cf_err}); $host_name has R2 on, so a local link needs one; nothing was published" ;;
+      *) r2_auth_verdict; die "R2 did not take the pointer record m/$id (HTTP $cf_code${cf_err:+, $cf_err}); $host_name has R2 on, so a local link needs one; nothing was published" ;;
     esac
   done
   die "R2 answered 412 for five ids in a row; nothing was published; rerun the same $me add"
@@ -4110,7 +4133,7 @@ cmd_add_r2() { # cmd_add_r2 <secs> <noindex> <target> [rule]: stage, upload to a
   r2_stage_check "$stage_out"
   nonce="$(r2_nonce)"; prefix="o/$id.$nonce/"
   r2_held_id=$id r2_held_prefix=$prefix   # from the first PUT on, the EXIT trap owns this prefix
-  r2_put_tree "$stage_out" "$prefix" || die "uploading $name failed (HTTP $cf_code); nothing was published"
+  r2_put_tree "$stage_out" "$prefix" || { r2_auth_verdict; die "uploading $name failed (HTTP $cf_code); nothing was published"; }
   r2_prefix_matches "$stage_out" "$prefix" || die "the objects under $prefix do not match the stage; nothing was published"
   if [[ -n $gated ]]; then
     access_nonce=$nonce access_create "$id"   # intent line, the app, its id into the line, read-back
@@ -4142,6 +4165,7 @@ cmd_add_r2() { # cmd_add_r2 <secs> <noindex> <target> [rule]: stage, upload to a
       fi
       die "another publisher took id $id during the upload; nothing was published; rerun the same $me add" ;;
     *) # a lost-but-committed PUT: the trap keeps the prefix the record names; a gated line stays for the sweep's fresh read
+      r2_auth_verdict
       local tail=""
       [[ -z $gated ]] || { held_access_id=""; tail=" (the next '$me prune' with the token settles its Access app)"; }
       die "publishing m/$id answered HTTP $cf_code${cf_err:+ ($cf_err)}; rerun the same $me add$tail" ;;
@@ -4697,7 +4721,10 @@ r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "
   f="$d/$key"
   case $meth in
     PUT)
-      [[ ${SHARE_R2_DRY_PUT:-} == 500 || ${SHARE_R2_DRY_FAIL:-} == "PUT $key" ]] && { cf_code=500 cf_err=InternalError; return 0; }
+      [[ ${SHARE_R2_DRY_PUT:-} == 500 ]] && { cf_code=500 cf_err=InternalError; return 0; }
+      # SHARE_R2_DRY_FAIL="PUT <key glob>" fails that PUT with 500, or with SHARE_R2_DRY_FAIL_CODE (401 and 403 for the token rows)
+      # shellcheck disable=SC2053 # a glob on the right is the seam
+      [[ -z ${SHARE_R2_DRY_FAIL:-} || "PUT $key" != ${SHARE_R2_DRY_FAIL} ]] || { cf_code=${SHARE_R2_DRY_FAIL_CODE:-500} cf_err=InternalError; return 0; }
       if [[ ${SHARE_R2_DRY_PUT:-} == race-once && $key == m/* && ! -f $d/.fx/race.done ]]; then   # another publisher takes this id just before the PUT
         mkdir -p "$d/.fx" "${f%/*}"; : >"$d/.fx/race.done"
         printf '{"v":1,"id":"%s","name":"theirs.txt","src":"/x","added":"2026-10-01","expires":0,"opts":"","prefix":"o/%s.00000000/","by":"peer"}\n' "${key#m/}" "${key#m/}" >"$f"
@@ -7411,8 +7438,8 @@ cmd_setup_members() { # cmd_setup_members <bucket> <yes> --members|--no-members:
 }
 
 
-# --- join (TASK-1h, seq-join): redeem, keys and config, the record, the service, a probe, the final record write; resumed from the journal step (DEC-31) ---
-op_steps_join() { printf '%s\n' "1 redeem" "2 keys" "3 record" "4 service" "5 probe" "6 active"; }
+# --- join (TASK-1h, seq-join): redeem, unseal, the two keys, the config, the record, the service, a probe, the final record write; resumed from the journal step (DEC-31, DEC-82) ---
+op_steps_join() { printf '%s\n' "1 redeem" "2 unseal" "3 api-key" "4 conn-key" "5 config" "6 record" "7 service" "8 probe" "9 active"; }
 own_join_config="role member_id member_mode hostname bucket r2_endpoint port hosts tunnel_id r2_key_id token_expires"
 wk_code="" wk_body=""
 worker_call() { # worker_call GET|POST <path> [body]: one request to https://<host><path>, 30 s; wk_code and wk_body (SHARE_R2_DRY_WORKER answers under the dry seam)
@@ -7435,7 +7462,7 @@ worker_call() { # worker_call GET|POST <path> [body]: one request to https://<ho
   [[ $wk_code =~ ^[0-9]{3}$ ]] || wk_code=000
 }
 worker_bind=""
-join_local_undo() { # a join that lost its record race keeps nothing here, except on a re-join, whose earlier keys and config stay (step 3, DEC-30)
+join_local_undo() { # a join that lost its record race keeps nothing here, except on a re-join, whose earlier keys and config stay (step 6, DEC-30)
   [[ $join_rejoin == 0 ]] || return 0
   token_forget; api_token_forget
   [[ ! -f $config ]] || to_trash "$config"
@@ -7448,8 +7475,8 @@ cmd_join() { # cmd_join [<host> <code>]: the bare form resumes a died join from 
   if [[ $# == 0 ]]; then   # the bare form: the journal names the step; the keys and config came from step 2
     op_begin join join
     [[ -n $op_prev_step ]] || { op_done; die "no join stopped part way on this profile; to join, run: $me join <host> <code>"; }
-    if [[ $op_prev_step -lt 3 || $role != member ]]; then
-      op_done; die_code invite_unavailable "the join stopped at step ${op_prev_step} (${op_prev_name}), before its keys were kept; the invite is spent; ask the admin: share member invite <your name>" "ask the admin: share member invite <your name>"
+    if [[ $op_prev_step -lt 6 || $role != member ]]; then   # steps 1 to 5 hold the unsealed bundle in memory only; from 6 the config on disk is enough (DEC-82)
+      op_done; die_code invite_unavailable "the join stopped at step ${op_prev_step} (${op_prev_name}), before its config was kept; the invite is spent; ask the admin: share member invite <your name>" "ask the admin: share member invite <your name>"
     fi
     start=$op_prev_step
     echo "join:       resuming at step $start ($op_prev_name)"
@@ -7474,7 +7501,7 @@ cmd_join() { # cmd_join [<host> <code>]: the bare form resumes a died join from 
       410) op_done; die_code invite_expired "this invite expired; ask the admin: share member invite <your name>" "ask the admin: share member invite <your name>" ;;
       *) op_done; die_code invite_unavailable "the invite could not be released (it may be spent; the Worker answered $wk_code); ask the admin: share member invite <your name>" "ask the admin: share member invite <your name>" ;;
     esac
-    # step 2: verify, unseal, every refusal, then the Keychain and the config
+    # step 2: verify, unseal, every refusal; the bundle exists in memory only until step 5 has written the config
     op_step 2
     env_body=$wk_body; wk_body=""
     jq -e --arg h "$inv_hash" 'type == "object" and .v == 1 and (.sealed | type == "string") and (.mac | type == "string")' <<<"$env_body" >/dev/null 2>&1 ||
@@ -7505,9 +7532,12 @@ cmd_join() { # cmd_join [<host> <code>]: the bare form resumes a died join from 
         die_code port_busy "port $jport, which the invite names, is busy here; ask the admin: share member invite $(sed 's/^m-//; s/-[0-9a-f]*$//' <<<"$mid") --port <free port>" "ask the admin: share member invite <your name> --port <free port>"
       fi
     fi
-    # the keys go through stdin into the Keychain, replaced in place on a re-join; then the config, through config_put (DEC-34)
+    # the keys go through stdin into the Keychain, replaced in place on a re-join; then the config, through config_put (DEC-34): one step each (DEC-82)
+    op_step 3
     api_token_store "$(jq -r .publisher_token <<<"$bundle")"
+    op_step 4
     [[ $mmode != machine ]] || token_store "$(jq -r .connector_token <<<"$bundle")" >/dev/null
+    op_step 5
     local cfgs=("role=member" "member_id=$mid" "member_mode=$mmode" "hostname=$jhost" "bucket=$(jq -r .bucket <<<"$bundle")" "r2_endpoint=$(jq -r .r2_endpoint <<<"$bundle")"
       "hosts=$(this_host)" "r2_key_id=$(jq -r .publisher_key_id <<<"$bundle")" "token_expires=$(jq -r .token_expires_on <<<"$bundle")")
     [[ $mmode != machine ]] || cfgs+=("port=$jport" "tunnel_id=$tid")
@@ -7516,35 +7546,35 @@ cmd_join() { # cmd_join [<host> <code>]: the bare form resumes a died join from 
     port="$(cfg port || echo 8787)"; [[ $port =~ ^[0-9]+$ ]] || port=8787; metrics_port=$((port + 1))
     hosts="$(cfg hosts)" r2on=1 backend=""
     [[ ${SHARE_R2_DRY:-0} != 1 ]] || echo "CONFIG member $mid" >>"$root/r2-calls.log"
-    start=3
+    start=6
   fi
   mid="$(cfg member_id)"; mmode="$(cfg member_mode)"; reg_id=$mid
-  # step 3: the record names this member and reads invited; joining (If-Match); a lost race keeps nothing here
-  if [[ $start -le 3 ]]; then
-    op_step 3
+  # step 6: the record names this member and reads invited; joining (If-Match); a lost race keeps nothing here
+  if [[ $start -le 6 ]]; then
+    op_step 6
     if ! reg_get "$mid"; then join_local_undo; op_done; die_code member_changed "the admin changed this member during the join (its record is gone); nothing was kept here" "ask the tenant admin"; fi
     case "$(jq -r .status <<<"$reg_rec")" in
-      invited) reg_status_join joining 3 ;;
+      invited) reg_status_join joining 6 ;;
       joining) ;;
       *) join_local_undo; op_done; die_code member_changed "the admin changed this member during the join (its record reads $(jq -r .status <<<"$reg_rec")); nothing was kept here" "ask the tenant admin" ;;
     esac
   fi
-  # step 4: the service (machine): Caddy and cloudflared under launchd, started
-  if [[ $start -le 4 && $mmode == machine ]]; then
-    op_step 4
+  # step 7: the service (machine): Caddy and cloudflared under launchd, started
+  if [[ $start -le 7 && $mmode == machine ]]; then
+    op_step 7
     mk_root; mkdir -p "$pub"
     lock_take index; write_caddyfile; lock_release index
     # SHARE_JOIN_SERVICE=0 (test seam): no login service; serve starts in the background, as the start verb does with no service installed
     if [[ ${SHARE_JOIN_SERVICE:-1} == 1 ]] && { [[ $(uname -s) == Darwin ]] || command -v systemctl >/dev/null; }; then svc_install; echo "service:    runs at login ($svc_label)"; fi
     running || cmd_start >/dev/null
   fi
-  # step 5: a probe link through https://<host>/ answers 3x200
-  if [[ $start -le 5 && $mmode == machine ]]; then
-    op_step 5
+  # step 8: a probe link through https://<host>/ answers 3x200
+  if [[ $start -le 8 && $mmode == machine ]]; then
+    op_step 8
     join_probe || die "a probe link did not answer through https://$host_name/ (the record stays joining); the admin can look with share member ls; rerun: $me join"
   fi
-  # step 6: the status it held before rotate or invite, else active; joined; prev_status, invite and step go (DEC-30)
-  op_step 6
+  # step 9: the status it held before rotate or invite, else active; joined; prev_status, invite and step go (DEC-30)
+  op_step 9
   reg_get "$mid" || { op_done; die_code member_changed "the record of $mid is gone; nothing more was changed" "ask the tenant admin"; }
   if [[ "$(jq -r .status <<<"$reg_rec")" == joining ]]; then
     reg_status_join "$(jq -r '.prev_status // "active"' <<<"$reg_rec")" ""
@@ -7553,7 +7583,7 @@ cmd_join() { # cmd_join [<host> <code>]: the bare form resumes a died join from 
   op_done
   echo "joined as $mid"
 }
-reg_status_join() { # reg_status_join <to> <step>: the member's own record write: joining at step 3, the final status at step 6; a 412 at step 3 keeps nothing here
+reg_status_join() { # reg_status_join <to> <step>: the member's own record write: joining at step 6, the final status at step 9; a 412 at step 6 keeps nothing here
   local to=$1 st=$2 rc=0 extra=.
   [[ $to == joining ]] || extra='.joined = (now | strftime("%Y-%m-%dT%H:%M:%SZ")) | del(.invite)'
   reg_refuse_code=member_changed reg_refuse_msg="the admin changed this member during the join; nothing was kept here"   # the join refusal table (DEC-37)
@@ -7674,6 +7704,7 @@ A refusal ends with `share: <message>` on stderr and exit 1. Set `SHARE_ERROR_JS
 | `op_running` | another run of the same multi-step verb is alive; wait, then read `share state` |
 | `quick_has_named_tunnel` | `setup --quick` on a profile that has a named tunnel |
 | `tenant_rollback` | `setup --r2` died after its config write; the message names the rollback |
+| `op_interrupted` | a cloud add refused: a `setup --r2` died at its config or marker step; its `next` is the rerun, and the add works after it |
 | `config_value_bad` | a config value holds a line break, or is not one the key takes; nothing was written |
 | `cloud_token_missing` | the menu lists cloud links only with a stored publisher token (`share api-token`) |
 | `admin_token_missing` | an admin verb found neither `CLOUDFLARE_API_TOKEN` nor `admin_token_cmd` |
