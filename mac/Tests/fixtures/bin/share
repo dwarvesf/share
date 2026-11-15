@@ -38,6 +38,10 @@ fail_with() { # fail_with <code> <message> <next>
   exit 1
 }
 
+# The fixtures write 4102444800 for "far from expiry"; a screenshot reads better with a
+# plausible time left, so the fake CLI answers it as 14 days from now.
+fresh_expiry='(.. | objects | select(has("expires") and .expires == 4102444800) | .expires) |= (now | floor) + 1209600'
+
 steps_for() { # journaled verbs and their step names
   case $1 in
     add) echo "stage upload row" ;;
@@ -62,10 +66,10 @@ progress() { # progress <verb>
 
 case $verb in
   profiles)
-    if [[ -f $scn/profiles.txt ]]; then cat "$scn/profiles.txt"; else cat "$scn/profiles.json"; fi
+    if [[ -f $scn/profiles.txt ]]; then cat "$scn/profiles.txt"; else jq -c "$fresh_expiry" "$scn/profiles.json"; fi
     ;;
   state)
-    jq -c --arg p "$profile" '.profiles[] | select(.name == $p) | .state' "$scn/profiles.json"
+    jq -c --arg p "$profile" '.profiles[] | select(.name == $p) | .state' "$scn/profiles.json" | jq -c "$fresh_expiry"
     ;;
   version)
     echo "share 0.10.0"

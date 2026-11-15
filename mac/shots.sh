@@ -9,7 +9,7 @@
 # Accessibility API (mac/Tests/fixtures/ax/axdrive.swift): a real mouse click at the centre
 # of a control found in the app's own tree, a real key press. Nothing sets state inside the
 # app (SPEC-009 DEC-56). Each step file runs twice, light then dark; the dark run starts the
-# app with `-AppleInterfaceStyle Dark`, so the machine's appearance never changes.
+# debug app with `-ShareBarShotsAppearance dark`, so the machine's appearance never changes.
 #
 # Step file (mac/Tests/fixtures/steps/<name>.steps), one step per line, `#` starts a comment:
 #   scenario <name>            default scenario for `shots.sh all`
@@ -77,6 +77,19 @@ build_driver() {
   "$AX" trusted >/dev/null 2>&1 || die "Accessibility is not granted to this terminal (System Settings > Privacy & Security > Accessibility)"
 }
 
+# A menu bar manager (Hidden Bar) pushes third-party status items out of the bar while it is
+# collapsed, and AppKit then reports no item at all. When the app's item is missing and
+# Hidden Bar runs, click Hidden Bar's own item once to expand it and look again.
+status_item_ready() { # status_item_ready <app pid>
+  "$AX" find "$1" status-item 3 >/dev/null 2>&1 && return 0
+  local hb
+  hb="$(pgrep -x "Hidden Bar" | head -1 || true)"
+  [[ -n $hb ]] || return 1
+  "$AX" click "$hb" status-item 2 >/dev/null 2>&1 || return 1
+  sleep 1
+  "$AX" find "$1" status-item 6 >/dev/null 2>&1
+}
+
 # step_error <n> <line> <message>
 step_error() { echo "shots.sh: step $1 ($2): $3" >&2; exit 1; }
 
@@ -91,13 +104,13 @@ run_steps() { # run_steps <scenario> <steps file> <light|dark>
   : > "$RUN_DIR/argv.log"
 
   local style_args=()
-  [[ $appearance == dark ]] && style_args=(-AppleInterfaceStyle Dark)
+  [[ $appearance == dark ]] && style_args=(-ShareBarShotsAppearance dark)
   SHARE_BIN="$FIXTURES/bin/share" SHARE_FAKE_DIR="$RUN_DIR" SHARE_FAKE_DELAY=0.4 \
     "$APP/Contents/MacOS/ShareBar" ${style_args[@]+"${style_args[@]}"} >"$RUN_DIR/app.log" 2>&1 &
   APP_PID=$!
 
   # The app is up once its status item is in the Accessibility tree.
-  "$AX" find "$APP_PID" status-item 15 >/dev/null 2>&1 || step_error 0 "launch" "the app's status item never appeared (see $RUN_DIR/app.log)"
+  status_item_ready "$APP_PID" || step_error 0 "launch" "the app's status item never appeared; if a menu bar manager is collapsed, expand it (see $RUN_DIR/app.log)"
   sleep 1.5   # first profiles read
 
   while IFS= read -r line || [[ -n $line ]]; do
@@ -112,6 +125,7 @@ run_steps() { # run_steps <scenario> <steps file> <light|dark>
       scenario) ;;
       click)
         [[ -n $rest ]] || step_error "$n" "$line" "click needs a control"
+        [[ $rest != status-item ]] || status_item_ready "$APP_PID" || step_error "$n" "$line" "missing control: status-item (hidden by the menu bar?)"
         out="$("$AX" click "$APP_PID" "$rest" 4 2>&1)" || step_error "$n" "$line" "$out"
         sleep 0.6 ;;
       find)

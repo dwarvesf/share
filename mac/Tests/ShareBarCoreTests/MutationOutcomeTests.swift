@@ -191,3 +191,49 @@ final class MutationOutcomeTests: XCTestCase {
         XCTAssertEqual(result.hitsText, "3 hits")
     }
 }
+
+/// SPEC-010 G11c (SB-06, SB-07): a mutation asks for the JSON error line and shows its
+/// message and `next`; with no JSON line it shows today's last `share: ` line.
+final class MutationErrorJSONTests: XCTestCase {
+    func testMutationsAskForTheJSONErrorLine() {
+        XCTAssertEqual(MutationQueue.environment["SHARE_ERROR_JSON"], "1")
+    }
+
+    func testAJSONErrorLineGivesItsMessageAndNext() {
+        let stderr = """
+        share: this profile has no members yet
+        {"error":{"code":"no_members","message":"This profile has no members yet.","next":"share --profile p member add <name>"}}
+        """
+        let result = CLIResult(status: 1, stdout: "", stderr: stderr, timedOut: false)
+        let alert = MutationOutcome.alert(for: result, warningShareID: nil, notServingHere: false)
+        XCTAssertEqual(alert?.kind, .failure)
+        XCTAssertEqual(alert?.message, "This profile has no members yet.")
+        XCTAssertEqual(alert?.next, "share --profile p member add <name>")
+    }
+
+    func testNoJSONLineGivesTodaysLastShareLine() {
+        let result = CLIResult(status: 1, stdout: "", stderr: "share: first\nshare: the real refusal", timedOut: false)
+        let alert = MutationOutcome.alert(for: result, warningShareID: nil, notServingHere: false)
+        XCTAssertEqual(alert?.message, "share: the real refusal")
+        XCTAssertNil(alert?.next)
+    }
+
+    func testAProgressLineAfterTheRefusalIsNotTheMessage() {
+        let stderr = "share: add failed at upload\n{\"progress\":{\"verb\":\"add\",\"step\":2,\"of\":3,\"name\":\"upload\"}}"
+        let result = CLIResult(status: 1, stdout: "", stderr: stderr, timedOut: false)
+        let alert = MutationOutcome.alert(for: result, warningShareID: nil, notServingHere: false)
+        XCTAssertEqual(alert?.message, "share: add failed at upload")
+    }
+
+    func testAMalformedJSONErrorLineFallsBack() {
+        let result = CLIResult(status: 1, stdout: "", stderr: "share: plain\n{\"error\":{\"code\":", timedOut: false)
+        let alert = MutationOutcome.alert(for: result, warningShareID: nil, notServingHere: false)
+        XCTAssertEqual(alert?.kind, .failure)
+        XCTAssertFalse(alert?.message.contains("{\"error\"") ?? true)
+    }
+
+    func testStopWaitingOnARunningAddHasTheNewCopy() {
+        XCTAssertEqual(StopWaiting.confirmText(isAdd: true), "The add stops where it is; share prune cleans up what it left.")
+        XCTAssertEqual(StopWaiting.confirmText(isAdd: false), StopWaiting.confirmText)
+    }
+}

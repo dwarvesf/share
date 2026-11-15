@@ -46,6 +46,14 @@ private final class RowMenu: NSMenu {
 final class StatusItemController: NSObject, @unchecked Sendable {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
+
+    #if DEBUG
+    /// Screenshot harness only: the status item's menu follows the menu bar, so it takes the
+    /// appearance explicitly.
+    func applyShotsAppearance(_ appearance: NSAppearance?) {
+        menu.appearance = appearance
+    }
+    #endif
     private let mutationQueue = MutationQueue()
     private let defaults: UserDefaults = .standard
 
