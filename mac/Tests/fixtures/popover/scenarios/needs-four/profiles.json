@@ -1,0 +1,112 @@
+{
+  "schema": 1,
+  "profiles": [
+    {
+      "name": "console",
+      "state": {
+        "schema": 1,
+        "state": "stopped",
+        "ready": false,
+        "mode": "named",
+        "host": "s.console.so",
+        "hosts": "Mac-mini",
+        "serves_here": true,
+        "service": true,
+        "access_pending": 0,
+        "role": "tenant_origin",
+        "tier": "t2",
+        "serve": {
+          "phase": "failed",
+          "reason": "caddy_failed"
+        },
+        "ops": [
+          {
+            "verb": "setup-members",
+            "step": 3,
+            "of": 9,
+            "name": "carry",
+            "alive": false,
+            "rerun": "share --profile console setup s.console.so --members",
+            "rerun_argv": [
+              "--profile",
+              "console",
+              "setup",
+              "s.console.so",
+              "--members"
+            ]
+          }
+        ],
+        "shares": [
+          {
+            "id": "4f9ff2",
+            "name": "notes.txt",
+            "url": "https://s.console.so/4f9ff2/notes.txt",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 4102444800,
+            "storage": "machine",
+            "type": "text",
+            "by": "Mac-mini",
+            "link_state": "live"
+          },
+          {
+            "id": "7f3a21",
+            "name": "playdate-uat-run.mov",
+            "url": "https://s.console.so/7f3a21/playdate-uat-run.mov",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 4102444800,
+            "storage": "machine",
+            "type": "video",
+            "by": "An's MacBook",
+            "link_state": "offline",
+            "origin": "m-an-1a2b3c4d"
+          },
+          {
+            "id": "2be8d0",
+            "name": "bao-cao-thang-10.pdf",
+            "url": "https://s.console.so/2be8d0/bao-cao-thang-10.pdf",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 4102444800,
+            "storage": "machine",
+            "type": "pdf",
+            "by": "Dung's iMac",
+            "link_state": "paused",
+            "origin": "m-dung-5e6f7a8b"
+          }
+        ],
+        "token": {
+          "source": "keychain",
+          "status": "expiring"
+        }
+      }
+    },
+    {
+      "name": "han",
+      "state": {
+        "schema": 1,
+        "state": "serving",
+        "ready": true,
+        "mode": "named",
+        "host": "s.han.ws",
+        "hosts": "Mac-mini",
+        "serves_here": true,
+        "service": true,
+        "access_pending": 0,
+        "role": "origin",
+        "tier": "t0",
+        "serve": {
+          "phase": "serving",
+          "reason": "ok"
+        },
+        "ops": [],
+        "shares": [],
+        "token": {
+          "source": "keychain",
+          "status": "expired"
+        }
+      }
+    }
+  ]
+}

@@ -15,12 +15,15 @@ public struct Undo: Sendable, Equatable {
     /// The argv the deadline runs, built by the caller (`rm <id>...` on the right profile).
     public let argv: [String]
     public let deadline: Date
+    /// The footer sentence while this undo is the newest one open.
+    public let message: String
 
-    public init(action: Action, ids: [String], argv: [String], deadline: Date) {
+    public init(action: Action, ids: [String], argv: [String], deadline: Date, message: String = "") {
         self.action = action
         self.ids = ids
         self.argv = argv
         self.deadline = deadline
+        self.message = message
     }
 }
 
@@ -89,11 +92,15 @@ public enum PopoverEvent: Sendable, Equatable {
     case quickLookOpen(url: String)
     /// Click or Return on a row that may copy.
     case copyLink(url: String)
-    case remove(action: Undo.Action, ids: [String], argv: [String], now: Date)
+    case remove(action: Undo.Action, ids: [String], argv: [String], now: Date, message: String = "")
     /// The Undo button or Command-Z: cancels the newest pending undo, no CLI call.
     case undo
-    /// The clock: runs every pending undo past its deadline, clears a lapsed toast.
+    /// The clock: runs every pending undo past its deadline, clears a lapsed toast. While the
+    /// Undo button has focus nothing runs and nothing clears (TASK-4b9).
     case tick(now: Date)
+    /// Focus entered (`held`) or left the Undo button. Leaving restarts every pending
+    /// undo's window, so a person who tabbed away still has the full 6 s.
+    case holdUndo(held: Bool, now: Date)
     /// The popover closed, or the app is quitting: every pending undo commits at once.
     case close
     case publishStep(file: String, step: Int, of: Int)
@@ -143,6 +150,8 @@ public struct PopoverState: Sendable, Equatable {
     public var pending: [Undo]
     public var publishing: [Publish]
     public var footer: Footer?
+    /// True while the Undo button has focus.
+    public var undoHeld = false
 
     public static let toastSeconds: TimeInterval = 3.5
 
@@ -267,21 +276,32 @@ public struct PopoverState: Sendable, Equatable {
         case .copyLink(let url):
             effects.append(.copy(url))
 
-        case .remove(let action, let ids, let argv, let now):
-            pending.append(Undo(action: action, ids: ids, argv: argv, deadline: now.addingTimeInterval(Undo.window)))
+        case .remove(let action, let ids, let argv, let now, let message):
+            if pending.isEmpty { undoHeld = false }
+            pending.append(Undo(action: action, ids: ids, argv: argv, deadline: now.addingTimeInterval(Undo.window), message: message))
 
         case .undo:
             if !pending.isEmpty { pending.removeLast() }
 
+        case .holdUndo(let held, let now):
+            undoHeld = held
+            if !held {
+                pending = pending.map { Undo(action: $0.action, ids: $0.ids, argv: $0.argv, deadline: now.addingTimeInterval(Undo.window), message: $0.message) }
+                if footer?.expires != nil, !pending.isEmpty { footer = Footer(text: footer?.text ?? "", kind: .toast, expires: now.addingTimeInterval(Undo.window)) }
+            }
+
         case .tick(let now):
+            if undoHeld, !pending.isEmpty { break }
             let due = pending.filter { $0.deadline <= now }
             pending.removeAll { $0.deadline <= now }
+            if pending.isEmpty { undoHeld = false }
             effects.append(contentsOf: due.map { .run($0.argv) })
             if let expires = footer?.expires, expires <= now { footer = nil }
 
         case .close:
             effects.append(contentsOf: pending.map { .run($0.argv) })
             pending.removeAll()
+            undoHeld = false
             switch mode {
             case .firstRun: break
             default:

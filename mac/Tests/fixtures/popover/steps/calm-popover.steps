@@ -1,0 +1,10 @@
+# TASK-4b6 "calm popover", TASK-4b7 "calm without Mine and Team" (every link is the viewer's), TASK-4b8 "footer all answer".
+scenario calm
+click status-item
+find tenant-button
+find search
+find show-all
+find footer-ok
+shot calm-popover
+shot calm-no-scope
+shot footer-all-answer

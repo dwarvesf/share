@@ -1,0 +1,11 @@
+# TASK-4b9 "undo footer after Remove"; an undone Remove leaves no rm in argv.log (run-shots.sh checks).
+# expect-rm: 0
+scenario admin
+click status-item
+click more-c4c2a0
+click menu-remove
+find undo-button
+shot undo-footer-remove
+click undo-button
+wait 7
+shot after-undo

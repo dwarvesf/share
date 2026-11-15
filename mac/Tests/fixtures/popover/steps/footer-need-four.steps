@@ -1,0 +1,5 @@
+# TASK-4b8 "footer 4 need a look".
+scenario ../popover/scenarios/needs-four
+click status-item
+find footer-issues
+shot footer-4-need-a-look

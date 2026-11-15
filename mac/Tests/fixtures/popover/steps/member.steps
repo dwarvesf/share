@@ -1,0 +1,5 @@
+# TASK-4b7 "member scenario": a member sees their own links and no Mine and Team control.
+scenario member
+click status-item
+find row-7f3a21
+shot member-scenario
