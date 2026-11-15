@@ -1,10 +1,11 @@
 import Foundation
 
 /// Which status-item icon a `MenuModel` calls for. AppKit picks the actual `NSImage`
-/// (template SF Symbols); this only names the two states the model can tell apart.
+/// (the template Share mark, `StatusGlyph`); this only names the two states the model can
+/// tell apart.
 public enum Icon: Sendable, Equatable {
-    case connected // antenna.radiowaves.left.and.right: serving and ready
-    case disconnected // antenna.radiowaves.left.and.right.slash: anything else
+    case connected // open ring plus dot: serving and ready
+    case disconnected // closed ring, no dot: anything else
 }
 
 /// One profile's condition for the menu, first matching rule of the spec's table wins.

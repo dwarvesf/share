@@ -91,6 +91,13 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_PATH/ShareBar" "$APP/Contents/MacOS/ShareBar"
 cp "$MAC_DIR/Info.plist" "$APP/Contents/Info.plist"
+# The app hides its Dock icon (LSUIElement), but Finder and System Settings still show
+# AppIcon.icns, drawn from code by icons.sh.
+ICON_DIR="$MAC_DIR/build/icon"
+rm -rf "$ICON_DIR"
+bash "$MAC_DIR/icons.sh" "$ICON_DIR" >/dev/null
+[[ -f "$ICON_DIR/AppIcon.icns" ]] || die "icons.sh did not produce AppIcon.icns"
+cp "$ICON_DIR/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 /usr/libexec/PlistBuddy \
   -c "Set :CFBundleShortVersionString $VERSION" \
   -c "Set :CFBundleVersion $VERSION" \

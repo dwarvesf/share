@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-labelledby="t">
+  <title id="t">Share Bar app icon</title>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#0B1B16"/>
+  <g transform="translate(185.60 177.60) scale(2.55)">
+    <path fill="#F4F1EA" d="M208.87 112.19A92 92 0 1 1 143.81 47.13L133.46 85.77A52 52 0 1 0 170.23 122.54Z"/>
+    <circle fill="#18C37E" cx="202.02" cy="53.98" r="30"/>
+  </g>
+</svg>
