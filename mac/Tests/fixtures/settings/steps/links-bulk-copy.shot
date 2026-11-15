@@ -1,0 +1,3 @@
+scenario links
+script links,lselect:91fe20+f1d7e2+3c8d11,lbulkcopy
+label links-bulk-copied

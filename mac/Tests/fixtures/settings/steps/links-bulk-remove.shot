@@ -1,0 +1,4 @@
+scenario links
+script links,lselect:91fe20+3c8d11+7f3a21,lbulkremove
+expect-no-argv rm
+label links-bulk-remove-pending

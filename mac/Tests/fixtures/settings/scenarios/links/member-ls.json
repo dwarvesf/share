@@ -1,0 +1,389 @@
+[
+ {
+  "member_id": "m-an-1a2b3c4d",
+  "name": "an",
+  "mode": "machine",
+  "status": "active",
+  "expired": false,
+  "step": null,
+  "of": null,
+  "step_name": null,
+  "lease": null,
+  "deploy": {
+   "bound": true,
+   "paused": false
+  },
+  "account": {
+   "tunnel": "t-an",
+   "connectors": 1,
+   "services": 1
+  },
+  "token_expires": "2027-01-15",
+  "invite_expires": null,
+  "prev_status": null,
+  "drift": [],
+  "can": [
+   "pause",
+   "invite",
+   "rotate",
+   "renew",
+   "rm"
+  ]
+ },
+ {
+  "member_id": "m-nam-1a2b4e81",
+  "name": "nam",
+  "mode": "machine",
+  "status": "pausing",
+  "expired": false,
+  "step": 2,
+  "of": 3,
+  "step_name": "deploy",
+  "lease": {
+   "holder": "han",
+   "verb": "pause",
+   "step": 2,
+   "live": false
+  },
+  "deploy": {
+   "bound": false,
+   "paused": false
+  },
+  "account": {
+   "tunnel": "t-nam",
+   "connectors": 0,
+   "services": 1
+  },
+  "token_expires": "2027-01-15",
+  "invite_expires": null,
+  "prev_status": null,
+  "drift": [],
+  "can": [
+   "finish",
+   "rm"
+  ]
+ },
+ {
+  "member_id": "m-linh-1a2b60b5",
+  "name": "linh",
+  "mode": "cloud",
+  "status": "invited",
+  "expired": false,
+  "step": null,
+  "of": null,
+  "step_name": null,
+  "lease": null,
+  "deploy": {
+   "bound": false,
+   "paused": false
+  },
+  "account": {
+   "tunnel": "t-linh",
+   "connectors": 0,
+   "services": 1
+  },
+  "token_expires": "2027-01-15",
+  "invite_expires": @EXP6@,
+  "prev_status": null,
+  "drift": [],
+  "can": [
+   "invite",
+   "rm"
+  ]
+ },
+ {
+  "member_id": "m-bao-1a2b72e9",
+  "name": "bao",
+  "mode": "machine",
+  "status": "active",
+  "expired": false,
+  "step": null,
+  "of": null,
+  "step_name": null,
+  "lease": null,
+  "deploy": {
+   "bound": true,
+   "paused": false
+  },
+  "account": {
+   "tunnel": "t-bao",
+   "connectors": 1,
+   "services": 1
+  },
+  "token_expires": "2027-01-15",
+  "invite_expires": null,
+  "prev_status": null,
+  "drift": [],
+  "can": [
+   "pause",
+   "invite",
+   "rotate",
+   "renew",
+   "rm"
+  ]
+ },
+ {
+  "member_id": "m-chi-1a2b851d",
+  "name": "chi",
+  "mode": "machine",
+  "status": "paused",
+  "expired": false,
+  "step": null,
+  "of": null,
+  "step_name": null,
+  "lease": null,
+  "deploy": {
+   "bound": false,
+   "paused": true
+  },
+  "account": {
+   "tunnel": "t-chi",
+   "connectors": 0,
+   "services": 1
+  },
+  "token_expires": "2027-01-15",
+  "invite_expires": null,
+  "prev_status": null,
+  "drift": [],
+  "can": [
+   "resume",
+   "rotate",
+   "rm"
+  ]
+ },
+ {
+  "member_id": "m-duc-1a2b9751",
+  "name": "duc",
+  "mode": "machine",
+  "status": "active",
+  "expired": false,
+  "step": null,
+  "of": null,
+  "step_name": null,
+  "lease": null,
+  "deploy": {
+   "bound": true,
+   "paused": false
+  },
+  "account": {
+   "tunnel": "t-duc",
+   "connectors": 1,
+   "services": 1
+  },
+  "token_expires": "2027-01-15",
+  "invite_expires": null,
+  "prev_status": null,
+  "drift": [],
+  "can": [
+   "pause",
+   "invite",
+   "rotate",
+   "renew",
+   "rm"
+  ]
+ },
+ {
+  "member_id": "m-hai-1a2ba985",
+  "name": "hai",
+  "mode": "machine",
+  "status": "joining",
+  "expired": false,
+  "step": null,
+  "of": null,
+  "step_name": null,
+  "lease": null,
+  "deploy": {
+   "bound": false,
+   "paused": false
+  },
+  "account": {
+   "tunnel": "t-hai",
+   "connectors": 0,
+   "services": 1
+  },
+  "token_expires": "2027-01-15",
+  "invite_expires": null,
+  "prev_status": null,
+  "drift": [],
+  "can": [
+   "finish",
+   "rm"
+  ]
+ },
+ {
+  "member_id": "m-khoa-1a2bbbb9",
+  "name": "khoa",
+  "mode": "cloud",
+  "status": "active",
+  "expired": false,
+  "step": null,
+  "of": null,
+  "step_name": null,
+  "lease": null,
+  "deploy": {
+   "bound": true,
+   "paused": false
+  },
+  "account": {
+   "tunnel": "t-khoa",
+   "connectors": 1,
+   "services": 1
+  },
+  "token_expires": "2027-01-15",
+  "invite_expires": null,
+  "prev_status": null,
+  "drift": [],
+  "can": [
+   "pause",
+   "invite",
+   "rotate",
+   "renew",
+   "rm"
+  ]
+ },
+ {
+  "member_id": "m-lan-1a2bcded",
+  "name": "lan",
+  "mode": "machine",
+  "status": "left",
+  "expired": false,
+  "step": null,
+  "of": null,
+  "step_name": null,
+  "lease": null,
+  "deploy": {
+   "bound": false,
+   "paused": false
+  },
+  "account": {
+   "tunnel": "t-lan",
+   "connectors": 0,
+   "services": 1
+  },
+  "token_expires": "2027-01-15",
+  "invite_expires": null,
+  "prev_status": "active",
+  "drift": [],
+  "can": [
+   "invite",
+   "rm"
+  ]
+ },
+ {
+  "member_id": "m-minh-1a2be021",
+  "name": "minh",
+  "mode": "machine",
+  "status": "active",
+  "expired": false,
+  "step": null,
+  "of": null,
+  "step_name": null,
+  "lease": null,
+  "deploy": {
+   "bound": true,
+   "paused": false
+  },
+  "account": {
+   "tunnel": "t-minh",
+   "connectors": 1,
+   "services": 1
+  },
+  "token_expires": "2027-01-15",
+  "invite_expires": null,
+  "prev_status": null,
+  "drift": [],
+  "can": [
+   "pause",
+   "invite",
+   "rotate",
+   "renew",
+   "rm"
+  ]
+ },
+ {
+  "member_id": "m-nhi-1a2bf255",
+  "name": "nhi",
+  "mode": "machine",
+  "status": "removing",
+  "expired": false,
+  "step": null,
+  "of": null,
+  "step_name": null,
+  "lease": null,
+  "deploy": {
+   "bound": false,
+   "paused": false
+  },
+  "account": {
+   "tunnel": "t-nhi",
+   "connectors": 0,
+   "services": 1
+  },
+  "token_expires": "2027-01-15",
+  "invite_expires": null,
+  "prev_status": null,
+  "drift": [],
+  "can": [
+   "finish",
+   "rm"
+  ]
+ },
+ {
+  "member_id": "m-phuc-1a2c0489",
+  "name": "phuc",
+  "mode": "machine",
+  "status": "active",
+  "expired": false,
+  "step": null,
+  "of": null,
+  "step_name": null,
+  "lease": null,
+  "deploy": {
+   "bound": true,
+   "paused": false
+  },
+  "account": {
+   "tunnel": "t-phuc",
+   "connectors": 1,
+   "services": 1
+  },
+  "token_expires": "2027-01-15",
+  "invite_expires": null,
+  "prev_status": null,
+  "drift": [],
+  "can": [
+   "pause",
+   "invite",
+   "rotate",
+   "renew",
+   "rm"
+  ]
+ },
+ {
+  "member_id": "m-quan-9d8e7f6a",
+  "name": "quan",
+  "mode": "machine",
+  "status": "removed",
+  "expired": false,
+  "step": null,
+  "of": null,
+  "step_name": null,
+  "lease": null,
+  "deploy": {
+   "bound": false,
+   "paused": false
+  },
+  "account": {
+   "tunnel": null,
+   "connectors": 0,
+   "services": 0
+  },
+  "token_expires": "2027-01-15",
+  "invite_expires": null,
+  "prev_status": null,
+  "drift": [],
+  "can": [
+   "purge"
+  ]
+ }
+]

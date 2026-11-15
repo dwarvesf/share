@@ -151,7 +151,7 @@ struct AllLinksView: View {
             Color.clear.frame(width: 26)
         }
         .font(.system(size: 11, weight: .medium)).foregroundColor(t.secondary)
-        .padding(.horizontal, 10).padding(.vertical, 7)
+        .padding(.horizontal, 10).frame(height: 28)
         .background(t.hover.opacity(0.5))
     }
 

@@ -116,7 +116,7 @@ public struct AllLinksModel: Sendable, Equatable {
         let expired = PopoverViewModel.isExpired(share, now: now)
         let tab: AllLinksTab = expired ? .expired : (model.state == .live ? .live : .needsLook)
         let owner = PopoverViewModel.ownerName(of: share, state: snapshot, role: role) ?? ""
-        let place = share.storage == "cloud" ? "cloud" : (model.machine)
+        let place = share.storage == "cloud" ? "cloud" : (model.own ? "this Mac" : model.machine)
         return AllLinksRow(
             row: model, tab: tab, owner: owner, livesOn: place,
             expires: expiresText(share, expired: expired, now: now),

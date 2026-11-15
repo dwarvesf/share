@@ -1,0 +1,223 @@
+{
+ "schema": 1,
+ "profiles": [
+  {
+   "name": "console",
+   "state": {
+    "schema": 1,
+    "state": "serving",
+    "ready": true,
+    "mode": "named",
+    "host": "s.console.so",
+    "hosts": "Mac-mini",
+    "serves_here": true,
+    "service": true,
+    "access_pending": 0,
+    "r2": true,
+    "storage_default": "cloud",
+    "role": "tenant_origin",
+    "tier": "t2",
+    "serve": {
+     "phase": "serving",
+     "reason": "ok"
+    },
+    "ops": [],
+    "token": {
+     "source": "keychain",
+     "status": "expiring",
+     "expires_on": "2026-12-01"
+    },
+    "compat": {
+     "cli": "0.10.0",
+     "worker": "5 a1b2c3d4e5f6",
+     "status": "ok",
+     "min_cli": "0.10.0"
+    },
+    "shares": [
+     {
+      "id": "0d489d",
+      "name": "kid-demos",
+      "url": "https://s.console.so/0d489d/kid-demos",
+      "kind": "snapshot",
+      "own_host": null,
+      "expires": 0,
+      "storage": "machine",
+      "type": "folder",
+      "by": "Mac-mini",
+      "link_state": "live",
+      "added": "@A0@"
+     },
+     {
+      "id": "c4e211",
+      "name": "q4-pitch-deck.pdf",
+      "url": "https://s.console.so/c4e211/q4-pitch-deck.pdf",
+      "kind": "snapshot",
+      "own_host": null,
+      "expires": @E6@,
+      "storage": "machine",
+      "type": "pdf",
+      "by": "Mac-mini",
+      "link_state": "live",
+      "added": "@A0@"
+     },
+     {
+      "id": "7f3a21",
+      "name": "playdate-uat-run.mov",
+      "url": "https://s.console.so/7f3a21/playdate-uat-run.mov",
+      "kind": "snapshot",
+      "own_host": null,
+      "expires": @E3@,
+      "storage": "machine",
+      "type": "video",
+      "by": "An's MacBook",
+      "link_state": "offline",
+      "added": "@A0@",
+      "origin": "m-an-1a2b3c4d"
+     },
+     {
+      "id": "a19f03",
+      "name": "press-kit.html",
+      "url": "https://s.console.so/a19f03/press-kit.html",
+      "kind": "snapshot",
+      "own_host": null,
+      "expires": @E21@,
+      "storage": "machine",
+      "type": "page",
+      "by": "Mac-mini",
+      "link_state": "live",
+      "added": "@A0@"
+     },
+     {
+      "id": "91fe20",
+      "name": "hero-v4.png",
+      "url": "https://s.console.so/91fe20/hero-v4.png",
+      "kind": "snapshot",
+      "own_host": null,
+      "expires": @E7@,
+      "storage": "cloud",
+      "type": "image",
+      "by": "Linh",
+      "link_state": "live",
+      "added": "@A0@",
+      "origin": "m-linh-5e6f7a8b",
+      "views": 3
+     },
+     {
+      "id": "91ac4e",
+      "name": "localhost:3000",
+      "url": "http://localhost:3000",
+      "kind": "live",
+      "own_host": null,
+      "expires": 0,
+      "storage": "machine",
+      "type": "page",
+      "by": "Binh's server",
+      "link_state": "live",
+      "added": "@A0@",
+      "origin": "m-binh-7a7b7c7d"
+     },
+     {
+      "id": "e04b9c",
+      "name": "landing-draft.html",
+      "url": "https://s.console.so/e04b9c/landing-draft.html",
+      "kind": "snapshot",
+      "own_host": null,
+      "expires": @E2@,
+      "storage": "machine",
+      "type": "page",
+      "by": "Dung's iMac",
+      "link_state": "paused",
+      "added": "@A1@",
+      "origin": "m-dung-9a8b7c6d"
+     },
+     {
+      "id": "f1d7e2",
+      "name": "hermes-demo-45s.mp4",
+      "url": "https://s.console.so/f1d7e2/hermes-demo-45s.mp4",
+      "kind": "snapshot",
+      "own_host": null,
+      "expires": @E30@,
+      "storage": "cloud",
+      "type": "video",
+      "by": "Mac-mini",
+      "link_state": "live",
+      "added": "@A1@",
+      "views": 12
+     },
+     {
+      "id": "b2c3d4",
+      "name": "invoice-2026-10.pdf",
+      "url": "https://s.console.so/b2c3d4/invoice-2026-10.pdf",
+      "kind": "snapshot",
+      "own_host": null,
+      "expires": 1700000000,
+      "storage": "cloud",
+      "type": "pdf",
+      "by": "Mac-mini",
+      "link_state": "expired",
+      "added": "@A9@",
+      "views": 7
+     },
+     {
+      "id": "2be8d0",
+      "name": "bao-cao-thang-10.pdf",
+      "url": "https://s.console.so/2be8d0/bao-cao-thang-10.pdf",
+      "kind": "snapshot",
+      "own_host": null,
+      "expires": @E6@,
+      "storage": "machine",
+      "type": "pdf",
+      "by": "An's MacBook",
+      "link_state": "offline",
+      "added": "@A2@",
+      "origin": "m-an-1a2b3c4d"
+     },
+     {
+      "id": "3c8d11",
+      "name": "contract-draft-v2.pdf",
+      "url": "https://s.console.so/3c8d11/contract-draft-v2.pdf",
+      "kind": "snapshot",
+      "own_host": null,
+      "expires": @E14@,
+      "storage": "cloud",
+      "type": "pdf",
+      "by": "Khoa",
+      "link_state": "live",
+      "added": "@A2@",
+      "origin": "m-khoa-2c2d2e2f",
+      "views": 1
+     },
+     {
+      "id": "7a2b90",
+      "name": "brand-assets",
+      "url": "https://s.console.so/7a2b90/brand-assets",
+      "kind": "snapshot",
+      "own_host": null,
+      "expires": 0,
+      "storage": "machine",
+      "type": "folder",
+      "by": "Minh's Mac Studio",
+      "link_state": "live",
+      "added": "@A3@",
+      "origin": "m-minh-3a3b3c3d"
+     },
+     {
+      "id": "d4e5f6",
+      "name": "moodboard.png",
+      "url": "https://s.console.so/d4e5f6/moodboard.png",
+      "kind": "snapshot",
+      "own_host": null,
+      "expires": @E5@,
+      "storage": "cloud",
+      "type": "image",
+      "by": "Phuc",
+      "link_state": "live",
+      "added": "@A4@",
+      "origin": "m-phuc-4e4f5a5b",
+      "views": 0
+     }
+    ]
+   }
+  }
+ ]
+}

@@ -17,8 +17,13 @@ import SwiftUI
 /// `invite-mode=<machine|cloud>`, `invite-ttl=<n>`, `create-code`, `pause:<profile>:<member>`,
 /// `remove-member:<profile>:<member>`, `wait:<seconds>`. Members tab: `keys` (both key sources as stored commands), `mload` (wait for the roster),
 /// `mfilter:<all|needsLook|removed>`, `mquery=<text>`, `mmenu:<member>`, `mverb:<member>:<verb>`.
+/// All links window (the capture then takes that window): `links`, `ltab:<all|live|needsLook|expired>`,
+/// `lq=<text>`, `lselect:<id>+<id>`, `lbulkcopy`, `lbulkremove`.
 @MainActor
 enum ShotsHooks {
+    /// Set by `links`: the capture then takes the All links window, not Settings.
+    private static var captureAllLinks = false
+
     static func installIfRequested() {
         guard let script = UserDefaults.standard.string(forKey: "ShareBarShotsScreen"), !script.isEmpty else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
@@ -36,7 +41,8 @@ enum ShotsHooks {
         }
         try? await Task.sleep(nanoseconds: 600_000_000)
         if let dir = ProcessInfo.processInfo.environment["SHARE_FAKE_DIR"] {
-            let info = "\(controller.windowNumber)\n"
+            let number = captureAllLinks ? AllLinksWindowController.shared.windowNumber : controller.windowNumber
+            let info = "\(number)\n"
             try? info.write(toFile: dir + "/shots-ready", atomically: true, encoding: .utf8)
         }
     }
@@ -117,6 +123,18 @@ enum ShotsHooks {
                 await step(inner, store: store, controller: controller)
                 try? await Task.sleep(nanoseconds: 150_000_000)
             }
+        case "links":
+            let popover = AllLinksWindowController.shared.store?.popover
+            for _ in 0..<80 where popover?.profiles == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+            AllLinksWindowController.shared.show()
+            captureAllLinks = true
+        case "ltab":
+            AllLinksWindowController.shared.store?.state.show(AllLinksTab(rawValue: rest) ?? .all)
+        case "lq": AllLinksWindowController.shared.store?.setQuery(rest)
+        case "lselect":
+            for id in rest.split(separator: "+") { AllLinksWindowController.shared.store?.state.toggle(String(id)) }
+        case "lbulkcopy": AllLinksWindowController.shared.store?.bulkCopy()
+        case "lbulkremove": AllLinksWindowController.shared.store?.bulkRemove()
         case "mload":
             for _ in 0..<60 where store.members.list == nil && store.members.failure == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
         case "mfilter": store.members.filter = MemberFilter(rawValue: rest) ?? .all
