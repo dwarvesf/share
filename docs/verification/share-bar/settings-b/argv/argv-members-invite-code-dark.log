@@ -1,0 +1,20 @@
+profiles --json
+profiles --json
+--profile console config ttl
+profiles --json
+--profile console config storage_default
+--profile console config ttl
+--profile console config storage_default
+version
+version
+--profile console admin-token --cmd pass show cf-admin
+--profile console minter-token --cmd pass show cf-minter
+profiles --json
+--profile console config ttl
+profiles --json
+--profile console member ls --json
+--profile console config storage_default
+--profile console config ttl
+--profile console config storage_default
+--profile console member add chi2 --machine --invite-ttl 7d
+--profile console member ls --json

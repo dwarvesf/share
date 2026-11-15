@@ -94,8 +94,7 @@ struct MembersPane: View {
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
         .frame(width: 160)
-        .background(RoundedRectangle(cornerRadius: 6).fill(t.field))
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(t.softBorder, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 6).fill(t.hover))
     }
 
     // MARK: list
@@ -212,7 +211,7 @@ private struct MemberRowView: View {
             Text(row.linkText).font(t.metaFont).foregroundColor(t.secondary).monospacedDigit()
                 .frame(width: 52, alignment: .trailing)
             Button(action: toggle) {
-                Image(systemName: "ellipsis").font(.system(size: 13)).foregroundColor(hovering || open ? t.secondary : t.secondary.opacity(0.0))
+                Image(systemName: "ellipsis").font(.system(size: 13)).foregroundColor(hovering || open ? t.secondary : t.tertiary)
                     .frame(width: 26, height: 26).contentShape(Rectangle())
             }
             .buttonStyle(.plain)

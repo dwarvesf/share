@@ -54,3 +54,8 @@ Delta from SPEC-009 for the drop, drag-out, Quick Look and hotkey tasks. Foundat
 - `share state` prints no port for a port share, so Quick Look reads it from a name like `localhost:3000`. A `port` key in the row would remove the guess.
 - The footer drag hint names the dragged link, as the prototype does; AppKit gives the source no way to learn the destination app's name.
 - Not exercised on a live desktop (owner rule): a real Finder drag onto the status item, a real ⌃⌥S press from another app, a real Space on a focused row, a real drag of a row into TextEdit. The reducer, the Carbon registration and the offscreen captures stand in; SG-16 or the owner's own run closes them.
+
+## Popover in settings B
+
+- D24. Loading, CLI missing and CLI too old replace the list body (`AppStateView`); `Working: add (3/6)` replaces the baseline footer for another process's alive op; a failure footer splits `Next:` into a copyable mono line. Scenes for them: `-ShareBarShotsScene loading|cli-missing|cli-old|focus-third|menu-shift-f10|publish-failure` (`PopoverStore.freezeForShots` holds them against the controller's reads).
+- D25. Row actions: VoiceOver gets every row-menu item as an action. Focus moves and restores through `RowFocus`.

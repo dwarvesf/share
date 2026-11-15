@@ -79,8 +79,8 @@ struct AllLinksView: View {
             }
             .padding(.horizontal, 8).padding(.vertical, 4)
             .frame(width: 180)
-            .background(RoundedRectangle(cornerRadius: 6).fill(t.field))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(searchFocused ? t.focus : t.softBorder, lineWidth: searchFocused ? 2 : 1))
+            .background(RoundedRectangle(cornerRadius: 6).fill(t.hover))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(t.focus, lineWidth: searchFocused ? 2 : 0))
         }
     }
 
