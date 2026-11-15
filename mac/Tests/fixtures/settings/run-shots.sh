@@ -73,6 +73,8 @@ capture() { # capture <step file> <light|dark>
   RUN_DIR="$(mktemp -d "$WORK/run.XXXXXX")"
   mkdir -p "$RUN_DIR/scenario"
   command cp -f "$HERE/scenarios/$scenario"/* "$RUN_DIR/scenario/"
+  # a code that expires in 6 days, read against the clock of the run
+  [[ ! -f $RUN_DIR/scenario/member-ls.json ]] || sed -i '' "s/@EXP6@/$(( $(date +%s) + 6 * 86400 + 3600 ))/g" "$RUN_DIR/scenario/member-ls.json"
   : > "$RUN_DIR/argv.log"
   : > "$RUN_DIR/env.log"
   defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true

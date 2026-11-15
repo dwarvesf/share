@@ -143,7 +143,7 @@ public struct MembersModel: Sendable, Equatable {
         )
     }
 
-    static func display(_ name: String) -> String { name.prefix(1).uppercased() + name.dropFirst() }
+    public static func display(_ name: String) -> String { name.prefix(1).uppercased() + name.dropFirst() }
 
     /// The machine a member publishes from: the `by` of one of their links, else `<Name>'s machine`.
     static func machineName(of member: MemberRecord, shares: [Share], fallback: String) -> String {

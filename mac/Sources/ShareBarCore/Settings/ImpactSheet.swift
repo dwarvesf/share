@@ -104,6 +104,37 @@ public enum Impact {
         )
     }
 
+    /// Rotate keys: the old keys stop now, the links keep their addresses, the member joins again with a new code.
+    public static func rotate(member: String) -> ImpactSheet {
+        ImpactSheet(
+            title: "Rotate keys for \(member)?",
+            body: "You get a new code to send them. They join again with it.",
+            lines: [
+                ImpactLine(.stops, "Their old keys stop working now"),
+                ImpactLine(.keeps, "Their links keep the same addresses"),
+            ],
+            actionTitle: "Rotate keys"
+        )
+    }
+
+    /// Renew key: extends the key by the CLI's default; nothing changes on their machine.
+    public static func renew(member: String) -> ImpactSheet {
+        ImpactSheet(
+            title: "Renew \(member)'s key?",
+            body: "Extends the key by 90 days. Nothing changes on their machine.",
+            actionTitle: "Renew"
+        )
+    }
+
+    /// Delete record: only a removed member has one; nothing of them is left to stop.
+    public static func purge(member: String) -> ImpactSheet {
+        ImpactSheet(
+            title: "Delete \(member)'s record?",
+            body: "\(member) is already removed. This deletes the record that remembers them. It cannot be undone.",
+            actionTitle: "Delete record", destructive: true
+        )
+    }
+
     /// Turn on members: the CLI's own warning, shown before `--yes` is passed.
     public static func turnOnMembers(host: String) -> ImpactSheet {
         ImpactSheet(

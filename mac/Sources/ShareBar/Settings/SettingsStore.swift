@@ -38,6 +38,8 @@ enum ConfirmAction {
     case rollBack(op: OpInfo, profile: String)
     /// A verb whose argv depends on the sheet's pop-up (Remove member: keep or delete cloud links).
     case runChoice(done: String, kinds: [KeyKind], profile: String, argv: (Int) -> [String])
+    /// A member verb that ends in a code to send (rotate keys, send a new code).
+    case runForCode(argv: [String], kinds: [KeyKind], profile: String, member: String, rotate: Bool)
 }
 
 struct AddForm: Equatable {
@@ -85,7 +87,9 @@ struct FlowStepPlan {
 final class SettingsStore: ObservableObject {
     @Published private(set) var profiles: ProfilesSnapshot?
     @Published private(set) var failure: Failure?
-    @Published var pane: SettingsPane = .general
+    @Published var pane: SettingsPane = .general {
+        didSet { if pane == .members, oldValue != .members { requestMembers() } }
+    }
     @Published var selectedProfile: String?
     @Published var sheet: SheetContent?
     @Published private(set) var flow: FlowRun?
@@ -118,6 +122,10 @@ final class SettingsStore: ObservableObject {
 
     let general: GeneralPrefs
     let keyStore: KeySourceStore
+    let members = MembersStore()
+    /// Called after every `member ls` read, so the popover's member lines of needs a look follow
+    /// the roster (the popover never runs `member ls` itself, DEC-54).
+    var onMembers: (MemberList?, String) -> Void = { _, _ in }
     let popoverPrefs: PopoverPrefs
     private let defaults: UserDefaults
     private let queue = MutationQueue()
@@ -194,7 +202,10 @@ final class SettingsStore: ObservableObject {
         if pane == .tenants, let current = popoverPrefs.currentProfile, tenants.contains(where: { $0.name == current }) {
             selectedProfile = current
         }
-        Task { await refresh() }
+        Task {
+            await refresh()
+            if self.pane == .members { requestMembers() }
+        }
     }
 
     func refresh() async {
@@ -477,18 +488,21 @@ final class SettingsStore: ObservableObject {
         sheet = .invite(profile: profile)
     }
 
-    func presentPause(member: String, profile: String) {
+    /// `display` is the capitalised name the sheet says; `member` is the CLI name argv carries.
+    func presentPause(member: String, profile: String, display: String? = nil) {
         let shares = entry(profile)?.state?.shares ?? []
+        let shown = display ?? member
         impactChoice = 0
-        sheet = .confirm(Impact.pause(member: member, shares: shares),
-                         .runKeyed(argv: ProfileArgs.argv(profile, ["member", "pause", member]), kinds: [.admin], profile: profile, done: "\(member) is paused."))
+        sheet = .confirm(Impact.pause(member: shown, shares: shares),
+                         .runKeyed(argv: ProfileArgs.argv(profile, ["member", "pause", member]), kinds: [.admin], profile: profile, done: "\(shown) is paused."))
     }
 
-    func presentRemoveMember(member: String, profile: String) {
+    func presentRemoveMember(member: String, profile: String, display: String? = nil) {
         let shares = entry(profile)?.state?.shares ?? []
+        let shown = display ?? member
         impactChoice = 0
-        sheet = .confirm(Impact.removeMember(member: member, shares: shares),
-                         .runChoice(done: "\(member) is removed. Their machine links stopped answering.", kinds: [.admin, .minter], profile: profile) { choice in
+        sheet = .confirm(Impact.removeMember(member: shown, shares: shares),
+                         .runChoice(done: "\(shown) is removed. Their machine links stopped answering.", kinds: [.admin, .minter], profile: profile) { choice in
                              ProfileArgs.argv(profile, ["member", "rm", member, "--cloud-links", choice == 0 ? "keep" : "delete"])
                          })
     }
@@ -507,6 +521,7 @@ final class SettingsStore: ObservableObject {
                     return
                 }
                 self.sheet = .code(CodeSheet(member: form.name.trimmingCharacters(in: .whitespaces), code: code, rotate: false, ttlDays: form.ttlDays))
+                await self.loadMembers(profile: profile, keys: keys)
             }
         }
     }
@@ -535,18 +550,19 @@ final class SettingsStore: ObservableObject {
 
     /// Runs one command with the asked keys in its environment, through the app's queue when
     /// there are none.
-    private func runWith(_ argv: [String], keys: [String: String]) async -> CLIResult {
+    func runWith(_ argv: [String], keys: [String: String]) async -> CLIResult {
         if keys.isEmpty { return await writeCLI(argv) }
         return await AskedKeyCommand(argv: argv, environment: keys).spawn().result
     }
 
-    private func runKeyed(_ argv: [String], kinds: [KeyKind], profile: String, host: String, done: String) {
+    func runKeyed(_ argv: [String], kinds: [KeyKind], profile: String, host: String, done: String) {
         collectKeys(keysNeedingAsk(kinds, profile: profile), asked: [:],
                     purpose: "Share Bar uses it for this one action and forgets it right away.") { [weak self] keys in
             guard let self else { return }
             Task {
                 let result = await self.runWith(argv, keys: keys)
                 await self.refresh()
+                if argv.contains("member") { await self.loadMembers(profile: profile, keys: keys) }
                 if result.status == 0 { self.announce(done) } else { self.showFailure(result, host: host) }
             }
         }
@@ -625,6 +641,8 @@ final class SettingsStore: ObservableObject {
             runKeyed(argv(impactChoice), kinds: kinds, profile: profile, host: entry(profile)?.state?.host ?? profile, done: done)
         case .runKeyed(let argv, let kinds, let profile, let done):
             runKeyed(argv, kinds: kinds, profile: profile, host: entry(profile)?.state?.host ?? profile, done: done)
+        case .runForCode(let argv, let kinds, let profile, let member, let rotate):
+            runForCode(argv, kinds: kinds, profile: profile, member: member, rotate: rotate)
         case .flow(let step, let profile, let done):
             startPlan([step], needsKey: true, profile: profile, done: done)
         case .run(let argv, let done):
@@ -770,6 +788,10 @@ final class SettingsStore: ObservableObject {
         guard let sheet else { return }
         if !sheet.kind.escCloses { return }
         self.sheet = nil
+        // Esc on the key the tab asked for: the list stays unread, with a way to ask again.
+        if case .askKey = sheet, pane == .members, members.list == nil, members.profile != nil {
+            members.failed("Reading the members needs the admin key.", profile: members.profile ?? "")
+        }
     }
 
     /// Esc: closes every sheet but progress.

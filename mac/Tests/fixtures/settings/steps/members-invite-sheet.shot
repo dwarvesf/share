@@ -1,0 +1,3 @@
+scenario admin-members
+script tab:advanced,keys,tab:members,mload,invite:console,name=chi2
+label members-invite-sheet

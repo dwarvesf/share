@@ -15,7 +15,8 @@ import SwiftUI
 /// `source:<admin|minter>:<1p|cmd|ask>`, `pick:<kind>:<item name>`, `cmd:<kind>=<text>`,
 /// `commit:<kind>`, `test:<kind>`, `askkey=<value>`, `invite:<profile>`, `name=<n>`,
 /// `invite-mode=<machine|cloud>`, `invite-ttl=<n>`, `create-code`, `pause:<profile>:<member>`,
-/// `remove-member:<profile>:<member>`, `wait:<seconds>`.
+/// `remove-member:<profile>:<member>`, `wait:<seconds>`. Members tab: `keys` (both key sources as stored commands), `mload` (wait for the roster),
+/// `mfilter:<all|needsLook|removed>`, `mquery=<text>`, `mmenu:<member>`, `mverb:<member>:<verb>`.
 @MainActor
 enum ShotsHooks {
     static func installIfRequested() {
@@ -109,6 +110,23 @@ enum ShotsHooks {
         case "remove-member":
             let parts = rest.split(separator: ":").map(String.init)
             if parts.count == 2 { store.presentRemoveMember(member: parts[1], profile: parts[0]) }
+        case "keys":
+            // Both key sources as stored commands, so no step asks for a key it was not meant to show.
+            for inner in ["source:admin:cmd", "cmd:admin=pass show cf-admin", "commit:admin",
+                          "source:minter:cmd", "cmd:minter=pass show cf-minter", "commit:minter"] {
+                await step(inner, store: store, controller: controller)
+                try? await Task.sleep(nanoseconds: 150_000_000)
+            }
+        case "mload":
+            for _ in 0..<60 where store.members.list == nil && store.members.failure == nil { try? await Task.sleep(nanoseconds: 100_000_000) }
+        case "mfilter": store.members.filter = MemberFilter(rawValue: rest) ?? .all
+        case "mquery": store.members.query = rest
+        case "mmenu":
+            if let record = store.members.list?.members.first(where: { $0.name == rest }) { store.members.menuMember = record.memberID }
+        case "mverb":
+            let parts = rest.split(separator: ":").map(String.init)
+            if parts.count == 2, let verb = MemberVerb(rawValue: parts[1]),
+               let record = store.members.list?.members.first(where: { $0.name == parts[0] }) { store.memberVerb(verb, member: record) }
         case "wait": try? await Task.sleep(nanoseconds: UInt64((Double(rest) ?? 1) * 1_000_000_000))
         default: break
         }

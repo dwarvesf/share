@@ -1,0 +1,3 @@
+scenario admin-members
+script tab:advanced,keys,tab:members,mload,mverb:an:rotate
+label members-rotate-confirm
