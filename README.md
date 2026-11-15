@@ -192,7 +192,7 @@ share join s.example.com <code>                                  # the member pa
 share add ./report.pdf                                           # https://s.example.com/<id>/report.pdf
 ```
 
-Admin verbs built: `member add`, `ls`, `sync`, `rm`, `purge`. Specified, not built yet: `pause`, `resume`, `invite`, `rotate`, `renew`, `adopt`. A member's own verbs: `join`, `leave`. They need the admin token and a separate minter token (`share admin-token`, `share minter-token`), and a Worker that has Workers VPC (a beta product), so members are off until `--members`. Members are named teammates only: every member's pages run under one origin, and the bucket token cannot tell members apart. Steps and refusals: [docs/setup.md](docs/setup.md#4i-members-one-line-to-onboard-a-teammates-machine); the model: [docs/how-it-works.md](docs/how-it-works.md#members-one-hostname-many-machines) and [ADR-0009](docs/decisions/ADR-0009-members.md).
+Admin verbs: `member add`, `ls`, `sync`, `rm`, `purge`, `pause`, `resume`, `invite`, `rotate`, `renew`, `adopt`. A member's own verbs: `join`, `leave`. They need the admin token and a separate minter token (`share admin-token`, `share minter-token`), and a Worker that has Workers VPC (a beta product), so members are off until `--members`. Members are named teammates only: every member's pages run under one origin, and the bucket token cannot tell members apart. Steps and refusals: [docs/setup.md](docs/setup.md#4i-members-one-line-to-onboard-a-teammates-machine); the model: [docs/how-it-works.md](docs/how-it-works.md#members-one-hostname-many-machines) and [ADR-0009](docs/decisions/ADR-0009-members.md).
 
 ## Menu bar app
 

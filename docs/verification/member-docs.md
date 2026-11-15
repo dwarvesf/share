@@ -1,13 +1,13 @@
 # Proof of done: member docs (SPEC-009 TASK-4c, without the suite docs grep)
 
-Branch: docs/member-docs, on main at 7b39971.
+Branch: docs/member-docs, on main at 7b39971. The suite grep was added later by the live e2e sub-goal (docs/verification/member-docs-grep.md).
 Notes: docs/implementation-notes/member-docs.md
 
-Docs only. `tests/` is untouched; the "tenant docs" suite grep is the live e2e sub-goal's.
+Docs only when written; `tests/` was untouched.
 
 ## Doc claims a later check re-reads against the built code
 
-These verbs were not merged when the docs were written. They are documented from SPEC-009 (`### Member status transitions` and the verb paragraphs of `## Technical Design`). README and `docs/setup.md` mark them "not built yet"; remove that wording when each verb lands.
+These verbs were not merged when the docs were written. They are documented from SPEC-009 (`### Member status transitions` and the verb paragraphs of `## Technical Design`). All six are built now; the docs grep in `tests/share.sh` ("tenant docs") re-reads every verb, flag and code against `bin/share`, and the "not built yet" wording is removed.
 
 | Verb or claim | Written in | Source |
 |---|---|---|
