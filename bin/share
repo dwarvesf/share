@@ -943,7 +943,7 @@ cmd_prune() { # cmd_prune [quiet|listing|--loop]: unpublish every share past its
 }
 
 prune_loop_member() { # prune --loop on a member machine (TASK-2c): the publisher key from the Keychain item only (never api_token_cmd or the environment);
-  # local expiry, own pointer expiry, the reconcile, and the own record into .health. A locked Keychain logs one line and skips the bucket work
+  # local expiry, own pointer expiry, the reconcile (which reads the own record into .health first). A locked Keychain logs one line and skips the bucket work
   local tok="" now ids id
   [[ ${SHARE_R2_DRY:-0} != 1 ]] || echo "LOOP env_token=$([[ -n ${CLOUDFLARE_API_TOKEN:-} ]] && echo 1 || echo 0)" >>"$root/r2-calls.log"
   if command -v security >/dev/null; then tok="$(security find-generic-password -a share -s "$(api_token_key)" -w 2>/dev/null || true)"; fi
@@ -952,13 +952,13 @@ prune_loop_member() { # prune --loop on a member machine (TASK-2c): the publishe
     cmd_prune quiet
     return 0
   fi
-  SHARE_R2_TOKEN=$tok r2_loop=1 prune_mode=soft; tok=""   # a shell variable, never exported: r2_creds reads it; Access stays off (SHARE_API_TOKEN_OFF)
+  export -n SHARE_R2_TOKEN 2>/dev/null || true   # a shell variable, never exported to a child (caddy, a subshell's exec): r2_creds reads it
+  SHARE_R2_TOKEN=$tok r2_loop=1 prune_mode=soft; tok=""   # Access stays off (SHARE_API_TOKEN_OFF)
   add_sweep
   now="$(date +%s)"
   ids="$(rows | awk -F'\t' -v now="$now" '$5 > 0 && $5 < now {print $1}')"
   for id in $ids; do cmd_rm "$id" prune | sed 's/$/ (expired)/' || true; done   # each own pointer goes with its row (r2_pointer_drop)
-  ( r2_prune loop; r2_reconcile ) || echo "share: prune --loop: the bucket was not checked (see above); local expiry ran" >&2
-  member_record_read
+  ( r2_prune loop; r2_reconcile ) || echo "share: prune --loop: the bucket was not checked (see above); local expiry ran" >&2   # the reconcile reads the own record into .health
 }
 member_record_read() { # mr_code: one GET of this member's own record. 200: the .health member key; 401/403: token.status invalid (expired past the
   # local token_expires), never removal (DEC-79); a 404 changes nothing (a deleted record is a write any publisher can forge)
@@ -3984,26 +3984,36 @@ rc_young() { # rc_young <key> <mods>: 0 when the key's LastModified is under 10 
   local lm; lm="$(awk -F'\t' -v k="$1" '$1 == k {print $2; exit}' <<<"$2")"
   [[ -z $lm || ! ${lm:0:19} < $(r2_ago $(( $(date +%s) - 600 ))) ]]
 }
-rc_tread() { # rc_tread <id>: rc_tby and rc_torigin from t/<id>; 1 when it is gone; a by outside [A-Za-z0-9._@:-]{1,64} reads unknown (FG-16)
+rc_tread() { # rc_tread <id>: rc_tby and rc_torigin from t/<id>: 0 read, 1 gone (404 only), 2 unknown (any other answer: the caller skips the id);
+  # a by outside [A-Za-z0-9._@:-]{1,64}, a newline included, reads unknown (FG-16)
   rc_tby="" rc_torigin=""
-  r2_call GET "t/$1" || return 1
-  [[ $cf_code == 200 ]] || return 1
-  IFS=$'\t' read -r rc_tby rc_torigin < <(jq -r '[(.by | if type == "string" and test("^[A-Za-z0-9._@:-]{1,64}$") then . else "unknown" end),
-    (.origin | if type == "string" and test("^m-[a-z0-9-]{2,24}-[0-9a-f]{8}$") then . else "" end)] | @tsv' <<<"$cf_body" 2>/dev/null) || rc_tby=unknown
-  [[ -n $rc_tby ]] || rc_tby=unknown
+  r2_call GET "t/$1" || return 2
+  case $cf_code in 200) ;; 404) return 1 ;; *) return 2 ;; esac
+  IFS=$'\t' read -r rc_tby rc_torigin < <(jq -r '[(.by | if type == "string" and test("^[A-Za-z0-9._@:-]{1,64}$") and (test("\n") | not) then . else "unknown" end),
+    (.origin | if type == "string" and test("^m-[a-z0-9-]{2,24}-[0-9a-f]{8}$") and (test("\n") | not) then . else "" end)] | @tsv' <<<"$cf_body" 2>/dev/null) || rc_tby=unknown
+  [[ $rc_tby =~ ^[A-Za-z0-9._@:-]{1,64}$ ]] || rc_tby=unknown
   return 0
 }
 rc_revoke() { # rc_revoke <id> <by>: the row gains revoked revoked_by=<by> and loses its Caddy handle; the bytes stay (invariant 3)
   local tmp
   lock_take index
   tmp="$(mktemp "$root/.index.XXXXXX")"
-  awk -F'\t' -v OFS='\t' -v id="$1" -v t="revoked revoked_by=$2" '$1 == id { if (NF < 6) $6 = ""; $6 = ($6 == "" ? t : $6 " " t) } {print}' "$index" >"$tmp" && mv -f "$tmp" "$index"
+  rc_t="revoked revoked_by=$2" awk -F'\t' -v OFS='\t' -v id="$1" 'BEGIN {t = ENVIRON["rc_t"]} $1 == id { if (NF < 6) $6 = ""; $6 = ($6 == "" ? t : $6 " " t) } {print}' "$index" >"$tmp" && mv -f "$tmp" "$index"
   write_caddyfile; caddy_reload >/dev/null 2>&1 || true
   lock_release index
 }
+rc_row10() { # rc_row10 <id>: revoked, the tombstone deleted, reported
+  rc_revoke "$1" "$rc_tby"; r2_call DELETE "t/$1" || true
+  echo "revoked $1: removed by $rc_tby; it no longer serves (the bytes stay in $pub/$1)"
+}
 r2_reconcile_member() { # R7, after r2_read listed m/: t/ is listed second (DEC-64); one decision per id, own origin only (r2_machine holds only this member's v:3)
-  local now id name src date exp opts t mid
+  local now id name src date exp opts t mid tr
   now="$(date +%s)"; mid="$(cfg member_id)"
+  member_record_read   # the own record first: a removed, removing or left member writes no pointer back (and .health learns what it read)
+  if [[ $mr_code == 200 ]]; then
+    case "$(jq -r .status <<<"$reg_rec")" in removing|removed|left)
+      echo "share: this member is $(jq -r .status <<<"$reg_rec") on $host_name; the reconcile writes nothing (share status)" >&2; return 0 ;; esac
+  fi
   r2_list t/
   rc_tkeys="$(sed -n 's|^t/\([0-9a-f]\{6\}\)$|\1|p' <<<"$r2_list_out")" rc_tmods=$r2_list_mods
   local ids; ids="$(rows | cut -f1)"
@@ -4018,25 +4028,29 @@ r2_reconcile_member() { # R7, after r2_read listed m/: t/ is listed second (DEC-
       r2_call DELETE "t/$id" || true   # row 8
       echo "share: a removal of $id by $rc_tby did not finish or was forged; its tombstone was deleted and the link still serves" >&2
     elif ! grep -qx "$id" <<<"$r2_mkeys"; then   # rows 10 and 11: no record holds the id
-      if grep -qx "$id" <<<"$rc_tkeys" && rc_tread "$id"; then   # row 10
-        rc_revoke "$id" "$rc_tby"; r2_call DELETE "t/$id" || true
-        echo "revoked $id: removed by $rc_tby; it no longer serves (the bytes stay in $pub/$id)"
-        continue
-      fi
+      tr=1; grep -qx "$id" <<<"$rc_tkeys" && { tr=0; rc_tread "$id" || tr=$?; }
+      case $tr in 0) rc_row10 "$id"; continue ;; 2) continue ;; esac   # row 10; an unreadable tombstone waits for the next pass
       if has_opt live "$opts"; then t=site; else t="$(share_type "$pub/$id/$name")"; fi   # row 11
       r2_pointer_write "$id" "$name" "$t" "$exp" "$opts" "" "$date"
       case $cf_code in
-        200) if rc_tread "$id"; then   # a revoke landed between the m/ list and this write: undo the write, then row 10 (DEC-64)
-               r2_call DELETE "m/$id" || true
-               rc_revoke "$id" "$rc_tby"; r2_call DELETE "t/$id" || true
-               echo "revoked $id: removed by $rc_tby; it no longer serves (the bytes stay in $pub/$id)"
-             else echo "share: wrote the missing pointer m/$id" >&2; fi ;;
+        200) tr=0; rc_tread "$id" || tr=$?   # a revoke landed between the m/ list and this write: undo the write, then row 10 (DEC-64)
+             case $tr in
+               0) r2_call DELETE "m/$id" || true; rc_row10 "$id" ;;
+               1) echo "share: wrote the missing pointer m/$id" >&2 ;;
+               *) r2_call DELETE "m/$id" || true; echo "share: t/$id could not be read after writing m/$id, so the write was undone; the next prune retries" >&2 ;;
+             esac ;;
         412) echo "share: $id is shadowed by another record; rm one of them" >&2 ;;   # row 12
         *) echo "share: writing the pointer m/$id answered HTTP $cf_code; the next prune retries" >&2 ;;
       esac
-    elif grep -qx "$id" <<<"$rc_tkeys" && rc_tread "$id"; then   # row 13: the id was reissued after a removal
-      rc_revoke "$id" "$rc_tby"
-      echo "revoked $id: removed by $rc_tby, and its id now names another link; it no longer serves (the bytes stay in $pub/$id)"
+    elif grep -qx "$id" <<<"$rc_tkeys"; then   # row 13, or row 10 when the pointer went after the m/ list
+      tr=0; rc_tread "$id" || tr=$?
+      case $tr in 2) continue ;; 1) echo "share: $id is shadowed by another record; rm one of them" >&2; continue ;; esac
+      r2_call GET "m/$id" || true
+      if [[ $cf_code == 404 ]]; then rc_row10 "$id"
+      elif [[ $cf_code == 200 ]]; then
+        rc_revoke "$id" "$rc_tby"
+        echo "revoked $id: removed by $rc_tby, and its id now names another link; it no longer serves (the bytes stay in $pub/$id)"
+      fi
     else
       echo "share: $id is shadowed by another record; rm one of them" >&2   # row 12
     fi
@@ -4702,7 +4716,8 @@ r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "
       if [[ -n $arg3 && -f $arg3 ]]; then cp "$arg3" "$f"; else : >"$f"; fi
       [[ ${SHARE_R2_DRY_PUT:-} == lost || ( ${SHARE_R2_DRY_PUT:-} == lost-record && $key == m/* ) ]] && { cf_code=000; return 0; }
       r2_etag="$(r2_md5 "$f")" ;;
-    GET) [[ -e $f ]] || { cf_code=404 cf_err=NoSuchKey; return 0; }
+    GET) [[ ${SHARE_R2_DRY_FAIL:-} != "GET $key" ]] || { cf_code=500 cf_err=InternalError; return 0; }
+      [[ -e $f ]] || { cf_code=404 cf_err=NoSuchKey; return 0; }
       cf_body="$(cat "$f")"; r2_etag="$(r2_md5 "$f")" ;;
     HEAD) [[ -e $f ]] || { cf_code=404 cf_err=NoSuchKey; return 0; }
       r2_etag="$(r2_md5 "$f")" ;;
@@ -6994,13 +7009,39 @@ cmd_member_sync() { # deploy wins for admin-set state, only from active, pausing
 # --- member rm and member purge (TASK-2d, seq-member-rm): every object of the member is found by its name on the account, never by a record id (DEC-58) ---
 op_steps_member_rm() { printf '%s\n' "1 lease" "2 removing" "3 deploy" "4 service" "5 connections" "6 tunnel" "7 token" "8 tombstones" "9 invite" "10 removed"; }
 op_steps_member_purge() { printf '%s\n' "1 lease" "2 purged" "3 record"; }
-mb_pick() { # mb_pick <name>: reg_id and reg_rec of the member of that name, a record not removed first, else a removed one; member_unknown otherwise
-  local rec
+mb_pick() { # mb_pick <name|member_id>: reg_id and reg_rec; by name, a record not removed first, else a removed one; member_unknown otherwise. Two records
+  # of a name not removed (a forged decoy, since add refuses a second): the one whose M_<8hex> is deployed wins, else refused naming each id
+  local rec n b r
   reg_list
-  rec="$(awk -F'\t' '{print $2}' <<<"$reg_all" | jq -c --arg n "$1" 'select(.name == $n and .status != "removed")' 2>/dev/null | head -1)"
-  [[ -n $rec ]] || rec="$(awk -F'\t' '{print $2}' <<<"$reg_all" | jq -c --arg n "$1" 'select(.name == $n)' 2>/dev/null | head -1)"
+  if [[ $1 =~ ^m-[a-z0-9-]{2,24}-[0-9a-f]{8}$ ]]; then
+    rec="$(awk -F'\t' -v id="$1" '$1 == id {print $2; exit}' <<<"$reg_all")"
+  else
+    rec="$(awk -F'\t' '{print $2}' <<<"$reg_all" | jq -c --arg n "$1" 'select(.name == $n and .status != "removed")' 2>/dev/null || true)"
+    n="$(grep -c . <<<"$rec" || true)"
+    if [[ $n -gt 1 ]]; then
+      b=""
+      while IFS= read -r r; do
+        jq -e --arg s "M_$(mb_suffix "$(jq -r .member_id <<<"$r")")" 'any(.result.bindings[]?; .type == "vpc_service" and .name == $s)' <<<"$mc_settings" >/dev/null 2>&1 && b+="$r"$'\n'
+      done <<<"$rec"
+      [[ "$(grep -c . <<<"$b" || true)" == 1 ]] || die_code member_name_taken "$n records hold the name $1 ($(jq -r .member_id <<<"$rec" | tr '\n' ' ' | sed 's/ $//')); name the one you mean by its id: share member <verb> <member_id>; nothing was changed" "$me member ls"
+      rec="$(grep . <<<"$b")"
+    fi
+    [[ -n $rec ]] || rec="$(awk -F'\t' '{print $2}' <<<"$reg_all" | jq -c --arg n "$1" 'select(.name == $n)' 2>/dev/null | head -1)"
+  fi
   [[ -n $rec ]] || die_code member_unknown "no member named $1 on $host_name; nothing was changed" "$me member ls"
   reg_id="$(jq -r .member_id <<<"$rec")" reg_rec=$rec reg_etag=""
+}
+mb_left=0
+mb_leftovers() { # mb_leftovers <suffix>: mb_left=1 when any account object of the member remains by name: a binding or PAUSED entry, a VPC Service, a tunnel, its token
+  local rid=$1; mb_left=0
+  jq -e --arg s "$(mb_suffix "$rid")" 'any(.result.bindings[]?; (.type == "vpc_service" and .name == "M_" + $s) or (.name == "PAUSED" and ((.text // "[]") | fromjson? // [] | index($s) != null)))' <<<"$mc_settings" >/dev/null 2>&1 && { mb_left=1; return 0; }
+  mb_services_list
+  grep -qE "^share-${host_name//./-}-$(mb_suffix "$rid")(-r[0-9]+)?"$'\t' <<<"$ms_list" && { mb_left=1; return 0; }
+  mb_tunnels_of "$(mb_suffix "$rid")"
+  [[ -z ${mt_ids//$'\n'/} ]] || { mb_left=1; return 0; }
+  ob_token_find "$(mb_token_name "$rid")"
+  [[ -z $tk_id ]] || mb_left=1
+  return 0
 }
 mt_ids=""
 mb_tunnels_of() { # mb_tunnels_of <suffix>: mt_ids, "<id>\t<name>" of every live tunnel named share-<host-dashes>-<suffix>[-r<n>]; a forged rotation hides none
@@ -7017,7 +7058,7 @@ mb_tunnels_of() { # mb_tunnels_of <suffix>: mt_ids, "<id>\t<name>" of every live
   return 0
 }
 cmd_member_rm() {
-  local name="" cl=keep argv=("$@") rid sx te n_t=0 n_c=0 k id v usage="usage: share member rm <name> [--cloud-links keep|delete] [--tenant <host>]"
+  local name="" cl=keep argv=("$@") rid sx te n_t=0 n_c=0 k id v usage="usage: share member rm <name|member_id> [--cloud-links keep|delete] [--tenant <host>]"
   while [[ $# -gt 0 ]]; do
     case $1 in
       --cloud-links) cl="${2:-}"; shift 2 || die "$usage"; [[ $cl == keep || $cl == delete ]] || die "$usage" ;;
@@ -7025,23 +7066,28 @@ cmd_member_rm() {
       *) [[ -z $name ]] || die "$usage"; name=$1; shift ;;
     esac
   done
-  mb_name_ok "$name" || die "$usage"
+  mb_name_ok "$name" || [[ $name =~ ^m-[a-z0-9-]{2,24}-[0-9a-f]{8}$ ]] || die "$usage"
   member_minter=1; member_context rm
-  mb_pick "$name"; rid=$reg_id
-  [[ "$(jq -r .status <<<"$reg_rec")" != removed ]] || die_code member_not_allowed "$name ($rid) is already removed; share member purge $name deletes its record; nothing was changed" "$me member purge $name"
+  mb_pick "$name"; rid=$reg_id; name="$(jq -r .name <<<"$reg_rec")"
+  if [[ "$(jq -r .status <<<"$reg_rec")" == removed ]]; then   # a removed record with objects still on the account (a forged removed, or an older rm) is cleaned anyway
+    mb_leftovers "$rid"
+    [[ $mb_left == 1 ]] || die_code member_not_allowed "$name ($rid) is already removed and nothing of it remains; share member purge $name deletes its record; nothing was changed" "$me member purge $name"
+  fi
   sx="$(mb_suffix "$rid")"
   op_begin member-rm member rm ${argv[@]+"${argv[@]}"}
   op_step 1
   lease_take rm "$rid"
   reg_get "$rid" || die_code member_changed "u/$rid.json went away during share member rm; nothing more was changed" "$me member ls"
+  local rest=0; [[ "$(jq -r .status <<<"$reg_rec")" != removed ]] || rest=1   # the record stays removed (member_can has no rm from removed); only the objects go
+  rm_step() { if [[ $rest == 1 ]]; then lease_renew "$1"; op_step "$1"; else reg_step rm removing "$1"; fi; }
   # step 2: removing, from any status but removed; rm wins over another verb's ...ing (CC-04)
-  reg_step rm removing 2
-  echo "member:     removing $name ($rid)"
+  rm_step 2
+  if [[ $rest == 1 ]]; then echo "member:     $name ($rid) reads removed, and objects of it remain on the account; removing them"; else echo "member:     removing $name ($rid)"; fi
   # step 3: the deploy without M_<8hex> and without its suffix in PAUSED (a binding whose service is gone breaks every later deploy, so it goes first)
-  reg_step rm removing 3
+  rm_step 3
   mb_deploy "map(select(.name != \"M_$sx\")) | map(if .name == \"PAUSED\" then .text = ((.text | fromjson) - [\"$sx\"] | tojson) else . end)"
   # step 4: every VPC Service of the member's names; 404 is done
-  reg_step rm removing 4
+  rm_step 4
   mb_services_list
   while IFS=$'\t' read -r k id _ _; do
     [[ $k =~ ^share-${host_name//./-}-$sx(-r[0-9]+)?$ && $id =~ ^[A-Za-z0-9-]{1,64}$ ]] || continue
@@ -7050,14 +7096,14 @@ cmd_member_rm() {
     echo "service:    deleted $k"
   done <<<"$ms_list"
   # step 5: the connections of every tunnel of its names, then step 6: the tunnels; 404 is done
-  reg_step rm removing 5
+  rm_step 5
   mb_tunnels_of "$sx"
   while IFS=$'\t' read -r id k; do
     [[ -n $id ]] || continue
     r2_api_retry DELETE "/accounts/$acct/cfd_tunnel/$id/connections"
     [[ $cf_code == 200 || $cf_code == 404 ]] || die "deleting tunnel $k's connections answered HTTP $cf_code; rerun the same verb"
   done <<<"$mt_ids"
-  reg_step rm removing 6
+  rm_step 6
   while IFS=$'\t' read -r id k; do
     [[ -n $id ]] || continue
     r2_api_retry DELETE "/accounts/$acct/cfd_tunnel/$id"
@@ -7065,21 +7111,21 @@ cmd_member_rm() {
     echo "tunnel:     deleted $k"
   done <<<"$mt_ids"
   # step 7: the token named share <host> <member_id> in the current minter's list, on every run, so a forged step skips nothing (DEC-78)
-  reg_step rm removing 7
+  rm_step 7
   ob_token_find "$(mb_token_name "$rid")"
-  if [[ -n $tk_id ]]; then
+  if [[ -n $tk_id ]]; then   # the record notes the delete first (display only), so a die between the two never reads as unreachable on the rerun
+    [[ $rest == 1 ]] || reg_status rm admin removing 7 '.token.id = ""'
     ob_token_delete "$tk_id"
-    reg_status rm admin removing 7 '.token.id = ""'   # display only: a rerun that finds no token says it went, not that it is unreachable
     echo "token:      deleted $(mb_token_name "$rid")"
   elif [[ "$(jq -r '.token.id // "x"' <<<"$reg_rec")" == "" ]]; then
     echo "token:      already deleted"
   else
     te="$(jq -r '.token.expires_on // ""' <<<"$reg_rec")"
     echo "token not reachable by this minter; it expires ${te:-(unknown)}"
-    [[ -z $te ]] || reg_status rm admin removing 7 ".token_unreachable_until = \"$te\""
+    [[ -z $te || $rest == 1 ]] || reg_status rm admin removing 7 ".token_unreachable_until = \"$te\""
   fi
   # step 8: each v:3 of this origin gets t/<id> (If-None-Match; 412 = present), then its pointer goes; cloud links of this origin per --cloud-links (DEC-1)
-  reg_step rm removing 8
+  rm_step 8
   r2_list m/
   local mkeys=$r2_list_out f
   while IFS= read -r k; do
@@ -7106,10 +7152,8 @@ cmd_member_rm() {
       n_c=$((n_c + 1))
     fi
   done <<<"$mkeys"
-  # step 9: the invite the record names, and every i/ whose envelope names this member
-  reg_step rm removing 9
-  local h; h="$(jq -r '.invite.hash // ""' <<<"$reg_rec")"
-  if [[ -n $h ]]; then r2_call DELETE "i/$h" || true; [[ $cf_code == 20? || $cf_code == 404 ]] || die "deleting the invite i/$h answered HTTP $cf_code; rerun the same verb"; fi
+  # step 9: every i/ whose envelope names this member (the record's own hash is never trusted alone: any publisher writes u/)
+  rm_step 9
   r2_list i/
   while IFS= read -r k; do
     [[ $k =~ ^i/[0-9a-f]{64}$ ]] || continue
@@ -7120,17 +7164,17 @@ cmd_member_rm() {
   done <<<"$r2_list_out"
   # step 10: removed
   op_step 10
-  reg_status rm admin removed "" 'del(.invite)'
+  [[ $rest == 1 ]] || reg_status rm admin removed "" 'del(.invite)'
   lease_release
   op_done
   echo "removed:    $name ($rid); $n_t machine link(s) tombstoned (their bytes wait on that machine for share leave); cloud links $([[ $cl == delete ]] && echo "deleted: $n_c" || echo "kept until they expire")"
 }
 cmd_member_purge() { # REMOVED only: the id goes into u/purged.json first, then the record, so a die between the two leaves the id reserved
-  local name="" a rid body etag ids f try usage="usage: share member purge <name> [--tenant <host>]"
+  local name="" a rid body etag ids f try usage="usage: share member purge <name|member_id> [--tenant <host>]"
   for a in "$@"; do case $a in -*) die "$usage" ;; *) [[ -z $name ]] || die "$usage"; name=$a ;; esac; done
-  mb_name_ok "$name" || die "$usage"
+  mb_name_ok "$name" || [[ $name =~ ^m-[a-z0-9-]{2,24}-[0-9a-f]{8}$ ]] || die "$usage"
   member_context purge
-  mb_pick "$name"; rid=$reg_id
+  mb_pick "$name"; rid=$reg_id; name="$(jq -r .name <<<"$reg_rec")"
   member_can "$(jq -r .status <<<"$reg_rec")" purge admin || die_code member_not_allowed "$name is $(jq -r .status <<<"$reg_rec"); share member purge runs only on a removed member (share member rm $name first); nothing was changed" "$me member rm $name"
   op_begin member-purge member purge "$@"
   op_step 1
@@ -7158,18 +7202,23 @@ cmd_member_purge() { # REMOVED only: the id goes into u/purged.json first, then 
 }
 
 # --- leave and the member's own status (TASK-2e): removal is shown only from a record read as removed; a 401 is a key problem (DEC-79) ---
-op_steps_leave() { printf '%s\n' "1 links" "2 service" "3 record" "4 local"; }
-cmd_leave() { # cmd_leave [--local]: own pointers deleted first, the service gone, the record left, then the keys, the config and the profile root with every row's bytes
+op_steps_leave() { printf '%s\n' "1 service" "2 links" "3 record" "4 local"; }
+cmd_leave() { # cmd_leave [--local]: the service stopped, own pointers deleted, the record left, then the keys, the config and the profile root with every row's bytes
   local lonly=0 a id mid st rc
   for a in "$@"; do case $a in --local) lonly=1 ;; *) die "usage: share [--profile <name>] leave [--local]" ;; esac; done
   [[ $role == member ]] || die "share leave runs on a member machine; this profile is ${role}; nothing was changed"
   mid="$(cfg member_id)"; reg_id=$mid
   op_begin leave leave "$@"
-  # step 1: every own pointer the bucket holds (r2_machine: own-origin v:3 only), each proven gone, before any bytes go: a rerun finds the rest by
-  # the bucket, never by the rows, so a die part way leaves no orphan pointer. The bytes go with the profile root at step 4. --local makes no bucket call
+  [[ ${op_prev_step:-0} -lt 4 ]] || lonly=1   # a leave that died in step 4 already forgot its keys: the rest is local
+  # step 1: the service and the server first, so no loop or reconcile of this machine writes a pointer back while step 2 deletes them
   op_step 1
+  svc_uninstall
+  cmd_stop >/dev/null
+  # step 2: every own pointer the bucket holds (r2_machine: own-origin v:3 only), each proven gone, before any bytes go: a rerun finds the rest by
+  # the bucket, never by the rows, so a die part way leaves no orphan pointer. The bytes go with the profile root at step 4. --local makes no bucket call
+  op_step 2
   if [[ $lonly == 0 ]]; then
-    r2_token_check
+    r2_token_ok soft || die "leave needs this machine's publisher key for the bucket, and none resolved; nothing more was changed; finish here with: $me leave --local"
     r2_read
     while IFS=$'\t' read -r id _; do
       [[ $id =~ ^[0-9a-f]{6}$ ]] || continue
@@ -7179,10 +7228,6 @@ cmd_leave() { # cmd_leave [--local]: own pointers deleted first, the service gon
       echo "unpublished $id"
     done <<<"$r2_machine"
   fi
-  # step 2: the service and the server
-  op_step 2
-  svc_uninstall
-  cmd_stop >/dev/null
   # step 3: the record left (If-Match, member_can); a record the admin moved is reported, never written
   op_step 3
   if [[ $lonly == 0 ]]; then
@@ -7207,7 +7252,7 @@ cmd_leave() { # cmd_leave [--local]: own pointers deleted first, the service gon
   [[ ! -f $config ]] || to_trash "$config"
   rm -f "$health"; [[ -z $profile ]] || rmdir "$config_dir" 2>/dev/null || true
   if [[ $lonly == 1 ]]; then echo "left:       $host_name ($mid) here, with no bucket call; this profile's links, keys and config are gone; the admin finishes with share member rm $(sed 's/^m-//; s/-[0-9a-f]\{8\}$//' <<<"$mid")"
-  else echo "left:       $host_name ($mid); this profile's links, keys and config are gone"; fi
+  else echo "left:       $host_name ($mid); this machine's links, keys and config are gone; its cloud links stay until they expire"; fi
 }
 member_status_check() { # share status on a member (R7): one read of the own record with the publisher pair, written to .health; removal only from a record read as removed
   local te tep n; te="$(cfg token_expires || true)"; n="$(cfg member_id | sed 's/^m-//; s/-[0-9a-f]\{8\}$//')"
@@ -7275,8 +7320,8 @@ t2_refuse() { # t2_refuse <what> <next>: dies members_present while config membe
     while IFS= read -r k; do
       [[ $k =~ ^u/(m-[a-z0-9-]{2,24}-[0-9a-f]{8})\.json$ ]] || continue
       kid=${BASH_REMATCH[1]}
-      r2_call GET "$k" || continue
-      [[ $cf_code == 200 ]] || continue
+      r2_call GET "$k" || { why="$k could not be read, so no member is ruled out"; break; }
+      case $cf_code in 200) ;; 404) continue ;; *) why="$k answered HTTP $cf_code, so no member is ruled out"; break ;; esac
       reg_valid "$cf_body" "$kid" && [[ "$(jq -r .status <<<"$cf_body")" == removed ]] && continue
       why="$k is not removed"; break
     done <<<"$r2_list_out"
@@ -7697,7 +7742,10 @@ A refusal ends with `share: <message>` on stderr and exit 1. Set `SHARE_ERROR_JS
 | `share start` / `share stop` | Serving on or off |
 | `share --profile <name> <command>` | Run any command against another setup (a second account or hostname); `share profiles` lists them. No flag is the default setup |
 | `share member add <name> [--machine\|--cloud]` / `share member ls [--json]` / `share member sync [--rebind]` | The tenant admin's member verbs (admin token; `add` also the minter token). `add` prints one `share join <host> <code>` line; send it to the member once. `ls --json` lists each member's `can[]` (the verbs allowed now) and `drift[]` codes |
+| `share member rm <name> [--cloud-links keep\|delete]` / `share member purge <name>` | Remove a member (admin and minter tokens): its binding, tunnel, VPC Service, token and invites go, found by name; its machine links are tombstoned (the bytes stay on its machine); its cloud links stay until they expire unless `delete`. A token this minter cannot reach is named with its expiry. `purge` deletes a removed member's record and reserves its id. Name a member by its id (`m-<name>-<8 hex>`) when two records share a name |
+| `share rm <id>` of another member's link | The tenant admin's revoke (admin token): a tombstone, then the pointer goes; the link 404s at once and the owner's machine drops it at its next loop. Without the admin token it is refused `revoke_needs_admin` |
 | `share join <host> <code>` | Join a tenant as a member on this Mac; a bare `share join` resumes a join that stopped. A refusal's code names the admin's next command |
+| `share leave [--local]` | On a member machine: stop serving, delete this machine's pointers, mark the record left, forget the keys, and move the profile (links included) to the Trash. `--local` makes no bucket call (use it once removed). `share status` there reads the member's own record: `removed` only from a record that says so; a refused key reads "your key stopped working; ask the admin" |
 | `share setup <hostname> --backend r2 --bucket <name>` | An R2 profile: a Worker serves links from a private bucket, so they stay up while this machine is off, and several people publish to one hostname. Live shares, `--host`, `start`, and `stop` are refused there; `share rm <id>` unpublishes |
 | `share config ttl\|storage_default [<value>\|--unset]` | The two defaults a person sets: the `add` expiry (`12h`, `7d`, `never`) and where `add` stores a link on a tenant with R2 on (`local` or `cloud`); with no value it prints the current one |
 | `share admin-token --cmd '<command>'` / `--clear` / `--test [--json]` | The command that prints the admin token for `setup --r2`, `--no-r2` and `teardown --purge` (never the token itself); `--test` names what the token can do |
