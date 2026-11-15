@@ -26,6 +26,7 @@ struct ShareBarView: View {
                     ListBody(store: store)
                 }
             }
+            if let overlay = store.dropOverlay { DropOverlay(theme: theme, model: overlay) }
             if store.tenantMenuOpen { tenantMenu }
             if let id = store.menuRowID, let row = store.row(id) {
                 GeometryReader { proxy in rowMenu(for: row, bottom: proxy.size.height) }.id(row.id)
@@ -35,6 +36,7 @@ struct ShareBarView: View {
         .frame(minHeight: menuMinHeight, alignment: .top)
         .background(theme.surface)
         .coordinateSpace(name: "pop")
+        .onDrop(of: [.fileURL], delegate: PopoverDropDelegate(store: store))
         .onPreferenceChange(MoreFramesKey.self) { moreFrames = $0 }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Share Bar")
@@ -234,5 +236,67 @@ struct PanelButton: View {
         .onHover { hovering = $0 }
         .accessibilityIdentifier(id)
         .accessibilityLabel(title)
+    }
+}
+
+/// The overlay while an outside file is dragged over the popover (SPEC-009 `### Layout & structure`).
+struct DropOverlay: View {
+    let theme: Theme
+    let model: DropOverlayModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: "arrow.down.to.line").font(.system(size: 22, weight: .regular)).foregroundColor(theme.info)
+                .accessibilityHidden(true)
+            Text(model.headline).font(.system(size: 13, weight: .semibold)).foregroundColor(theme.label)
+            Text(model.detail).font(theme.metaFont).foregroundColor(theme.secondary).multilineTextAlignment(.center)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(RoundedRectangle(cornerRadius: 10).fill(theme.info.opacity(0.15)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(theme.surface.opacity(0.85)))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(theme.info, style: StrokeStyle(lineWidth: 2, dash: [6, 4])))
+        .padding(8)
+        .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98)))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("drop-overlay")
+        .accessibilityAddTraits(.updatesFrequently)
+    }
+}
+
+/// A file dragged in from outside: enter and leave move `dropTarget`, release publishes.
+struct PopoverDropDelegate: DropDelegate {
+    let store: PopoverStore
+
+    func validateDrop(info: DropInfo) -> Bool {
+        store.state.draggingOut == nil && info.hasItemsConforming(to: [.fileURL])
+    }
+
+    func dropEntered(info: DropInfo) { store.dragEntered() }
+    func dropExited(info: DropInfo) { store.dragLeft() }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .copy) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let providers = info.itemProviders(for: [.fileURL])
+        guard !providers.isEmpty else { return false }
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var found: [Int: URL] = [:]
+        for (index, provider) in providers.enumerated() {
+            group.enter()
+            provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, _ in
+                var url: URL?
+                if let data = item as? Data { url = URL(dataRepresentation: data, relativeTo: nil) } else if let item = item as? URL { url = item }
+                if let url { lock.lock(); found[index] = url; lock.unlock() }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) {
+            // In the order the files were dropped; an empty result still leaves `dropTarget`.
+            let urls = found.sorted { $0.key < $1.key }.map(\.value)
+            MainActor.assumeIsolated { store.publish(paths: urls.map(\.path), dropped: true) }
+        }
+        return true
     }
 }

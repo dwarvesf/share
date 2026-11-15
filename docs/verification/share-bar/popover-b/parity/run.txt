@@ -1,0 +1,180 @@
+== drop light
+panel found at 1250,840 height 530 (marks (1262, 852), (1265, 1357))
+sample                    design   build    max step  allowed
+surface                   #f2f3f5 #f2f3f5 0         6 
+overlay background        #d8e5f6 #d9e1f0 6         6 
+headline (primary)        #272729 #272729 0         6 
+detail (secondary)        #727277 #727277 0         6 
+size design 680x530, build 680x526
+VERDICT: every sample within its allowance
+== drop dark
+panel found at 1250,840 height 530 (marks (1262, 852), (1265, 1357))
+sample                    design   build    max step  allowed
+surface                   #393a40 #393a40 0         6 
+overlay background        #3a495f #3b475d 2         6 
+headline (primary)        #f7f7f9 #f7f7f9 0         6 
+detail (secondary)        #bebec3 #bebec2 1         6 
+size design 680x530, build 680x526
+VERDICT: every sample within its allowance
+== uploading light
+panel found at 1250,840 height 610 (marks (1262, 852), (1265, 1437))
+sample                    design   build    max step  allowed
+background                #f2f3f5 #f2f3f5 0         6 
+primary text              #272729 #272729 0         6 
+secondary text            #727277 #727277 0         6 
+search placeholder        #8d8d92 #7e7e83 15        16 
+separator                 #e0e1e3 #e3e4e6 3         6 
+size design 680x610, build 680x606
+VERDICT: every sample within its allowance
+== uploading dark
+panel found at 1250,840 height 610 (marks (1262, 852), (1265, 1437))
+sample                    design   build    max step  allowed
+background                #393a40 #393a40 0         6 
+primary text              #f7f7f9 #f7f7f9 0         6 
+secondary text            #bebec3 #bebec2 1         6 
+search placeholder        #9c9ca0 #a2a2a7 7         16 
+separator                 #4e4f56 #4e4f55 1         6 
+size design 680x610, build 680x606
+VERDICT: every sample within its allowance
+== flashed light
+panel found at 1250,840 height 530 (marks (1262, 852), (1265, 1357))
+sample                    design   build    max step  allowed
+background                #f2f3f5 #f2f3f5 0         6 
+primary text              #272729 #272729 0         6 
+secondary text            #727277 #727277 0         6 
+search placeholder        #8d8d92 #7e7e83 15        16 
+separator                 #e0e1e3 #e3e4e6 3         6 
+footer text               #272729 #272729 0         6 
+size design 680x530, build 680x526
+VERDICT: every sample within its allowance
+== flashed dark
+panel found at 1250,840 height 530 (marks (1262, 852), (1265, 1357))
+sample                    design   build    max step  allowed
+background                #393a40 #393a40 0         6 
+primary text              #f7f7f9 #f7f7f9 0         6 
+secondary text            #bebec3 #bebec2 1         6 
+search placeholder        #9c9ca0 #a2a2a7 7         16 
+separator                 #4e4f55 #4e4f55 0         6 
+footer text               #f7f7f9 #f7f7f9 0         6 
+size design 680x530, build 680x526
+VERDICT: every sample within its allowance
+== dragout light
+panel found at 1250,840 height 530 (marks (1262, 852), (1265, 1357))
+sample                    design   build    max step  allowed
+background                #f2f3f5 #f2f3f5 0         6 
+primary text              #272729 #272729 0         6 
+secondary text            #727277 #727277 0         6 
+search placeholder        #8d8d92 #7e7e83 15        16 
+separator                 #e0e1e3 #e3e4e6 3         6 
+footer text               #272729 #272729 0         6 
+size design 680x530, build 680x526
+VERDICT: every sample within its allowance
+== dragout dark
+panel found at 1250,840 height 530 (marks (1262, 852), (1265, 1357))
+sample                    design   build    max step  allowed
+background                #393a40 #393a40 0         6 
+primary text              #f7f7f9 #f7f7f9 0         6 
+secondary text            #bebec3 #bebec2 1         6 
+search placeholder        #9c9ca0 #a2a2a7 7         16 
+separator                 #4e4f55 #4e4f55 0         6 
+footer text               #f7f7f9 #f7f7f9 0         6 
+size design 680x530, build 680x526
+VERDICT: every sample within its allowance
+== hotkey light
+panel found at 1250,840 height 530 (marks (1262, 852), (1265, 1357))
+sample                    design   build    max step  allowed
+background                #f2f3f5 #f2f3f5 0         6 
+primary text              #272729 #272729 0         6 
+secondary text            #727277 #727277 0         6 
+separator                 #e0e1e4 #e3e4e6 3         6 
+size design 680x530, build 680x526
+VERDICT: every sample within its allowance
+== hotkey dark
+panel found at 1250,840 height 530 (marks (1262, 852), (1265, 1357))
+sample                    design   build    max step  allowed
+background                #393a40 #393a40 0         6 
+primary text              #f7f7f9 #f7f7f9 0         6 
+secondary text            #bebec3 #bebec2 1         6 
+separator                 #4f5055 #4e4f55 1         6 
+size design 680x530, build 680x526
+VERDICT: every sample within its allowance
+== ql-pdf light
+panel found at 440,1290 height 792 (marks (452, 1302), (455, 2069))
+sample                    design   build    max step  allowed
+header background         #f7f7f9 #f7f7f9 0         6 
+title (primary)           #272729 #272729 0         6 
+meta (secondary)          #727277 #727277 0         6 
+url (mono, primary)       #272729 #272729 0         6 
+header separator          #e4e4e6 #e8e8ea 4         6 
+size design 1120x792, build 1120x788
+VERDICT: every sample within its allowance
+== ql-pdf dark
+panel found at 440,1290 height 792 (marks (452, 1302), (455, 2069))
+sample                    design   build    max step  allowed
+header background         #333338 #302f35 4         6 
+title (primary)           #f7f7f9 #f7f7f9 0         6 
+meta (secondary)          #bebec3 #bebec2 1         6 
+url (mono, primary)       #f7f7f9 #f7f7f9 0         6 
+header separator          #494a4e #47464b 4         6 
+size design 1120x792, build 1120x788
+VERDICT: every sample within its allowance
+== ql-folder light
+panel found at 440,1250 height 792 (marks (452, 1262), (455, 2029))
+sample                    design   build    max step  allowed
+header background         #f7f7f9 #f7f7f9 0         6 
+title (primary)           #272729 #272729 0         6 
+meta (secondary)          #727277 #727277 0         6 
+url (mono, primary)       #272729 #272729 0         6 
+header separator          #e4e4e6 #e8e8ea 4         6 
+size design 1120x792, build 1120x788
+VERDICT: every sample within its allowance
+== ql-folder dark
+panel found at 440,1250 height 792 (marks (452, 1262), (455, 2029))
+sample                    design   build    max step  allowed
+header background         #333338 #302f35 4         6 
+title (primary)           #f7f7f9 #f7f7f9 0         6 
+meta (secondary)          #bebec3 #bebec2 1         6 
+url (mono, primary)       #f7f7f9 #f7f7f9 0         6 
+header separator          #494a4e #47464b 4         6 
+size design 1120x792, build 1120x788
+VERDICT: every sample within its allowance
+== ql-port light
+panel found at 440,1290 height 792 (marks (452, 1302), (455, 2069))
+sample                    design   build    max step  allowed
+header background         #f7f7f9 #f7f7f9 0         6 
+title (primary)           #272729 #272729 0         6 
+meta (secondary)          #727277 #727277 0         6 
+url (mono, primary)       #272729 #272729 0         6 
+header separator          #e4e4e6 #e8e8ea 4         6 
+size design 1120x792, build 1120x788
+VERDICT: every sample within its allowance
+== ql-port dark
+panel found at 440,1290 height 792 (marks (452, 1302), (455, 2069))
+sample                    design   build    max step  allowed
+header background         #333338 #302f35 4         6 
+title (primary)           #f7f7f9 #f7f7f9 0         6 
+meta (secondary)          #bebec3 #bebec2 1         6 
+url (mono, primary)       #f7f7f9 #f7f7f9 0         6 
+header separator          #494a4e #47464b 4         6 
+size design 1120x792, build 1120x788
+VERDICT: every sample within its allowance
+== ql-cloud light
+panel found at 440,1290 height 792 (marks (452, 1302), (455, 2069))
+sample                    design   build    max step  allowed
+header background         #f7f7f9 #f7f7f9 0         6 
+title (primary)           #272729 #272729 0         6 
+meta (secondary)          #727277 #727277 0         6 
+url (mono, primary)       #272729 #272729 0         6 
+header separator          #e4e4e6 #e8e8ea 4         6 
+size design 1120x792, build 1120x788
+VERDICT: every sample within its allowance
+== ql-cloud dark
+panel found at 440,1290 height 792 (marks (452, 1302), (455, 2069))
+sample                    design   build    max step  allowed
+header background         #333338 #302f35 4         6 
+title (primary)           #f7f7f9 #f7f7f9 0         6 
+meta (secondary)          #bebec3 #bebec2 1         6 
+url (mono, primary)       #f7f7f9 #f7f7f9 0         6 
+header separator          #494a4e #47464b 4         6 
+size design 1120x792, build 1120x788
+VERDICT: every sample within its allowance

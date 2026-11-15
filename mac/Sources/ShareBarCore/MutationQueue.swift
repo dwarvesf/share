@@ -31,11 +31,18 @@ public actor MutationQueue {
 
     public init() {}
 
-    public func run(_ args: [String]) async -> CLIResult {
+    /// `environment` adds to the child's (the popover's `SHARE_PROGRESS=1`); `onOutput` sees each
+    /// chunk of stdout and stderr as it arrives. Both default to nothing, so the queue's callers
+    /// that only wait for the result are unchanged.
+    public func run(
+        _ args: [String],
+        environment extra: [String: String] = [:],
+        onOutput: @escaping @Sendable (String) -> Void = { _ in }
+    ) async -> CLIResult {
         let previous = lastTask
         let task = Task {
             _ = await previous?.value
-            return await self.runTracked(args)
+            return await self.runTracked(args, environment: extra, onOutput: onOutput)
         }
         lastTask = task
         return await task.value
@@ -45,9 +52,9 @@ public actor MutationQueue {
     /// be cancelled from outside (Stop Waiting); behaviorally identical otherwise (no
     /// automatic timeout, same locate/env rules), just with a `CLIJob` handle kept live for
     /// the run's duration.
-    private func runTracked(_ args: [String]) async -> CLIResult {
+    private func runTracked(_ args: [String], environment extra: [String: String], onOutput: @escaping @Sendable (String) -> Void) async -> CLIResult {
         let token = JobToken()
-        let job = CLI.spawnCancellable(args, environment: MutationQueue.environment) { _ in }
+        let job = CLI.spawnCancellable(args, environment: MutationQueue.environment.merging(extra) { _, new in new }, onOutput: onOutput)
         running = (token, job)
         let result = await job.result
         running = nil

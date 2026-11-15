@@ -31,6 +31,12 @@ struct Theme {
     var surface: Color {
         scheme == .dark ? color(RGB(hex: "#2b2c31")) : color(RGB(hex: "#eff0f3"))
     }
+    /// A window's color as revision 8 renders it (`--win`: `#f7f7f9`, dark `#333338`): the Quick Look panel, a window and not the popover.
+    /// Painted as `#f5f5f8` and `#242328`, the values whose offscreen capture reads as the render, the way `surface` is calibrated.
+    /// A local surface, no change to a token.
+    var windowSurface: Color {
+        scheme == .dark ? color(RGB(hex: "#242328")) : color(RGB(hex: "#f5f5f8"))
+    }
     /// The border of the shortcut keycap (`rgba(ink, .14)`).
     var keycapBorder: Color { color(primitive.label.value(palette.appearance), opacity: 0.14) }
     var attentionInk: Color { color(semantic.attentionInk) }
