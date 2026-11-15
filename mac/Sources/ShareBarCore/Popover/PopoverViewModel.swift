@@ -89,6 +89,8 @@ public struct RowModel: Sendable, Equatable, Identifiable {
     public let servesHere: Bool
     /// The viewer runs the tenant (owner or admin): the only role that revokes another member's link.
     public let isAdmin: Bool
+    /// Trailing relative age (`today`, `1d`, `8d`, `3w`, `5mo`, `2y`); nil when the CLI gave no `added` day.
+    public var age: String? = nil
 
     public var dimmed: Bool { !state.answers }
     public var canCopy: Bool { state.canCopy }
@@ -281,7 +283,8 @@ public struct PopoverViewModel: Sendable, Equatable {
             storage: share.storage,
             isMemberLink: share.origin != nil,
             servesHere: state?.servesHere ?? false,
-            isAdmin: role.isOrigin
+            isAdmin: role.isOrigin,
+            age: RowAge.text(added: share.added, now: now)
         )
     }
 

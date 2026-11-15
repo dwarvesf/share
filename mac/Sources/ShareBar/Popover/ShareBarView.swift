@@ -8,7 +8,8 @@ struct ShareBarView: View {
     @ObservedObject var store: PopoverStore
     @Environment(\.colorScheme) private var scheme
     @State private var moreFrames: [String: CGRect] = [:]
-    @State private var contentSize: CGSize = .zero
+    /// The highlighted row-menu item: the first one on open, then whichever the pointer is over.
+    @State private var menuActive: String?
 
     private var theme: Theme { Theme(scheme) }
     static let width: CGFloat = 340
@@ -25,17 +26,32 @@ struct ShareBarView: View {
                     ListBody(store: store)
                 }
             }
-            .background(GeometryReader { proxy in Color.clear.preference(key: SizeKey.self, value: proxy.size) })
             if store.tenantMenuOpen { tenantMenu }
-            if let id = store.menuRowID, let row = store.row(id) { rowMenu(for: row) }
+            if let id = store.menuRowID, let row = store.row(id) {
+                GeometryReader { proxy in rowMenu(for: row, bottom: proxy.size.height) }.id(row.id)
+            }
         }
         .frame(width: Self.width, alignment: .topLeading)
-        .frame(minHeight: store.menuRowID != nil ? 230 : nil, alignment: .top)
+        .frame(minHeight: menuMinHeight, alignment: .top)
+        .background(theme.surface)
         .coordinateSpace(name: "pop")
         .onPreferenceChange(MoreFramesKey.self) { moreFrames = $0 }
-        .onPreferenceChange(SizeKey.self) { contentSize = $0 }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Share Bar")
+    }
+
+    /// The popover grows to hold the row menu under its More button, as the design does, so
+    /// the menu never has to flip up over the header and the search.
+    private var menuMinHeight: CGFloat? {
+        guard let id = store.menuRowID, let row = store.row(id) else { return nil }
+        let anchor = moreFrames[id]?.maxY ?? 100
+        return max(230, anchor + 4 + Self.menuHeight(for: row) + 8)
+    }
+
+    private static func menuHeight(for row: RowModel) -> CGFloat {
+        let items = RowMenu.items(for: row)
+        let danger = items.filter(\.isDestructive)
+        return CGFloat(items.count) * 28 + 8 + (danger.isEmpty || danger.count == items.count ? 0 : 9)
     }
 
     // MARK: tenant menu
@@ -67,14 +83,14 @@ struct ShareBarView: View {
 
     // MARK: row menu
 
-    private func rowMenu(for row: RowModel) -> some View {
+    private func rowMenu(for row: RowModel, bottom listBottom: CGFloat) -> some View {
         let items = RowMenu.items(for: row)
         let safe = items.filter { !$0.isDestructive }
         let danger = items.filter(\.isDestructive)
         let height = CGFloat(items.count) * 28 + 8 + (danger.isEmpty || safe.isEmpty ? 0 : 9)
         let anchor = moreFrames[row.id] ?? CGRect(x: Self.width - 40, y: 100, width: 26, height: 26)
         let x = max(8, min(anchor.maxX - Self.menuWidth, Self.width - Self.menuWidth - 8))
-        let bottom = max(contentSize.height, height + 16)
+        let bottom = max(listBottom, height + 16)
         var y = anchor.maxY + 4
         if y + height > bottom - 8 { y = anchor.minY - height - 4 }
         y = max(8, min(y, bottom - height - 8))
@@ -82,13 +98,13 @@ struct ShareBarView: View {
             Color.clear.contentShape(Rectangle()).onTapGesture { store.closeMenu() }
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(safe, id: \.self) { action in
-                    MenuRow(theme: theme, id: "menu-\(action.rawValue)", title: action.title, trailing: nil, checked: false, indent: false) {
+                    MenuRow(theme: theme, id: "menu-\(action.rawValue)", title: action.title, trailing: nil, checked: false, indent: false, active: $menuActive) {
                         store.choose(action, for: row)
                     }
                 }
                 if !safe.isEmpty, !danger.isEmpty { Divider().padding(.vertical, 4) }
                 ForEach(danger, id: \.self) { action in
-                    MenuRow(theme: theme, id: "menu-\(action.rawValue)", title: action.title, trailing: nil, checked: false, indent: false, destructive: true) {
+                    MenuRow(theme: theme, id: "menu-\(action.rawValue)", title: action.title, trailing: nil, checked: false, indent: false, destructive: true, active: $menuActive) {
                         store.choose(action, for: row)
                     }
                 }
@@ -100,12 +116,8 @@ struct ShareBarView: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Actions for \(row.title)")
         }
+        .onAppear { menuActive = (safe.first ?? danger.first).map { "menu-\($0.rawValue)" } }
     }
-}
-
-private struct SizeKey: PreferenceKey {
-    static var defaultValue: CGSize = .zero
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
 }
 
 struct MoreFramesKey: PreferenceKey {
@@ -134,8 +146,11 @@ struct MenuRow: View {
     let checked: Bool
     var indent = true
     var destructive = false
+    /// A menu that shares one highlight (the first item is lit on open); nil keeps a per-row hover.
+    var active: Binding<String?>?
     let action: () -> Void
-    @State private var hovering = false
+    @State private var hoverOnly = false
+    private var hovering: Bool { active.map { $0.wrappedValue == id } ?? hoverOnly }
 
     var body: some View {
         Button(action: action) {
@@ -155,7 +170,9 @@ struct MenuRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .onHover { inside in
+            if let active { if inside { active.wrappedValue = id } } else { hoverOnly = inside }
+        }
         .accessibilityIdentifier(id)
         .accessibilityLabel(title)
         .accessibilityAddTraits(checked ? .isSelected : [])

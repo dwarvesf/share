@@ -59,15 +59,24 @@ struct ListBody: View {
     private func search(_ model: PopoverViewModel) -> some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(.system(size: 12)).foregroundColor(theme.secondary).accessibilityHidden(true)
-            TextField("", text: Binding(get: { store.query }, set: { store.setQuery($0) }),
-                      prompt: Text(model.search.placeholder).foregroundColor(theme.tertiary))
+            // SwiftUI ignores a color on `prompt:`, so the placeholder is drawn here in the tertiary ink.
+            TextField("", text: Binding(get: { store.query }, set: { store.setQuery($0) }))
                 .textFieldStyle(.plain)
                 .font(theme.bodyFont)
                 .foregroundColor(theme.label)
+                .overlay(alignment: .leading) {
+                    if store.query.isEmpty {
+                        Text(model.search.placeholder).font(theme.bodyFont).foregroundColor(theme.tertiary)
+                            .allowsHitTesting(false).accessibilityHidden(true)
+                    }
+                }
                 .accessibilityIdentifier("search")
                 .accessibilityLabel("Search links")
             if store.query.isEmpty {
-                Text(model.search.hint).font(theme.metaFont).foregroundColor(theme.tertiary).accessibilityHidden(true)
+                Text(model.search.hint).font(.system(size: 10.5, weight: .medium)).foregroundColor(theme.tertiary)
+                    .padding(.horizontal, 4)
+                    .overlay(RoundedRectangle(cornerRadius: theme.chipRadius).stroke(theme.keycapBorder, lineWidth: 1))
+                    .accessibilityHidden(true)
             }
         }
         .padding(.horizontal, 8).frame(height: 28)
@@ -153,6 +162,11 @@ struct RowView: View {
                 Text(row.meta).font(theme.metaFont).foregroundColor(theme.secondary).lineLimit(1).truncationMode(.tail)
             }
             Spacer(minLength: 4)
+            if let age = row.age {
+                Text(age).font(theme.metaFont).foregroundColor(theme.tertiary)
+                    .frame(minWidth: 46, alignment: .trailing)
+                    .accessibilityLabel(age == "today" ? "added today" : "added \(age) ago")
+            }
             if store.flashRow == row.id {
                 Text("Copied").font(.system(size: 11, weight: .semibold)).foregroundColor(theme.ok)
             }

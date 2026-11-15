@@ -68,6 +68,35 @@ final class PopoverController: NSObject, NSPopoverDelegate {
         popover.performClose(nil)
     }
 
+    #if DEBUG
+    /// Screenshot hook (DEBUG only, read by AppDelegate from `-ShareBarShotsRender <png>`): draws the
+    /// popover's SwiftUI tree in an offscreen window, optionally with one row's menu open, and writes
+    /// a PNG. It takes no pointer or key input, so it runs on a live desktop without touching it.
+    func debugRender(to path: String, menuRow: String?, appearance: NSAppearance?, done: @escaping () -> Void) {
+        let hosting = NSHostingView(rootView: ShareBarView(store: store))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: ShareBarView.width, height: 600),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.appearance = appearance
+        window.contentView = hosting
+        func capture() {
+            let size = hosting.fittingSize
+            window.setContentSize(size)
+            hosting.frame = NSRect(origin: .zero, size: size)
+            hosting.layoutSubtreeIfNeeded()
+            guard let rep = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { done(); return }
+            hosting.cacheDisplay(in: hosting.bounds, to: rep)
+            if let png = rep.representation(using: .png, properties: [:]) { try? png.write(to: URL(fileURLWithPath: path)) }
+            done()
+        }
+        store.opened()
+        window.orderBack(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            if let menuRow { self.store.openMenu(menuRow) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: capture)
+        }
+    }
+    #endif
+
     // MARK: NSPopoverDelegate
 
     func popoverDidClose(_ notification: Notification) {
