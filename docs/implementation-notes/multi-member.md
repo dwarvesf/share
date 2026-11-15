@@ -329,3 +329,49 @@ The delta from the audit-to-spec trace, row 18. Decision record: SPEC-009 DEC-82
 | Keys a refused cut leaves (steps 4 and 5) | left in the Keychain | bare join has no config, so no host name to forget them by; the re-join replaces them |
 | Record `step` of a `joining` record | 6 | it is the journal step, so `member ls` and the journal agree |
 | Spec tables | `seq-join`, the status table row `join step 6`, TASK-1h, the DP-join rows, NC-11, and the `join step 3` grep in `mm member_can` all renumbered | the member_can test reads the spec row by its label |
+
+## Phase 3 build (SG-08: TASK-3a to 3d)
+
+Built on main at a62f7ff. Dry seams only; nothing live. Also fixes the CC-14 lease-read flake (DECISIONS.md 2026-11-15).
+
+### AC to test map (Phase 3)
+
+| AC row | Test (`mm` labels in tests/members.sh, section `members: pause, resume, invite, rotate, renew (TASK-3a to 3d)`) |
+|---|---|
+| MB-10, MB-11, LK-14 | `mm MB-10: ...`, `mm MB-10, LK-14: ...`, `mm MB-11, LK-14: ...` |
+| CC-02 | `mm CC-02: ...` |
+| DP-pause-1, -2 (and resume) | `mm DP-pause-1, DP-pause-2: ...`, `mm DP-resume: ...` |
+| cloud guard (pause, resume, rotate) | `mm TASK-3a: a cloud member is refused member_cloud ...` |
+| MB-09 | `mm MB-09 (invited): ...`, `mm MB-09 (expired): ...` |
+| DP-invite-1 to -3 | `mm DP-invite-1 to DP-invite-3: ...` |
+| MB-12, OT-14 | `mm MB-12 (active): ...`, `mm MB-12 (paused): ...`, `mm OT-14: ...` |
+| MB-26 | `mm MB-26 (verbs): ...` |
+| MB-36 | `mm MB-36: ...` (invited and joining) |
+| OT-10 | `mm OT-10: ...` |
+| CC-03 | `mm CC-03 (join loses): ...`, `mm CC-03 (rotate re-reads): ...` |
+| DP-rotate-1 to -4 | `mm DP-rotate-1 to DP-rotate-4: ...` |
+| MB-18, CK-04 | `mm MB-18: ...`, `mm CK-04: ...` |
+| MB-19 | `mm MB-19: ...` (state, status, member ls) |
+| MB-37 | `mm MB-37: ...` (machine and cloud) |
+| MB-30 (last clause, Q4 above) | `mm MB-30 (renew): ...` |
+| CC-14 flake | `mm CC-14 (vanished lease): ...` (forced race, NC below) |
+
+### Build delta
+
+- P41 (TASK-3a): `pause` and `resume` share one body. Steps: 1 lease, 2 `pausing`/`resuming`, 3 deploy (the suffix added to or dropped from `PAUSED`; skipped when already so), 4 the resting status. A cloud member is refused `member_cloud`, a new code (`member_cloud`: code table and skill row added).
+- P42 (CC-02, all five verbs): the pre-lease check refuses `member_busy` only when no live holder has the lease. With a live holder it proceeds to `lease_take`, which waits, and the same refusals run again on a fresh read under the lease. Why: "serialized by the lease" in CC-02 means the second shell waits, not that it refuses the first shell's `pausing`. Any refusal under the lease ends the journal first (`op_done`), so it leaves no dead journal.
+- P43 (TASK-3b): `invite` steps: 1 lease, 2 inviting, 3 token, 4 connections, 5 service, 6 invite-hash, 7 invite, 8 invited. The new token gets 90 days: the spec gives `invite` no `--token-ttl`. The tunnel is the member's live tunnel with the highest `-r<n>` by name; the record's rotation is a hint only. A tunnel deleted outside share is made again under the record's name, and the service and binding follow it (review finding). Why: refusing toward `rotate` dead-locks, since `rotate` refuses `member_busy` from `inviting`. Every older `i/` whose envelope names the member goes, as in `rm`.
+- P44 (TASK-3c): `rotate` steps: 1 lease, 2 rotating, 3 tunnel, 4 service, 5 deploy, 6 old, 7 token, 8 invite-hash, 9 invite, 10 invited. Step 6 deletes every service and tunnel of the suffix except the new name, so a forged rotation hides none. The new rotation is above the record's and above every `-r<n>` on the account. A rerun keeps the record's rotation only when this machine holds a dead `member-rotate` journal for the same member (review and advisor finding: a forged `rotating` record would otherwise point it at the live tunnel, and the leaked connector would keep serving, OT-14). A rerun from another machine makes one more tunnel, and step 6 deletes the extra. New tokens get 90 days and new invites 7 days: the spec gives `rotate` no flags.
+- P45 (TASK-3d): `renew` steps: 1 lease, 2 renewing, 3 token, 4 record, 5 restored. The token is found by name before the journal and again under the lease. With none found, it dies `token_unreachable` before any write (MB-37). The PUT body is the token's own `name`, `policies`, `not_before` and `condition`, the new `expires_on`, and `status` `active` (an expired token comes back; a disabled one stays disabled). The record keeps the server's `expires_on` from the PUT answer (CK-04).
+- P46 (TASK-3d, DEC-39): join step 9 writes the `.health` token cache, so `state.token` on R7 carries `expires_on` from the first join. Each read of the own record (`status`, the member loop) copies the record's `token.expires_on` into the local `token_expires` when it differs, so a renew reaches the member with no re-join (MB-30's last clause, Q4 above). Residual: the record is member-writable, so a forged date changes only this display. The token's real expiry is Cloudflare's. `member ls` warns from the minter's own token list when `SHARE_MINTER_TOKEN` is set, else from the record.
+- P47 (CC-03): join step 6 now also checks that the record's `invite.hash` is the hash it redeemed (`reg_guard`, checked on every read inside `reg_status`). So a join whose record write lands after a `rotate` or `invite` loses, and rolls back like a lost If-Match. Without it the old code's join landed on the rotated member as `joining`, then `active`, holding dead keys. The guard holds only in the run that redeemed: a bare resumed join has no hash (residual). Join step 9 refuses `member_changed` when the record reads anything but `joining`, `active` or `paused`, and it keeps the config.
+- P48 (CC-14 flake): the root cause was the dry bucket, not `lease_read`. `r2_dry` GET checked that the file existed, then a concurrent `lease_release` deleted it before `cat`. The failed read made `r2_call` return 1, which `lease_read` reports as "needs the admin S3 pair". R2 answers a GET atomically, 200 or 404. The dry GET now does the same, LIST leaves out a vanished object, and If-Match on a vanished object answers 412. `lease_read` already treats 404 as absent, and `lease_take` retries the If-None-Match take. The seam `SHARE_R2_DRY_VANISH="GET <key>"` forces the race once.
+- P49 (invite from left while paused, advisor finding): `leave` from `paused` clears `prev_status` and cannot unpause the deploy. An `invite` from `left` therefore sets `prev_status` `paused` when the deployed `PAUSED` holds the suffix, so the re-join lands `paused`, matching the deploy.
+- P50 (`member sync --rebind`, advisor findings): the rebind binds only the newest `-r<n>` service of a suffix and skips a suffix whose record reads `rotating` (a rotate that died between its deploy and its old deletes). It restores `PAUSED` from records reading `paused`, and also from `invited` records with `prev_status` `paused`.
+- P51 (`member ls`): a record read with no lease in an `...ing` status names its rerun from a verb table. The old `rtrimstr("ing")` printed `paus` and `rotat`. MB-28's expectation now includes `of 4` because `pause` has a step table.
+- P52 (shards): `tests/ci/shards.txt` gains the new section in `members-a` (SG-19's shard-check fails the lint job otherwise). The file is outside this sub-goal's Touches list; the edit is one regex word.
+
+### Open questions for the operator (Phase 3)
+
+- Q5: a forged `mode: cloud` record makes `pause` and `rotate` refuse `member_cloud`. This is the same class as a forged status, so it is not fixed here. The admin repairs it with `member rm`, or by restoring the record by hand.
+- Q6: the spec's `## Review` section in SPEC-009 was not replaced by this sub-goal's `/kit:review`: the spec is outside Touches. The review lives in `docs/verification/members-lifecycle.md`.
