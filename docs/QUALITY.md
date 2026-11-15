@@ -120,19 +120,19 @@ The worktree has no `docs/QUALITY.md` (checked 2026-11-13), so these are the fir
   - Quality: compatibility (older CLIs and Workers)
   - Scenario: a v0.9 CLI or a v4 Worker meets v:3 pointers, tombstones or member records
   - Measure: 0 deletions and 0 wrong-content answers for member links (v4 answers 404; v0.9 hides and never reaps)
-  - Check: `mm OC-01` to `mm OC-06`
+  - Check: spec rows OC-01 to OC-06; only OC-02 and OC-03 are in `tests/members.sh` so far
 
 - ID: `Q-COMPAT-3`
   - Quality: compatibility (the shipped Share Bar)
   - Scenario: the released v0.9.0 Share Bar reads every profile the new CLI reports
   - Measure: `bash mac/compat-check.sh v0.9.0` exits 0; `state` stays schema 1 with no new `state.state` value
-  - Check: `mac/compat-check.sh` (TASK-4b1); `mm OC-06`, `mm OC-08`
+  - Check: `mac/compat-check.sh` (TASK-4b1); spec rows OC-06 and OC-08 (not yet in the suite)
 
 - ID: `Q-COMPAT-4`
   - Quality: compatibility (`share state` contract)
   - Scenario: a profile of any role is read by `share state` after the groundwork change
   - Measure: schema stays 1; keys are only added; every existing key keeps its value
-  - Check: `tests/share.sh` rows CP-01 to CP-03; `state_schema_ok`
+  - Check: `tests/share.sh` row CP-01 and `state_schema_ok` (CP-02 and CP-03 are spec rows, not yet in the suite)
 
 ## Cost
 

@@ -354,10 +354,10 @@ Join redeems the code once, stores two tokens in the Keychain, starts Caddy and 
 | `invite_unavailable` | the Worker could not release it; it may be spent | the admin runs `share member invite <name>` |
 | `invite_tampered`, `member_changed` | the sealed bytes or the record changed | ask the admin for a new code |
 | `port_busy` | the invite's port is taken on this machine | the admin runs `share member invite <name> --port <free port>` |
-| `profile_not_empty` | the profile already publishes or serves | use another `--profile`, or `share leave` first |
+| `profile_not_empty` | the profile already publishes or serves | `share profiles`, then join with `--profile <new name>` |
 | `cli_below_min` | this `share` is older than the tenant's `min_cli` | upgrade `share` |
 
-**Run the member lifecycle (admin).** `member ls [--json]` lists every member with status, step, token expiry, drift and the verbs allowed now.
+**Run the member lifecycle (admin).** `member ls [--json]` lists every member with status, step, token expiry, drift and the verbs allowed now. `pause`, `resume`, `invite`, `rotate`, `renew` and `adopt` are specified and not built yet (not built yet: the CLI answers "not built in this version"); the rows below describe them from the spec.
 
 | Verb | Does | Notes |
 |---|---|---|

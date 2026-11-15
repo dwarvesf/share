@@ -42,7 +42,7 @@ share profiles                                                       # default a
 | **Profiles** | `share --profile work ...` runs a second setup (another account or hostname) beside the first, on its own port and service |
 | **Private links** | `--access email:a@x,b@y`, `domain:example.com`, or `group:<rule group>` puts a Cloudflare Access login (one-time PIN) on one link; the other links stay public. See [Private links](#private-links) |
 | **One hostname per tenant** | local by default; the admin can turn R2 on at the origin (`setup <host> --r2 --bucket <name>`) and each link picks local or cloud (`add --cloud`). See [One hostname per tenant](#one-hostname-per-tenant) |
-| **Members** | `share member add an --machine` prints one `share join <host> <code>` line; the teammate's links then stay on their own machine under your hostname. Pause, rotate, renew and remove from one admin CLI. See [Members](#members) |
+| **Members** | `share member add an --machine` prints one `share join <host> <code>` line; the teammate's links then stay on their own machine under your hostname. Add, list and remove from one admin CLI (pause, rotate and renew are specified). See [Members](#members) |
 | **Links with the machine off** | `setup <host> --backend r2 --bucket <name>`: snapshots live in a private R2 bucket, a Worker serves them, and a whole team publishes to one hostname. See [R2 backend](#r2-backend-links-that-stay-up-while-the-machine-is-off) |
 
 On the default tunnel backend, links are live only while the machine is awake; visitors get Cloudflare 530 when it sleeps. `https://<hostname>/healthz` answers `ok` while share is serving; the site root 404s by design.
@@ -192,7 +192,7 @@ share join s.example.com <code>                                  # the member pa
 share add ./report.pdf                                           # https://s.example.com/<id>/report.pdf
 ```
 
-Admin verbs: `member ls`, `pause`, `resume`, `invite`, `rotate`, `renew`, `adopt`, `sync`, `rm`, `purge`. A member's own verbs: `join`, `leave`. They need the admin token and a separate minter token (`share admin-token`, `share minter-token`), and a Worker that has Workers VPC (a beta product), so members are off until `--members`. Members are named teammates only: every member's pages run under one origin, and the bucket token cannot tell members apart. Steps and refusals: [docs/setup.md](docs/setup.md#4i-members-one-line-to-onboard-a-teammates-machine); the model: [docs/how-it-works.md](docs/how-it-works.md#members-one-hostname-many-machines) and [ADR-0009](docs/decisions/ADR-0009-members.md).
+Admin verbs built: `member add`, `ls`, `sync`, `rm`, `purge`. Specified, not built yet: `pause`, `resume`, `invite`, `rotate`, `renew`, `adopt`. A member's own verbs: `join`, `leave`. They need the admin token and a separate minter token (`share admin-token`, `share minter-token`), and a Worker that has Workers VPC (a beta product), so members are off until `--members`. Members are named teammates only: every member's pages run under one origin, and the bucket token cannot tell members apart. Steps and refusals: [docs/setup.md](docs/setup.md#4i-members-one-line-to-onboard-a-teammates-machine); the model: [docs/how-it-works.md](docs/how-it-works.md#members-one-hostname-many-machines) and [ADR-0009](docs/decisions/ADR-0009-members.md).
 
 ## Menu bar app
 
