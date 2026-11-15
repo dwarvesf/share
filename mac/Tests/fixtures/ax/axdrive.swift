@@ -84,17 +84,22 @@ func waitFor(_ pid: pid_t, _ name: String, _ seconds: Double) -> AXUIElement? {
 }
 
 func post(_ type: CGEventType, at point: CGPoint) {
-    CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)?
-        .post(tap: .cghidEventTap)
+    let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)
+    event?.setIntegerValueField(.mouseEventClickState, value: 1)
+    event?.post(tap: .cghidEventTap)
 }
 
 func click(_ element: AXUIElement) -> Bool {
     guard let box = frame(element), box.width > 0, box.height > 0 else { return false }
     let point = CGPoint(x: box.midX, y: box.midY)
+    // Hover first and let the control highlight: a click that lands before the window has
+    // seen the pointer is dropped by some panels (an NSAlert's button).
     post(.mouseMoved, at: point)
-    Thread.sleep(forTimeInterval: 0.15)
+    Thread.sleep(forTimeInterval: 0.3)
+    post(.mouseMoved, at: CGPoint(x: point.x + 1, y: point.y))
+    Thread.sleep(forTimeInterval: 0.1)
     post(.leftMouseDown, at: point)
-    Thread.sleep(forTimeInterval: 0.08)
+    Thread.sleep(forTimeInterval: 0.1)
     post(.leftMouseUp, at: point)
     return true
 }
@@ -150,7 +155,16 @@ case "find", "click":
     let name = args[3]
     let seconds = args.count > 4 ? (Double(args[4]) ?? 3) : 3
     guard let element = waitFor(pid, name, seconds) else { fail("missing control: \(name)", code: 3) }
-    if args[1] == "click", !click(element) { fail("control has no on-screen frame: \(name)", code: 3) }
+    if args[1] == "click" {
+        guard click(element) else { fail("control has no on-screen frame: \(name)", code: 3) }
+        // A panel's button can drop a click that lands while the app is not yet active (an
+        // NSAlert on another display). If the button is still there after the click, press
+        // it through its own Accessibility action: still the control's own handler, no state set.
+        if text(element, kAXRoleAttribute) == kAXButtonRole as String {
+            Thread.sleep(forTimeInterval: 0.5)
+            if frame(element) != nil { AXUIElementPerformAction(element, kAXPressAction as CFString) }
+        }
+    }
 case "dump":
     guard args.count >= 3, let pid = Int32(args[2]) else { fail("usage: axdrive dump <pid>", code: 2) }
     func dump(_ element: AXUIElement, depth: Int) {

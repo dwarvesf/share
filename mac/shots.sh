@@ -18,7 +18,10 @@
 #   key <name> [cmd|opt|ctrl|shift]...
 #   wait <seconds>
 #   shot <label>               capture the frontmost Share Bar window
-#   expect-argv <text>         fail unless a CLI call logged in argv.log contains <text>
+#   expect-argv <args>         fail unless argv.log holds a whole call equal to <args>
+#                              (the leading `--profile <name>` is ignored)
+#   negative                   the file is a negative control: `shots.sh all` runs it and
+#                              requires it to fail and to write no image
 #
 # Images go to docs/verification/share-bar/<task>-<label>-<light|dark>.png (SHOTS_TASK,
 # default 4b4; SHOTS_OUT overrides the directory). They are written to a temp directory
@@ -46,6 +49,7 @@ cleanup() {
   if [[ -n $APP_PID ]]; then
     pkill -P "$APP_PID" 2>/dev/null || true
     kill "$APP_PID" 2>/dev/null || true
+    wait "$APP_PID" 2>/dev/null || true
   fi
   if [[ -n $RUN_DIR && -d $RUN_DIR ]]; then mv "$RUN_DIR" "$RUN_DIR.gone.$$" 2>/dev/null || true; fi
   if [[ -n $IMG_DIR && -d $IMG_DIR ]]; then mv "$IMG_DIR" "$IMG_DIR.gone.$$" 2>/dev/null || true; fi
@@ -122,7 +126,7 @@ run_steps() { # run_steps <scenario> <steps file> <light|dark>
     rest=""
     [[ $line == *" "* ]] && rest="${line#* }"
     case $cmd in
-      scenario) ;;
+      scenario|negative) ;;
       click)
         [[ -n $rest ]] || step_error "$n" "$line" "click needs a control"
         [[ $rest != status-item ]] || status_item_ready "$APP_PID" || step_error "$n" "$line" "missing control: status-item (hidden by the menu bar?)"
@@ -145,8 +149,11 @@ run_steps() { # run_steps <scenario> <steps file> <light|dark>
         screencapture -x -o -l "$win" "$IMG_DIR/$TASK-$rest-$appearance.png" || step_error "$n" "$line" "screencapture failed"
         [[ -s $IMG_DIR/$TASK-$rest-$appearance.png ]] || step_error "$n" "$line" "screencapture wrote nothing" ;;
       expect-argv)
+        [[ -n $rest ]] || step_error "$n" "$line" "expect-argv needs the arguments to look for"
         sleep 0.8
-        grep -qF -- "$rest" "$RUN_DIR/argv.log" || step_error "$n" "$line" "no CLI call logged \"$rest\" (argv.log: $(tr '\n' ';' < "$RUN_DIR/argv.log"))" ;;
+        # A whole logged call, with or without its leading `--profile <name>`.
+        sed 's/^--profile [^ ]* //' "$RUN_DIR/argv.log" | grep -qxF -- "$rest" \
+          || step_error "$n" "$line" "no CLI call logged \"$rest\" (argv.log: $(tr '\n' ';' < "$RUN_DIR/argv.log"))" ;;
       *) step_error "$n" "$line" "unknown step" ;;
     esac
   done < "$steps"
@@ -191,6 +198,15 @@ if [[ $1 == all ]]; then
   for steps in "$FIXTURES"/steps/*.steps; do
     scenario="$(sed -n 's/^scenario[[:space:]]*//p' "$steps" | head -1)"
     [[ -n $scenario ]] || die "$(basename "$steps") has no scenario line"
+    if grep -q '^negative[[:space:]]*$' "$steps"; then
+      # A negative control must fail by itself and leave no image behind.
+      before="$(find "$OUT_DIR" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
+      if bash "$0" "$scenario" "$steps" >/dev/null 2>&1; then die "negative control $(basename "$steps") passed; it must fail"; fi
+      after="$(find "$OUT_DIR" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
+      [[ $before == "$after" ]] || die "negative control $(basename "$steps") wrote an image"
+      echo "== $scenario / $(basename "$steps" .steps): failed as required, no image"
+      continue
+    fi
     run_one "$scenario" "$steps"
   done
 else

@@ -199,7 +199,7 @@ public struct LinkView: Sendable, Equatable {
     static func timeLeft(of share: Share, now: Date) -> String? {
         if share.kind == "live" { return "live server" }
         if share.expires == 0 { return nil }
-        let remaining = share.expires - Int(now.timeIntervalSince1970)
+        let remaining = secondsLeft(share.expires, now: now)
         if remaining <= 0 { return "expired" }
         if remaining >= 86_400 { return "\(remaining / 86_400)d left" }
         if remaining >= 3_600 { return "\(remaining / 3_600)h left" }

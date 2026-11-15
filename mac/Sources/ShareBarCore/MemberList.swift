@@ -126,8 +126,13 @@ public struct MemberRecord: Decodable, Sendable, Equatable {
         self.can = can
     }
 
-    /// True for an `...ing` status: a verb is, or was, running on this record.
-    public var isRunning: Bool { status.hasSuffix("ing") }
+    /// The statuses a verb is, or was, running on this record under (`member_statuses` of
+    /// the CLI). An unknown status reads as not running, today's fallback.
+    static let runningStatuses: Set<String> = [
+        "adding", "joining", "pausing", "resuming", "inviting", "rotating", "renewing", "removing",
+    ]
+
+    public var isRunning: Bool { Self.runningStatuses.contains(status) }
 
     /// Present only for a machine member: whether its connector is up.
     public var isOnline: Bool { mode == "machine" && connectors > 0 }

@@ -30,6 +30,15 @@ A serial run of this sub-goal left a WIP commit (decoders, derivation, reducer, 
 - D13. `JournalRun` tests cover SPEC-010 DEC-21: the allowed verb per journal verb, the profile check, argument limits, a stand-in CLI that logs one line per argument (a hostile argument arrives as one literal argument and the marker file never appears).
 - D14. The serial run had no tests for SB-06 and SB-07. `MutationErrorJSONTests` adds them.
 
+## Review round (code lens and advisor)
+
+Folded: the argv shape check of `JournalRun` (a flag allowlist per journal verb, `rm` only for the add's own id, `OpInfo.id` and `aliveKnown` decoded so an op with unreadable liveness never runs, `\z` in the profile pattern); an `expires` far in the past no longer traps (`secondsLeft`); `MemberRecord.isRunning` uses the CLI's own status list; `expect-argv` matches a whole logged call and refuses an empty argument; `shots.sh all` runs a `negative` step file and requires it to fail with no image; `compat-check.sh` gained a live leg (the checked-out CLI's `profiles --json` and `state` from a throwaway HOME) and takes extra fixture files; the full `Snapshot` field checks in `GroundworkCompatTests` are back.
+
+- D15. SB-05 "attention line": a dead op is a distinct disabled line under its profile title with the `rerun` display string as text. It does not move the header to attention; the issues list that does so is a later task of the redesign.
+- D16. `JournalRun` is built now and not yet called by the menu: the Done line of this sub-goal names it, and G11b says the menu only shows the string. Its first caller is the Resume and Roll back buttons of a later task.
+- D17. Not attempted: the "drag from Finder" step of TASK-4b4. A drag needs a Finder window and a drop target; today's `NSMenu` has no drop target. The step arrives with the popover shell and its drop state. The proof index `docs/verification/multi-member.md` named by the spec is left to the sub-goal that owns the popover screens; this run's proof is `docs/verification/share-bar/foundations.md`.
+- D18. A panel's button can drop a click while the app is not active (the remove confirm sits on another display of the Mini). `axdrive click` sends the real click first and, if an `AXButton` is still on screen half a second later, performs its `AXPress`. The status item and menu rows only ever take the real click.
+
 ## AC map
 
 | Row | Test |

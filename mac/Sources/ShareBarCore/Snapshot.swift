@@ -113,6 +113,11 @@ public struct OpInfo: Decodable, Sendable, Equatable {
     public let of: Int?
     public let name: String?
     public let alive: Bool
+    /// False when the entry carried no readable `alive` boolean. `JournalRun` then refuses:
+    /// an op whose liveness is unknown is never rerun or rolled back.
+    public let aliveKnown: Bool
+    /// The share id an `add` journal belongs to (null for every other verb).
+    public let id: String?
     /// The display string (`printf %q` per argument). Text only: never parsed, never run.
     public let rerun: String?
     /// The arguments after `share` (DEC-21). Run only through `JournalRun`.
@@ -121,7 +126,7 @@ public struct OpInfo: Decodable, Sendable, Equatable {
     public let rollbackArgv: [String]?
 
     enum CodingKeys: String, CodingKey {
-        case verb, step, of, name, alive, rerun, rollback
+        case verb, step, of, name, alive, rerun, rollback, id
         case rerunArgv = "rerun_argv"
         case rollbackArgv = "rollback_argv"
     }
@@ -129,7 +134,10 @@ public struct OpInfo: Decodable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         verb = try c.decode(String.self, forKey: .verb)
-        alive = c.lenient(Bool.self, forKey: .alive) ?? false
+        let aliveValue = c.lenient(Bool.self, forKey: .alive)
+        alive = aliveValue ?? false
+        aliveKnown = aliveValue != nil
+        id = c.lenient(String.self, forKey: .id)
         step = c.lenient(Int.self, forKey: .step)
         of = c.lenient(Int.self, forKey: .of)
         name = c.lenient(String.self, forKey: .name)
@@ -140,7 +148,7 @@ public struct OpInfo: Decodable, Sendable, Equatable {
     }
 
     public init(
-        verb: String, step: Int? = nil, of: Int? = nil, name: String? = nil, alive: Bool,
+        verb: String, step: Int? = nil, of: Int? = nil, name: String? = nil, alive: Bool, id: String? = nil,
         rerun: String? = nil, rerunArgv: [String]? = nil, rollback: String? = nil, rollbackArgv: [String]? = nil
     ) {
         self.verb = verb
@@ -148,6 +156,8 @@ public struct OpInfo: Decodable, Sendable, Equatable {
         self.of = of
         self.name = name
         self.alive = alive
+        self.aliveKnown = true
+        self.id = id
         self.rerun = rerun
         self.rerunArgv = rerunArgv
         self.rollback = rollback

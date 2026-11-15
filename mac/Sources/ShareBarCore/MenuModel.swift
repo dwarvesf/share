@@ -132,8 +132,7 @@ public struct Row: Sendable, Equatable {
         if share.linkState == "expired" { return "expired" }
         if share.kind == "live" { return "live" }
         if share.expires == 0 { return "never" }
-        let nowEpoch = Int(now.timeIntervalSince1970)
-        let remaining = share.expires - nowEpoch
+        let remaining = secondsLeft(share.expires, now: now)
         if remaining <= 0 { return "expired" }
         if remaining >= 86_400 { return "\(remaining / 86_400)d left" }
         if remaining >= 3_600 { return "\(remaining / 3_600)h left" }
@@ -321,4 +320,11 @@ public struct MenuModel: Sendable {
         }
         return "Not set up"
     }
+}
+
+/// Seconds from `now` to an `expires` epoch. A value so far in the past that the
+/// subtraction would overflow reads as 0 (expired) and never traps.
+func secondsLeft(_ expires: Int, now: Date) -> Int {
+    let (remaining, overflow) = expires.subtractingReportingOverflow(Int(now.timeIntervalSince1970))
+    return overflow ? 0 : remaining
 }

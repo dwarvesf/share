@@ -1,11 +1,12 @@
 #!/bin/bash
 # compat-check.sh: does a shipped Share Bar still read what the new CLI prints?
 #
-# Usage: mac/compat-check.sh <release tag>     e.g. mac/compat-check.sh v0.9.0
+# Usage: mac/compat-check.sh <release tag> [extra fixture ...]     e.g. mac/compat-check.sh v0.9.0
 #
 # Builds the ShareBarCore sources of the tag in a temp package, then decodes every
 # new-CLI fixture with them: each `profiles --json` fixture (the test fixtures and every
-# scenario of the fake CLI) and each single `state` fixture. A fixture fails when the old
+# scenario of the fake CLI), each single `state` fixture, and the checked-out CLI's own live
+# `profiles --json` and `state` output from a throwaway HOME. A fixture fails when the old
 # decoder cannot read it, or when a profile it reports maps to Health.error (the shipped
 # app's "Error:" or "Update Share Bar" text). A scenario with no profiles.json
 # (cli-old, a TSV listing) is skipped on purpose: it stands for a CLI older than the tag.
@@ -15,7 +16,8 @@ set -euo pipefail
 MAC_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$MAC_DIR/.." && pwd)"
 TAG="${1:-}"
-[[ -n $TAG ]] || { echo "usage: mac/compat-check.sh <release tag>" >&2; exit 2; }
+[[ -n $TAG ]] || { echo "usage: mac/compat-check.sh <release tag> [extra fixture ...]" >&2; exit 2; }
+shift
 git -C "$REPO_DIR" rev-parse --verify --quiet "$TAG^{commit}" >/dev/null || { echo "compat-check: no such tag: $TAG" >&2; exit 2; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/compat-check.XXXXXX")"
@@ -90,6 +92,24 @@ for f in "$MAC_DIR"/Tests/ShareBarCoreTests/Fixtures/{profiles,profiles-tenant,s
   [[ -f $f ]] && FIXTURES+=("$f")
 done
 [[ ${#FIXTURES[@]} -gt 0 ]] || { echo "compat-check: no fixtures found" >&2; exit 2; }
+
+# The live leg: the checked-out CLI's own output from a throwaway HOME with a not-set-up
+# default, a quick-tunnel profile and a named profile (nothing runs, nothing is served), so
+# a drift in what the CLI prints shows up here and not only in the hand-written fixtures.
+command -v jq >/dev/null 2>&1 || { echo "compat-check: jq is needed for the live leg" >&2; exit 2; }
+LIVE_HOME="$WORK/home"
+mkdir -p "$LIVE_HOME/.config/share/profiles/quick" "$LIVE_HOME/.config/share/profiles/named" "$WORK/live"
+printf 'mode=quick\n' >"$LIVE_HOME/.config/share/profiles/quick/config"
+printf 'tunnel_id=abc123\nhostname=s.example.test\n' >"$LIVE_HOME/.config/share/profiles/named/config"
+live_cli() {
+  env -u SHARE_CONFIG_DIR -u SHARE_ROOT -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_PROFILE -u XDG_CONFIG_HOME \
+    HOME="$LIVE_HOME" bash "$REPO_DIR/bin/share" "$@"
+}
+live_cli profiles --json >"$WORK/live/profiles.json" || { echo "compat-check: the CLI's profiles --json failed" >&2; exit 1; }
+live_cli state >"$WORK/live/state.json" || { echo "compat-check: the CLI's state failed" >&2; exit 1; }
+jq -e '.profiles | length >= 3' "$WORK/live/profiles.json" >/dev/null || { echo "compat-check: the live profiles output has fewer than 3 profiles" >&2; exit 1; }
+FIXTURES+=("$WORK/live/profiles.json" "$WORK/live/state.json")
+for f in "$@"; do FIXTURES+=("$f"); done
 
 echo "== build ShareBarCore at $TAG"
 swift build --package-path "$WORK" >"$WORK/build.log" 2>&1 || { cat "$WORK/build.log" >&2; echo "compat-check: the $TAG sources did not build" >&2; exit 1; }
