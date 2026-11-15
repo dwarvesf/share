@@ -42,6 +42,7 @@ share profiles                                                       # default a
 | **Profiles** | `share --profile work ...` runs a second setup (another account or hostname) beside the first, on its own port and service |
 | **Private links** | `--access email:a@x,b@y`, `domain:example.com`, or `group:<rule group>` puts a Cloudflare Access login (one-time PIN) on one link; the other links stay public. See [Private links](#private-links) |
 | **One hostname per tenant** | local by default; the admin can turn R2 on at the origin (`setup <host> --r2 --bucket <name>`) and each link picks local or cloud (`add --cloud`). See [One hostname per tenant](#one-hostname-per-tenant) |
+| **Members** | `share member add an --machine` prints one `share join <host> <code>` line; the teammate's links then stay on their own machine under your hostname. Pause, rotate, renew and remove from one admin CLI. See [Members](#members) |
 | **Links with the machine off** | `setup <host> --backend r2 --bucket <name>`: snapshots live in a private R2 bucket, a Worker serves them, and a whole team publishes to one hostname. See [R2 backend](#r2-backend-links-that-stay-up-while-the-machine-is-off) |
 
 On the default tunnel backend, links are live only while the machine is awake; visitors get Cloudflare 530 when it sleeps. `https://<hostname>/healthz` answers `ok` while share is serving; the site root 404s by design.
@@ -173,11 +174,25 @@ share add --local ./notes           # on the origin's disk
 |---|---|---|
 | Hostname | one | the same one; storage is a badge on the row |
 | Link while the origin is off | Cloudflare 530 | cloud links serve; machine links answer a 503 offline page |
-| Who publishes | the origin | the origin (local or cloud), members (cloud only) |
+| Who publishes | the origin | the origin (local or cloud), members (their own machines or cloud; see [Members](#members)) |
 | Live dev servers, `--host` | yes | yes, on the origin |
 | Rollback | none needed | `setup <host> --no-r2` deletes the route; the tunnel serves alone again |
 
 `setup <host> --r2 --bucket <name> --alias <old-host>` folds a former r2 hostname into the tenant: the old name answers 301 to the same path and each gated link keeps its Access app. `share migrate --to <ssh-target>` moves an R2-off tenant to another always-on machine with every link kept, and prints the rollback line if a step fails. Share Bar shows one section per tenant, and each row carries a storage badge, a file-type icon, the link type, and a lock for gated links. Admin steps, tokens, and rollbacks: [docs/setup.md](docs/setup.md#4h-one-hostname-per-tenant-r2-on-the-origin-the-alias-fold-moving-the-origin); the model: [docs/how-it-works.md](docs/how-it-works.md#tenants-one-hostname-local-or-cloud) and [ADR-0008](docs/decisions/ADR-0008-one-host-per-tenant.md).
+
+## Members
+
+A member is a named teammate registered in the tenant's bucket. A machine member serves links from their own Mac under your hostname: no subdomain, no dashboard visit, and the file never leaves their machine. A cloud member publishes cloud links only.
+
+```sh
+share setup s.example.com --r2 --bucket share-s --members --yes   # admin, once (T2)
+share member add an --machine                                    # admin: prints one line
+# share join s.example.com <code>
+share join s.example.com <code>                                  # the member pastes it once
+share add ./report.pdf                                           # https://s.example.com/<id>/report.pdf
+```
+
+Admin verbs: `member ls`, `pause`, `resume`, `invite`, `rotate`, `renew`, `adopt`, `sync`, `rm`, `purge`. A member's own verbs: `join`, `leave`. They need the admin token and a separate minter token (`share admin-token`, `share minter-token`), and a Worker that has Workers VPC (a beta product), so members are off until `--members`. Members are named teammates only: every member's pages run under one origin, and the bucket token cannot tell members apart. Steps and refusals: [docs/setup.md](docs/setup.md#4i-members-one-line-to-onboard-a-teammates-machine); the model: [docs/how-it-works.md](docs/how-it-works.md#members-one-hostname-many-machines) and [ADR-0009](docs/decisions/ADR-0009-members.md).
 
 ## Menu bar app
 
@@ -211,8 +226,9 @@ Working on Share Bar: `swift test --package-path mac` runs the unit tests, `bash
 
 ## Docs
 
-- [docs/setup.md](docs/setup.md): API token setup (no browser), the R2 backend and teammate onboarding, a tenant's R2 and alias fold, moving machines, troubleshooting
-- [docs/how-it-works.md](docs/how-it-works.md): architecture, config keys, security model, the R2 data model and Worker, testing
+- [docs/setup.md](docs/setup.md): API token setup (no browser), the R2 backend and teammate onboarding, a tenant's R2 and alias fold, members, moving machines, troubleshooting
+- [docs/how-it-works.md](docs/how-it-works.md): architecture, config keys, security model, the R2 data model and Worker, members, testing
+- [docs/SYSTEM-DESIGN.md](docs/SYSTEM-DESIGN.md), [docs/QUALITY.md](docs/QUALITY.md), [CONTEXT.md](CONTEXT.md): the UML design, the measurable qualities, the glossary
 
 ## License
 

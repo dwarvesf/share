@@ -1,5 +1,5 @@
 ---
-rev: B
+rev: C
 decided:
   - "Members serve from their own machines behind the one tenant hostname via Workers VPC bindings."
   - "Removed member's cloud links stay until they expire."
@@ -9,13 +9,14 @@ decided:
   - "Cut from v1: member move, edit verb, teardown --cascade, member gated links, member hits."
   - "Spike O1 passed: VPC Service to 127.0.0.1 over a tunnel with no ingress, Free plan, no warp-routing."
   - "Spike O2 passed for user tokens: mint, one-time secret, expiry extended in place, found by name."
+  - "Rev C: the validated SPEC-009 and SPEC-010 delta folded in; ADR-0009 accepted."
 ---
 
 # share system design
 
 `share` is one bash CLI (`bin/share`, v0.9 line) that publishes a file, folder or local port at `https://<host>/<id>/`. A tenant is one hostname with one origin machine: Caddy serves the origin's links through a named Cloudflare tunnel, and when R2 is on, a tenant Worker on the same hostname serves cloud links from a private R2 bucket and passes everything else to the tunnel. Teammates publish cloud links only, with a bucket-scoped token the admin makes by hand.
 
-Rev A was the backfill of the system as built (`docs/research/2026-11-13-current-state-machines.md`). Rev B is the multi-member design from `docs/briefs/DECISION-BRIEF-multi-member.md` (r2): members serve links from their own machines behind the same hostname, through one Workers VPC binding each, with a member registry in the bucket and tool-minted credentials redeemed once. Nothing in rev B is built.
+Rev A was the backfill of the system as built (`docs/research/2026-11-13-current-state-machines.md`). Rev B is the multi-member design from `docs/briefs/DECISION-BRIEF-multi-member.md` (r2): members serve links from their own machines behind the same hostname, through one Workers VPC binding each, with a member registry in the bucket and tool-minted credentials redeemed once. Rev C folds in the validated specs (`docs/specs/SPEC-009-multi-member.md`, `docs/specs/SPEC-010-state-groundwork.md`) and ADR-0009, now accepted. It is the design as specified: the verbs `member pause`, `resume`, `invite`, `rotate`, `renew` and `adopt` are drawn from the spec and were not yet built when this revision was written, so a check against the code owes them a second look.
 
 ## Use cases
 
@@ -144,7 +145,7 @@ edges:
 
 ## Data
 
-Rev B adds the member registry `u/`, the v:3 pointer that names its origin, the tombstone `t/`, the sealed invite `i/` and the admin lease, all in the bucket. The marker gains `members` and `min_cli`; config gains `members=on` on the origin and `role`, `member_id` on a member (its `mode=` key then names machine or cloud, a third value beside quick). Index rows gain the `revoked` opts token. One key `m/<id>` still holds exactly one of v:1, v:2 or v:3.
+Rev B adds the member registry `u/`, the v:3 pointer that names its origin, the tombstone `t/`, the sealed invite `i/` and the admin lease, all in the bucket. The marker gains `members` and `min_cli`; config gains `members=on` on the origin and `role`, `member_id` and `member_mode` on a member (`member_mode`, never `mode`, names machine or cloud, so the tunnel `mode=` key keeps its meaning). The registry also holds `u/purged.json`, the ids of purged members, so a member_id is never reissued. A `u/` record gains `invite` (`hash`, `expires`) and `rotation`; an `i/` envelope holds `member_id`, `expires`, `sealed` and `mac`. Index rows gain the `revoked` opts token. One key `m/<id>` still holds exactly one of v:1, v:2 or v:3.
 
 ```uml
 id: data
@@ -157,7 +158,7 @@ review:
 tables:
   - name: config
     at: [0, 0]
-    cols: [[hostname, PK], [tunnel_id, NULL], [tunnel_name, NULL], [hosts], [port], [zone], [mode, NULL], [backend, NULL], [bucket, NULL], [r2_endpoint, NULL], [storage_default, NULL], [aliases, NULL], [api_token_cmd, NULL], [r2_token_cmd, NULL], [members, NULL], [role, NULL], [member_id, NULL]]
+    cols: [[hostname, PK], [tunnel_id, NULL], [tunnel_name, NULL], [hosts], [port], [zone], [mode, NULL], [backend, NULL], [bucket, NULL], [r2_endpoint, NULL], [storage_default, NULL], [aliases, NULL], [api_token_cmd, NULL], [r2_token_cmd, NULL], [members, NULL], [role, NULL], [member_id, NULL], [member_mode, NULL]]
   - name: index.tsv row
     at: [1, 0]
     cols: [[id, PK], [name], [src], [added], [exp], [opts]]
@@ -184,7 +185,7 @@ tables:
     cols: [[id, FK], [prefix], [src]]
   - name: "u/<member_id> record"
     at: [0, 2]
-    cols: [[member_id, PK], [name], [mode], [status], [tunnel_id, NULL], [vpc_service_id, NULL], [token_ids], [token_expires], [port, NULL], [joined, NULL], [updated]]
+    cols: [[member_id, PK], [name], [mode], [status], [tunnel_id, NULL], [vpc_service_id, NULL], [token_ids], [token_expires], [port, NULL], [rotation], [invite, NULL], [joined, NULL], [updated]]
   - name: "m/<id> pointer v:3"
     at: [1, 2]
     cols: [[id, PK], [v = 3], [storage = machine], [origin, FK], [name], [by], [added], [expires], [opts], [type]]
@@ -193,7 +194,7 @@ tables:
     cols: [[id, PK], [origin, FK], [by], [LastModified]]
   - name: "i/<sha256(code)> invite"
     at: [0, 3]
-    cols: [[hash, PK], [member_id, FK], [sealed tokens], [expires]]
+    cols: [[hash, PK], [member_id, FK], [sealed tokens], [mac], [expires]]
 rels:
   - {from: config, to: index.tsv row, cardinality: "1:N"}
   - {from: index.tsv row, to: "m/<id> pointer v:2", cardinality: "1:0..1", label: R3 only}
@@ -266,7 +267,7 @@ messages:
   - {from: Worker, to: Visitor, text: "passed answer, or 503 offline page", kind: return}
 ```
 
-`member add` runs under the admin lease and in the one write order: the record says `adding` first, then every Cloudflare object, then the record says `invited`. A die anywhere leaves `adding`, and the rerun on the same name resumes, finding the token by name. Blue is the admin side, gray Cloudflare, violet the bucket.
+`member add` runs under the admin lease and in the one write order: the record says `adding` first, then every Cloudflare object, then the record says `invited`. The record notes the invite hash before the sealed `i/` object is written. A die anywhere leaves `adding`, and the rerun on the same name resumes, finding the token by name. Blue is the admin side, gray Cloudflare, violet the bucket.
 
 ```uml
 id: seq-member-add
@@ -292,13 +293,14 @@ messages:
   - {from: share CLI, to: Cloudflare API, text: "deploy Worker from registry + M_<8hex>", kind: call}
   - {from: Cloudflare API, to: share CLI, text: deployed, kind: return}
   - {from: share CLI, to: Worker, text: "GET /healthz (VERSION SHA pair)", kind: call}
+  - {from: share CLI, to: R2 bucket, text: "PUT u/<id> invite hash, If-Match", kind: call}
   - {from: share CLI, to: R2 bucket, text: "PUT i/<sha256(code)> sealed, expires", kind: call}
   - {from: share CLI, to: R2 bucket, text: "PUT u/<id> status=invited, If-Match", kind: call}
   - {from: share CLI, to: R2 bucket, text: DELETE lock/admin, kind: call}
   - {from: share CLI, to: Admin, text: "code, shown once", kind: return}
 ```
 
-`join <code>` redeems through the Worker, which checks the expiry on its own clock and deletes the sealed invite: this is the Worker's one write. The record moves to `joining` before anything local exists, so a concurrent admin verb fails the join early.
+`join <code>` redeems through the Worker, which checks the expiry on its own clock, claims the sealed invite with a conditional overwrite and then deletes it: this is the Worker's one write, and of two concurrent redeems only one wins. The CLI writes the tokens and the member config locally first; only then does the record move to `joining`, so a join that died after the redeem still has its tokens on disk for the rerun.
 
 ```uml
 id: seq-join
@@ -319,11 +321,11 @@ messages:
   - {from: share CLI, to: share CLI, text: "CLI >= min_cli, port free", kind: call}
   - {from: share CLI, to: Worker, text: "POST /_share/redeem (sha256(code))", kind: call}
   - {from: Worker, to: R2 bucket, text: "get i/<hash>, expiry by server time", kind: call}
-  - {from: Worker, to: R2 bucket, text: "delete i/<hash>", kind: call}
+  - {from: Worker, to: R2 bucket, text: "claim i/<hash> (etagMatches), then delete", kind: call}
   - {from: Worker, to: share CLI, text: sealed bytes, kind: return}
   - {from: share CLI, to: share CLI, text: "unseal: publisher + connector token", kind: call}
-  - {from: share CLI, to: R2 bucket, text: "PUT u/<id> status=joining, If-Match", kind: call}
   - {from: share CLI, to: share CLI, text: "config role=member, tokens to Keychain", kind: call}
+  - {from: share CLI, to: R2 bucket, text: "PUT u/<id> status=joining, If-Match", kind: call}
   - {from: share CLI, to: Caddy + cloudflared, text: start service, kind: call}
   - {from: share CLI, to: Worker, text: "probe link, GET 3x200", kind: call}
   - {from: share CLI, to: R2 bucket, text: "PUT u/<id> status=active, joined", kind: call}
@@ -388,10 +390,11 @@ messages:
   - {from: VPC Service, to: Member Caddy, text: "member tunnel, 127.0.0.1:<port>", kind: call}
   - {from: Member Caddy, to: VPC Service, text: "handle /<id>/*: listed row only", kind: return}
   - {from: VPC Service, to: Worker, text: "200, or down", kind: return}
-  - {from: Worker, to: Visitor, text: "200 (hit counted), or generic 503", kind: return}
+  - {from: Worker, to: Worker, text: "X-Share-Served matches, HTML gets CSP sandbox", kind: call}
+  - {from: Worker, to: Visitor, text: "200 (no hit counted), or generic 503", kind: return}
 ```
 
-When the admin removes a member's link, the admin cannot reach the member's disk. It writes a tombstone and deletes the pointer, so the link 404s at once. The owner's next hourly reconcile flags the row revoked, drops its Caddy handle and deletes the tombstone; the bytes wait for the owner's own `rm` or the row's expiry.
+When the admin removes a member's link, the admin cannot reach the member's disk. It writes a tombstone and deletes the pointer, so the link 404s at once. The owner's next hourly reconcile flags the row revoked, drops its Caddy handle and deletes the tombstone. A tombstone beside the owner's own live pointer is deleted only once it is older than 10 minutes, so a revoke in flight is not undone; the bytes wait for the owner's own `rm` or the row's expiry.
 
 ```uml
 id: seq-revoke
@@ -417,7 +420,7 @@ messages:
   - {from: R2 bucket, to: share CLI (owner), text: "t/<id> present, m/<id> absent", kind: return}
   - {from: share CLI (owner), to: share CLI (owner), text: flag row revoked, kind: call}
   - {from: share CLI (owner), to: Owner Caddy, text: "drop handle, reload", kind: call}
-  - {from: share CLI (owner), to: R2 bucket, text: "DELETE t/<id>", kind: call}
+  - {from: share CLI (owner), to: R2 bucket, text: "DELETE t/<id> (own pointer: only if older than 10 min)", kind: call}
   - {from: share CLI (owner), to: share CLI (owner), text: "ls: removed by <who>", kind: call}
 ```
 
@@ -482,7 +485,7 @@ transitions:
   - {from: T2 members on, to: refused (stays T2), event: "teardown, migrate, --no-r2, older CLI --force", tone: gray}
 ```
 
-New in rev B. A member's lifecycle lives in its `u/` record, written in the one order intent, Cloudflare, final. `member rm` works from every state but REMOVED. `rotate` sends ACTIVE or PAUSED back to INVITED with `prev_status` kept and drops the connectors; the member's join with the new code restores `prev_status`, so a paused member comes back paused. The full table, with every `...ing` intent, is in SPEC-009, section "Member status transitions". OFFLINE is runtime only, never stored. Violet is stored status, gray is runtime.
+New in rev B. A member's lifecycle lives in its `u/` record, written in the one order intent, Cloudflare, final. `member rm` works from every state but REMOVED. `rotate` replaces the tunnel and the VPC Service (the binding name stays), sends ACTIVE or PAUSED back to INVITED with `prev_status` kept and drops the connectors; the member's join with the new code restores `prev_status`, so a paused member comes back paused. EXPIRED is derived from the invite's expiry and never stored. The full table, with every `...ing` intent, is in SPEC-009, section "Member status transitions". OFFLINE is runtime only, never stored. Violet is stored status, gray is runtime.
 
 ```uml
 id: sm-member
@@ -617,6 +620,7 @@ states:
   - {name: ignore other origin, at: [0, 3], tone: gray}
   - {name: delete stale tombstone, at: [2, 3], tone: rose}
   - {name: flag row revoked, at: [4, 3], tone: violet}
+  - {name: skip young tombstone, at: [1, 3], tone: gray}
 transitions:
   - {from: read m/ and index, to: no local row, event: "own pointer, no row", via: [[2, 0.5], [0, 0.5]]}
   - {from: read m/ and index, to: unexpired row, event: row exists, via: [[2, 0.5], [3, 0.5]]}
@@ -624,9 +628,11 @@ transitions:
   - {from: read m/ and index, to: skip revoked row, event: row revoked, via: [[2, 0.5], [5, 0.5]]}
   - {from: read m/ and index, to: ignore other origin, event: "other origin's pointer", via: [[2, 0.5], [-0.5, 0.5], [-0.5, 3]]}
   - {from: no local row, to: delete orphan pointer, event: older than 10 min, guard: no pending line, no add lock}
+  - {from: no local row, to: delete stale tombstone, event: "own-origin t/, no row", via: [[0.5, 1], [0.5, 2.5], [2, 2.5]]}
   - {from: no local row, to: skip (add may be writing), event: younger than 10 min}
   - {from: unexpired row, to: keep, event: "own pointer, no t/", via: [[2.5, 1], [2.5, 2]]}
-  - {from: unexpired row, to: delete stale tombstone, event: "own pointer + t/", via: [[2.5, 1], [2.5, 3]]}
+  - {from: unexpired row, to: delete stale tombstone, event: "own pointer + t/", guard: older than 10 min, via: [[2.5, 1], [2.5, 3]]}
+  - {from: unexpired row, to: skip young tombstone, event: "own pointer + t/", guard: younger than 10 min, via: [[2.5, 1], [2.5, 1.5], [1.5, 1.5], [1.5, 3]]}
   - {from: unexpired row, to: write missing pointer, event: key absent, guard: t/ absent, via: [[4, 1]]}
   - {from: unexpired row, to: flag row revoked, event: "key absent + t/", via: [[3.5, 1], [3.5, 2.5], [4, 2.5]]}
   - {from: unexpired row, to: report shadowed, event: "v:1, corrupt or v>2", guard: t/ absent}
@@ -653,7 +659,7 @@ transitions:
 - Workers VPC is beta. Bites if Cloudflare changes the binding API, its pricing, or loopback routing to a tunnel. Mitigated by shipping members behind `--members` only, with cloud-only members as the fallback. Spike O1 passed live on a Free-plan account (VPC Service to 127.0.0.1 over a tunnel with only the 404 catch-all, no warp-routing, 150 to 350 ms).
 - Every member serves under one origin. Bites if one member's page reads another member's link or cookies through same-origin script. Mitigated by stripping Access headers and cookies before a binding fetch; not by isolation.
 - The bucket token cannot tell members apart. Bites if a member token leaks or a teammate errs: it can write any `u/`, `m/` or `t/` key. Mitigated by making the worst case visible and recoverable: a forged tombstone revokes a link the owner can see and re-add, a forged pointer cannot serve an unlisted or revoked row, a forged record cannot change routing. Worker-mediated writes are the upgrade before anyone outside the team publishes.
-- Member tokens are user-owned (spike O2): the minter token (API Tokens Read and Write) mints them, the secret comes back once, and `expires_on` extends in place. Bites if the minting user leaves the account: every member token dies with it. Mitigated later by account-owned tokens, once a token with Account API Tokens Write exists (none does today).
+- Member tokens are user-owned (spike O2): the minter token (API Tokens Read and Write) mints them, the secret comes back once, and `expires_on` extends in place. Bites if the minting user leaves the account: every member token dies with it (O2 passed for user tokens). Mitigated later by account-owned tokens, once a token with Account API Tokens Write exists (none does today).
 - A member's connector token never expires. Bites if it leaks: another machine can join that tunnel and take a share of the requests. Mitigated by `rotate` (connections dropped first) and the "extra connector" flag in `member ls`.
 - `by` is an unauthenticated `uname -n`, and any publisher may rm any cloud link. Bites if a publisher token leaks or a teammate errs. Mitigated only by ADR-0007's named-teammates rule.
 - The origin's hourly prune still runs with no token. Bites as orphan pointers and expired cloud records that wait for an interactive `ls` or `prune` on the origin. Members run their reconcile unattended; the origin does not.
