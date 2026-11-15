@@ -103,6 +103,11 @@ public enum PopoverEvent: Sendable, Equatable {
     case holdUndo(held: Bool, now: Date)
     /// The popover closed, or the app is quitting: every pending undo commits at once.
     case close
+    /// The popover closed while the app keeps running: every pending undo commits except a bulk
+    /// Remove, which the All links window still shows with its Undo.
+    case popoverClosed
+    /// The All links window closed: only its bulk Removes commit, and the popover's mode stays.
+    case commitBulk
     case publishStep(file: String, step: Int, of: Int)
     /// A file chosen with + starts a publish with no drop in front of it.
     case publishStarted(file: String)
@@ -336,6 +341,24 @@ public struct PopoverState: Sendable, Equatable {
                 let context = listContext
                 mode = .list(scope: context?.scope ?? .mine, query: context?.query ?? "")
             }
+
+        case .popoverClosed:
+            let due = pending.filter { $0.action != .bulkRemove }
+            effects.append(contentsOf: due.map { .run($0.argv) })
+            pending.removeAll { $0.action != .bulkRemove }
+            if pending.isEmpty { undoHeld = false }
+            switch mode {
+            case .firstRun: break
+            default:
+                let context = listContext
+                mode = .list(scope: context?.scope ?? .mine, query: context?.query ?? "")
+            }
+
+        case .commitBulk:
+            let due = pending.filter { $0.action == .bulkRemove }
+            effects.append(contentsOf: due.map { .run($0.argv) })
+            pending.removeAll { $0.action == .bulkRemove }
+            if pending.isEmpty { undoHeld = false }
 
         case .publishStep(let file, let step, let of):
             if let index = publishing.firstIndex(where: { $0.file == file }) {

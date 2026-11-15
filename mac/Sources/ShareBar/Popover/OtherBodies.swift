@@ -108,3 +108,43 @@ struct FirstRunView: View {
         }
     }
 }
+
+/// Loading, the share command missing, or too old: one panel with the sentence and, when there
+/// is a command to run, a button that copies it (SPEC-009 TASK-4b21).
+struct AppStateView: View {
+    @ObservedObject var store: PopoverStore
+    let panel: AppStatePanel
+    @Environment(\.colorScheme) private var scheme
+    private var theme: Theme { Theme(scheme) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Share Bar").font(theme.titleFont).foregroundColor(theme.label).padding(.horizontal, 6)
+                Spacer()
+                IconButton(theme: theme, symbol: "gearshape", id: "settings-button", label: "Settings") { store.openSettings(.general) }
+            }
+            .padding(.leading, 10).padding(.trailing, 8).padding(.top, 8).padding(.bottom, 6)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: panel.symbol).font(.system(size: 15)).foregroundColor(theme.secondary).accessibilityHidden(true)
+                    Text(panel.title).font(theme.titleFont).foregroundColor(theme.label)
+                }
+                Text(panel.body).font(theme.bodyFont).foregroundColor(theme.secondary).fixedSize(horizontal: false, vertical: true)
+                if let button = panel.button, let text = panel.copy {
+                    PanelButton(theme: theme, title: button, id: "app-state-copy", prominent: true) { store.copyCommand(text) }
+                    Text(text).font(theme.monoFont).foregroundColor(theme.secondary).textSelection(.enabled)
+                        .accessibilityIdentifier("app-state-command")
+                }
+                if let footer = store.state.footer {
+                    Text(footer.text).font(theme.metaFont).foregroundColor(footer.kind == .failure ? theme.errorInk : theme.label)
+                        .accessibilityIdentifier("footer-status")
+                        .accessibilityAddTraits(.updatesFrequently)
+                }
+            }
+            .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 16)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("app-state-\(panel.title)")
+    }
+}

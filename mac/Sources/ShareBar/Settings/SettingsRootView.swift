@@ -145,20 +145,3 @@ struct SmallText: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 }
-
-/// The Members tab is built by the next sub-goal (SPEC-009 TASK-4b19); the tab itself shows
-/// for an admin so the Settings shape is complete.
-struct MembersPane: View {
-    @ObservedObject var store: SettingsStore
-    @Environment(\.colorScheme) private var scheme
-
-    var body: some View {
-        let t = SettingsTheme(scheme)
-        VStack(spacing: 8) {
-            Text("Members").font(t.titleFont).foregroundColor(t.label)
-            Text("Your team's people and their machines.").font(t.bodyFont).foregroundColor(t.secondary)
-        }
-        .frame(maxWidth: .infinity, minHeight: 420)
-        .accessibilityIdentifier("members-pane")
-    }
-}

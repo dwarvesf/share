@@ -4,8 +4,7 @@ import os
 
 private let routerLogger = Logger(subsystem: "com.dwarves.sharebar", category: "router")
 
-/// Where the popover's buttons land. The Settings window and its add sheet are real; the All
-/// links window belongs to a later sub-goal, which replaces that body and nothing else.
+/// Where the popover's buttons land: the Settings window, its add sheet and the All links window.
 enum SettingsTab: String {
     case general, tenants, members, advanced
 
@@ -38,6 +37,7 @@ final class AppRouter {
     /// "Show all N links…".
     func openAllLinks() {
         routerLogger.log("openAllLinks")
+        MainActor.assumeIsolated { AllLinksWindowController.shared.show() }
     }
 
     /// The two first-run buttons.

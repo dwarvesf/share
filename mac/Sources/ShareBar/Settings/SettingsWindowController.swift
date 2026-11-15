@@ -17,6 +17,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     func show(pane: SettingsPane, member: String? = nil) {
         let window = ensureWindow()
         store.show(pane: pane)
+        if let member { store.pointAtMember(member) }
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
         startRefreshing()

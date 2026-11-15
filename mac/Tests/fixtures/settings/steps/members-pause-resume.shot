@@ -1,0 +1,5 @@
+scenario admin-members
+script tab:advanced,keys,tab:members,mload,mverb:an:pause,ok,wait:1,mverb:chi:resume,wait:1
+expect-argv member pause an
+expect-argv member resume chi
+label members-pause-resume

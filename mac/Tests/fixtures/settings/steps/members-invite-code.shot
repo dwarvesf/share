@@ -1,0 +1,4 @@
+scenario admin-members
+script tab:advanced,keys,tab:members,mload,invite:console,name=chi2,create-code,wait:1
+label members-invite-code
+expect-argv member add chi2 --machine --invite-ttl 7d

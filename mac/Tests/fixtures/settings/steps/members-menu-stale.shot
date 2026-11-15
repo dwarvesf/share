@@ -1,0 +1,3 @@
+scenario admin-members
+script tab:advanced,keys,tab:members,mload,mmenu:nam
+label members-menu-stale

@@ -44,6 +44,11 @@ final class PopoverStore: ObservableObject {
         await CLI.spawnCancellable(argv, environment: ["SHARE_PROGRESS": "1", "SHARE_ERROR_JSON": "1"], onOutput: out).result
     }
     private var visible = false
+    /// General's After sharing and Notify me when, read at the moment they matter.
+    var general = GeneralPrefs()
+    /// Posts one notification; the app points it at `Notifier`, tests and shots leave it empty.
+    var notify: (NotifyEvent) -> Void = { _ in }
+    private var attention = AttentionNotifier()
 
     init(prefs: PopoverPrefs = PopoverPrefs(), router: AppRouter = .shared) {
         self.prefs = prefs
@@ -88,12 +93,50 @@ final class PopoverStore: ObservableObject {
     var showsIssues: Bool { state.mode == .issues }
     var isFirstRun: Bool { state.mode == .firstRun }
     var isStale: Bool { failure != nil }
+
+    /// Loading, CLI missing, CLI too old: bodies that replace the list (the first-run panel is `isFirstRun`).
+    var appState: AppState { AppState.of(profiles: profiles, failure: failure) }
+
+    /// `Working: add (3/6)` for a journaled command another process runs; our own publishes show their placeholder rows.
+    var workingLine: String? {
+        guard state.publishing.isEmpty else { return nil }
+        return WorkingLine.text(for: profiles?.profiles.first { $0.name == currentProfile })
+    }
+
+    /// The panel's button: puts the command on the pasteboard and says so.
+    func copyCommand(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        state.footer = Footer(text: "Copied. Paste it in Terminal.", kind: .toast, expires: Date().addingTimeInterval(PopoverState.toastSeconds))
+    }
     var undoVisible: Bool { !state.pending.isEmpty }
 
     // MARK: input
 
     /// A fresh `profiles` read from the controller.
+    #if DEBUG
+    /// Screenshot scenes only: holds the state a scene set against the controller's own reads.
+    var shotsFrozen = false
+
+    func freezeForShots(profiles: ProfilesSnapshot?, failure: Failure?) {
+        shotsFrozen = true
+        self.profiles = profiles
+        self.failure = failure
+        send(.profilesChanged(hasRole: profiles.map { !$0.profiles.isEmpty } ?? false))
+    }
+    #endif
+
     func update(profiles: ProfilesSnapshot?, failure: Failure?) {
+        #if DEBUG
+        if shotsFrozen { return }
+        #endif
+        let before = viewModel.rows.map(\.id)
+        defer {
+            // Focus follows the row's id, never its position: a refresh that reorders rows keeps it.
+            if let focused = focusedRow {
+                focusedRow = RowFocus.restored(previous: focused, previousIndex: before.firstIndex(of: focused), ids: viewModel.rows.map(\.id))
+            }
+        }
         self.profiles = profiles
         self.failure = failure
         now = Date()
@@ -107,6 +150,12 @@ final class PopoverStore: ObservableObject {
         if profiles != nil {
             send(.profilesChanged(hasRole: !tenants.isEmpty))
         }
+        notifyAttention()
+    }
+
+    /// Notify me when: what is newly true since the last read, for the toggles that are on.
+    private func notifyAttention() {
+        for event in attention.events(profiles: profiles, members: members, prefs: general.notifyPrefs, current: currentProfile) { notify(event) }
     }
 
     private func applyRememberedScope() {
@@ -201,6 +250,14 @@ final class PopoverStore: ObservableObject {
         state = next
     }
 
+    /// A bulk Remove from the All links window: one `pending` entry for every id, with its Undo.
+    func removeBulk(ids: [String], argv: [String], message: String) {
+        let now = Date()
+        var next = state.reduce(.remove(action: .bulkRemove, ids: ids, argv: argv, now: now, message: message)).state
+        next.footer = Footer(text: message, kind: .toast, expires: now.addingTimeInterval(Undo.window))
+        state = next
+    }
+
     /// The Delete key.
     func deleteFocused() {
         guard let id = focusedRow, let row = row(id) else { return }
@@ -220,13 +277,7 @@ final class PopoverStore: ObservableObject {
     func moveFocus(_ step: Int) {
         keyboardFocus = true
         searchFocused = false
-        let ids = viewModel.rows.map(\.id)
-        guard !ids.isEmpty else { return }
-        guard let current = focusedRow, let index = ids.firstIndex(of: current) else {
-            focusedRow = step > 0 ? ids.first : ids.last
-            return
-        }
-        focusedRow = ids[max(0, min(ids.count - 1, index + step))]
+        focusedRow = RowFocus.moved(from: focusedRow, step: step, ids: viewModel.rows.map(\.id)) ?? focusedRow
     }
 
     func returnOnFocused() {
@@ -261,7 +312,7 @@ final class PopoverStore: ObservableObject {
         searchFocused = false
         focusedRow = nil
         guard commitSynchronously else {
-            send(.close)
+            send(.popoverClosed)
             return
         }
         // The app is quitting: the calls must finish before the process ends, within one bound.
@@ -346,8 +397,17 @@ final class PopoverStore: ObservableObject {
             ? await newRowURL(profile: profile, before: before, title: (path as NSString).lastPathComponent) : nil
         stepNames[path] = nil
         let outcome = PublishOutcome.result(status: result.status, stdout: result.stdout, stderr: result.stderr, fallbackURL: fresh?.url)
-        send(.publishFinished(file: path, result: outcome, now: Date()))
-        if case .copied = outcome, let id = fresh?.id { flash(id) }
+        // After sharing: Copy the link and Show a notification, each its own toggle.
+        var shown = outcome
+        if case .copied = outcome, !general.copyAfterSharing { shown = .copied(url: "") }
+        send(.publishFinished(file: path, result: shown, now: Date()))
+        if case .copied(let url) = outcome {
+            if general.copyAfterSharing, let id = fresh?.id { flash(id) }
+            if general.notifyAfterSharing {
+                let name = (path as NSString).lastPathComponent
+                notify(NotifyEvent(key: "shared:\(path)", title: general.copyAfterSharing ? "Link copied" : "Published", body: url.isEmpty ? name : "\(name): \(url)"))
+            }
+        }
     }
 
     private func hasPrintedLink(_ stdout: String) -> Bool {
@@ -417,6 +477,7 @@ final class PopoverStore: ObservableObject {
     /// needs a look exist once the tab has loaded the roster.
     func setMembers(_ list: MemberList?, for profile: String) {
         if let list { members[profile] = list } else { members[profile] = nil }
+        notifyAttention()
     }
 
     // MARK: effects

@@ -73,6 +73,15 @@ capture() { # capture <step file> <light|dark>
   RUN_DIR="$(mktemp -d "$WORK/run.XXXXXX")"
   mkdir -p "$RUN_DIR/scenario"
   command cp -f "$HERE/scenarios/$scenario"/* "$RUN_DIR/scenario/"
+  # @E<n>@ is n days from now (an expiry epoch), @A<n>@ is n days ago (an added day), read against the clock of the run
+  local rule="" n
+  for n in 0 1 2 3 4 5 6 7 9 14 21 30; do
+    rule="$rule -e s/@E$n@/$(( $(date +%s) + n * 86400 + 3600 ))/g -e s/@A$n@/$(date -v-${n}d +%F)/g"
+  done
+  # shellcheck disable=SC2086
+  [[ ! -f $RUN_DIR/scenario/profiles.json ]] || sed -i '' $rule "$RUN_DIR/scenario/profiles.json"
+  # a code that expires in 6 days, read against the clock of the run
+  [[ ! -f $RUN_DIR/scenario/member-ls.json ]] || sed -i '' "s/@EXP6@/$(( $(date +%s) + 6 * 86400 + 3600 ))/g" "$RUN_DIR/scenario/member-ls.json"
   : > "$RUN_DIR/argv.log"
   : > "$RUN_DIR/env.log"
   defaults delete "$BUNDLE_ID" >/dev/null 2>&1 || true

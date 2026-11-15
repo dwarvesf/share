@@ -207,8 +207,13 @@ struct RowView: View {
         .accessibilityLabel(row.accessibilityLabel)
         .accessibilityIdentifier("row-\(row.id)")
         .accessibilityAddTraits(.isButton)
-        .accessibilityAction(named: "Copy link") { store.click(row) }
-        .accessibilityAction(named: "More actions") { store.openMenu(row.id) }
+        .accessibilityActions {
+            // The same items the row menu offers, so VoiceOver reaches every one of them.
+            ForEach(RowAccessibility.actions(for: row), id: \.self) { action in
+                Button(action.title) { store.choose(action, for: row) }
+            }
+            Button("More actions") { store.openMenu(row.id) }
+        }
     }
 }
 
@@ -237,6 +242,16 @@ struct FooterBar: View {
                     status(toast)
                     Spacer(minLength: 8)
                     if store.undoVisible { undoButton }
+                } else if let working = store.workingLine {
+                    HStack(spacing: 6) {
+                        SBWorkingDot(theme: theme)
+                        Text(working).font(theme.metaFont).foregroundColor(theme.label)
+                    }
+                    .padding(.vertical, 4).padding(.horizontal, 6)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("footer-working")
+                    .accessibilityAddTraits(.updatesFrequently)
+                    Spacer()
                 } else {
                     baseline
                     Spacer()
@@ -248,16 +263,31 @@ struct FooterBar: View {
     }
 
     private func status(_ footer: Footer) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: footer.kind == .failure ? "exclamationmark.triangle" : "checkmark.circle")
-                .font(.system(size: 12)).foregroundColor(footer.kind == .failure ? theme.errorInk : theme.secondary)
-                .accessibilityHidden(true)
-            Text(footer.text).font(theme.metaFont).foregroundColor(footer.kind == .failure ? theme.errorInk : theme.label)
-                .lineLimit(3).fixedSize(horizontal: false, vertical: true)
+        let failed = footer.kind == .failure
+        let line = failed ? FailureLine.split(footer.text) : (sentence: footer.text, next: nil as String?)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: failed ? "exclamationmark.triangle" : "checkmark.circle")
+                    .font(.system(size: 12)).foregroundColor(failed ? theme.errorInk : theme.secondary)
+                    .accessibilityHidden(true)
+                Text(line.sentence).font(theme.metaFont).foregroundColor(failed ? theme.errorInk : theme.label)
+                    .lineLimit(3).fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("footer-status")
+            .accessibilityAddTraits(.updatesFrequently)
+            if let next = line.next {
+                HStack(spacing: 6) {
+                    Text(next).font(theme.monoFont).foregroundColor(theme.label).lineLimit(1).truncationMode(.middle)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(theme.hover))
+                        .accessibilityIdentifier("footer-next")
+                    PanelButton(theme: theme, title: "Copy", id: "footer-next-copy") { store.copyCommand(next) }
+                }
+                .padding(.leading, 18)
+            }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("footer-status")
-        .accessibilityAddTraits(.updatesFrequently)
     }
 
     private var undoButton: some View {
@@ -339,5 +369,13 @@ struct UploadRowView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Publishing \(upload.title), \(upload.meta)")
         .accessibilityIdentifier("upload-\((upload.title))")
+    }
+}
+
+/// A small steady ring beside "Working:": motion is never the only sign, and Reduce Motion needs none.
+struct SBWorkingDot: View {
+    let theme: Theme
+    var body: some View {
+        Circle().stroke(theme.info, lineWidth: 1.5).frame(width: 9, height: 9).accessibilityHidden(true)
     }
 }

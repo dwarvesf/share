@@ -1,0 +1,3 @@
+scenario admin-members
+script tab:advanced,keys,tab:members,mload,mfilter:removed
+label members-removed

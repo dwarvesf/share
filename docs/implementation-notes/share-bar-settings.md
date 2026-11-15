@@ -28,3 +28,17 @@ Delta from SPEC-009 TASK-4b14 to TASK-4b18. The spec rows are not restated. Popo
 
 - Where the 1Password item list comes from: `op item list --format json` through the located `op`, ids and names only. A locked vault shows the `op` sentence in the picker.
 - `member rm` takes `--cloud-links keep|delete`; the Remove member sheet carries the choice and `presentRemoveMember` builds the argv; the Members tab (TASK-4b19) calls it.
+
+## Settings B (SPEC-009 TASK-4b19 to TASK-4b23)
+
+- D16. Members logic is `ShareBarCore/Settings/MembersModel.swift` (filters, counts, row, menu from `can[]`, argv); the tab is `MembersPane`, its state `MembersStore`, its verbs `MembersActions`. Needs a look for a member follows the interactions table (paused, left, expired code, a stopped verb, an active machine member offline with links).
+- D17. The tab reads `member ls --json` when it opens (once per second at most, since the tab open and the refresh behind it both ask) and after each member action, reusing the keys the action asked, so one action asks once. Esc on the key ask leaves the list unread with Try again.
+- D18. Rotate, Renew and Delete record get confirm sheets (`Impact.rotate`, `renew`, `purge`); Send a new code and Rotate end in the code sheet. Renew uses the CLI's 90 day default.
+- D19. The All links window shares the popover's `PopoverStore`: a bulk Remove is one `pending` entry (`removeBulk`) with the popover's Undo and clock, one `rm <id>...` in table order. Another member's link is revoked by the same verb.
+- D20. App states are `AppState.of(profiles:failure:)`. `cli_below_min` counts only when every set-up tenant reports it.
+- D21. General's readers: copy after sharing and the notification sit in `PopoverStore.runAdd`; the three Notify toggles run through `AttentionNotifier` (first read primes, a cleared fact can fire again). `Notifier` posts only from an app bundle.
+- D22. Settings and popover verbs now share the app's `MutationQueue` (`StatusItemController.installShell`); the Settings roster feeds `PopoverStore.setMembers`; the shortcut row shows `hotkeyStatus.message`.
+- D23. `shots.sh` creates `SHOTS_OUT`, gains `type` and `click-once`; `axdrive click` skips the follow-up press under `AXDRIVE_NO_PRESS`.
+- D24. New refusal sheets: `member_busy`, `cli_below_min` and the join codes (`RefusalSheet.knownJoinOrMember`).
+
+Open: a member's last-seen time is absent from `member ls`, so the sub line shows machine and offline only.

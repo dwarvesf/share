@@ -1,0 +1,3 @@
+scenario links
+script links,wait:1
+label links-all

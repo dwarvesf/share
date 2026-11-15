@@ -18,7 +18,9 @@ struct ShareBarView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             Group {
-                if store.isFirstRun {
+                if let panel = store.appState.panel {
+                    AppStateView(store: store, panel: panel)
+                } else if store.isFirstRun {
                     FirstRunView(store: store)
                 } else if store.showsIssues {
                     IssuesView(store: store)

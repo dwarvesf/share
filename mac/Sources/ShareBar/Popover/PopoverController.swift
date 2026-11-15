@@ -113,7 +113,9 @@ final class PopoverController: NSObject, NSPopoverDelegate {
     /// `-ShareBarShotsScene <name>` (read here, so the frozen AppDelegate stays as it is) puts the
     /// popover in one state of TASK-4b10 to TASK-4b13 through the same reducer events a real drag, key
     /// or hotkey sends: `drop`, `uploading`, `flashed`, `dragout`, `hotkey`, and `ql-pdf`, `ql-folder`,
-    /// `ql-port`, `ql-cloud` for the Quick Look view.
+    /// `ql-port`, `ql-cloud` for the Quick Look view. The app states and the keyboard and error screens
+    /// of TASK-4b21 to TASK-4b23: `loading`, `cli-missing`, `cli-old`, `focus-third`, `menu-shift-f10`,
+    /// `publish-failure`; `first-run` and `working-line` come from the scenario the fake CLI answers with.
     func debugRender(to path: String, menuRow: String?, appearance: NSAppearance?, done: @escaping () -> Void) {
         let scene = UserDefaults.standard.string(forKey: "ShareBarShotsScene")
         let quickLookRow = ["ql-pdf": "pd0001", "ql-folder": "d4e5f6", "ql-port": "lv0001", "ql-cloud": "cl0001"][scene ?? ""]
@@ -172,6 +174,23 @@ final class PopoverController: NSObject, NSPopoverDelegate {
         case "hotkey":
             store.showIssues()
             openForHotkey()
+        case "loading":
+            store.freezeForShots(profiles: nil, failure: nil)
+        case "cli-missing":
+            store.freezeForShots(profiles: nil, failure: .cliNotFound)
+        case "cli-old":
+            store.freezeForShots(profiles: nil, failure: .oldCLI)
+        case "focus-third":
+            // The popover opens with search focused, so the first Down enters row 1: the third row takes three.
+            for _ in 0..<3 { store.moveFocus(1) }
+        case "menu-shift-f10":
+            store.moveFocus(1)
+            store.openMenuOnFocused()
+        case "publish-failure":
+            let file = "/Users/demo/Q4-plan.pdf"
+            store.send(.publishStarted(file: file))
+            let stderr = "share: the bucket refused the upload\n{\"error\":{\"code\":\"upload_refused\",\"message\":\"the bucket refused the upload\",\"next\":\"share status\"}}\n"
+            store.send(.publishFinished(file: file, result: PublishOutcome.result(status: 1, stdout: "", stderr: stderr, fallbackURL: nil), now: Date()))
         default:
             break
         }
