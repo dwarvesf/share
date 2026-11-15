@@ -23,7 +23,7 @@ All runs on the Mac mini, from the SG-06 worktree, after the last code change.
 
 ## Done line
 
-- Journal `rerun_argv` and `rollback_argv`: `JournalRunTests` (15 rows) covers the verb and profile checks, the per-verb flag shapes, a hostile argument reaching a stand-in CLI as one literal argument with no shell, and an op of unknown liveness never running.
+- Journal `rerun_argv` and `rollback_argv`: `JournalRunTests` (17 rows) covers the verb and profile checks, the per-verb flag shapes, a hostile argument reaching a stand-in CLI as one literal argument with no shell, and an op of unknown liveness never running.
 - `member ls --json` and the progress line decode from fixtures built to the spec's shapes: `NewKeyDecodeTests` with `member-ls.json` and `state-full.json`.
 - Each AC row maps to a test or a run in the AC map of the notes.
 
