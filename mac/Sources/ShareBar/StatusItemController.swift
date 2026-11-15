@@ -48,6 +48,10 @@ final class StatusItemController: NSObject, @unchecked Sendable {
     private let menu = NSMenu()
 
     #if DEBUG
+    func debugRender(to path: String, menuRow: String?, appearance: NSAppearance?, done: @escaping () -> Void) {
+        MainActor.assumeIsolated { popoverController.debugRender(to: path, menuRow: menuRow, appearance: appearance, done: done) }
+    }
+
     /// Screenshot harness only: the status item's menu follows the menu bar, so it takes the
     /// appearance explicitly.
     func applyShotsAppearance(_ appearance: NSAppearance?) {

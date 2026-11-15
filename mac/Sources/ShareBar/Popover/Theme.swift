@@ -5,8 +5,10 @@ import SwiftUI
 /// popover comes from here, so a contrast change is one edit in `Tokens`.
 struct Theme {
     let palette: Palette
+    private let scheme: ColorScheme
 
     init(_ scheme: ColorScheme) {
+        self.scheme = scheme
         palette = Tokens.palette(scheme == .dark ? .dark : .light)
     }
 
@@ -23,7 +25,14 @@ struct Theme {
     var dimmed: Color { color(primitive.labelDimmed.value(palette.appearance)) }
     var hover: Color { color(primitive.label.value(palette.appearance), opacity: semantic.hoverOpacity) }
     var pressed: Color { color(primitive.label.value(palette.appearance), opacity: semantic.pressedOpacity) }
-    var separator: Color { color(primitive.label.value(palette.appearance), opacity: 0.12) }
+    var separator: Color { color(primitive.label.value(palette.appearance), opacity: 0.09) }
+    /// The window color of revision 8 as the design renders it over its desk (`#eff0f3`, dark `#2b2c31`),
+    /// painted opaque on the popover root. `primitive.window` (`#f5f5f7`) is the contrast reference only.
+    var surface: Color {
+        scheme == .dark ? color(RGB(hex: "#2b2c31")) : color(RGB(hex: "#eff0f3"))
+    }
+    /// The border of the shortcut keycap (`rgba(ink, .14)`).
+    var keycapBorder: Color { color(primitive.label.value(palette.appearance), opacity: 0.14) }
     var attentionInk: Color { color(semantic.attentionInk) }
     var errorInk: Color { color(semantic.errorInk) }
     var ok: Color { color(semantic.ok) }
@@ -41,6 +50,7 @@ struct Theme {
     var metaFont: Font { .system(size: primitive.metaSize) }
     var monoFont: Font { .system(size: primitive.monoSize, design: .monospaced) }
     var rowRadius: CGFloat { primitive.rowRadius }
+    var chipRadius: CGFloat { primitive.chipRadius }
     var buttonRadius: CGFloat { primitive.buttonRadius }
     var minRowHeight: CGFloat { primitive.minRowHeight }
     var iconButton: CGFloat { primitive.iconButtonSize }

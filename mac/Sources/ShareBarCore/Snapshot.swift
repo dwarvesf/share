@@ -35,9 +35,11 @@ public struct Share: Decodable, Sendable, Equatable {
     public let reason: String?
     /// View count on a cloud row, when the CLI reported one.
     public let views: Int?
+    /// The day the link was added (`yyyy-MM-dd`), when the CLI reports it; the row's trailing age.
+    public let added: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, url, kind, expires, access, storage, type, by, origin, reason, views
+        case id, name, url, kind, expires, access, storage, type, by, origin, reason, views, added
         case ownHost = "own_host"
         case linkState = "link_state"
     }
@@ -58,12 +60,14 @@ public struct Share: Decodable, Sendable, Equatable {
         linkState = c.lenient(String.self, forKey: .linkState)
         reason = c.lenient(String.self, forKey: .reason)
         views = c.lenient(Int.self, forKey: .views)
+        added = c.lenient(String.self, forKey: .added)
     }
 
     public init(
         id: String, name: String, url: String, kind: String, ownHost: String?, expires: Int,
         access: String? = nil, storage: String? = nil, type: String? = nil, by: String? = nil,
-        origin: String? = nil, linkState: String? = nil, reason: String? = nil, views: Int? = nil
+        origin: String? = nil, linkState: String? = nil, reason: String? = nil, views: Int? = nil,
+        added: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -79,6 +83,7 @@ public struct Share: Decodable, Sendable, Equatable {
         self.linkState = linkState
         self.reason = reason
         self.views = views
+        self.added = added
     }
 }
 

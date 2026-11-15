@@ -21,6 +21,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
 
+        // Screenshot hook without input: `-ShareBarShotsRender <png> [-ShareBarShotsMenuRow <id>]`
+        // draws the popover offscreen once the first profiles read is in, then quits.
+        #if DEBUG
+        if let png = UserDefaults.standard.string(forKey: "ShareBarShotsRender") {
+            let row = UserDefaults.standard.string(forKey: "ShareBarShotsMenuRow")
+            let dark = UserDefaults.standard.string(forKey: "ShareBarShotsAppearance") == "dark"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                self?.statusItemController?.debugRender(
+                    to: png, menuRow: row, appearance: NSAppearance(named: dark ? .darkAqua : .aqua)
+                ) { NSApp.terminate(nil) }
+            }
+        }
+        #endif
+
         // Manual-verification-only debug entry (TASK-017/TASK-010): a colon-separated list
         // of paths in `SHAREBAR_DEBUG_ADD_PATHS` runs through the same publish path a real
         // Share File… selection or drop would, without driving `NSOpenPanel` or a real
