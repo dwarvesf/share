@@ -62,7 +62,7 @@ jobs:
 
   # A pull request runs the suite as shards on Ubuntu (tests/ci/shards.txt), so its wall time is the longest shard.
   # `chain` cannot shrink: the core, r2, groundwork and late groups share state. macOS runs the whole suite on main only,
-  # since even its chain shard outlasts the Ubuntu PR run.
+  # and one cheap shard plus a bash 3.2 parse check on pull requests (job test-macos).
   test:
     needs: changes
     if: needs.changes.outputs.bash == 'true' && github.event_name == 'pull_request'
@@ -90,6 +90,27 @@ jobs:
 
       - name: Self-test (shard ${{ matrix.shard }})
         run: bash tests/ci/run-shard.sh "${{ matrix.shard }}"
+
+  # macOS on a pull request: the bash 3.2 parse check and one standalone shard, sized to finish before the Ubuntu chain.
+  test-macos:
+    needs: changes
+    if: needs.changes.outputs.bash == 'true' && github.event_name == 'pull_request'
+    timeout-minutes: 30
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Parse under the system bash 3.2
+        run: /bin/bash -n bin/share && /bin/bash -n install.sh
+
+      - name: Install caddy and pandoc
+        run: brew install caddy pandoc
+
+      - name: Self-test (shard members-b)
+        run: bash tests/ci/run-shard.sh members-b
 
   # A push to main runs the whole suite once per OS.
   test-full:
