@@ -2817,7 +2817,7 @@ health_worker_put() { # health_worker_put: the Worker pair the last healthz answ
 # file at the step it reached; the next run of the verb reports it and runs from step 1 again, each step
 # skipping what is already in place. The file never holds a token, a secret, or a single-use code.
 op_verb="" op_file="" op_of=0 op_n=0 op_name="" op_started=0 op_conc=0 op_rerun_json='[]' op_rerun="" op_rollback_json="" op_rollback=""
-op_prev_step="" op_prev_name=""   # op_prev_name: the step name a resuming verb reads (SPEC-009's join)
+op_prev_step="" op_prev_name="" op_prev_rerun=""   # op_prev_name: the step name a resuming verb reads (SPEC-009's join)
 op_steps_setup_tunnel() { printf '%s\n' "1 auth" "2 tunnel" "3 route" "4 dns" "5 token" "6 config" "7 service" "8 live"; }
 op_steps_setup_r2() { printf '%s\n' "1 alias" "2 worker" "3 bucket" "4 alias-domain" "5 routes" "6 snapshot" "7 alias-apps" "8 deploy" \
   "9 pointers" "10 access" "11 config" "12 marker" "13 route" "14 alias-bind" "15 probe" "16 handoff"; }
@@ -2871,7 +2871,7 @@ op_begin() { # op_begin <verb> [--concurrent] <rerun args...> [-- <rollback args
     if [[ $inrb == 0 && $a == -- ]]; then inrb=1; elif [[ $inrb == 1 ]]; then rb+=("$a"); else rerun+=("$a"); fi
   done
   [[ -z $profile ]] || pfx=(--profile "$profile")
-  op_verb=$verb op_n=0 op_name="" op_prev_step="" op_prev_name="" op_started="$(date +%s)"
+  op_verb=$verb op_n=0 op_name="" op_prev_step="" op_prev_name="" op_prev_rerun="" op_started="$(date +%s)"
   op_of="$(op_steps "$verb" | grep -c . || true)"
   op_rerun_json="$(op_argv_json ${pfx[@]+"${pfx[@]}"} ${rerun[@]+"${rerun[@]}"})"
   op_rerun="$(op_display ${pfx[@]+"${pfx[@]}"} ${rerun[@]+"${rerun[@]}"})"
@@ -2892,7 +2892,7 @@ op_begin() { # op_begin <verb> [--concurrent] <rerun args...> [-- <rollback args
         fi
         echo "previous $verb died at step $op_r_step ($op_r_name); continuing"
         # shellcheck disable=SC2034 # op_prev_name is read by the resuming verbs SPEC-009 adds
-        if [[ -z $op_prev_step || $op_r_step -gt $op_prev_step ]]; then op_prev_step=$op_r_step op_prev_name=$op_r_name; fi
+        if [[ -z $op_prev_step || $op_r_step -gt $op_prev_step ]]; then op_prev_step=$op_r_step op_prev_name=$op_r_name op_prev_rerun=$op_r_rerun; fi
       fi
       rm -f "$f"   # transient bookkeeping, like the pidfile: never to the Trash (DEC-24)
     done
@@ -6950,6 +6950,19 @@ cmd_member_ls() {
   for a in "$@"; do case $a in --json) json=1 ;; *) die "usage: share member ls [--json] [--tenant <host>]" ;; esac; done
   member_context ls
   mb_report
+  if [[ -n ${SHARE_MINTER_TOKEN:-} ]]; then
+    local page=1 tl="[]" pages
+    while :; do
+      as_minter r2_api GET "/user/tokens?per_page=50&page=$page"
+      [[ $cf_code == 200 ]] || break
+      tl="$(jq -c --argjson a "$tl" '$a + [.result[]? | {name, expires_on}]' <<<"$cf_body")"
+      pages="$(jq -r '.result_info.total_pages // 1' <<<"$cf_body")"
+      [[ $pages =~ ^[0-9]+$ && $page -lt $pages && $page -lt 50 ]] || break
+      page=$((page + 1))
+    done
+    ml_json="$(jq -c --argjson t "$tl" --arg h "$host_name" 'map(. as $m | ([$t[] | select(.name == "share " + $h + " " + $m.member_id) | .expires_on | select(type == "string" and test("^[0-9TZ:.-]{1,32}$"))] | first) as $e
+      | if $e then .token_expires = $e else . end)' <<<"$ml_json")"
+  fi
   # can[]: through member_can, so the Share Bar never mirrors the table (DEC-53)
   o="[]"
   while IFS= read -r l; do
@@ -7005,15 +7018,17 @@ cmd_member_sync() { # deploy wins for admin-set state, only from active, pausing
   done < <(jq -r '.[] | select(.status != "invalid") | [.member_id, .status, (.member_id | split("-") | last), (.deploy.bound | tostring), (.deploy.paused | tostring)] | @tsv' <<<"$ml_json")
   if [[ $rebind == 1 ]]; then   # account VPC Services are admin-only objects, so they are a trusted rebuild source; records marked paused restore PAUSED
     local n s rest
-    while IFS=$'\t' read -r n s _ _; do
+    while IFS=$'\t' read -r n s; do   # the newest -r<n> of each suffix only: a rotate that died before its old deletes leaves two
       [[ $n =~ ^share-${host_name//./-}-([0-9a-f]{8})(-r[0-9]+)?$ ]] || continue
       sx=${BASH_REMATCH[1]}
       rest="$(jq -r --arg sx "$sx" '[.[] | select(.member_id | endswith("-" + $sx))] | first // {} | .status // ""' <<<"$ml_json")"
+      [[ $rest != rotating ]] || { echo "rebind:     M_$sx skipped: its rotate did not finish; rerun share member rotate first"; continue; }
       [[ $rest != removing && $rest != removed && $s =~ ^[A-Za-z0-9-]{1,64}$ ]] || continue
       jq -e --arg n "M_$sx" --arg s "$s" 'any(.result.bindings[]?; .name == $n and .service_id == $s)' <<<"$mc_settings" >/dev/null && continue
       add_b="$add_b $sx=$s"; echo "rebind:     M_$sx -> $n"
-    done <<<"$ms_list"
-    add_p="$add_p $(jq -r '[.[] | select(.status == "paused") | .member_id | split("-") | last] | join(" ")' <<<"$ml_json")"
+    done < <(awk -F'\t' -v p="share-${host_name//./-}-" 'index($1, p) == 1 {r = 0; if (match($1, /-r[0-9]+$/)) r = substr($1, RSTART + 2) + 0
+      print substr($1, length(p) + 1, 8) "\t" r "\t" $1 "\t" $2}' <<<"$ms_list" | sort -t$'\t' -k1,1 -k2,2n | awk -F'\t' '{last[$1] = $3 "\t" $4} END {for (k in last) print last[k]}')
+    add_p="$add_p $(jq -r '[.[] | select(.status == "paused" or (.status == "invited" and .prev_status == "paused")) | .member_id | split("-") | last] | join(" ")' <<<"$ml_json")"
   fi
   op_step 3
   local delta=". " b
@@ -7395,8 +7410,14 @@ cmd_member_invite() { # a new code for invited, joining or left; the old token a
   mb_pre invite "$mb_who"
   [[ -z $port || $mb_mode == machine ]] || die "--port is for a machine member; $mb_name is a cloud member; nothing was changed"
   mb_take invite ${argv[@]+"${argv[@]}"}
-  # step 2: inviting (from invited, joining or left: prev_status kept, DEC-41)
-  reg_step invite inviting 2
+  # step 2: inviting (from invited, joining or left: prev_status kept, DEC-41). From left (which cleared prev_status) while the deploy still pauses
+  # the member, prev_status becomes paused, so the re-join lands paused as the deploy is (leave cannot unpause; DEC-75)
+  local extra=.
+  if [[ "$(jq -r .status <<<"$reg_rec")" == left ]]; then
+    mb_settings_reread
+    jq -e --arg s "$mb_sx" 'any(.result.bindings[]?; .name == "PAUSED" and (((.text // "[]") | fromjson? // []) | index($s) != null))' <<<"$mc_settings" >/dev/null 2>&1 && extra='.prev_status = "paused"'
+  fi
+  lease_renew 2; reg_status invite admin inviting 2 "$extra"; op_step 2
   echo "member:     inviting $mb_name ($mb_rid, $mb_mode)"
   # step 3: the old token by name goes, a new one is minted under the current minter
   reg_step invite inviting 3
@@ -7437,14 +7458,17 @@ cmd_member_rotate() { # a new tunnel and VPC Service of the next rotation, the s
   mb_pre rotate "$mb_who"
   mb_take rotate ${argv[@]+"${argv[@]}"}
   # step 2: rotating, with the next rotation: above the record's and above every name on the account. Only a rerun of this machine's own dead
-  # rotate (its journal) keeps the rotation the record holds: u/ is member-writable, so a forged rotating record would otherwise point it at the live tunnel
+  # rotate of this member (its journal) keeps the rotation the record holds: u/ is member-writable, so a forged rotating record would otherwise
+  # point it at the live tunnel
   rot="$(jq -r '.rotation // 0' <<<"$reg_rec")"
-  if [[ "$(jq -r .status <<<"$reg_rec")" != rotating || -z $op_prev_step || $op_prev_step -lt 2 ]]; then
+  if [[ "$(jq -r .status <<<"$reg_rec")" != rotating || -z $op_prev_step || $op_prev_step -lt 2 ||
+        ( " $op_prev_rerun " != *" $mb_name "* && " $op_prev_rerun " != *" $mb_rid "* ) ]]; then
     mb_services_list; mb_tunnels_of "$mb_sx"
     hi="$(printf '%s\n%s\n' "$(cut -f1 <<<"$ms_list")" "$(cut -f2 <<<"$mt_ids")" | sed -n "s/^share-${host_name//./-}-$mb_sx-r\([0-9]\{1,3\}\)$/\1/p" | sort -n | tail -1)"
     [[ -z $hi || $hi -lt $rot ]] || rot=$hi
     rot=$((rot + 1))
   fi
+  [[ $rot -le 999 ]] || { op_done; die_code member_not_allowed "$mb_name would reach rotation $rot, past the 999 a record holds (a forged rotation?); nothing was changed" "$me member rm $mb_name"; }
   lease_renew 2; reg_status rotate admin rotating 2 ".rotation = $rot"; op_step 2
   tname="$(mb_obj_name "$mb_sx" "$rot")"
   echo "member:     rotating $mb_name ($mb_rid) to $tname"
@@ -7933,7 +7957,7 @@ join_probe() { # one probe link (v:3) on this machine, fetched 3 times through t
   [[ "$(jq -r '.prev_status // ""' <<<"$reg_rec")" != paused ]] || also=503
   for i in $(seq 1 "${SHARE_JOIN_PROBES:-20}"); do
     worker_call GET "/$id/$name"
-    if [[ $wk_code == 200 || $wk_code == "$also" ]]; then ok=$((ok + 1)); [[ $ok -lt 3 ]] || break; else ok=0; [[ ${SHARE_R2_DRY:-0} == 1 ]] || sleep 2; fi
+    if [[ $wk_code == 200 || $wk_code == "$also" ]]; then ok=$((ok + 1)); [[ $ok -lt 3 ]] || break; else ok=0; if [[ ${SHARE_R2_DRY:-0} == 1 ]]; then sleep 0.2; else sleep 2; fi; fi   # a loaded test host starts Caddy late
   done
   worker_bind=""
   ( cmd_rm "$id" ) >/dev/null 2>&1 || true   # a subshell: its die never ends the join; prune catches what it leaves
