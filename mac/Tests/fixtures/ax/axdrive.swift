@@ -160,7 +160,7 @@ case "find", "click":
         // A panel's button can drop a click that lands while the app is not yet active (an
         // NSAlert on another display). If the button is still there after the click, press
         // it through its own Accessibility action: still the control's own handler, no state set.
-        if text(element, kAXRoleAttribute) == kAXButtonRole as String {
+        if ProcessInfo.processInfo.environment["AXDRIVE_NO_PRESS"] == nil, text(element, kAXRoleAttribute) == kAXButtonRole as String {
             Thread.sleep(forTimeInterval: 0.5)
             if frame(element) != nil { AXUIElementPerformAction(element, kAXPressAction as CFString) }
         }
@@ -183,6 +183,13 @@ case "key":
     guard args.count >= 3 else { fail("usage: axdrive key <name> [cmd] [opt] [ctrl] [shift]", code: 2) }
     guard AXIsProcessTrusted() else { fail("Accessibility is not granted to this terminal", code: 4) }
     if !press(args[2], modifiers: Array(args.dropFirst(3))) { fail("unknown key: \(args[2])", code: 2) }
+case "type":
+    guard args.count >= 3 else { fail("usage: axdrive type <text>", code: 2) }
+    guard AXIsProcessTrusted() else { fail("Accessibility is not granted to this terminal", code: 4) }
+    for character in args[2...].joined(separator: " ") {
+        let name = character == " " ? "space" : String(character).lowercased()
+        if !press(name, modifiers: []) { fail("cannot type: \(character)", code: 2) }
+    }
 case "window":
     guard args.count >= 3, let pid = Int32(args[2]) else { fail("usage: axdrive window <pid>", code: 2) }
     guard let id = frontWindow(pid) else { fail("no on-screen window for pid \(pid)", code: 3) }

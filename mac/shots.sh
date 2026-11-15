@@ -15,6 +15,8 @@
 #   scenario <name>            default scenario for `shots.sh all`
 #   click <control>            real click; <control> is `status-item` or a title/description
 #   find <control>             fail unless the control exists
+#   click-once <control>       a click with no follow-up AXPress, for a toggling button
+#   type <text>                real key presses for the text (letters, digits, space)
 #   key <name> [cmd|opt|ctrl|shift]...
 #   wait <seconds>
 #   shot <label>               capture the frontmost Share Bar window
@@ -132,6 +134,15 @@ run_steps() { # run_steps <scenario> <steps file> <light|dark>
         [[ $rest != status-item ]] || status_item_ready "$APP_PID" || step_error "$n" "$line" "missing control: status-item (hidden by the menu bar?)"
         out="$("$AX" click "$APP_PID" "$rest" 4 2>&1)" || step_error "$n" "$line" "$out"
         sleep 0.6 ;;
+      click-once)
+        # a toggling button: the click only, no follow-up AXPress (which would fire it twice)
+        [[ -n $rest ]] || step_error "$n" "$line" "click-once needs a control"
+        out="$(AXDRIVE_NO_PRESS=1 "$AX" click "$APP_PID" "$rest" 4 2>&1)" || step_error "$n" "$line" "$out"
+        sleep 0.6 ;;
+      type)
+        [[ -n $rest ]] || step_error "$n" "$line" "type needs text"
+        out="$("$AX" type "$rest" 2>&1)" || step_error "$n" "$line" "$out"
+        sleep 0.4 ;;
       find)
         out="$("$AX" find "$APP_PID" "$rest" 4 2>&1)" || step_error "$n" "$line" "$out" ;;
       key)
@@ -190,7 +201,7 @@ run_one() { # run_one <scenario> <step name|path>
   IMG_DIR=""
 }
 
-mkdir -p "$WORK_ROOT"
+mkdir -p "$WORK_ROOT" "$OUT_DIR"
 build_app
 build_driver
 
