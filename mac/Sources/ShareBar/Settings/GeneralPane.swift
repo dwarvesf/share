@@ -54,7 +54,16 @@ struct GeneralPane: View {
                     .background(RoundedRectangle(cornerRadius: 6).fill(t.field))
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(t.border, lineWidth: 1))
                     .accessibilityIdentifier("g-shortcut")
-                SmallText("Opens the menu from anywhere.")
+                if let problem = store.hotkeyMessage() {
+                    HStack(spacing: 5) {
+                        Image(systemName: "exclamationmark.triangle").font(.system(size: 11)).foregroundColor(t.attentionInk).accessibilityHidden(true)
+                        Text(problem).font(t.metaFont).foregroundColor(t.attentionInk).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("g-shortcut-status")
+                } else {
+                    SmallText("Opens the menu from anywhere.")
+                }
             }
         }
         .frame(width: 506, alignment: .topLeading)

@@ -105,7 +105,13 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         super.init()
         MainActor.assumeIsolated {
             popoverStore = PopoverStore()
+            popoverStore.notify = { Notifier.post($0) }
             popoverController = PopoverController(store: popoverStore)
+            AllLinksWindowController.shared.attach(popoverStore)
+            // The Members tab reads the roster; the popover's member lines follow it (DEC-54).
+            let store = popoverStore
+            SettingsWindowController.shared.store.onMembers = { list, profile in store?.setMembers(list, for: profile) }
+            SettingsWindowController.shared.store.hotkeyMessage = { store?.hotkeyStatus.message }
         }
         menu.delegate = self
         menu.autoenablesItems = false
@@ -204,6 +210,8 @@ final class StatusItemController: NSObject, @unchecked Sendable {
             popoverStore.onAddFile = { [weak self] in self?.pickFilesForPopover() }
             let queue = mutationQueue
             popoverStore.runCLI = { await queue.run($0) }
+            // One queue for the popover and the Settings window: a verb started in either waits for the other.
+            SettingsWindowController.shared.store.writeCLI = { await queue.run($0) }
             popoverStore.runPublish = { argv, output in
                 await queue.run(argv, environment: ["SHARE_PROGRESS": "1"], onOutput: output)
             }

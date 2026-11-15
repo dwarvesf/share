@@ -126,6 +126,8 @@ final class SettingsStore: ObservableObject {
     /// Called after every `member ls` read, so the popover's member lines of needs a look follow
     /// the roster (the popover never runs `member ls` itself, DEC-54).
     var onMembers: (MemberList?, String) -> Void = { _, _ in }
+    /// Why ⌃⌥S did not register (`Control-Option-S is in use by another app`), or nil; the popover owns the key.
+    var hotkeyMessage: () -> String? = { nil }
     let popoverPrefs: PopoverPrefs
     private let defaults: UserDefaults
     private let queue = MutationQueue()

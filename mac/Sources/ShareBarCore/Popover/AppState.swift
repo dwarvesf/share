@@ -106,3 +106,14 @@ public enum RowAccessibility {
     /// Actions rotor): the same items the menu offers, so nothing is reachable by pointer only.
     public static func actions(for row: RowModel) -> [RowAction] { RowMenu.items(for: row) }
 }
+
+/// A failure toast reads `<sentence> Next: <command>` (`PublishOutcome`): the sentence, then the
+/// command as its own copyable line.
+public enum FailureLine {
+    public static func split(_ text: String) -> (sentence: String, next: String?) {
+        guard let range = text.range(of: " Next: ", options: .backwards) else { return (text, nil) }
+        let next = String(text[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+        guard !next.isEmpty else { return (text, nil) }
+        return (String(text[..<range.lowerBound]), next)
+    }
+}
