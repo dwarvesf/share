@@ -28,38 +28,52 @@ Nothing was deployed. The change is `mac/` only plus docs. Screens, parity sampl
 
 Command: `swift build --package-path mac`
 Exit: 0
-Verdict: pass
+Verdict: PASS
 Output: `Build complete!`
 
 Command: `swift test --package-path mac`
 Exit: 0
-Verdict: pass, 358 tests (the 42 new ones are under `Tests/ShareBarCoreTests/Settings/`)
+Verdict: PASS, 358 tests (the 42 new ones are under `Tests/ShareBarCoreTests/Settings/`)
 Output: `Executed 358 tests, with 0 failures (0 unexpected)`
 
 Command: `bash mac/build.sh 0.0.0`
 Exit: 0
-Verdict: pass; the release build compiles the hook file out (`#if DEBUG`)
+Verdict: PASS; the release build compiles the hook file out (`#if DEBUG`)
 Output: `mac/build/Share-Bar-0.0.0.zip`
 
 Command: `bash mac/compat-check.sh v0.9.0`
 Exit: 0
-Verdict: pass; the shipped Share Bar keeps working against the new CLI
+Verdict: PASS; the shipped Share Bar keeps working against the new CLI
 Output: `ok .../scenarios/member/profiles.json (1 profile)`, `ok .../live/state.json (1 profile)`
 
 Command: `bash mac/Tests/fixtures/settings/run-shots.sh` (33 step files, light and dark)
 Exit: 0
-Verdict: pass; every `expect-argv`, `expect-no-argv` and `expect-env` held against a fake CLI that refuses what the real one refuses (no key, `--members` without `--yes`), 66 captures written
+Verdict: PASS; every `expect-argv`, `expect-no-argv` and `expect-env` held against a fake CLI that refuses what the real one refuses (no key, `--members` without `--yes`), 66 captures written
 Output: `wrote docs/verification/share-bar/settings-a/4b-<label>-<light|dark>.png`; argv logs in `settings-a/argv/`
 
 Command: `bash mac/Tests/fixtures/settings/parity/render-reference.sh` then `compare.sh`
 Exit: 0
-Verdict: pass; surface, title ink and separator within 2 steps, deviations listed in `settings-a/README.md`
+Verdict: PASS; surface, title ink and separator within 2 steps, deviations listed in `settings-a/README.md`
 Output: `settings-a/parity/samples.tsv` (200 rows)
 
 Command: `shellcheck -x` over the new scripts, and `/bin/bash -n` on each
 Exit: 0
-Verdict: pass (bash 3.2 parses)
+Verdict: PASS (bash 3.2 parses)
 Output: none
+
+## Negative control
+
+The rule under test: only a 26-character `[a-z0-9]` id reaches a 1Password command (`KeyArgv.isValidID`). The check was weakened to accept any non-empty string, the tests were run (red), then the file was restored from git and the tests run again (green).
+
+Command: weaken `isValidID` to `!id.isEmpty`, then `swift test --package-path mac --filter KeySourceTests`
+Exit: 1
+Verdict: RED, as required
+Output: `KeySourceTests.swift:54: error: testTheItemListKeepsOnlyValidIDsAndTheirNames : XCTAssertEqual failed` and `Executed 8 tests, with 4 failures (0 unexpected)`
+
+Command: `git checkout -- mac/Sources/ShareBarCore/Settings/KeySource.swift`, then `swift test --package-path mac --filter KeySourceTests`
+Exit: 0
+Verdict: PASS, restored
+Output: `Executed 8 tests, with 0 failures (0 unexpected)`
 
 ## Review
 
