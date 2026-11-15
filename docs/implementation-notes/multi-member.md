@@ -271,3 +271,47 @@ Built on main at f8aba46 (SPEC-010 Phase 1 and Phase 2 shipped, so every row of 
 | MB-08, MB-20, MB-22, MB-23, MB-28, MB-29, MB-33, MB-35, OC-03, FG-05, FG-06 | `mm MB-08: ...` (2), `mm MB-20: ...`, `mm MB-22: ...` (2), `mm MB-23: ...`, `mm DEC-75: ...`, `mm MB-28: ...` (2), `mm MB-29: ...`, `mm MB-33: ...` (2), `mm MB-35: ...` (3), `mm OC-03: ...`, `mm FG-05, FG-06 (NC-9): ...` |
 | Q-SEC-6 | `mm Q-SEC-6: ...` (3) |
 | NC-7, NC-9, NC-11 | red runs on mutants of bin/share: CC-01, FG-05 (NC-9), DP-join-3 (NC-11) fail; green in the suite (`docs/verification/members-core.md`) |
+
+## Phase 2 build (SG-07: TASK-2a to 2e)
+
+Built on main at f8042fa. Dry seams only; nothing live.
+
+### Build delta
+
+- P30 (TASK-2a): the admin revoke lives in `cmd_rm_r2`'s no-cloud-row branch (`r2_rm_machine`, `member_revoke`): an id whose pointer is a v:3 of another origin is revoked only after `member_context` proves the admin token, so the admin S3 pair writes `t/` and deletes `m/`. With no admin token the refusal is the new code `revoke_needs_admin`, before any write. Why a code: the Share Bar maps it (TASK-4b9). A member's own pointer with no local row, and an origin's v:2 with no local row on the origin, keep today's `no share with id`.
+- P31 (TASK-2a): "refused before any call" (LK-09) is read as before any write: the CLI must read `m/<id>` (through the listing it already makes) to learn that the id is another member's v:3.
+- P32 (TASK-2b): `r2_reconcile` keeps the origin's code path byte for byte (DEC-17: the origin never reads `t/`), and adds a member path for R7 (`r2_reconcile_member`) that walks the 13-row table. It lists `t/` after `r2_read` listed `m/` (DEC-64), and reads a tombstone body only for the ids a row needs (`by` for the report, `origin` for row 5).
+- P33 (TASK-2c): `share prune --loop` is the serve loop's verb on R7; elsewhere it is a bare prune. On R7 it reads the publisher token from the Keychain item only (never `api_token_cmd`, never the environment), runs local expiry, own pointer expiry, the reconcile, and one read of its own record into the `.health` cache. `SHARE_API_TOKEN_OFF=1` still holds for Access: `r2_token_ok` lets the loop's Keychain token through only for bucket calls. Serve spawns the loop under `env -u CLOUDFLARE_API_TOKEN`; under the dry seam the loop logs `LOOP env_token=<0|1>` so the suite proves it (NC-loop below). The dispatcher passed no argument to `cmd_prune` before; it now passes `--loop`.
+- P34 (TASK-2d): `member rm` finds tunnels by listing every live tunnel of the account (`mb_tunnels_of`) and VPC Services by the paged list, matching `share-<host-dashes>-<8hex>(-r<n>)?`, so a forged `rotation` cannot hide a rotated tunnel; the record's ids are never used (FG-15). Steps: 1 lease, 2 removing, 3 deploy, 4 service, 5 connections, 6 tunnel, 7 token, 8 tombstones (and cloud links with `--cloud-links delete`), 9 invite, 10 removed. Step 3 runs for a cloud member too (it skips when nothing changes). The invite step deletes the record's `i/` and every `i/` whose envelope names this member_id.
+- P35 (TASK-2d, DEC-78): after the token delete, the record's `token.id` is set to `""`, so a rerun that finds no token says `already deleted` instead of `token not reachable`. The lookup by name still runs on every rerun; a forged empty id changes only that display line.
+- P36 (TASK-2d): `member purge` takes the lease, adds the id to `u/purged.json` (If-Match, else If-None-Match, 3 tries), then deletes the record, so a die between the two leaves the id reserved. It needs no minter (DEC-80 lists none for purge). `member rm` of a removed member refuses `member_not_allowed` naming purge.
+- P37 (TASK-2e): `leave` deletes every own pointer the bucket lists (own-origin v:3, `r2_machine`), each proven gone by a GET, before any bytes go; then the service, the record `left`, the keys, the config, and the whole profile root to the Trash (rows, `pub/`, logs). Why not `cmd_rm` per row: it trashes the bytes and the row before the pointer, so a die between them left an orphan pointer no machine reaps after the member is gone (found by DP-leave-1). MB-14's "pointer, then bytes" holds. The member's cloud links stay until they expire, as `member rm --cloud-links keep` does (DEC-1). `leave --local` makes no bucket call; the record and pointers stay for the admin's `member rm`.
+- P38 (TASK-2e): member `status` reads its own record once with the publisher pair (`member_status_check`, the same `member_record_read` the loop uses) and writes what it saw to `.health`. A 404 (record gone, for example purged) prints `your member record is gone from <host>; ask the admin` and leaves `state.member.status` alone: a deleted record is a bucket write any publisher can forge, so only a record read as `removed` sets `removed` (DEC-79's rule, applied to 404 as well). A 401 or 403 writes the token verdict `invalid`; `token_state` then reads `expired` when the local `token_expires` is past (DEC-79).
+- P39 (the open review TODO, teardown without the admin token): decided as a fix, not a doc note. `t2_refuse` with no settings read (no admin token) now lists `u/` with the bucket pair it already holds and refuses while any record is not `removed` or fails validation. Residual: a forger who also deletes every `u/` record still passes; the admin token closes it (TN-12). The spec's Review finding stays as written (the spec file is outside this sub-goal's Touches).
+- P40 (test seam): `SHARE_R2_DRY_AUTH=401` makes every dry bucket call answer 401 (a deleted or expired publisher token).
+
+### Open questions for the operator
+
+- Q3: TASK-2e's Share Bar copy ("You were removed" with Clean up) is TASK-4b17's; this sub-goal lands only `state.member.status` and the `status` lines it reads.
+- Q4: MB-30's last clause (after the admin's `renew` the member publishes again with no re-join) needs `member renew` (TASK-3e, SG-08). Not attempted here.
+
+### AC to test map (Phase 2)
+
+| AC row | Test (`mm` labels in tests/members.sh) |
+|---|---|
+| LK-08, LK-09, LK-10, LK-19, WM-04 | `mm LK-08: ...` (2), `mm LK-09: ...`, `mm LK-10: ...`, `mm LK-19: ...`, `mm WM-04: ...` |
+| LK-11, LK-12, Q-OPS-1 | `mm LK-11, Q-OPS-1: ...`, `mm LK-11: ...` (2), `mm LK-12, CK-05: ...`, `mm LK-12: ...` |
+| RC-01 to RC-15, LK-16, CK-06 | `mm RC-01: ...` to `mm RC-13: ...` (one each), `mm RC-03, RC-04, LK-16, CK-06: ...`, `mm RC-14: ...`, `mm RC-15: ...` (prune --loop; ls and prune in Phase 1) |
+| CC-06, CC-07, CC-08 | `mm CC-06: ...` (3 orders), `mm CC-06, DEC-64: ...`, `mm RC-05, CC-07: ...`, `mm CC-08: ...` |
+| CK-02, member sync sweep | `mm CK-02, TASK-2b: ...` |
+| FG-01 to FG-04, FG-11, FG-14, FG-16, OC-02 | `mm RC-08, FG-01: ...`, `mm RC-10, FG-02: ...`, `mm FG-03, FG-11: ...`, `mm RC-12, FG-04: ...`, `mm FG-14: ...`, `mm FG-16: ...`, `mm OC-02: ...` |
+| TASK-2c, CK-05, OT-02 | `mm TASK-2c: ...` (loop reads its record), `mm OT-02, TASK-2c: ...`, `mm TASK-2c, Q-OPS-1: serve ... env -u CLOUDFLARE_API_TOKEN (NC-loop)` |
+| MB-13, Q-SEC-5, OT-11, OT-17, LK-15 | `mm TASK-2d: ...` (order), `mm MB-13, Q-SEC-5 (NC-10): ...`, `mm MB-13: ...` (2), `mm OT-17, DEC-1: ...`, `mm OT-17: ...`, `mm OT-11: ...`, `mm LK-15: ...` |
+| MB-16, MB-34 | `mm MB-16: ...` (3), `mm MB-34: ...` (2) |
+| FG-15, OT-09 | `mm FG-15, OT-09: ...` |
+| DP-rm-1 to DP-rm-8 | `mm DP-rm-1 to DP-rm-8: ...` (kills at steps 1 to 10) |
+| CC-04, OT-08, OT-12 | `mm CC-04: ...`, `mm OT-08: a deploy failing 3 times ...`, `mm OT-12: ...` |
+| MB-14, MB-15, DP-leave-1 to -3 | `mm MB-14: ...`, `mm MB-15: ...`, `mm DP-leave-1: ...`, `mm DP-leave-2: ...`, `mm DP-leave-3: ...`, `mm TASK-2e: leave on a profile that is not a member ...` |
+| MB-21, MB-30, MB-31, OT-03 | `mm MB-21 (a): ...`, `mm MB-21 (b), MB-31, OT-03: ...`, `mm OT-03: ...`, `mm MB-30: ...`, `mm TASK-2e: a record gone (404) ...` |
+| review TODO (teardown) | `mm TN-12 (no admin token): ...` |
+| NC-1, NC-8, NC-10, NC-14, NC-loop | red runs on mutants of bin/share; green in the suite (`docs/verification/members-rm-reconcile.md`) |

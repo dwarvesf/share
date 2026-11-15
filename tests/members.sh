@@ -442,8 +442,8 @@ out=$(mx_env=(SHARE_ERROR_JSON=1); mxa member rotate an 2>&1); rc=$?
 check "mm MB-24: rotate on a pausing record is refused member_busy naming pause, step 2 and its rerun" "1 member_busy 1" \
   "$rc $(mx_jcode "$out") $(grep -c '^share: an is mid-pause (step 2) since 2026-11-15T00:00:00Z; finish it: share member pause an$' <<<"$out")"
 out=$(mxa member rm an 2>&1); out2=$(mx_env=(SHARE_ERROR_JSON=1); mxa member sync 2>&1); rc2=$?
-check "mm MB-24: rm proceeds past member_can (its build is later); sync reports and writes no refusal" "1 0 none 0" \
-  "$(grep -c 'member rm is not built' <<<"$out") $rc2 $(mx_jcode "$out2") $(grep -c 'member_busy' <<<"$out2")"
+check "mm MB-24: rm proceeds from another verb's ...ing and ends removed; sync reports and writes no refusal" "removed 0 none 0" \
+  "$(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json") $rc2 $(mx_jcode "$out2") $(grep -c 'member_busy' <<<"$out2")"
 mx_load t2; mx_put_rec active
 o1=$(mx_fn reg-step m-an-aaaaaaa1 pause pausing 2 2>&1); o2=$(mx_fn reg-step m-an-aaaaaaa1 pause pausing 2 2>&1); o3=$(mx_fn reg-step m-an-aaaaaaa1 pause pausing 2 2>&1); o4=$(mx_fn reg-step m-an-aaaaaaa1 pause paused 2>&1)
 check "mm MB-25: prev_status is written entering pausing from active, never rewritten by two reruns, cleared when paused lands" \
@@ -870,6 +870,318 @@ mxa setup mx.example.test --r2 --bucket mx-bucket >/dev/null 2>&1; mxa setup mx.
 out=$(mxa member sync --rebind 2>&1); rc=$?
 check "mm OC-03: after a downgrade lost the bindings, sync --rebind restores both bindings from the account's services and PAUSED from the records" \
   "0 MEMBERS M_aaaaaaa1 M_bbbbbbb2 PAUSED 1" "$rc $(mx_bind | sed 's/=[^ ]*//g') $(mx_bind | grep -c 'PAUSED=\["aaaaaaa1"\]')"
+fi
+
+if mx_on "revoke and reconcile" || mx_on "member rm" || mx_on "leave and status"; then
+# SPEC-009 Phase 2 (TASK-2a to 2e): a joined member an (rj), and an invited one (ri), each a snapshot of both HOMEs
+mx_load t2; mxm_fresh
+SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 SHARE_TEST_CODE=$MXC1 mxa member add an --port "$MP" >/dev/null 2>&1; mx_save ri
+mxm join mx.example.test "$MXC1" >/dev/null 2>&1; mxm stop >/dev/null 2>&1
+mx_save rj; rm -rf "$MX/snap.rj/member" "$MX/snap.rj/kvm"; cp -R "$MXM_HOME" "$MX/snap.rj/member"; cp -R "$MX/kv-member" "$MX/snap.rj/kvm"
+rxj() { mx_load rj; mxm stop >/dev/null 2>&1; rm -rf "$MXM_HOME" "$MX/kv-member" "$MX/trashed"; cp -R "$MX/snap.rj/member" "$MXM_HOME"; cp -R "$MX/snap.rj/kvm" "$MX/kv-member"; : >"$MXM_LOG"; }
+rx_v3() { mkdir -p "$MX_DRY/m"; jq -nc --arg id "$1" --arg o "${2:-m-an-aaaaaaa1}" --argjson e "${3:-0}" '{v: 3, id: $id, storage: "machine", origin: $o, name: "f.txt", by: "mxm", added: "2026-11-15", expires: $e, opts: "", type: "text"}' >"$MX_DRY/m/$1"; }
+rx_v2() { mkdir -p "$MX_DRY/m"; printf '{"v":2,"id":"%s","storage":"machine","name":"o.txt","by":"origin","added":"2026-10-01","expires":0,"opts":"","type":"text"}\n' "$1" >"$MX_DRY/m/$1"; }
+rx_tomb() { mkdir -p "$MX_DRY/t"; jq -nc --arg id "$1" --arg o "${2:-m-an-aaaaaaa1}" --arg by "${3:-admin.example}" '{v: 1, id: $id, origin: $o, by: $by, at: 1}' >"$MX_DRY/t/$1"; }
+rx_row() { mkdir -p "$MXM_ROOT/pub/$1"; echo x >"$MXM_ROOT/pub/$1/f.txt"; printf '%s\tf.txt\t/src/f.txt\t2026-11-15\t%s\t%s\n' "$1" "${2:-0}" "${3:-}" >>"$MXM_ROOT/index.tsv"; }
+rx_opts() { awk -F'\t' -v id="$1" '$1 == id {print $6}' "$MXM_ROOT/index.tsv"; }
+rx_has() { [[ -e $MX_DRY/$1 ]] && echo 1 || echo 0; }
+rx_n() { grep -c -- "$1" "$MXM_LOG" 2>/dev/null || true; }
+rx_loop() { local e=(SHARE_API_TOKEN_OFF=1 ${mxm_env[@]+"${mxm_env[@]}"}); mxm_env=("${e[@]}"); mxm prune --loop; local rc=$?; mxm_env=(); return $rc; }   # as serve runs it: Access off
+rx_wk() { node "$(dirname "$SH")/../tests/worker.mjs" --dir "$MX_DRY" --host mx.example.test --bind "M_aaaaaaa1=127.0.0.1:$MP" "$1" 2>/dev/null | awk '/^[0-9]{3} \// {print $1}'; }
+fi
+
+if mx_on "revoke and reconcile"; then
+echo "=== members: revoke and reconcile (TASK-2a, 2b, 2c) ==="
+# TASK-2a: the admin revoke of another machine's link
+rxj; echo hello >"$MX/f.txt"; SHARE_TEST_IDS=a20001 mxm add "$MX/f.txt" >/dev/null 2>&1; mxm stop >/dev/null 2>&1; : >"$MX_LOG"
+out=$(mxa rm a20001 2>&1); rc=$?
+check "mm LK-08: the admin's rm of a member's v:3 writes t/<id> (If-None-Match), deletes the pointer, proves it gone; the bytes stay" \
+  "0 1 1 0 1 1" "$rc $(awk '/^PUT t\/a20001/ {a=NR} /^DELETE m\/a20001/ {b=NR} /^GET m\/a20001/ {c=NR} END {print (a && a < b && b < c) ? 1 : 0}' "$MX_LOG") $(rx_has t/a20001) $(rx_has m/a20001) $([[ -d $MXM_ROOT/pub/a20001 ]] && echo 1) $(grep -c "^revoked a20001; the bytes stay on an's machine$" <<<"$out")"
+check "mm LK-08: the tombstone names this origin and the remover" "m-an-aaaaaaa1 1" "$(jq -r .origin "$MX_DRY/t/a20001") $(jq -r '.by | test("^[a-z0-9.-]+$")' "$MX_DRY/t/a20001" | grep -c true)"
+cp -R "$MX_DRY" "$MX/revoked.bucket"
+: >"$MXM_LOG"; out=$(rx_loop 2>&1); rc=$?
+check "mm LK-11, Q-OPS-1: the owner's loop marks the row revoked (revoked_by), drops its Caddy handle, deletes t/, keeps the bytes" "0 1 0 0 1 1" \
+  "$rc $(rx_opts a20001 | grep -c 'revoked revoked_by=') $(grep -c '@sa20001 path' "$MXM_ROOT/Caddyfile") $(rx_has t/a20001) $([[ -f $MXM_ROOT/pub/a20001/f.txt ]] && echo 1) $(grep -c '^revoked a20001: removed by ' <<<"$out")"
+check "mm LK-11: ls on the member shows removed by <who>" "1" "$(mxm ls 2>&1 | grep -c 'a20001.*state=revoked (removed by .*; the bytes stay here)')"
+check "mm LK-11: a revoked link answers 404 at the Worker (no pointer)" "404" "$(rx_wk /a20001/f.txt)"
+# LK-09, WM-04, LK-19, LK-10: who may rm what
+rxj; rx_v3 bb0002 m-bo-bbbbbbb2; : >"$MXM_LOG"
+out=$(mxm_env=(SHARE_ERROR_JSON=1); mxm rm bb0002 2>&1); rc=$?; mxm_env=()
+check "mm LK-09: a member's rm of another member's v:3 is refused revoke_needs_admin before any write" "1 revoke_needs_admin 0 1" "$rc $(mx_jcode "$out") $(grep -cE '^(PUT|DELETE) ' "$MXM_LOG") $(rx_has m/bb0002)"
+: >"$MX_LOG"; out=$(MX_TOK=-; mx_env=(SHARE_ERROR_JSON=1); mxa rm bb0002 2>&1); rc=$?; mx_env=()
+check "mm WM-04: the origin without the admin token rm of a v:3 is refused, naming the admin" "1 revoke_needs_admin 1 0" \
+  "$rc $(mx_jcode "$out") $(grep -c '^share: .*only the tenant admin revokes it' <<<"$out") $(grep -cE '^(PUT|DELETE) ' "$MX_LOG")"
+rx_v2 bb0003; out=$(mxm rm bb0003 2>&1); rc=$?
+check "mm LK-19: rm of a v:2 from a machine that is not the origin is refused, served by the tenant's origin" "1 1 1" "$rc $(grep -c 'served from the tenant.s origin; remove it there' <<<"$out") $(rx_has m/bb0003)"
+out=$(SHARE_TEST_IDS=c20001 mxa add --cloud "$MX/f.txt" 2>&1); out=$(mxm rm c20001 2>&1); rc=$?
+check "mm LK-10: any publisher's rm of a cloud link takes today's path" "0 1 0" "$rc $(grep -c '^unpublished c20001' <<<"$out") $(rx_has m/c20001)"
+# RC-01 to RC-13: the reconcile table, one row each, on the member HOME (bare prune: the Keychain key, the reconcile after the cloud expiry)
+rc_t() { # rc_t <label> <expected> <actual>
+  check "mm $1" "$2" "$3"
+}
+rxj; rx_row ee0001 1000; rx_tomb ee0001; mx_aged 900 "$MX_DRY/t/ee0001"; out=$(mxm prune 2>&1)
+rc_t "RC-01: an expired row is prune's: the reconcile leaves its tombstone; prune trashes the row" "1 0 0" "$(rx_has t/ee0001) $(grep -c '^ee0001' "$MXM_ROOT/index.tsv") $(grep -c 'revoked ee0001' <<<"$out")"
+rxj; rx_row ee0002 0 "revoked revoked_by=x"; rx_tomb ee0002; : >"$MXM_LOG"; mxm prune >/dev/null 2>&1
+rc_t "RC-02: a revoked row: nothing (no pointer written, the tombstone stays)" "0 1" "$(rx_n '^PUT m/ee0002') $(rx_has t/ee0002)"
+rxj; rx_v3 ee0003; mx_aged 660 "$MX_DRY/m/ee0003"; rx_v3 ee0004; mx_aged 300 "$MX_DRY/m/ee0004"; out=$(mxm prune 2>&1)
+rc_t "RC-03, RC-04, LK-16, CK-06: an own pointer with no row goes after 10 minutes (LastModified on the local clock); a younger one stays" "0 1 1" \
+  "$(rx_has m/ee0003) $(rx_has m/ee0004) $(grep -c '^removed orphan pointer m/ee0003' <<<"$out")"
+rxj; rx_v3 ee0005; mx_aged 660 "$MX_DRY/m/ee0005"; ln -s "$$" "$MXM_ROOT/.lock-add-ee0005"; mxm prune >/dev/null 2>&1; rx_loop >/dev/null 2>&1
+rc_t "CC-08: a live add lock keeps the pointer from the reconcile, in prune and in the member loop" "1" "$(rx_has m/ee0005)"
+rxj; rx_tomb ee0006; rx_tomb ee0007 m-bo-bbbbbbb2; out=$(mxm prune 2>&1)
+rc_t "RC-05, CC-07: an own tombstone with no row and no record goes; another origin's stays" "0 1 1" "$(rx_has t/ee0006) $(rx_has t/ee0007) $(grep -c '^removed the leftover tombstone t/ee0006' <<<"$out")"
+rxj; rx_v3 ee0008 m-bo-bbbbbbb2; mx_aged 900 "$MX_DRY/m/ee0008"; : >"$MXM_LOG"; mxm prune >/dev/null 2>&1; rx_loop >/dev/null 2>&1
+rc_t "RC-06: another origin's pointer with no row here: nothing" "1 0" "$(rx_has m/ee0008) $(rx_n '^DELETE m/ee0008')"
+rxj; SHARE_TEST_IDS=ee0009 mxm add "$MX/f.txt" >/dev/null 2>&1; mxm stop >/dev/null 2>&1; : >"$MXM_LOG"; mxm prune >/dev/null 2>&1
+rc_t "RC-07: a live row with its own pointer and no tombstone: no write" "0" "$(grep -cE '^(PUT|DELETE) (m|t)/ee0009' "$MXM_LOG")"
+rx_tomb ee0009 m-an-aaaaaaa1 forger.example; mx_aged 900 "$MX_DRY/t/ee0009"; out=$(mxm prune 2>&1)
+rc_t "RC-08, FG-01: a tombstone over 10 minutes old beside a live pointer is deleted and reported; the link serves throughout" "0 1 1 " \
+  "$(rx_has t/ee0009) $(rx_has m/ee0009) $(grep -c 'a removal of ee0009 by forger.example did not finish or was forged' <<<"$out") $(rx_opts ee0009)"
+rx_tomb ee0009; out=$(mxm prune 2>&1)
+rc_t "RC-09: a young tombstone beside the pointer: skipped (a revoke is in flight)" "1 1 " "$(rx_has t/ee0009) $(rx_has m/ee0009) $(rx_opts ee0009)"
+rm -f "$MX_DRY/m/ee0009"; out=$(mxm prune 2>&1)
+rc_t "RC-10, FG-02: tombstone and no pointer: the row is revoked, its handle gone, the tombstone deleted, the bytes kept, removed by <who>" "revoked revoked_by=admin.example 0 0 1 1" \
+  "$(rx_opts ee0009) $(grep -c '@see0009 path' "$MXM_ROOT/Caddyfile") $(rx_has t/ee0009) $([[ -f $MXM_ROOT/pub/ee0009/f.txt ]] && echo 1) $(grep -c '^revoked ee0009: removed by admin.example' <<<"$out")"
+rxj; rx_row ee000a; : >"$MXM_LOG"; out=$(mxm prune 2>&1)
+rc_t "RC-11: a live row with no pointer and no tombstone gets its pointer back (v:3, If-None-Match)" "1 3 m-an-aaaaaaa1" "$(rx_n '^PUT m/ee000a') $(jq -r .v "$MX_DRY/m/ee000a") $(jq -r .origin "$MX_DRY/m/ee000a")"
+rxj; rx_row ee000b; rx_v3 ee000b m-bo-bbbbbbb2; out=$(mxm prune 2>&1)
+rc_t "RC-12, FG-04: a live row whose id another member's record holds: reported shadowed, nothing written" "1 m-bo-bbbbbbb2 " \
+  "$(grep -c 'ee000b is shadowed by another record; rm one of them' <<<"$out") $(jq -r .origin "$MX_DRY/m/ee000b") $(rx_opts ee000b)"
+rx_tomb ee000b; out=$(mxm prune 2>&1)
+rc_t "RC-13: a live row whose id was reissued after a removal (another record plus a tombstone) is revoked" "revoked revoked_by=admin.example 1" "$(rx_opts ee000b) $(grep -c '^revoked ee000b: removed by admin.example, and its id now names another link' <<<"$out")"
+rxj; rx_row ee000c; mkdir -p "$MX_DRY/m"; printf '{"v":1,"id":"ee000c","name":"theirs.txt","src":"/x","added":"2026-10-01","expires":0,"opts":"","prefix":"o/ee000c.00000000/","by":"peer"}\n' >"$MX_DRY/m/ee000c"; rx_tomb ee000c
+out=$(mxm prune 2>&1)
+rc_t "OC-02: a v0.9 publisher drew a tombstoned id for a cloud link: row 13 revokes the owner's row; the bytes stay" "revoked revoked_by=admin.example 1" "$(rx_opts ee000c) $([[ -f $MXM_ROOT/pub/ee000c/f.txt ]] && echo 1)"
+rxj; rx_row ee000d; rx_tomb ee000d m-an-aaaaaaa1 "$(printf 'a\tb c\nd')"; out=$(mxm prune 2>&1)
+rx_row ee000e; rx_tomb ee000e m-an-aaaaaaa1 "$(printf 'abc\n')x"; jq -c '.by = "abc\n"' "$MX_DRY/t/ee000e" >"$MX/t" && mv "$MX/t" "$MX_DRY/t/ee000e"; mxm prune >/dev/null 2>&1
+rc_t "FG-16: a tombstone whose by holds a tab, a space and a newline, or ends in a newline, reads revoked_by=unknown; index.tsv gains no row or opts token" "revoked revoked_by=unknown revoked revoked_by=unknown 1" \
+  "$(rx_opts ee000d) $(rx_opts ee000e) $(awk -F'\t' 'NF != 6 {bad++} END {print bad ? 0 : 1}' "$MXM_ROOT/index.tsv")"
+# CC-06: the admin revoke racing the reconcile: the revoke's t/ PUT and m/ DELETE land before, between and after its m/ list and t/ read
+cc6() { # cc6 <order>: before | between | after; the reconcile held at its t/ list (between: the m/ DELETE lands while it is held)
+  rxj; SHARE_TEST_IDS=ee0010 mxm add "$MX/f.txt" >/dev/null 2>&1; mxm stop >/dev/null 2>&1
+  case $1 in before) rx_tomb ee0010; rm -f "$MX_DRY/m/ee0010"; mxm prune >/dev/null 2>&1 ;;
+    between) rx_tomb ee0010
+      ( mxm_env=(SHARE_R2_DRY_PAUSE="LIST t/"); mxm prune >/dev/null 2>&1 ) & local p=$!
+      mx_wait_paused; rm -f "$MX_DRY/m/ee0010"; : >"$MX_DRY/.resume"; wait "$p"; rm -f "$MX_DRY/.resume" "$MX_DRY/.paused" ;;
+    after) ( mxm_env=(SHARE_R2_DRY_PAUSE="LIST t/"); mxm prune >/dev/null 2>&1 ) & local p=$!
+      mx_wait_paused; : >"$MX_DRY/.resume"; wait "$p"; rm -f "$MX_DRY/.resume" "$MX_DRY/.paused"; rx_tomb ee0010; rm -f "$MX_DRY/m/ee0010" ;;
+  esac
+  local first; first="$(rx_opts ee0010 | grep -c revoked)/$(rx_has m/ee0010)"
+  mxm prune >/dev/null 2>&1
+  echo "$first $(rx_opts ee0010 | grep -c revoked)/$(rx_has m/ee0010)/$(rx_has t/ee0010)"
+}
+check "mm CC-06: revoke landed before the reconcile: revoked at once; never resurrected" "1/0 1/0/0" "$(cc6 before)"
+check "mm CC-06: the m/ DELETE lands between the m/ list and the t/ read: row 9 skips the young tombstone; the next pass revokes; no resurrection" "0/0 1/0/0" "$(cc6 between)"
+check "mm CC-06: revoke landed after the reconcile read: unchanged first; the next pass revokes; no resurrection" "0/0 1/0/0" "$(cc6 after)"
+rxj; rx_row ee0011
+( mxm_env=(SHARE_R2_DRY_PAUSE="PUT m/ee0011"); mxm prune >"$MX/cc6d.out" 2>&1 ) & p=$!
+mx_wait_paused; rx_tomb ee0011; : >"$MX_DRY/.resume"; wait "$p"; rm -f "$MX_DRY/.resume" "$MX_DRY/.paused"
+check "mm CC-06, DEC-64: a revoke between row 11's reads and its pointer write: the reconcile deletes its own write and revokes the row" "0 revoked 0" \
+  "$(rx_has m/ee0011) $(rx_opts ee0011 | cut -d' ' -f1) $(rx_has t/ee0011)"
+rxj; SHARE_TEST_IDS=ee0017 mxm add "$MX/f.txt" >/dev/null 2>&1; mxm stop >/dev/null 2>&1
+( mxm_env=(SHARE_R2_DRY_PAUSE="GET m/ee0017"); mxm prune >"$MX/cc6e.out" 2>&1 ) & p=$!
+mx_wait_paused; rx_tomb ee0017; rm -f "$MX_DRY/m/ee0017"; : >"$MX_DRY/.resume"; wait "$p"; rm -f "$MX_DRY/.resume" "$MX_DRY/.paused"
+check "mm CC-06: the revoke lands between the m/ list and the pointer's read: row 10 (revoked, tombstone deleted), never row 13's reissue" "revoked 0 0 1 0" \
+  "$(rx_opts ee0017 | cut -d' ' -f1) $(rx_has m/ee0017) $(rx_has t/ee0017) $(grep -c '^revoked ee0017: removed by' "$MX/cc6e.out") $(grep -c 'now names another link' "$MX/cc6e.out")"
+rxj; rx_row ee0018; rx_tomb ee0018; : >"$MXM_LOG"; out=$(mxm_env=(SHARE_R2_DRY_FAIL="GET t/ee0018"); mxm prune 2>&1); mxm_env=()
+check "mm TASK-2b: an unreadable tombstone (HTTP 500) is never read as absent: no pointer written, the row not revoked; the next pass revokes" "0 0 1" \
+  "$(rx_n '^PUT m/ee0018') $(rx_has m/ee0018) $(mxm prune >/dev/null 2>&1; rx_opts ee0018 | grep -c revoked)"
+rxj; mx_set() { jq -c "$2" "$MX_DRY/u/$1.json" >"$MX/r" && mv "$MX/r" "$MX_DRY/u/$1.json"; }; rx_row ee0019; mx_set m-an-aaaaaaa1 '.status = "removed"'; : >"$MXM_LOG"; out=$(mxm prune 2>&1)
+check "mm TASK-2b: a member whose record reads removed writes no pointer back in its reconcile" "0 1" "$(rx_n '^PUT m/') $(grep -c 'this member is removed on mx.example.test; the reconcile writes nothing' <<<"$out")"
+# RC-14, FG-14: the origin never reaps a v:3 and never reads t/
+mx_load rj; rx_v3 ee0012; mx_aged 900 "$MX_DRY/m/ee0012"; mkdir -p "$MX_ROOT/pub/0c0002"; echo y >"$MX_ROOT/pub/0c0002/y.txt"; printf '0c0002\ty.txt\t/src/y.txt\t2026-10-01\t0\t\n' >>"$MX_ROOT/index.tsv"
+rx_v3 0c0002; mx_aged 900 "$MX_DRY/m/0c0002"; : >"$MX_LOG"; mxa prune >/dev/null 2>&1; mxa ls >/dev/null 2>&1
+check "mm RC-14: on the origin a v:3 pointer of any age, with or without a local row of its id, is never deleted" "1 1 0" "$(rx_has m/ee0012) $(rx_has m/0c0002) $(grep -c '^DELETE m/' "$MX_LOG")"
+rx_tomb 0c0001 m-an-aaaaaaa1; rm -f "$MX_DRY/m/0c0001"; : >"$MX_LOG"; mxa prune >/dev/null 2>&1
+check "mm FG-14: a forged t/ for an origin v:2 link: the origin rewrites its pointer, never reads t/, never revokes" "2 0 1 " \
+  "$(jq -r .v "$MX_DRY/m/0c0001") $(grep -c ' t/' "$MX_LOG") $(rx_has t/0c0001) $(awk -F'\t' '$1 == "0c0001" {print $6}' "$MX_ROOT/index.tsv")"
+# RC-15: prune --loop too
+rxj; rx_v2 bb0001; mx_aged 660 "$MX_DRY/m/bb0001"; : >"$MXM_LOG"; rx_loop >/dev/null 2>&1
+check "mm RC-15: on a member, an origin v:2 pointer aged 660 s with no local row survives prune --loop" "0 1" "$(rx_n '^DELETE m/bb0001') $(rx_has m/bb0001)"
+# TASK-2c: the member loop
+rxj; rx_row ee0013 "$(( $(date +%s) - 5 ))"; rx_v3 ee0013 m-an-aaaaaaa1 "$(( $(date +%s) - 5 ))"; rx_row ee0014 "$(( $(date +%s) + 3600 ))"; : >"$MXM_LOG"
+mxm_env=(CLOUDFLARE_API_TOKEN=admintoken); out=$(rx_loop 2>&1); rc=$?; mxm_env=()
+check "mm LK-12, CK-05: the loop trashes a row past its expiry (the owner's clock) and deletes its pointer; an unexpired row stays" "0 0 0 1" \
+  "$rc $(grep -c '^ee0013' "$MXM_ROOT/index.tsv") $(rx_has m/ee0013) $(grep -c '^ee0014' "$MXM_ROOT/index.tsv")"
+check "mm LK-12: the Worker answers 404 for a v:3 past its expiry at once" "404" "$(rx_v3 ee0015 m-an-aaaaaaa1 1000; rx_wk /ee0015/f.txt)"
+check "mm TASK-2c: the loop reads its own record into .health (member status, token ok) and never the environment's admin token for the bucket" "active ok 1" \
+  "$(jq -r .member.status "$MXM_HOME/.config/share/.health") $(jq -r .token.verify "$MXM_HOME/.config/share/.health") $(rx_n '^GET u/m-an-aaaaaaa1.json')"
+rxj; rx_row ee0016 1000; rm -f "$MX/kv-member/share-api:mx.example.test"; : >"$MXM_LOG"; out=$(rx_loop 2>&1); rc=$?
+check "mm OT-02, TASK-2c: a locked Keychain logs one line and skips the bucket; local expiry still runs; serving continues" "0 1 0 0" \
+  "$rc $(grep -c 'publisher key could not be read from the Keychain' <<<"$out") $(grep -cE '^(GET|PUT|DELETE|LIST) ' "$MXM_LOG") $(grep -c '^ee0016' "$MXM_ROOT/index.tsv")"
+rxj; : >"$MXM_LOG"
+mxm_env=(SHARE_PRUNE_EVERY=1 CLOUDFLARE_API_TOKEN=admintoken); mxm start >/dev/null 2>&1; mxm_env=()
+for _ in $(seq 1 40); do grep -q '^LOOP ' "$MXM_LOG" 2>/dev/null && break; sleep 0.25; done; mxm stop >/dev/null 2>&1
+check "mm TASK-2c, Q-OPS-1: serve on a member runs prune --loop hourly under env -u CLOUDFLARE_API_TOKEN (NC-loop)" "LOOP env_token=0" "$(grep -m1 '^LOOP ' "$MXM_LOG")"
+# CK-02: tombstone age by LastModified, never by the remover's clock; member sync sweeps those of removed origins after 30 days
+mx_load rj; mx_set() { jq -c "$2" "$MX_DRY/u/$1.json" >"$MX/r" && mv "$MX/r" "$MX_DRY/u/$1.json"; }
+mx_set m-an-aaaaaaa1 '.status = "removed"'; rx_tomb ee0020; jq -c ".at = $(( $(date +%s) + 3456000 ))" "$MX_DRY/t/ee0020" >"$MX/t" && mv "$MX/t" "$MX_DRY/t/ee0020"
+rx_tomb ee0021; mx_aged 2700000 "$MX_DRY/t/ee0021"
+mxa member sync >/dev/null 2>&1
+check "mm CK-02, TASK-2b: member sync keeps a young tombstone whatever its at says (a remover 40 days fast) and sweeps one over 30 days old" "1 0" "$(rx_has t/ee0020) $(rx_has t/ee0021)"
+# FG-03, FG-11: a forged pointer for an unlisted, revoked or expired row reaches the member's Caddy, which 404s
+rxj; mxm start >/dev/null 2>&1; rx_v3 ff0001; rx_row ff0002 0 "revoked revoked_by=x"; rx_v3 ff0002
+rx_row ff0003 1000; mxm prune >/dev/null 2>&1; rx_v3 ff0003
+check "mm FG-03, FG-11: forged pointers for an unlisted, a revoked and an already expired row 404 at the member's Caddy" "404 404 404" "$(rx_wk /ff0001/f.txt) $(rx_wk /ff0002/f.txt) $(rx_wk /ff0003/f.txt)"
+mxm stop >/dev/null 2>&1
+fi
+
+if mx_on "member rm"; then
+echo "=== members: member rm and member purge (TASK-2d) ==="
+mx_set() { jq -c "$2" "$MX_DRY/u/$1.json" >"$MX/r" && mv "$MX/r" "$MX_DRY/u/$1.json"; }
+mx_paused() { jq -c --arg p "$1" '(.bindings |= map(if .name == "PAUSED" then .text = $p else . end))' "$MX_DRY/.cf/script.json" >"$MX/s" && mv "$MX/s" "$MX_DRY/.cf/script.json"; }
+# rl: the joined member with two machine links and one cloud link
+rxj; echo hello >"$MX/f.txt"; SHARE_TEST_IDS=d20001 mxm add "$MX/f.txt" >/dev/null 2>&1; SHARE_TEST_IDS=d20002 mxm add "$MX/f.txt" >/dev/null 2>&1
+SHARE_TEST_IDS=d20003 mxm add --cloud "$MX/f.txt" >/dev/null 2>&1; mxm stop >/dev/null 2>&1; mx_save rl
+rm_gone() { # 1 when nothing of an remains: no tunnel, service, token, invite, binding, PAUSED entry or v:3 pointer; its two links tombstoned; the record removed with no step or invite
+  [[ "$(mx_objs)" == "tunnels=[] services=[] tokens=[] invites=0" && "$(mx_bind)" != *M_aaaaaaa1* && "$(mx_bind)" != *aaaaaaa1* && $(rx_has m/d20001)$(rx_has m/d20002) == 00 &&
+    "$(jq -r '"\(.status) \(has("step")) \(has("invite"))"' "$MX_DRY/u/m-an-aaaaaaa1.json")" == "removed false false" && ! -e $MX_DRY/lock/admin && -z "$(mx_ops "$MX_ROOT")" ]] && echo 1 || echo 0
+}
+mx_load rl; : >"$MX_LOG"; out=$(mxa member rm an 2>&1); rc=$?
+ord="$(mx_ln '^PUT lock/admin') $(mx_ln '^API PUT /accounts/acct-dry/workers/scripts/') $(mx_ln '^API DELETE /accounts/acct-dry/connectivity/directory/services/') $(mx_ln '^API DELETE /accounts/acct-dry/cfd_tunnel/.*/connections') $(mx_ln '^API DELETE /accounts/acct-dry/cfd_tunnel/[^/]*$') $(mx_ln '^API DELETE /user/tokens/') $(mx_ln '^PUT t/d20001') $(mx_ln '^DELETE m/d20001') $(mx_ln '^DELETE lock/admin')"
+check "mm TASK-2d: member rm runs lease, deploy, service, connections, tunnel, token, tombstone, pointer, release in order" "0 1" \
+  "$rc $(awk '{for (i = 2; i <= NF; i++) if ($i == "" || $i + 0 <= $(i - 1) + 0) {print 0; exit}} END {if (NF == 9) print 1; else print 0}' <<<"$ord" | tail -1)"
+check "mm MB-13, Q-SEC-5 (NC-10): after member rm the dry listing of every object kind for the member is empty; its links tombstoned" "1 1 1" "$(rm_gone) $(rx_has t/d20001) $(rx_has t/d20002)"
+check "mm OT-17, DEC-1: cloud links are kept by default and keep serving until they expire" "1 1" "$(rx_has m/d20003) $(grep -c 'cloud links kept until they expire' <<<"$out")"
+check "mm LK-15: the member's bytes wait on its machine (only that machine deletes bytes)" "1 1" "$([[ -f $MXM_ROOT/pub/d20001/f.txt ]] && echo 1) $(grep -c '^d20001' "$MXM_ROOT/index.tsv")"
+pfx="$(jq -r .prefix "$MX/snap.rl/bucket/m/d20003")"
+mx_load rl; out=$(mxa member rm an --cloud-links delete 2>&1); rc=$?
+check "mm OT-17: --cloud-links delete removes the member's cloud links and their uploads" "0 1 0 0" "$rc $(rm_gone) $(rx_has m/d20003) $(find "$MX_DRY/${pfx%/}" -type f 2>/dev/null | grep -c .)"
+# MB-13 from every status
+bad=""
+for st in active paused left adding joining pausing resuming inviting rotating renewing removing; do
+  mx_load rl; mx_set m-an-aaaaaaa1 ".status = \"$st\" | .step = 3 | .step_name = \"x\""; [[ $st != paused && $st != pausing ]] || mx_paused '["aaaaaaa1"]'
+  mxa member rm an >/dev/null 2>&1 || bad="$bad rc:$st"; [[ $(rm_gone) == 1 ]] || bad="$bad $st:$(mx_objs)/$(mx_bind)"
+done
+mx_load ri; mxa member rm an >/dev/null 2>&1 || bad="$bad rc:invited"; [[ "$(mx_objs) $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json")" == "tunnels=[] services=[] tokens=[] invites=0 removed" ]] || bad="$bad invited"
+mx_load ri; mx_set m-an-aaaaaaa1 '.invite.expires = 1000'; mxa member rm an >/dev/null 2>&1; [[ "$(mx_objs)" == "tunnels=[] services=[] tokens=[] invites=0" ]] || bad="$bad expired"
+check "mm MB-13: member rm from invited, expired, active, paused, left and each ...ing ends removed with no object left (paused: out of PAUSED)" "" "$bad"
+mx_load rl; mxa member rm an >/dev/null 2>&1; : >"$MX_LOG"; out=$(mx_env=(SHARE_ERROR_JSON=1); mxa member rm an 2>&1); rc=$?
+check "mm MB-13: member rm of a removed member is refused, naming purge; nothing written" "1 member_not_allowed 0" "$rc $(mx_jcode "$out") $(mx_writes)"
+mx_load rl; mx_set m-an-aaaaaaa1 '.status = "removed"'; out=$(mxa member rm an 2>&1); rc=$?
+check "mm FG-06 (review): a record forged to removed while its objects remain: member rm still removes every object; the record stays removed" "0 tunnels=[] services=[] tokens=[] invites=0 0 removed 1" \
+  "$rc $(mx_objs) $(mx_bind | grep -c M_aaaaaaa1) $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json") $(grep -c 'reads removed, and objects of it remain' <<<"$out")"
+mx_load rl; mx_put_rec active m-an-00000000 '.mode = "machine"'; out=$(mxa member rm an 2>&1); rc=$?
+check "mm FG-15 (review): a decoy record of the same name never steers member rm: the bound member is removed, the decoy stays" "0 removed active tunnels=[] services=[] tokens=[] invites=0" \
+  "$rc $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json") $(jq -r .status "$MX_DRY/u/m-an-00000000.json") $(mx_objs)"
+mx_load t2; mx_put_rec active m-cx-11111111 '.mode = "cloud"'; mx_put_rec active m-cx-22222222 '.mode = "cloud"'
+out=$(mx_env=(SHARE_ERROR_JSON=1); mxa member rm cx 2>&1); rc=$?; out2=$(mxa member rm m-cx-22222222 2>&1); rc2=$?
+check "mm FG-15 (review): two unbound records of one name are refused naming both ids; rm by member id picks one" "1 member_name_taken 1 0 active removed" \
+  "$rc $(mx_jcode "$out") $(grep -c '^share: .*m-cx-11111111 m-cx-22222222' <<<"$out") $rc2 $(jq -r .status "$MX_DRY/u/m-cx-11111111.json") $(jq -r .status "$MX_DRY/u/m-cx-22222222.json")"
+# MB-34: the minter of another user cannot reach the token: rm still ends removed and names the token's expiry
+mx_load rl; te="$(jq -r .token.expires_on "$MX_DRY/u/m-an-aaaaaaa1.json")"; out=$(MX_MINT=otherminter mxa member rm an 2>&1); rc=$?
+check "mm MB-34: rm with another user's minter ends removed and prints token not reachable with its expiry" "0 removed 1 $te" \
+  "$rc $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json") $(grep -c "^token not reachable by this minter; it expires $te$" <<<"$out") $(jq -r .token_unreachable_until "$MX_DRY/u/m-an-aaaaaaa1.json")"
+check "mm MB-34: member ls shows token_unreachable until that date passes" "token_unreachable" "$(mxa member ls --json 2>/dev/null | jq -r '.[] | select(.name == "an") | .drift | join(" ")')"
+# MB-16: purge
+mx_load rl; out=$(mx_env=(SHARE_ERROR_JSON=1); mxa member purge an 2>&1); rc=$?
+check "mm MB-16: purge of an active member is refused; the record stays" "1 member_not_allowed 1" "$rc $(mx_jcode "$out") $(rx_has u/m-an-aaaaaaa1.json)"
+mxa member rm an >/dev/null 2>&1; : >"$MX_LOG"; out=$(mxa member purge an 2>&1); rc=$?
+check "mm MB-16: purge of a removed member: the id goes into u/purged.json first, then the record goes" "0 0 [\"m-an-aaaaaaa1\"] 1" \
+  "$rc $(rx_has u/m-an-aaaaaaa1.json) $(jq -c .ids "$MX_DRY/u/purged.json") $(awk '/^PUT u\/purged.json/ {a=NR} /^DELETE u\/m-an-aaaaaaa1.json/ {b=NR} END {print (a && a < b) ? 1 : 0}' "$MX_LOG")"
+out=$(SHARE_TEST_MEMBER_IDS="m-an-aaaaaaa1 m-an-cccccccc" mxa member add an --cloud 2>&1)
+check "mm MB-16: a purged id is never reissued" "m-an-cccccccc" "$(find "$MX_DRY/u" -name 'm-an-*.json' | sed 's|.*/||; s/\.json$//')"
+# FG-15, OT-09: forged ids in the record and another tenant's objects of the same suffix are never touched
+mx_load rl; SHARE_TEST_MEMBER_IDS=m-bo-bbbbbbb2 SHARE_TEST_CODE=$MXC2 mxa member add bo --port $((base + 381)) >/dev/null 2>&1
+bt="$(jq -r .tunnel_id "$MX_DRY/u/m-bo-bbbbbbb2.json")"; bs="$(jq -r .vpc_service_id "$MX_DRY/u/m-bo-bbbbbbb2.json")"; bk="$(jq -r .token.id "$MX_DRY/u/m-bo-bbbbbbb2.json")"
+mx_set m-an-aaaaaaa1 ".tunnel_id = \"$bt\" | .vpc_service_id = \"$bs\" | .token.id = \"$bk\" | .token.name = \"share mx.example.test m-bo-bbbbbbb2\" | .rotation = 7 | .token_unreachable_until = \"2020-01-01T00:00:00Z\""
+mx_api POST /accounts/acct-dry/cfd_tunnel '{"name":"share-mx-example-test-aaaaaaa1-r1","config_src":"cloudflare"}' >/dev/null
+ot="$(mx_body "$(mx_api POST /accounts/acct-dry/cfd_tunnel '{"name":"share-other-example-test-aaaaaaa1","config_src":"cloudflare"}')" | jq -r .result.id)"
+mx_api POST /accounts/acct-dry/connectivity/directory/services "$(jq -nc --arg t "$ot" '{type: "http", name: "share-other-example-test-aaaaaaa1", host: {ipv4: "127.0.0.1", network: {tunnel_id: $t}}, http_port: 9999}')" >/dev/null
+out=$(mxa member rm an 2>&1); rc=$?
+check "mm FG-15, OT-09: a forged record naming bo's tunnel, service and token touches none of them; the rotated tunnel of an goes; another tenant's same-suffix objects stay" \
+  "0 tunnels=[share-mx-example-test-bbbbbbb2,share-other-example-test-aaaaaaa1] services=[share-mx-example-test-bbbbbbb2,share-other-example-test-aaaaaaa1] tokens=[share mx.example.test m-bo-bbbbbbb2] 1" \
+  "$rc $(mx_objs | sed 's/ invites=.*//') $(mx_bind | grep -c M_bbbbbbb2)"
+# OT-11: a member with no links: no tombstone
+mx_load ri; rm -rf "$MX_DRY/t"; mxa member rm an >/dev/null 2>&1
+check "mm OT-11: member rm of a member with no links completes with no tombstone" "removed 0" "$(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json") $(find "$MX_DRY/t" -type f 2>/dev/null | grep -c .)"
+# OT-08: the deploy keeps failing: the record stays removing, the rerun converges
+mx_load rl; out=$(mx_env=(SHARE_R2_DRY_FAIL='API PUT */workers/scripts/*'); mxa member rm an 2>&1); rc=$?
+st="$(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json")"; mxa member rm an >/dev/null 2>&1; rc2=$?
+check "mm OT-08: a deploy failing 3 times dies with the record removing; the rerun converges" "1 removing 0 1" "$rc $st $rc2 $(rm_gone)"
+# DP-rm-1 to DP-rm-10: killed at each step; status or member ls names it and the rerun; the rerun ends removed with no orphan
+dp_bad=""
+for n in 1 2 3 4 5 6 7 8 9 10; do
+  mx_load rl
+  mx_kill_at "$MX_ROOT" member-rm "$n" mxa member rm an || { dp_bad="$dp_bad held$n"; continue; }
+  if [[ $n -ge 2 ]]; then
+    es=$n; [[ $n != 10 ]] || es=9   # step 10 is the removed write itself
+    grep -q "^an: removing, step $es of 10 ([a-z]*), lease held by $mx_this:[0-9]*:[0-9a-f]* (stale since .*; rerun: share member rm an)$" <<<"$(mxa member ls 2>&1)" || dp_bad="$dp_bad ls$n"
+  else
+    grep -q "^member-rm stopped at step 1 of 10 (lease); rerun: share --profile ten member rm an" <<<"$(mxa status 2>&1)" || dp_bad="$dp_bad status$n"
+  fi
+  out="$(mxa member rm an 2>&1)" || dp_bad="$dp_bad rerun$n"
+  [[ $(rm_gone) == 1 ]] || dp_bad="$dp_bad end$n:$(mx_objs)"
+  [[ $n -lt 9 ]] || grep -q '^token:      already deleted$' <<<"$out" || dp_bad="$dp_bad tok$n"
+done
+check "mm DP-rm-1 to DP-rm-8: killed at each step, member ls names it and the rerun; the rerun skips what is done and ends removed with no orphan" "" "$dp_bad"
+# CC-04: join while member rm runs: rm wins, the join keeps nothing
+mx_load ri; mxm_fresh
+( mxm_env=(SHARE_R2_DRY_PAUSE="PUT u/m-an-aaaaaaa1.json" SHARE_ERROR_JSON=1); mxm join mx.example.test "$MXC1" >"$MX/cc04.out" 2>&1 ) & pa=$!
+mx_wait_paused; mxa member rm an >/dev/null 2>&1; rr=$?
+: >"$MX_DRY/.resume"; wait "$pa"; ra=$?; rm -f "$MX_DRY/.resume" "$MX_DRY/.paused"
+check "mm CC-04: join racing member rm: rm wins; the join dies member_changed and keeps nothing; no object remains" "0 1 member_changed 0 removed tunnels=[] services=[] tokens=[] invites=0" \
+  "$rr $ra $(mx_jcode "$(cat "$MX/cc04.out")") $([[ -f $MXM_CONF ]] && echo 1 || echo 0) $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json") $(mx_objs)"
+# the open review TODO: teardown with no admin token, a forged members:false and a dropped config key: the u/ records still refuse it
+mx_load rl; sed -i.bak '/^members=on$/d' "$MX_CONF"; jq -c '.members = false' "$MX_DRY/share.json" >"$MX/s" && mv "$MX/s" "$MX_DRY/share.json"; : >"$MX_LOG"
+out=$(MX_TOK=-; mx_env=(SHARE_ERROR_JSON=1); mxa teardown --yes 2>&1); rc=$?; mx_env=()
+check "mm TN-12 (no admin token): teardown is refused members_present while a u/ record is not removed; nothing deleted" "1 members_present 1 0" \
+  "$rc $(mx_jcode "$out") $(grep -c '^share: .*u/m-an-aaaaaaa1.json is not removed' <<<"$out") $(grep -cE '^(API DELETE|DELETE) ' "$MX_LOG")"
+# OT-12: a member with 500 rows: the Caddyfile renders 500 handles and serves the last
+rxj; for i in $(seq 1 500); do rx_row "$(printf 'f%05x' "$i")"; done
+mxm start >/dev/null 2>&1; SHARE_TEST_IDS=f0ffff mxm add "$MX/f.txt" >/dev/null 2>&1; rc=$?
+check "mm OT-12: 500 rows render 500 handles; the reload succeeds and the 500th row serves through the binding" "0 501 200" \
+  "$rc $(grep -c '@s[0-9a-f]\{6\} path' "$MXM_ROOT/Caddyfile") $(rx_v3 f001f4; rx_wk /f001f4/f.txt)"
+mxm stop >/dev/null 2>&1
+fi
+
+if mx_on "leave and status"; then
+echo "=== members: leave and the member's status (TASK-2e) ==="
+mx_set() { jq -c "$2" "$MX_DRY/u/$1.json" >"$MX/r" && mv "$MX/r" "$MX_DRY/u/$1.json"; }
+rxl() { rxj; echo hello >"$MX/f.txt"; SHARE_TEST_IDS=e20001 mxm add "$MX/f.txt" >/dev/null 2>&1; SHARE_TEST_IDS=e20002 mxm add "$MX/f.txt" >/dev/null 2>&1; : >"$MXM_LOG"; }
+lv_done() { # 1 when the member left cleanly: pointers gone, record left, no config, no keys, no serve, the root trashed
+  [[ $(rx_has m/e20001)$(rx_has m/e20002) == 00 && "$(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json")" == left && ! -f $MXM_CONF && -z "$(find "$MX/kv-member" -type f 2>/dev/null)" &&
+    ! -d $MXM_ROOT && -n "$(find "$MX/trashed" -maxdepth 1 -name 'share.*' 2>/dev/null)" ]] && echo 1 || echo 0
+}
+rxl; out=$(mxm leave 2>&1); rc=$?
+check "mm MB-14: leave on active: own links rm'd, the service stopped, record left (If-Match), keys forgotten, config dropped, rows and pub/ to the Trash" "0 1 1" "$rc $(lv_done) $(grep -c '^left:       mx.example.test (m-an-aaaaaaa1)' <<<"$out")"
+rxl; mxm stop >/dev/null 2>&1; n0="$(grep -c . "$MXM_LOG")"; out=$(mxm leave --local 2>&1); rc=$?
+tl="$(find "$MX/trashed" -maxdepth 1 -name 'share.*' | head -1)"
+check "mm MB-15: leave --local makes no bucket call; the service, keys and config go; rows and pub/ moved to the Trash; the record and pointers stay for the admin" \
+  "0 $n0 0 0 1 1 active 1" \
+  "$rc $(grep -c . "$tl/r2-calls.log") $([[ -f $MXM_CONF ]] && echo 1 || echo 0) $(find "$MX/kv-member" -type f | grep -c .) $([[ -f $tl/pub/e20001/f.txt ]] && echo 1) $(grep -c '^e20001' "$tl/index.tsv") $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json") $(rx_has m/e20001)"
+# DP-leave-1 to -3: a die part way through the links, after the service, after the record; status names it; the rerun finishes
+rxl
+( mxm_env=(SHARE_R2_DRY_PAUSE="DELETE m/e20002"); mxm leave >/dev/null 2>&1 ) & pa=$!
+mx_wait_paused; pkill -9 -f "bin/share leave" 2>/dev/null; wait "$pa" 2>/dev/null; rm -f "$MX_DRY/.paused"
+o1="$(mxm status 2>&1)"; out=$(mxm leave 2>&1); rc=$?
+check "mm DP-leave-1: killed with half the links rm'd: status names step 2 and the rerun; the rerun finishes" "1 0 1" "$(grep -c '^leave stopped at step 2 of 4 (links); rerun: share leave$' <<<"$o1") $rc $(lv_done)"
+for n in 2 3 4; do
+  rxl; mx_kill_at "$MXM_ROOT" leave "$n" mxm leave
+  o1="$(mxm status 2>&1)"; out=$(mxm leave 2>&1); rc=$?
+  check "mm DP-leave-2, DP-leave-3: killed after step $((n - 1)): status names step $n and the rerun; the rerun finishes the local cleanup" "1 0 1" \
+    "$(grep -c "^leave stopped at step $n of 4 ([a-z]*); rerun: share leave$" <<<"$o1") $rc $(lv_done)"
+done
+rxl; mx_kill_at "$MXM_ROOT" leave 4 mxm leave; rm -f "$MX/kv-member"/*; out=$(mxm leave 2>&1); rc=$?
+check "mm DP-leave-3 (advisor): a leave that died in step 4 after its keys went: the rerun finishes locally, with no key" "0 0 1" "$rc $([[ -f $MXM_CONF ]] && echo 1 || echo 0) $(grep -c 'with no bucket call' <<<"$out")"
+out=$(mxa status 2>&1 | head -1); out2=$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$MX/nobody" PATH="$MX/bin:$PATH" bash "$SH" leave 2>&1); rc=$?
+check "mm TASK-2e: leave on a profile that is not a member is refused" "1 1" "$rc $(grep -c '^share: share leave runs on a member machine' <<<"$out2")"
+# MB-21, MB-30, MB-31, OT-03: what member status reports; removal only from a record read as removed (DEC-79)
+rxj; MX_MINT=otherminter mxa member rm an >/dev/null 2>&1; out=$(mxm status 2>&1)
+check "mm MB-21 (a): the rm could not reach the token, the record reads removed: status says removed; state.member.status removed" "1 removed" \
+  "$(grep -c '^removed: this machine was removed from mx.example.test; share leave --local$' <<<"$out") $(mxm state 2>/dev/null | jq -r .member.status)"
+rxj; mxm status >/dev/null 2>&1; mxa member rm an >/dev/null 2>&1; out=$(mxm_env=(SHARE_R2_DRY_AUTH=401); mxm status 2>&1); mxm_env=(); st="$(mxm state 2>/dev/null)"
+check "mm MB-21 (b), MB-31, OT-03: the token was deleted, the bucket answers 401: your key stopped working; token invalid; member status unchanged, never removed" "1 0 invalid active" \
+  "$(grep -c '^key: your key stopped working; ask the admin$' <<<"$out") $(grep -c 'removed' <<<"$out") $(jq -r .token.status <<<"$st") $(jq -r .member.status <<<"$st")"
+out=$(mxm leave --local 2>&1); rc=$?
+check "mm OT-03: leave --local cleans a removed member's machine" "0 0" "$rc $([[ -f $MXM_CONF ]] && echo 1 || echo 0)"
+rxj; mxm status >/dev/null 2>&1; sed -i.bak 's/^token_expires=.*/token_expires=2020-01-01T00:00:00Z/' "$MXM_CONF"
+out=$(mxm_env=(SHARE_R2_DRY_AUTH=401); mxm status 2>&1); mxm_env=(); st="$(mxm state 2>/dev/null)"
+check "mm MB-30: a 401 after the local token_expires: token expired, the copy names share member renew; member status stays active" "1 expired active" \
+  "$(grep -c '^key: your key expired on 2020-01-01T00:00:00Z; ask the admin: share member renew an$' <<<"$out") $(jq -r .token.status <<<"$st") $(jq -r .member.status <<<"$st")"
+rxj; rm -f "$MX_DRY/u/m-an-aaaaaaa1.json"; mxm status >/dev/null 2>&1; out=$(mxm status 2>&1)
+check "mm TASK-2e: a record gone (404) is reported, never read as removal (a deleted record is a write any publisher can forge)" "1 active" \
+  "$(grep -c '^record: your member record is gone from mx.example.test; ask the admin$' <<<"$out") $(mxm state 2>/dev/null | jq -r .member.status)"
 fi
 
 if mx_on "secrets"; then
