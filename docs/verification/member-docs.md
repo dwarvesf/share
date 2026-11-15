@@ -7,7 +7,7 @@ Docs only. `tests/` is untouched; the "tenant docs" suite grep is the live e2e s
 
 ## Doc claims a later check re-reads against the built code
 
-These verbs were not merged when the docs were written. They are documented from SPEC-009 (`### Member status transitions` and the verb paragraphs of `## Technical Design`). README and `docs/setup.md` mark them "not built yet"; remove that wording when each verb lands.
+These verbs were not merged when the docs were written. They are documented from SPEC-009 (`### Member status transitions` and the verb paragraphs of `## Technical Design`). All six are built now; the docs grep in `tests/share.sh` ("tenant docs") re-reads every verb, flag and code against `bin/share`, and the "not built yet" wording is removed.
 
 | Verb or claim | Written in | Source |
 |---|---|---|

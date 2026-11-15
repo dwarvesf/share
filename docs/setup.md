@@ -357,15 +357,15 @@ Join redeems the code once, stores two tokens in the Keychain, starts Caddy and 
 | `profile_not_empty` | the profile already publishes or serves | `share profiles`, then join with `--profile <new name>` |
 | `cli_below_min` | this `share` is older than the tenant's `min_cli` | upgrade `share` |
 
-**Run the member lifecycle (admin).** `member ls [--json]` lists every member with status, step, token expiry, drift and the verbs allowed now. `pause`, `resume`, `invite`, `rotate`, `renew` and `adopt` are specified and not built yet (not built yet: the CLI answers "not built in this version"); the rows below describe them from the spec.
+**Run the member lifecycle (admin).** `member ls [--json]` lists every member with status, step, token expiry, drift and the verbs allowed now. The rows below are every admin verb; `--tenant <host>` goes after any of them on a machine with no profile for the tenant. A `share` older than the marker's `min_cli` still reads, but refuses `cli_below_min` on any write; `member rm`, `purge`, `leave` and `r2-call` are exempt, and `setup --members` repairs a forged marker.
 
 | Verb | Does | Notes |
 |---|---|---|
-| `member pause <name>` / `resume <name>` | the member's links answer 503 within the verb; resume restores 200 | machine members only |
+| `member pause <name>` / `member resume <name>` | the member's links answer 503 within the verb; resume restores 200 | machine members only |
 | `member invite <name> [--port P]` | a new code for a lost or expired one; the old token and code die | from `invited`, `joining` or `left` |
 | `member rotate <name>` | a new tunnel, service and tokens; same id and links; the member must `join` again with the new code | machine members only; a paused member returns paused |
 | `member renew <name> [--token-ttl 90d]` | extends the token's expiry in place; no re-join | needs the minter that made the token |
-| `member adopt <name> --token-id <id>` | registers an existing publisher token as a cloud member | optional |
+| `member adopt <name> --token-id <id> [--by <label>]` | registers an existing publisher token as a cloud member; the token is renamed in place so `member rm` finds it; `--by` lists the v:1 links with that `by`, which keep their `by` and `origin` | optional; refused `adopt_token_scope` unless the minter made the token and its policy names only this bucket plus Zone Read, or when the token already belongs to a member |
 | `member sync [--rebind]` | repairs records from the deploy, never unpauses a paused member | |
 | `member rm <name> [--cloud-links keep\|delete]` | removes the tunnel, service, binding, token, invites and pointers; the bytes stay on the member's machine | the verb for a leaver |
 | `member purge <name>` | deletes a removed member's record and keeps its id from reuse | |

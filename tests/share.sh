@@ -1277,6 +1277,25 @@ sed 's/--remote-bin/--XXX-bin/g' "$SH" >"$WORK/share.missing-flag"
 check "negative control: a bin/share without --remote-bin fails the tenant check" "1" "$(tenant_covers "$doc" "$WORK/share.missing-flag"; echo $?)"
 sed 's/shares\[\]\.storage/shares[].XXX/g' "$doc" >"$WORK/how-it-works.missing-key"
 check "negative control: a doc missing the storage state key fails the tenant check" "1" "$(tenant_covers "$WORK/how-it-works.missing-key" "$SH"; echo $?)"
+# The member docs: every member verb, flag, config key and refusal code the docs name is a real thing in bin/share, and the docs name every one.
+# The terms are checked over the README, docs/setup.md and docs/how-it-works.md together (a verb is in the doc set, not in one file).
+member_terms=("member add" "member ls" "member sync" "member rm" "member purge" "member pause" "member resume" "member invite" "member rotate" "member renew" "member adopt"
+  "share join" "share leave" --tenant --machine --cloud --port --invite-ttl --token-ttl --token-id --by --rebind --cloud-links --members --no-members --json
+  member_id member_mode admin_token_cmd minter_token_cmd SHARE_MINTER_TOKEN min_cli prev_status
+  adopt_token_scope cli_below_min token_unreachable lease_held member_cloud invite_unavailable member_needs_keychain port_busy profile_not_empty)
+members_covers() { # members_covers <bin> <doc>...: 0 iff every member term is in bin/share and in the doc set
+  local t sh=$1 all; shift; all=$(cat "$@")
+  for t in "${member_terms[@]}"; do
+    if ! grep -qF -- "$t" "$sh" || ! grep -qF -- "$t" <<<"$all"; then echo "missing: $t" >&2; return 1; fi
+  done
+  return 0
+}
+mdocs=("$(dirname "$doc")/../README.md" "$(dirname "$doc")/setup.md" "$doc")
+check "every member verb, flag, config key and code in the docs is in bin/share, and the docs name each" "0" "$(members_covers "$SH" "${mdocs[@]}" 2>/dev/null; echo $?)"
+cat "${mdocs[@]}" | sed 's/member adopt/member XXXXX/g' >"$WORK/docs.no-adopt"
+check "negative control: the docs without member adopt fail the member check" "1" "$(members_covers "$SH" "$WORK/docs.no-adopt" 2>/dev/null; echo $?)"
+sed 's/--invite-ttl/--XXX-ttl/g' "$SH" >"$WORK/share.no-member-terms"
+check "negative control: a bin/share without --invite-ttl fails the member check" "1" "$(members_covers "$WORK/share.no-member-terms" "${mdocs[@]}" 2>/dev/null; echo $?)"
 fi
 
 if section "access: a login gate per link (SHARE_ACCESS_DRY=1, every Cloudflare call answered from fixtures)"; then

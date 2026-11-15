@@ -97,7 +97,7 @@ nodes:
   - {id: cloudflared, name: cloudflared, note: named tunnel connector, lane: origin, at: [0, 4]}
   - {id: visitor, name: Visitor, kind: ext, at: [2, 1]}
   - {id: dns, name: DNS + route, note: "CNAME to tunnel, route <host>/*", lane: edge, at: [2, 2]}
-  - {id: worker, name: Worker share-<host>, note: "v5: PASS, PAUSED, M_<8hex> bindings, /_share/redeem", lane: edge, at: [2, 3]}
+  - {id: worker, name: Worker share-<host>, note: "v6: PASS, PAUSED, M_<8hex> bindings, /_share/redeem, live member upgrade", lane: edge, at: [2, 3]}
   - {id: tunnel, name: Tunnel share-<host>, note: "ingress rule 0 to 127.0.0.1", lane: edge, at: [2, 4]}
   - {id: vpc, name: VPC Service, note: "share-<host>-<8hex>: tunnel + 127.0.0.1:<port>", lane: edge, at: [3, 4]}
   - {id: mtunnel, name: Member tunnel, note: "share-<host>-<8hex>, no hostname, no ingress", lane: edge, at: [3, 6]}
@@ -362,7 +362,7 @@ messages:
   - {from: share CLI, to: Admin, text: removed, kind: return}
 ```
 
-A member link reaches its machine through the VPC binding, never through the tenant's tunnel. Worker v5 checks expiry on every pointer, answers 503 for a paused member, and 404 when the binding is gone. Spike O1 showed request headers pass through a binding unchanged, so the Worker strips Access headers itself; the Host stays the tenant hostname, streaming works, and the hop adds 150 to 350 ms.
+A member link reaches its machine through the VPC binding, never through the tenant's tunnel. Worker v6 checks expiry on every pointer, answers 503 for a paused member, and 404 when the binding is gone. For a `v:3` pointer with `live` it forwards an `Upgrade: websocket` request through the binding (a fresh 101 carrying only the chosen subprotocol; GET, HEAD and the upgrade only). Every PUT and DELETE through `r2_call` first compares the marker's `min_cli` and dies `cli_below_min` for an older `share`. Spike O1 showed request headers pass through a binding unchanged, so the Worker strips Access headers itself; the Host stays the tenant hostname, streaming works, and the hop adds 150 to 350 ms.
 
 ```uml
 id: seq-visit-member
