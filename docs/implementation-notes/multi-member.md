@@ -318,7 +318,7 @@ Built on main at f8042fa. Dry seams only; nothing live.
 
 ## Audit spec gaps (SG-18): join step 2 split
 
-The delta from the audit-to-spec trace, row 18. Decision record: SPEC-009 DEC-81.
+The delta from the audit-to-spec trace, row 18. Decision record: SPEC-009 DEC-82.
 
 | Decision the spec left open | Choice | Why |
 |---|---|---|

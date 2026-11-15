@@ -49,5 +49,5 @@ Checked against main at f8042fa before the SG-18 run. Five of the eight gaps wer
 | 4 (row 8, phase) | handled | G7 added to SPEC-009 `Depends on` and TASK-0c |
 | 5 (row 9, version source) | handled | SPEC-009 TASK-0a gives `SHARE_VERSION` and `share version`; the G10 suite checks `worker_older`, `worker_newer` and `cli_below_min` |
 | 6 (row 7, 401 on add) | fixed by SG-18 | SPEC-010 G10 and DEC-39, row TK-07; `r2_auth_verdict` after a failed upload, record PUT or pointer PUT |
-| 7 (row 18, join step 2) | fixed by SG-18 | SPEC-009 DEC-81; `op_steps_join` has nine rows; rows DP-join-1a to 1d |
+| 7 (row 18, join step 2) | fixed by SG-18 | SPEC-009 DEC-82; `op_steps_join` has nine rows; rows DP-join-1a to 1d |
 | 8 (concurrent add) | handled | SPEC-010 DEC-22 and row AD-04; `add` journals with `--concurrent` |

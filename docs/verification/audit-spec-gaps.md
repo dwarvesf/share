@@ -1,6 +1,6 @@
 # Audit spec gaps: proof of done
 
-Closes the open gaps of `docs/research/2026-11-14-audit-to-spec-trace.md`: a cloud add over a dead `setup-r2` (gap 2), a 401 on an add (gap 6), join step 2 split into one step per write (gap 7), and the prune leg of gap 3. Decisions: SPEC-010 DEC-37 to DEC-39, SPEC-009 DEC-81. Notes: `docs/implementation-notes/state-groundwork.md` and `multi-member.md`.
+Closes the open gaps of `docs/research/2026-11-14-audit-to-spec-trace.md`: a cloud add over a dead `setup-r2` (gap 2), a 401 on an add (gap 6), join step 2 split into one step per write (gap 7), and the prune leg of gap 3. Decisions: SPEC-010 DEC-37 to DEC-39, SPEC-009 DEC-82. Notes: `docs/implementation-notes/state-groundwork.md` and `multi-member.md`.
 
 ## Recorded run
 
@@ -56,7 +56,7 @@ Output: (none)
 
 Command: kit:advisor (critique) and kit:code-reviewer on the frozen diff, then kit:doc-verifier on the docs
 Exit: 0
-Verdict: no critical finding. Folded: the LS-06 test needed `SHARE_ACCESS_DRY=1`; the 401 verdict keeps the stored `expires_on`; the pointer-PUT 401 row and the keeps-expiry row were added; TASK-4b18 and the step 0 row of the join table were updated; stale step numbers in the notes were fixed; the DP-join labels now match the spec rows. Accepted and written down: the guard also blocks a killed rerun of `setup --r2` on a working tenant (DEC-37), and a join journal an older CLI left reads by the new numbering (DEC-81).
+Verdict: no critical finding. Folded: the LS-06 test needed `SHARE_ACCESS_DRY=1`; the 401 verdict keeps the stored `expires_on`; the pointer-PUT 401 row and the keeps-expiry row were added; TASK-4b18 and the step 0 row of the join table were updated; stale step numbers in the notes were fixed; the DP-join labels now match the spec rows. Accepted and written down: the guard also blocks a killed rerun of `setup --r2` on a working tenant (DEC-37), and a join journal an older CLI left reads by the new numbering (DEC-82).
 Output: (reports in the PR body)
 
 ### UAT
