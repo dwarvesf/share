@@ -87,12 +87,11 @@ public enum TenantRemoval: Sendable, Equatable {
 }
 
 public enum TenantRoleWord {
-    /// D13: `origin` is Owner; `tenant_origin` Owner at T1 and Admin at T2; `r2_profile` Admin.
+    /// D13: `origin` is Owner; `tenant_origin` and `r2_profile` are Admin, as the prototype words them.
     public static func word(role: Role, tier: String?) -> String {
         switch role {
         case .origin, .quick: return "Owner"
-        case .tenantOrigin: return tier == "t2" ? "Admin" : "Owner"
-        case .r2Profile: return "Admin"
+        case .tenantOrigin, .r2Profile: return "Admin"
         case .member: return "Member"
         case .migrated: return "Moved"
         case .unset, .unknown: return "No role"

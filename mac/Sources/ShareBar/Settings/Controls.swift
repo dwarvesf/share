@@ -135,7 +135,7 @@ struct SBPopup<Value: Hashable>: View {
     let options: [(Value, String)]
     @Binding var selection: Value
     var id = ""
-    var width: CGFloat? = nil
+    var fullWidth = false
 
     var body: some View {
         Picker("", selection: $selection) {
@@ -143,8 +143,8 @@ struct SBPopup<Value: Hashable>: View {
         }
         .labelsHidden()
         .pickerStyle(.menu)
-        .frame(width: width)
-        .fixedSize()
+        .frame(maxWidth: fullWidth ? .infinity : nil)
+        .fixedSize(horizontal: !fullWidth, vertical: false)
         .accessibilityIdentifier(id)
     }
 }

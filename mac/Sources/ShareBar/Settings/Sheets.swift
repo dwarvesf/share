@@ -96,7 +96,7 @@ struct AddSheetView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Cloudflare admin key").font(t.metaFont).foregroundColor(t.secondary)
                     SBPopup(options: [(true, "Ask me now (not saved)"), (false, "Run the admin key command from Advanced")],
-                            selection: formBinding.askKey, id: "sh-tok")
+                            selection: formBinding.askKey, id: "sh-tok", fullWidth: true)
                 }
                 Toggle(isOn: formBinding.alsoCloud) { Text("Also turn on cloud storage").font(t.bodyFont).foregroundColor(t.label) }
                     .toggleStyle(.checkbox).accessibilityIdentifier("sh-r2")
@@ -234,7 +234,7 @@ struct ConfirmSheetView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(choice.label).font(t.metaFont).foregroundColor(t.secondary)
                     SBPopup(options: choice.options.enumerated().map { ($0.offset, $0.element) },
-                            selection: Binding(get: { store.impactChoice }, set: { store.impactChoice = $0 }), id: "sh-cl")
+                            selection: Binding(get: { store.impactChoice }, set: { store.impactChoice = $0 }), id: "sh-cl", fullWidth: true)
                 }
             }
             Buttons {

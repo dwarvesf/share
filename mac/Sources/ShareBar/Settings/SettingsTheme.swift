@@ -1,9 +1,9 @@
 import ShareBarCore
 import SwiftUI
 
-/// The Settings window's colors: the popover's `Theme` plus the revision 8 window surface
-/// and the 9% separator of the design. `primitive.window` is `#f5f5f7` and `#26262a`
-/// (`Tokens.swift:89`) and Tokens is frozen after SG-06, so the surface lives here.
+/// The Settings window's colors: the popover's `Theme`, `primitive.window` as the surface
+/// (`Tokens.swift:89`, the design's `.mac --win`: `#f5f5f7` light, `#26262a` dark, sampled equal
+/// in the headless render), and the 9% separator of the design.
 struct SettingsTheme {
     let theme: Theme
     let scheme: ColorScheme
@@ -15,9 +15,8 @@ struct SettingsTheme {
 
     private var palette: Palette { Tokens.palette(scheme == .dark ? .dark : .light) }
 
-    /// Revision 8 of `docs/design/share-bar-redesign.html`: `#eff0f3` light, `#2b2c31` dark.
-    static let surfaceLight = RGB(hex: "#eff0f3")
-    static let surfaceDark = RGB(hex: "#2b2c31")
+    static let surfaceLight = Tokens.primitive.window.light
+    static let surfaceDark = Tokens.primitive.window.dark
 
     func color(_ rgb: RGB, opacity: Double = 1) -> Color {
         Color(.sRGB, red: rgb.red / 255, green: rgb.green / 255, blue: rgb.blue / 255, opacity: opacity)
@@ -36,7 +35,8 @@ struct SettingsTheme {
     var attentionInk: Color { theme.attentionInk }
     var errorInk: Color { theme.errorInk }
     var quiet: Color { color(palette.semantic.quiet) }
-    var separator: Color { color(palette.primitive.label.value(palette.appearance), opacity: 0.09) }
+    /// The design's `--sep`: black at 9% in light, white at 9% in dark.
+    var separator: Color { (scheme == .dark ? Color.white : Color.black).opacity(0.09) }
     var hover: Color { theme.hover }
     var selection: Color { color(palette.primitive.label.value(palette.appearance), opacity: palette.semantic.selectionOpacity) }
     var border: Color { color(palette.primitive.label.value(palette.appearance), opacity: 0.18) }

@@ -17,6 +17,7 @@
 # A file `scenario/fail-<verb>` fails that verb with the file's text; `scenario/fail-test-admin-token`
 # and `fail-test-minter-token` fail `--test`. The key a call received is logged as `token-env:` in
 # `$SHARE_FAKE_DIR/env.log` as present or absent, never its value. bash 3.2 safe; needs jq.
+# shellcheck disable=SC2016,SC2329
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"

@@ -24,6 +24,7 @@ struct SettingsRootView: View {
             }
         }
         .frame(width: Self.width)
+        .ignoresSafeArea(.container, edges: .top)
         .windowSurface()
         .onExitCommand { store.escape() }
         .accessibilityElement(children: .contain)

@@ -1,0 +1,3 @@
+scenario firstrun
+script add:setup
+label add-sheet-empty

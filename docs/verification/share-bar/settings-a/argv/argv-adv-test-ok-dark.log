@@ -1,0 +1,11 @@
+profiles --json
+profiles --json
+--profile console config ttl
+profiles --json
+--profile console config storage_default
+--profile console config ttl
+--profile console config storage_default
+version
+version
+--profile console admin-token --cmd pass show cf-admin
+--profile console admin-token --test --json
