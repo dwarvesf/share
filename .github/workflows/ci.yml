@@ -13,9 +13,42 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded PR runs only. On main every merge keeps its run, so parallel
+  # sub-goals that merge back to back do not cancel each other's main check.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Skip the slow suite a change cannot affect. A Share Bar change (mac/ only) skips the bash
+  # suite; a CLI change skips the Swift job. Unknown diffs and workflow edits run everything.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      bash: ${{ steps.f.outputs.bash }}
+      mac: ${{ steps.f.outputs.mac }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: f
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          run_all() { { echo bash=true; echo mac=true; } >>"$GITHUB_OUTPUT"; exit 0; }
+          files=$(git diff --name-only "$BASE" "$HEAD" 2>/dev/null) || run_all
+          [ -n "$files" ] || run_all
+          printf '%s\n' "$files"
+          ! grep -q '^\.github/' <<<"$files" || run_all
+          # tests/share.sh reads CLI.swift, so that file still runs the bash suite
+          mac_only='^(mac/|docs/verification/share-bar/|docs/implementation-notes/share-bar\.md$)'
+          if grep -qvE "$mac_only" <<<"$files" || grep -qx 'mac/Sources/ShareBarCore/CLI.swift' <<<"$files"; then
+            echo bash=true >>"$GITHUB_OUTPUT"
+          else
+            echo bash=false >>"$GITHUB_OUTPUT"
+          fi
+          if grep -q '^mac/' <<<"$files"; then echo mac=true >>"$GITHUB_OUTPUT"; else echo mac=false >>"$GITHUB_OUTPUT"; fi
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -25,6 +58,10 @@ jobs:
       - run: shellcheck bin/share install.sh tests/share.sh tests/members.sh tests/e2e.sh demo/render.sh mac/*.sh
 
   test:
+    needs: changes
+    if: needs.changes.outputs.bash == 'true'
+    # A hung check fails here instead of holding the job for the 6 h default.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -54,6 +91,9 @@ jobs:
         run: bash tests/share.sh
 
   mac:
+    needs: changes
+    if: needs.changes.outputs.mac == 'true'
+    timeout-minutes: 20
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
