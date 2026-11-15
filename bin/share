@@ -6462,7 +6462,7 @@ ob_token_mint() { # ob_token_mint <name> <expires_on>: Bucket Item Write on this
 inv_code="" inv_hash=""
 invite_code() { # inv_code: 20 characters of RFC 4648 base32 from /dev/urandom (SHARE_TEST_CODE in tests); inv_hash: the i/ object id
   if [[ -n ${SHARE_TEST_CODE:-} && ${SHARE_R2_DRY:-0} == 1 ]]; then inv_code=$SHARE_TEST_CODE   # a test seam only beside the dry one
-  else   # 20 bounded bytes, each byte mod 32 (uniform: 256 = 8 x 32); never `tr </dev/urandom | head`, which spins forever where SIGPIPE is ignored (macOS CI)
+  else   # 20 bounded bytes, each byte mod 32 (uniform: 256 = 8 x 32); never tr reading urandom into head, which spins forever where SIGPIPE is ignored (macOS CI)
     local b32=ABCDEFGHIJKLMNOPQRSTUVWXYZ234567 byte; inv_code=""
     for byte in $(od -An -N20 -tu1 /dev/urandom); do inv_code+=${b32:$((byte % 32)):1}; done
   fi
