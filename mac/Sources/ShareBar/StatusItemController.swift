@@ -52,10 +52,16 @@ final class StatusItemController: NSObject, @unchecked Sendable {
     /// appearance explicitly.
     func applyShotsAppearance(_ appearance: NSAppearance?) {
         menu.appearance = appearance
+        MainActor.assumeIsolated { popoverController.appearance = appearance }
     }
     #endif
     private let mutationQueue = MutationQueue()
     private let defaults: UserDefaults = .standard
+    private var popoverStore: PopoverStore!
+    private var popoverController: PopoverController!
+    private var attentionDot: NSView?
+    /// Today's `NSMenu` stays for one release behind the `LegacyMenu` default (DEC-42).
+    private var legacyMenu: Bool { LegacyMenu.isOn(defaults) }
 
     private var model = MenuModel(profiles: nil, failure: nil, now: Date())
     private var refreshGate = RefreshGate()
@@ -93,9 +99,13 @@ final class StatusItemController: NSObject, @unchecked Sendable {
 
     override init() {
         super.init()
+        MainActor.assumeIsolated {
+            popoverStore = PopoverStore()
+            popoverController = PopoverController(store: popoverStore)
+        }
         menu.delegate = self
         menu.autoenablesItems = false
-        statusItem.menu = menu
+        installShell()
         installDropView()
 
         // Renders the "Loading…" placeholder instantly so the item never opens empty; the
@@ -176,6 +186,54 @@ final class StatusItemController: NSObject, @unchecked Sendable {
     private func rebuildModel() {
         model = MenuModel(profiles: currentProfiles, failure: currentFailure, now: Date(), working: working)
         applyModel()
+        MainActor.assumeIsolated { popoverStore.update(profiles: currentProfiles, failure: currentFailure) }
+        applyAttention()
+    }
+
+    // MARK: - Popover shell
+
+    /// The status item opens the popover; with `LegacyMenu` on it opens today's menu instead.
+    private func installShell() {
+        MainActor.assumeIsolated {
+            popoverController.onWillShow = { [weak self] in self?.triggerRefresh() }
+            popoverStore.onChanged = { [weak self] in self?.triggerRefresh(fresh: true) }
+            popoverStore.onAddFile = { [weak self] in self?.shareFile() }
+        }
+        guard let button = statusItem.button else { return }
+        MainActor.assumeIsolated { popoverController.attach(to: button) }
+        if legacyMenu {
+            statusItem.menu = menu
+        } else {
+            statusItem.menu = nil
+            button.target = self
+            button.action = #selector(togglePopover)
+            button.sendAction(on: [.leftMouseDown])
+        }
+    }
+
+    @objc private func togglePopover() {
+        MainActor.assumeIsolated { popoverController.toggle() }
+    }
+
+    /// The status item's accessible label carries the count of needs-a-look lines, and an
+    /// orange dot marks it (color is never the only signal: the label says it too).
+    private func applyAttention() {
+        guard !legacyMenu, let button = statusItem.button else { return }
+        let count = MainActor.assumeIsolated { popoverStore.issues.count }
+        let label = PopoverViewModel.statusItemLabel(count: count)
+        button.setAccessibilityLabel(label)
+        button.setAccessibilityTitle(label)
+        if count > 0, attentionDot == nil {
+            let dot = NSView(frame: NSRect(x: button.bounds.maxX - 8, y: button.bounds.maxY - 8, width: 6, height: 6))
+            dot.wantsLayer = true
+            dot.layer?.backgroundColor = NSColor.systemOrange.cgColor
+            dot.layer?.cornerRadius = 3
+            dot.autoresizingMask = [.minXMargin, .minYMargin]
+            dot.setAccessibilityElement(false)
+            button.addSubview(dot)
+            attentionDot = dot
+        }
+        attentionDot?.isHidden = count == 0
     }
 
     // MARK: - Rendering
@@ -183,7 +241,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
     private func applyModel() {
         if let button = statusItem.button {
             StatusIcon.apply(model.icon, to: button)
-            button.setAccessibilityLabel(model.header)
+            if legacyMenu { button.setAccessibilityLabel(model.header) }
         }
 
         menu.removeAllItems()
