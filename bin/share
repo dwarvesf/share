@@ -4012,7 +4012,7 @@ r2_reconcile_member() { # R7, after r2_read listed m/: t/ is listed second (DEC-
   member_record_read   # the own record first: a removed, removing or left member writes no pointer back (and .health learns what it read)
   if [[ $mr_code == 200 ]]; then
     case "$(jq -r .status <<<"$reg_rec")" in removing|removed|left)
-      echo "share: this member is $(jq -r .status <<<"$reg_rec") on $host_name; the reconcile writes nothing (share status)" >&2; return 0 ;; esac
+      echo "share: this member is $(jq -r .status <<<"$reg_rec") on $host_name; the reconcile writes nothing ($me status)" >&2; return 0 ;; esac
   fi
   r2_list t/
   rc_tkeys="$(sed -n 's|^t/\([0-9a-f]\{6\}\)$|\1|p' <<<"$r2_list_out")" rc_tmods=$r2_list_mods
@@ -4489,7 +4489,7 @@ member_revoke() { # member_revoke <id> <origin>: the tenant admin revokes anothe
   local n f; n="${2#m-}"; n="${n%-*}"
   admin_token_resolve optional
   [[ -n ${CLOUDFLARE_API_TOKEN:-} ]] || die_code revoke_needs_admin "$1 is on $n's machine: only the tenant admin revokes it (it needs the admin token); nothing was changed" "ask the tenant admin: $me rm $1"
-  mc_what="share rm $1 (a revoke)" member_context rm
+  mc_what="$me rm $1 (a revoke)" member_context rm
   r2_call GET "m/$1" || true   # again with the admin pair: still that machine's v:3
   if [[ $cf_code != 200 ]] || ! jq -e --arg id "$1" --arg o "$2" '.v == 3 and .storage == "machine" and .id == $id and .origin == $o' <<<"$cf_body" >/dev/null 2>&1; then
     die "m/$1 changed since it was read (HTTP $cf_code); nothing was revoked; rerun $me rm $1"
@@ -7254,7 +7254,7 @@ cmd_leave() { # cmd_leave [--local]: the service stopped, own pointers deleted, 
   if [[ $lonly == 1 ]]; then echo "left:       $host_name ($mid) here, with no bucket call; this profile's links, keys and config are gone; the admin finishes with share member rm $(sed 's/^m-//; s/-[0-9a-f]\{8\}$//' <<<"$mid")"
   else echo "left:       $host_name ($mid); this machine's links, keys and config are gone; its cloud links stay until they expire"; fi
 }
-member_status_check() { # share status on a member (R7): one read of the own record with the publisher pair, written to .health; removal only from a record read as removed
+member_status_check() { # the status verb on a member (R7): one read of the own record with the publisher pair, written to .health; removal only from a record read as removed
   local te tep n; te="$(cfg token_expires || true)"; n="$(cfg member_id | sed 's/^m-//; s/-[0-9a-f]\{8\}$//')"
   member_record_read
   case $mr_code in

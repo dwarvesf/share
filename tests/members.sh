@@ -442,8 +442,8 @@ out=$(mx_env=(SHARE_ERROR_JSON=1); mxa member rotate an 2>&1); rc=$?
 check "mm MB-24: rotate on a pausing record is refused member_busy naming pause, step 2 and its rerun" "1 member_busy 1" \
   "$rc $(mx_jcode "$out") $(grep -c '^share: an is mid-pause (step 2) since 2026-11-15T00:00:00Z; finish it: share member pause an$' <<<"$out")"
 out=$(mxa member rm an 2>&1); out2=$(mx_env=(SHARE_ERROR_JSON=1); mxa member sync 2>&1); rc2=$?
-check "mm MB-24: rm proceeds past member_can (its build is later); sync reports and writes no refusal" "1 0 none 0" \
-  "$(grep -c 'member rm is not built' <<<"$out") $rc2 $(mx_jcode "$out2") $(grep -c 'member_busy' <<<"$out2")"
+check "mm MB-24: rm proceeds from another verb's ...ing and ends removed; sync reports and writes no refusal" "removed 0 none 0" \
+  "$(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json") $rc2 $(mx_jcode "$out2") $(grep -c 'member_busy' <<<"$out2")"
 mx_load t2; mx_put_rec active
 o1=$(mx_fn reg-step m-an-aaaaaaa1 pause pausing 2 2>&1); o2=$(mx_fn reg-step m-an-aaaaaaa1 pause pausing 2 2>&1); o3=$(mx_fn reg-step m-an-aaaaaaa1 pause pausing 2 2>&1); o4=$(mx_fn reg-step m-an-aaaaaaa1 pause paused 2>&1)
 check "mm MB-25: prev_status is written entering pausing from active, never rewritten by two reruns, cleared when paused lands" \
@@ -1118,7 +1118,7 @@ check "mm DP-rm-1 to DP-rm-8: killed at each step, member ls names it and the re
 # CC-04: join while member rm runs: rm wins, the join keeps nothing
 mx_load ri; mxm_fresh
 ( mxm_env=(SHARE_R2_DRY_PAUSE="PUT u/m-an-aaaaaaa1.json" SHARE_ERROR_JSON=1); mxm join mx.example.test "$MXC1" >"$MX/cc04.out" 2>&1 ) & pa=$!
-mx_wait_paused; ro=$(mxa member rm an 2>&1); rr=$?
+mx_wait_paused; mxa member rm an >/dev/null 2>&1; rr=$?
 : >"$MX_DRY/.resume"; wait "$pa"; ra=$?; rm -f "$MX_DRY/.resume" "$MX_DRY/.paused"
 check "mm CC-04: join racing member rm: rm wins; the join dies member_changed and keeps nothing; no object remains" "0 1 member_changed 0 removed tunnels=[] services=[] tokens=[] invites=0" \
   "$rr $ra $(mx_jcode "$(cat "$MX/cc04.out")") $([[ -f $MXM_CONF ]] && echo 1 || echo 0) $(jq -r .status "$MX_DRY/u/m-an-aaaaaaa1.json") $(mx_objs)"
