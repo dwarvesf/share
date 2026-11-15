@@ -4708,7 +4708,7 @@ r2_call() { # r2_call METHOD KEY [ARG] [curl args...]: one S3 call on cf_try's g
 }
 
 r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "METHOD key" line per call; etags and conditional headers honored
-  local meth=$1 key=$2 arg3=${3:-} d="${SHARE_R2_DRY_DIR:-$root/r2-dry}" f h k rest
+  local meth=$1 key=$2 arg3=${3:-} d="${SHARE_R2_DRY_DIR:-$root/r2-dry}" f h k rest cur lm et sz
   mkdir -p "$d" "$root"
   if [[ ${SHARE_R2_DRY_PAUSE:-} == "$meth $key" ]]; then
     local w=0
@@ -4733,7 +4733,7 @@ r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "
         case "$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')" in
           -h) ;;
           if-none-match:\ \*) [[ -e $f ]] && { cf_code=412 cf_err=PreconditionFailed; return 0; } ;;
-          if-match:*) [[ -e $f && $h == *"$(r2_md5 "$f")"* ]] || { cf_code=412 cf_err=PreconditionFailed; return 0; } ;;
+          if-match:*) cur="$(r2_md5 "$f" 2>/dev/null)" || cur=""; [[ -n $cur && $h == *"$cur"* ]] || { cf_code=412 cf_err=PreconditionFailed; return 0; } ;;
         esac
       done
       if [[ ${SHARE_R2_DRY_PUT:-} == 500-once && ! -f $d/.fx/p500.done ]]; then
@@ -4745,7 +4745,10 @@ r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "
       r2_etag="$(r2_md5 "$f")" ;;
     GET) [[ ${SHARE_R2_DRY_FAIL:-} != "GET $key" ]] || { cf_code=500 cf_err=InternalError; return 0; }
       [[ -e $f ]] || { cf_code=404 cf_err=NoSuchKey; return 0; }
-      cf_body="$(cat "$f")"; r2_etag="$(r2_md5 "$f")" ;;
+      # SHARE_R2_DRY_VANISH="GET <key>": another process deletes the object between this check and the read, once (a lease release racing a lease read)
+      if [[ ${SHARE_R2_DRY_VANISH:-} == "GET $key" && ! -f $d/.fx/vanish.done ]]; then mkdir -p "$d/.fx"; : >"$d/.fx/vanish.done"; rm -f "$f"; fi
+      # an object deleted under the read answers 404, as R2 does: a GET is atomic there
+      { cf_body="$(cat "$f" 2>/dev/null)" && r2_etag="$(r2_md5 "$f" 2>/dev/null)"; } || { cf_body="" r2_etag="" cf_code=404 cf_err=NoSuchKey; return 0; } ;;
     HEAD) [[ -e $f ]] || { cf_code=404 cf_err=NoSuchKey; return 0; }
       r2_etag="$(r2_md5 "$f")" ;;
     DELETE) [[ ${SHARE_R2_DRY_DELETE:-} == lost ]] && { cf_code=000; return 0; }
@@ -4761,7 +4764,8 @@ r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "
       while IFS= read -r k; do
         [[ -n $k ]] || continue
         if [[ $count -ge 1000 ]]; then urlenc "$last"; cf_body+='<IsTruncated>true</IsTruncated><NextContinuationToken>'"$urlenc_out"'</NextContinuationToken>'; break; fi
-        urlenc "$k"; cf_body+='<Contents><Key>'"$urlenc_out"'</Key><LastModified>'"$(date -u -r "$d/$k" +%Y-%m-%dT%H:%M:%S.000Z)"'</LastModified><ETag>"'"$(r2_md5 "$d/$k")"'"</ETag><Size>'"$(wc -c <"$d/$k" | tr -d ' ')"'</Size></Contents>'
+        { lm="$(date -u -r "$d/$k" +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null)" && et="$(r2_md5 "$d/$k" 2>/dev/null)" && sz="$(wc -c 2>/dev/null <"$d/$k" | tr -d ' ')"; } || continue   # deleted under the listing: not listed
+        urlenc "$k"; cf_body+='<Contents><Key>'"$urlenc_out"'</Key><LastModified>'"$lm"'</LastModified><ETag>"'"$et"'"</ETag><Size>'"$sz"'</Size></Contents>'
         last="$k"; count=$((count + 1))
       done <<<"$all"
       [[ $count -lt 1000 ]] && cf_body+='<IsTruncated>false</IsTruncated>'
