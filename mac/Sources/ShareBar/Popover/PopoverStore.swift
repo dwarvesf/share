@@ -19,6 +19,12 @@ final class PopoverStore: ObservableObject {
     @Published private(set) var keyboardFocus = false
     @Published private(set) var flashRow: String?
     @Published private(set) var hoveredRow: String?
+    /// The search field has focus (⌃⌥S, or a click in it).
+    @Published var searchFocused = false
+    /// The journal step name of each file being published, for the placeholder row.
+    @Published var stepNames: [String: String] = [:]
+    /// Whether ⌃⌥S registered; General's Shortcut shows `hotkeyStatus.message`.
+    @Published var hotkeyStatus: HotkeyStatus = .registered
 
     let prefs: PopoverPrefs
     let router: AppRouter
@@ -31,6 +37,12 @@ final class PopoverStore: ObservableObject {
     var onAddFile: () -> Void = {}
     /// Closes the popover window.
     var onDismiss: () -> Void = {}
+    /// Opens the popover when a drop or a picked file needs the first-run panel on screen.
+    var onReveal: () -> Void = {}
+    /// Runs one `add` with `SHARE_PROGRESS=1`, streaming the journal's text to the second argument.
+    var runPublish: ([String], @escaping @Sendable (String) -> Void) async -> CLIResult = { argv, out in
+        await CLI.spawnCancellable(argv, environment: ["SHARE_PROGRESS": "1", "SHARE_ERROR_JSON": "1"], onOutput: out).result
+    }
     private var visible = false
 
     init(prefs: PopoverPrefs = PopoverPrefs(), router: AppRouter = .shared) {
@@ -103,7 +115,7 @@ final class PopoverStore: ObservableObject {
     }
 
     func send(_ event: PopoverEvent) {
-        let result = state.reduce(event)
+        let result = state.reduceRestoringFocus(event)
         state = result.state
         run(result.effects)
     }
@@ -148,7 +160,7 @@ final class PopoverStore: ObservableObject {
         if result.flash { flash(row.id) }
     }
 
-    private func flash(_ id: String) {
+    func flash(_ id: String) {
         flashRow = id
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 1_200_000_000)
@@ -207,6 +219,7 @@ final class PopoverStore: ObservableObject {
 
     func moveFocus(_ step: Int) {
         keyboardFocus = true
+        searchFocused = false
         let ids = viewModel.rows.map(\.id)
         guard !ids.isEmpty else { return }
         guard let current = focusedRow, let index = ids.firstIndex(of: current) else {
@@ -229,11 +242,12 @@ final class PopoverStore: ObservableObject {
     // MARK: clock and lifecycle
 
     func tick() {
+        pollDragOut()
         now = Date()
         send(.tick(now: now))
     }
 
-    var needsClock: Bool { !state.pending.isEmpty || state.footer?.expires != nil || flashRow != nil }
+    var needsClock: Bool { !state.pending.isEmpty || state.footer?.expires != nil || flashRow != nil || state.draggingOut != nil }
 
     func opened() {
         visible = true
@@ -244,6 +258,7 @@ final class PopoverStore: ObservableObject {
     func closed(commitSynchronously: Bool = false) {
         visible = false
         tenantMenuOpen = false
+        searchFocused = false
         focusedRow = nil
         guard commitSynchronously else {
             send(.close)
@@ -264,6 +279,117 @@ final class PopoverStore: ObservableObject {
             done.signal()
         }
         _ = done.wait(timeout: .now() + 10)
+    }
+
+    // MARK: publish and drop
+
+    /// The current tenant's host and where a dropped file will live, for the overlay.
+    var dropOverlay: DropOverlayModel? {
+        guard case .dropTarget = state.mode else { return nil }
+        let entry = profiles?.profiles.first { $0.name == currentProfile }
+        return DropOverlayModel(host: entry?.state?.host ?? currentProfile ?? "Share Bar", storedOn: DropOverlayModel.storedOn(entry?.state))
+    }
+
+    /// The placeholder rows of files being published, newest first.
+    var uploadRows: [UploadRow] {
+        state.publishing.reversed().map { UploadRow(publish: $0, stepName: stepNames[$0.file]) }
+    }
+
+    func dragEntered() { send(.dragEnter) }
+    func dragLeft() { send(.dragLeave) }
+
+    /// Files released on the status item or the popover (`dropTarget`), or chosen with +.
+    func publish(paths: [String], dropped: Bool) {
+        guard !paths.isEmpty else { return }
+        guard !isFirstRun, let profile = currentProfile else {
+            send(dropped ? .drop(file: paths[0], of: 0) : .publishStarted(file: paths[0]))
+            return
+        }
+        for (index, path) in paths.enumerated() {
+            if dropped, index == 0 { send(.drop(file: path, of: 0)) } else { send(.publishStarted(file: path)) }
+        }
+        if case .dropTarget = state.mode { send(.dragLeave) }
+        Task { @MainActor [weak self] in
+            for path in paths { await self?.runAdd(path: path, profile: profile) }
+        }
+    }
+
+    private func runAdd(path: String, profile: String) async {
+        guard let argv = PublishChoice.args(profile: profile, rule: nil, path: path) else {
+            send(.publishFinished(file: path, result: .failed(sentence: "Couldn't publish: \(path) is not a file path."), now: Date()))
+            return
+        }
+        let before = Set(rows(of: profile).map(\.id))
+        let relay = ProgressRelay { [weak self] line in
+            Task { @MainActor in
+                guard let self, let parsed = PublishProgress.parse(line), parsed.verb == "add" else { return }
+                self.stepNames[path] = parsed.name
+                if let event = PublishProgress.event(file: path, line: line) { self.send(event) }
+            }
+        }
+        let result = await runPublish(argv) { relay.feed($0) }
+        onChanged()
+        // The CLI prints no link on some versions: the new row is the one the re-read adds.
+        let fresh = await newRowURL(profile: profile, before: before)
+        stepNames[path] = nil
+        let outcome = PublishOutcome.result(status: result.status, stdout: result.stdout, stderr: result.stderr, fallbackURL: fresh?.url)
+        send(.publishFinished(file: path, result: outcome, now: Date()))
+        if case .copied = outcome, let id = fresh?.id { flash(id) }
+    }
+
+    private func rows(of profile: String) -> [Share] {
+        profiles?.profiles.first { $0.name == profile }?.state?.shares ?? []
+    }
+
+    /// Waits for the post-publish re-read (a few polls), then returns the row it added.
+    private func newRowURL(profile: String, before: Set<String>) async -> (id: String, url: String)? {
+        for _ in 0..<12 {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if let share = rows(of: profile).first(where: { !before.contains($0.id) }) { return (share.id, share.url) }
+        }
+        return nil
+    }
+
+    // MARK: drag out
+
+    func dragPayload(for row: RowModel) -> DragPayload? { DragPayload(row: row) }
+
+    func beginDragOut(_ row: RowModel) -> NSItemProvider {
+        guard let payload = DragPayload(row: row) else { return NSItemProvider() }
+        send(.dragOutBegan(id: row.id))
+        return payload.itemProvider()
+    }
+
+    /// The drag ends when the button is up: SwiftUI's `onDrag` has no end callback (decision D18).
+    func pollDragOut() {
+        if state.draggingOut != nil, NSEvent.pressedMouseButtons == 0 { send(.dragOutEnded) }
+    }
+
+    var dragOutHint: String? { state.dragOutHint(rows: viewModel.rows) }
+
+    // MARK: Quick Look
+
+    #if DEBUG
+    /// Every row of the current tenant, unfiltered by the recent count, for the screenshot hook.
+    func allRowsForShots() -> [RowModel] {
+        PopoverViewModel(profiles: profiles, current: currentProfile, scope: .mine, query: "", recentCount: 50, needCount: 0, now: now).rows
+    }
+    #endif
+
+    var quickLook: QuickLookModel? {
+        guard case .quickLook(let id, _) = state.mode, let row = row(id) else { return nil }
+        return QuickLookModel(row: row)
+    }
+
+    /// Copy link in Quick Look: copies like a click, then closes and hands focus back to the row.
+    func copyFromQuickLook(rowID: String) {
+        if let row = row(rowID) { click(row) }
+        send(.closeQuickLook)
+    }
+
+    func toggleQuickLookOnFocused() {
+        guard let id = focusedRow, row(id) != nil else { return }
+        send(.toggleQuickLook(id: id))
     }
 
     // MARK: members
@@ -288,7 +414,11 @@ final class PopoverStore: ObservableObject {
             case .open(let text):
                 if let url = URL(string: text) { NSWorkspace.shared.open(url) }
             case .focus(let id):
+                searchFocused = id == "search"
                 focusedRow = id == "search" ? nil : id
+                if id != "search" { keyboardFocus = true }
+            case .reveal:
+                onReveal()
             }
         }
     }
@@ -332,4 +462,20 @@ final class PopoverStore: ObservableObject {
 
     func openAllLinks() { router.openAllLinks() }
     func openAdd(_ kind: AddSheetKind) { router.openAddSheet(kind: kind) }
+}
+
+/// Turns a stream of text chunks into whole lines for `onLine`; callable from any thread.
+final class ProgressRelay: @unchecked Sendable {
+    private var buffer = LineBuffer()
+    private let lock = NSLock()
+    private let onLine: @Sendable (String) -> Void
+
+    init(onLine: @escaping @Sendable (String) -> Void) { self.onLine = onLine }
+
+    func feed(_ chunk: String) {
+        lock.lock()
+        let lines = buffer.feed(chunk)
+        lock.unlock()
+        for line in lines { onLine(line) }
+    }
 }

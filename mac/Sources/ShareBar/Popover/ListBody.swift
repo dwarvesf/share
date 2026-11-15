@@ -5,6 +5,7 @@ import SwiftUI
 struct ListBody: View {
     @ObservedObject var store: PopoverStore
     @Environment(\.colorScheme) private var scheme
+    @FocusState private var searchField: Bool
     private var theme: Theme { Theme(scheme) }
     static let maxListHeight: CGFloat = 360
 
@@ -70,6 +71,9 @@ struct ListBody: View {
                             .allowsHitTesting(false).accessibilityHidden(true)
                     }
                 }
+                .focused($searchField)
+                .onChange(of: store.searchFocused) { searchField = $0 }
+                .onChange(of: searchField) { if !$0 { store.searchFocused = false } }
                 .accessibilityIdentifier("search")
                 .accessibilityLabel("Search links")
             if store.query.isEmpty {
@@ -81,6 +85,7 @@ struct ListBody: View {
         }
         .padding(.horizontal, 8).frame(height: 28)
         .background(RoundedRectangle(cornerRadius: 7).fill(theme.hover))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(theme.focus, lineWidth: store.searchFocused ? 2 : 0))
         .padding(.horizontal, 10).padding(.bottom, 8)
     }
 
@@ -120,7 +125,8 @@ struct ListBody: View {
     private func list(_ model: PopoverViewModel) -> some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(spacing: 0) {
-                if let empty = model.emptyText {
+                ForEach(store.uploadRows) { upload in UploadRowView(theme: theme, upload: upload) }
+                if let empty = model.emptyText, store.uploadRows.isEmpty {
                     Text(empty).font(theme.bodyFont).foregroundColor(theme.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.vertical, 28).padding(.horizontal, 20)
@@ -167,9 +173,6 @@ struct RowView: View {
                     .frame(minWidth: 46, alignment: .trailing)
                     .accessibilityLabel(age == "today" ? "added today" : "added \(age) ago")
             }
-            if store.flashRow == row.id {
-                Text("Copied").font(.system(size: 11, weight: .semibold)).foregroundColor(theme.ok)
-            }
             Button { store.openMenu(row.id) } label: {
                 Image(systemName: "ellipsis").font(.system(size: 13)).foregroundColor(hovering || focused || menuOpen ? theme.secondary : .clear)
                     .frame(width: theme.iconButton, height: theme.iconButton)
@@ -185,12 +188,20 @@ struct RowView: View {
         }
         .padding(.leading, 10).padding(.trailing, 6).padding(.vertical, 4)
         .frame(minHeight: theme.minRowHeight)
+        .overlay(alignment: .trailing) {
+            // The design's `.row.flash::after`: laid over the age, not between the name and it.
+            if store.flashRow == row.id {
+                Text("Copied").font(.system(size: 11, weight: .semibold)).foregroundColor(theme.ok)
+                    .padding(.horizontal, 4).background(theme.surface).padding(.trailing, 40)
+            }
+        }
         .background(RoundedRectangle(cornerRadius: theme.rowRadius).fill(menuOpen ? theme.pressed : (hovering ? theme.hover : .clear)))
         .overlay(RoundedRectangle(cornerRadius: theme.rowRadius).stroke(theme.focus, lineWidth: focused && !menuOpen ? 2 : 0))
         .contentShape(Rectangle())
         .padding(.horizontal, 6)
         .onHover { store.hover($0 ? row.id : (store.hoveredRow == row.id ? nil : store.hoveredRow)) }
         .onTapGesture { store.click(row) }
+        .modifier(DragOutModifier(store: store, row: row))
         .accessibilityElement(children: .contain)
         .accessibilityLabel(row.accessibilityLabel)
         .accessibilityIdentifier("row-\(row.id)")
@@ -213,7 +224,15 @@ struct FooterBar: View {
         VStack(spacing: 0) {
             Rectangle().fill(theme.separator).frame(height: 1)
             HStack(spacing: 6) {
-                if let toast = store.state.footer {
+                if let hint = store.dragOutHint {
+                    HStack(spacing: 6) {
+                        Image(systemName: "square.and.arrow.down").font(.system(size: 12)).foregroundColor(theme.secondary).accessibilityHidden(true)
+                        Text(hint).font(theme.metaFont).foregroundColor(theme.label).lineLimit(2)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("footer-drag-hint")
+                    Spacer(minLength: 8)
+                } else if let toast = store.state.footer {
                     status(toast)
                     Spacer(minLength: 8)
                     if store.undoVisible { undoButton }
@@ -271,5 +290,53 @@ struct FooterBar: View {
             .accessibilityIdentifier("footer-issues")
             .accessibilityLabel(footer.text)
         }
+    }
+}
+
+/// A row that may drag out carries its link as a URL and as text; one that may not has no drag at all.
+struct DragOutModifier: ViewModifier {
+    let store: PopoverStore
+    let row: RowModel
+
+    func body(content: Content) -> some View {
+        if row.canDrag {
+            content.onDrag { store.beginDragOut(row) }
+        } else {
+            content
+        }
+    }
+}
+
+/// The placeholder row of a file being published: its step and a progress bar.
+struct UploadRowView: View {
+    let theme: Theme
+    let upload: UploadRow
+
+    var body: some View {
+        HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 6).fill(theme.hover).frame(width: 28, height: 28)
+                .overlay(Image(systemName: "arrow.up.doc").font(.system(size: 13)).foregroundColor(theme.secondary))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(upload.title).font(theme.bodyFont).foregroundColor(theme.label).lineLimit(1).truncationMode(.middle)
+                Text(upload.meta).font(theme.metaFont).foregroundColor(theme.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            ZStack(alignment: .leading) {
+                Capsule().fill(theme.hover)
+                GeometryReader { proxy in
+                    Capsule().fill(theme.info).frame(width: proxy.size.width * (upload.fraction ?? 0))
+                }
+            }
+            .frame(width: 44, height: 4)
+            .padding(.trailing, 8)
+            .accessibilityHidden(true)
+        }
+        .padding(.leading, 10).padding(.trailing, 6).padding(.vertical, 4)
+        .frame(minHeight: theme.minRowHeight)
+        .padding(.horizontal, 6)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Publishing \(upload.title), \(upload.meta)")
+        .accessibilityIdentifier("upload-\((upload.title))")
     }
 }

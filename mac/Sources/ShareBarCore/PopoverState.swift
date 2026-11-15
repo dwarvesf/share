@@ -104,6 +104,11 @@ public enum PopoverEvent: Sendable, Equatable {
     /// The popover closed, or the app is quitting: every pending undo commits at once.
     case close
     case publishStep(file: String, step: Int, of: Int)
+    /// A file chosen with + starts a publish with no drop in front of it.
+    case publishStarted(file: String)
+    /// A row of this popover started a drag out, or the drag ended (TASK-4b11).
+    case dragOutBegan(id: String)
+    case dragOutEnded
     case publishFinished(file: String, result: PublishResult, now: Date)
 }
 
@@ -114,6 +119,8 @@ public enum PopoverEffect: Sendable, Equatable {
     case copy(String)
     case focus(String)
     case open(String)
+    /// Show the popover so the first-run panel is what a refused drop lands on.
+    case reveal
 }
 
 /// The popover's state machine: one navigation mode plus the two fields every mode
@@ -152,6 +159,8 @@ public struct PopoverState: Sendable, Equatable {
     public var footer: Footer?
     /// True while the Undo button has focus.
     public var undoHeld = false
+    /// The row id being dragged out of this popover: an internal drag never enters `dropTarget`.
+    public var draggingOut: String?
 
     public static let toastSeconds: TimeInterval = 3.5
 
@@ -231,6 +240,7 @@ public struct PopoverState: Sendable, Equatable {
             effects.append(.focus("search"))
 
         case .dragEnter:
+            guard draggingOut == nil else { break }
             switch mode {
             case .firstRun, .dropTarget: break
             default: mode = .dropTarget(prev: mode)
@@ -243,7 +253,24 @@ public struct PopoverState: Sendable, Equatable {
             if case .dropTarget(let prev) = mode {
                 publishing.append(Publish(file: file, step: 0, of: of))
                 mode = prev
+            } else if mode == .firstRun {
+                // No tenant: nothing is published, the first-run panel is the answer.
+                effects.append(.reveal)
             }
+
+        case .publishStarted(let file):
+            if mode == .firstRun {
+                effects.append(.reveal)
+            } else if !publishing.contains(where: { $0.file == file }) {
+                publishing.append(Publish(file: file, step: 0, of: 0))
+            }
+
+        case .dragOutBegan(let id):
+            draggingOut = id
+            if case .dropTarget(let prev) = mode { mode = prev }
+
+        case .dragOutEnded:
+            draggingOut = nil
 
         case .openMenu(let id):
             if case .list = mode { mode = .menu(id: id, prev: mode) }
@@ -318,8 +345,8 @@ public struct PopoverState: Sendable, Equatable {
             publishing.removeAll { $0.file == file }
             switch result {
             case .copied(let url):
-                effects.append(.copy(url))
-                footer = Footer(text: "Link copied", kind: .toast, expires: now.addingTimeInterval(PopoverState.toastSeconds))
+                if !url.isEmpty { effects.append(.copy(url)) }
+                footer = Footer(text: url.isEmpty ? "Published: \((file as NSString).lastPathComponent)" : "Link copied: \((file as NSString).lastPathComponent)", kind: .toast, expires: now.addingTimeInterval(PopoverState.toastSeconds))
             case .failed(let sentence):
                 footer = Footer(text: sentence, kind: .failure)
             }

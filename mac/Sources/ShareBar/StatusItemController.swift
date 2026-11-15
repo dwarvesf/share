@@ -201,9 +201,12 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         MainActor.assumeIsolated {
             popoverController.onWillShow = { [weak self] in self?.triggerRefresh() }
             popoverStore.onChanged = { [weak self] in self?.triggerRefresh(fresh: true) }
-            popoverStore.onAddFile = { [weak self] in self?.shareFile() }
+            popoverStore.onAddFile = { [weak self] in self?.pickFilesForPopover() }
             let queue = mutationQueue
             popoverStore.runCLI = { await queue.run($0) }
+            popoverStore.runPublish = { argv, output in
+                await queue.run(argv, environment: ["SHARE_PROGRESS": "1"], onOutput: output)
+            }
         }
         guard let button = statusItem.button else { return }
         MainActor.assumeIsolated { popoverController.attach(to: button) }
@@ -553,6 +556,21 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         guard panel.runModal() == .OK else { return }
         let paths = panel.urls.map(\.path)
         presentPublishDialog(paths: paths)
+    }
+
+    /// The popover's + button: pick files, then publish them through the popover's placeholder rows.
+    private func pickFilesForPopover() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Share"
+        guard panel.runModal() == .OK else { return }
+        let paths = panel.urls.map(\.path)
+        MainActor.assumeIsolated {
+            popoverStore.publish(paths: paths, dropped: false)
+            popoverController.show()
+        }
     }
 
     @objc private func stopWaiting() {
@@ -958,7 +976,25 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         view.onFiles = { [weak self] urls in
             actionLogger.log("drop paths=\(urls.count, privacy: .public)")
             RunLoop.main.perform(inModes: [.common]) {
-                self?.presentPublishDialog(paths: urls.map(\.path))
+                guard let self else { return }
+                if self.legacyMenu {
+                    self.presentPublishDialog(paths: urls.map(\.path))
+                } else {
+                    MainActor.assumeIsolated { self.popoverStore.publish(paths: urls.map(\.path), dropped: true) }
+                }
+            }
+        }
+        if !legacyMenu {
+            view.onDragEnter = { [weak self] in
+                guard let self else { return }
+                MainActor.assumeIsolated {
+                    self.popoverController.show()
+                    self.popoverStore.dragEntered()
+                }
+            }
+            view.onDragExit = { [weak self] in
+                guard let self else { return }
+                MainActor.assumeIsolated { self.popoverStore.dragLeft() }
             }
         }
         view.onFilePromise = { [weak self] in

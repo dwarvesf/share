@@ -25,6 +25,9 @@ final class DropView: NSView {
 
     var onFiles: (([URL]) -> Void)?
     var onFilePromise: (() -> Void)?
+    /// A file drag entered or left the status item (the popover's `dropTarget`).
+    var onDragEnter: (() -> Void)?
+    var onDragExit: (() -> Void)?
     private weak var forwardTarget: NSStatusBarButton?
 
     init(forwarding button: NSStatusBarButton) {
@@ -45,7 +48,13 @@ final class DropView: NSView {
     // NSView already conforms to NSDraggingDestination (default no-op implementations), so
     // these are overrides, not a fresh protocol conformance.
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        dragOperation(for: sender)
+        let operation = dragOperation(for: sender)
+        if !operation.isEmpty { onDragEnter?() }
+        return operation
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        onDragExit?()
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
