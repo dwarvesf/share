@@ -92,8 +92,12 @@ public enum PopoverEvent: Sendable, Equatable {
     case remove(action: Undo.Action, ids: [String], argv: [String], now: Date)
     /// The Undo button or Command-Z: cancels the newest pending undo, no CLI call.
     case undo
-    /// The clock: runs every pending undo past its deadline, clears a lapsed toast.
+    /// The clock: runs every pending undo past its deadline, clears a lapsed toast. While the
+    /// Undo button has focus nothing runs and nothing clears (TASK-4b9).
     case tick(now: Date)
+    /// Focus entered (`held`) or left the Undo button. Leaving restarts every pending
+    /// undo's window, so a person who tabbed away still has the full 6 s.
+    case holdUndo(held: Bool, now: Date)
     /// The popover closed, or the app is quitting: every pending undo commits at once.
     case close
     case publishStep(file: String, step: Int, of: Int)
@@ -143,6 +147,8 @@ public struct PopoverState: Sendable, Equatable {
     public var pending: [Undo]
     public var publishing: [Publish]
     public var footer: Footer?
+    /// True while the Undo button has focus.
+    public var undoHeld = false
 
     public static let toastSeconds: TimeInterval = 3.5
 
@@ -273,7 +279,15 @@ public struct PopoverState: Sendable, Equatable {
         case .undo:
             if !pending.isEmpty { pending.removeLast() }
 
+        case .holdUndo(let held, let now):
+            undoHeld = held
+            if !held {
+                pending = pending.map { Undo(action: $0.action, ids: $0.ids, argv: $0.argv, deadline: now.addingTimeInterval(Undo.window)) }
+                if footer?.expires != nil, !pending.isEmpty { footer = Footer(text: footer?.text ?? "", kind: .toast, expires: now.addingTimeInterval(Undo.window)) }
+            }
+
         case .tick(let now):
+            if undoHeld, !pending.isEmpty { break }
             let due = pending.filter { $0.deadline <= now }
             pending.removeAll { $0.deadline <= now }
             effects.append(contentsOf: due.map { .run($0.argv) })
