@@ -7394,7 +7394,6 @@ cmd_member_invite() { # a new code for invited, joining or left; the old token a
   member_minter=1; member_context invite
   mb_pre invite "$mb_who"
   [[ -z $port || $mb_mode == machine ]] || die "--port is for a machine member; $mb_name is a cloud member; nothing was changed"
-  [[ $mb_mode != machine ]] || mb_tunnel_newest || die_code member_not_allowed "$mb_name has no tunnel on the account (deleted outside share); share member rotate makes a new one; nothing was changed" "$me member rotate $mb_name"
   mb_take invite ${argv[@]+"${argv[@]}"}
   # step 2: inviting (from invited, joining or left: prev_status kept, DEC-41)
   reg_step invite inviting 2
@@ -7404,10 +7403,14 @@ cmd_member_invite() { # a new code for invited, joining or left; the old token a
   mb_token_fresh invite inviting 3 7776000
   mb_tid="" mb_ctok=""
   if [[ $mb_mode == machine ]]; then
-    # step 4: the tunnel of the record's rotation, by name; its connections go (a code someone else redeemed connects no more until it reconnects)
+    # step 4: the member's newest tunnel, by name; its connections go (a code someone else redeemed connects no more until it reconnects)
     reg_step invite inviting 4
-    mb_tunnel_newest || die "the tunnel of $mb_name was deleted outside share during this invite; nothing more was changed; share member rm $mb_name ends the member"
-    tname=$mb_tname
+    if mb_tunnel_newest; then tname=$mb_tname
+    else   # deleted outside share: made again under the record's name (the new code carries its connector token; the service and binding follow below)
+      tname="$(mb_obj_name "$mb_sx" "$(jq -r 'if (.rotation // 0) > 0 then .rotation else "" end' <<<"$reg_rec")")"
+      ob_tunnel_ensure "$tname"; mb_tid=$ob_id
+      echo "tunnel:     $tname made again (it was gone from the account)"
+    fi
     r2_api_retry DELETE "/accounts/$acct/cfd_tunnel/$mb_tid/connections"
     [[ $cf_code == 200 || $cf_code == 404 ]] || die "deleting tunnel $tname's connections answered HTTP $cf_code; rerun the same verb"
     mb_tunnel_token "$mb_tid" "$tname"
@@ -7433,9 +7436,10 @@ cmd_member_rotate() { # a new tunnel and VPC Service of the next rotation, the s
   member_minter=1; member_context rotate
   mb_pre rotate "$mb_who"
   mb_take rotate ${argv[@]+"${argv[@]}"}
-  # step 2: rotating, with the next rotation: above the record's and above every name on the account (a rerun keeps the one it wrote)
+  # step 2: rotating, with the next rotation: above the record's and above every name on the account. Only a rerun of this machine's own dead
+  # rotate (its journal) keeps the rotation the record holds: u/ is member-writable, so a forged rotating record would otherwise point it at the live tunnel
   rot="$(jq -r '.rotation // 0' <<<"$reg_rec")"
-  if [[ "$(jq -r .status <<<"$reg_rec")" != rotating ]]; then
+  if [[ "$(jq -r .status <<<"$reg_rec")" != rotating || -z $op_prev_step || $op_prev_step -lt 2 ]]; then
     mb_services_list; mb_tunnels_of "$mb_sx"
     hi="$(printf '%s\n%s\n' "$(cut -f1 <<<"$ms_list")" "$(cut -f2 <<<"$mt_ids")" | sed -n "s/^share-${host_name//./-}-$mb_sx-r\([0-9]\{1,3\}\)$/\1/p" | sort -n | tail -1)"
     [[ -z $hi || $hi -lt $rot ]] || rot=$hi
@@ -7515,7 +7519,7 @@ cmd_member_renew() { # the token's expires_on moved in place (PUT, same id, same
   reg_step renew renewing 3
   as_minter r2_api GET "/user/tokens/$tk_id"
   [[ $cf_code == 200 ]] || die "reading the member token answered HTTP $cf_code; rerun the same verb"
-  body="$(jq -c --arg e "$(mb_iso $(( $(date +%s) + tsec )))" '.result | {name, policies, expires_on: $e} + (if .status then {status} else {} end)
+  body="$(jq -c --arg e "$(mb_iso $(( $(date +%s) + tsec )))" '.result | {name, policies, expires_on: $e, status: (if .status == "disabled" then "disabled" else "active" end)}
     + (if .not_before then {not_before} else {} end) + (if .condition then {condition} else {} end)' <<<"$cf_body")"
   as_minter r2_api_retry PUT "/user/tokens/$tk_id" "$body"
   [[ $cf_code == 200 ]] || die "updating the member token answered HTTP $cf_code; rerun the same verb"

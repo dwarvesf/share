@@ -1371,6 +1371,15 @@ p3_load p3; mx_set m-an-aaaaaaa1 '.rotation = 0'; SHARE_TEST_CODE=$MX3C mxa memb
 out=$(SHARE_TEST_CODE=$MX4C mxa member rotate an 2>&1); rc=$?
 check "mm DEC-58: a forged rotation never reuses a live tunnel name: the next rotation is above every name on the account" \
   "0 tunnels=[share-mx-example-test-aaaaaaa1-r2] 2" "$rc $(mx_objs | sed 's/ services=.*//') $(p3_an .rotation)"
+p3_load p3; SHARE_TEST_CODE=$MX3C mxa member rotate an >/dev/null 2>&1; mx_set m-an-aaaaaaa1 '.status = "rotating" | .step = 3 | .step_name = "tunnel"'; r1t="$(p3_an .tunnel_id)"
+out=$(SHARE_TEST_CODE=$MX4C mxa member rotate an 2>&1); rc=$?
+check "mm DEC-58, DEC-67: a forged rotating record never makes rotate keep the live tunnel: a new rotation, the old tunnel deleted" \
+  "0 tunnels=[share-mx-example-test-aaaaaaa1-r2] 1" "$rc $(mx_objs | sed 's/ services=.*//') $(jq -r '.deleted_at != null' "$MX_DRY/.cf/tunnels/$r1t.json" | grep -c true)"
+p3_load inv; tid="$(p3_an .tunnel_id)"; jq -c '.deleted_at = "2026-11-15T00:00:00Z"' "$MX_DRY/.cf/tunnels/$tid.json" >"$MX/t" && mv "$MX/t" "$MX_DRY/.cf/tunnels/$tid.json"
+out=$(SHARE_TEST_CODE=$MX3C mxa member invite an 2>&1); rc=$?
+check "mm TASK-3b: invite of a member whose tunnel was deleted outside share makes it again under its name and points the service at it" \
+  "0 tunnels=[share-mx-example-test-aaaaaaa1] 1 invited" \
+  "$rc $(mx_objs | sed 's/ services=.*//') $(jq -r --arg t "$(p3_an .tunnel_id)" 'select(.host.network.tunnel_id == $t) | 1' "$MX_DRY"/.cf/services/*.json) $(p3_an .status)"
 
 # --- TASK-3d: member renew and expiry warnings ---
 p3_load p3; tk="$(p3_an .token.id)"; mu="$(printf '%s' mintertoken | cksum | cut -d' ' -f1)"; pol0="$(jq -c .policies "$MX_DRY/.cf/tokens/$mu/$tk.json")"; : >"$MX_LOG"
@@ -1382,6 +1391,10 @@ check "mm MB-18: renew PUTs the same token id with the same policies and a new e
 $([[ $d -gt 2500000 && $d -le 2592000 ]] && echo 1) $(p3_an .token.expires_on) $(p3_an .status) $(p3_an .prev_status) $(p3_clean)"
 out=$(mxm status 2>&1); out2=$(SHARE_TEST_IDS=f30003 mxm add "$MX/f.txt" 2>&1); rc2=$?; mxm stop >/dev/null 2>&1
 check "mm MB-18, CK-04: the member keeps working; its status takes the server's expires_on from the record (no re-join)" "0 $ne" "$rc2 $(sed -n 's/^token_expires=//p' "$MXM_CONF")"
+p3_load p3; tk="$(p3_an .token.id)"; jq -c '.status = "expired" | .expires_on = "2020-01-01T00:00:00Z"' "$MX_DRY/.cf/tokens/$mu/$tk.json" >"$MX/t" && mv "$MX/t" "$MX_DRY/.cf/tokens/$mu/$tk.json"
+out=$(mxa member renew an 2>&1); rc=$?
+check "mm MB-18: renew of an expired token sends it back active with the new expiry" "0 active 1" \
+  "$rc $(jq -r .status "$MX_DRY/.cf/tokens/$mu/$tk.json") $(jq -r '.expires_on | fromdateiso8601 > now' "$MX_DRY/.cf/tokens/$mu/$tk.json" | grep -c true)"
 p3_load paused; mxa member renew an >/dev/null 2>&1; r1="$(p3_an .status)/$(p3_an .prev_status)"
 out=$(mxa member renew bo 2>&1); rc=$?
 check "mm TASK-3d: renew goes back to the status it started from: paused, and invited for a member with a pending invite" "paused/null 0 invited" \
