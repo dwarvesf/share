@@ -31,3 +31,26 @@ Delta from SPEC-009 TASK-4b6 to TASK-4b9. The spec rows are not restated. Founda
 - D11. Row menu: the popover's measured height was always zero (a preference that never fired), so the menu flipped to the top. The overlay now reads its own size, and the popover grows (`minHeight`) to hold the menu under the row. The first item is lit on open and the highlight follows the pointer.
 - D12. Native arrow kept; the root fill is opaque inside the arrow-less body.
 - D13. Capture without input: DEBUG-only `-ShareBarShotsRender <png> [-ShareBarShotsMenuRow <id>]` draws `ShareBarView` offscreen. `Snapshot.swift` gained one field outside the listed touches because the age needs it.
+
+# Popover B (TASK-4b10 to TASK-4b13)
+
+Delta from SPEC-009 for the drop, drag-out, Quick Look and hotkey tasks. Foundations and popover A decisions above still hold.
+
+## Decisions the spec left open
+
+- D14. Input-free captures (owner decision 2026-11-15, replaces DEC-56 for these tasks): the DEBUG hook `-ShareBarShotsRender <png>` gains `-ShareBarShotsScene <name>`, read inside `PopoverController.debugRender` so the frozen `AppDelegate` stays untouched. A scene sets state through the same reducer events a real drag, key or hotkey sends, then draws the popover (or the Quick Look view) offscreen. No pointer or key input reaches the desktop. SPEC-009 gets DEC-81 and the four AC lines are amended.
+- D15. AC map (row to test): `progress lines move the publishing entry's step` is `PublishFlowTests.testProgressLinesMoveThePublishingEntrysStep`; `a drop with no tenant is refused with the first-run panel` is `PublishFlowTests.testADropWithNoTenantIsRefusedWithTheFirstRunPanel`; `the drag item carries the URL as url and text`, `expired and revoked do not drag`, `an internal drag never enters dropTarget` are in `DragOutTests`; `preview source per row kind` and `close returns focus to the row id` are in `QuickLookModelTests`; `the hotkey event from issues lands in list with search focused` is the existing `PopoverStateTests.testHotkeyFromIssuesLandsInListWithSearchFocused`; the negative control (a second registration of one key reports in use) is `HotkeyTests.testASecondRegistrationOfTheSameKeyReportsInUse`.
+- D16. A drop runs `add` on the popover's current tenant with `SHARE_PROGRESS=1`, through the app's `MutationQueue`. `MutationQueue.run` gained optional `environment` and `onOutput` parameters (default empty), so the popover streams the journal's lines without a second queue. Callers of `run(_:)` are unchanged.
+- D17. The status item drag opens the popover (`dragEnter`); leaving the item sends `dragLeave` but leaves the popover open, so moving the drag from the item into the popover does not close it under the cursor. The popover's own `onDrop` then re-enters `dropTarget`.
+- D18. A drag out reports its end by polling `NSEvent.pressedMouseButtons` on the popover clock: SwiftUI's `onDrag` has no end callback, and an `NSDraggingSource` wrapper would fight the row's tap and hover handling.
+- D19. Quick Look is a non-activating `NSPanel`; while it is open the popover's behavior is `applicationDefined`, so a click on the panel does not dismiss the popover under it.
+- D20. The `state` rows carry no port, so a port share shows `Live server`, the port read from a name like `localhost:3000` when it has one, and a local TCP connect probe says whether anything answers. No HTTP request leaves the Mac for any row (DEC-55).
+- D21. `pub/<id>` is the served tree, not the file: a file share keeps `pub/<id>/<name>` and a folder share keeps `pub/<id>/<name>/` (`bin/share` stage and publish). The Quick Look preview source is therefore `pub/<id>/<row name>`; a file goes to `QLPreviewView`, a folder to the entry list. The spec's "previews `pub/<id>`" is read that way.
+- D22. Deliberate deviations from revision 8, all listed in `docs/verification/share-bar/popover-b/README.md`: the search keeps its focus ring after ⌃⌥S (the prototype shows a caret that an offscreen capture cannot draw); the drop overlay says `Stored on this Mac` where the prototype says the machine name (the spec wins); the uploading row says `Step n of m` where the prototype says a percent (SPEC-010 G9 reports steps); the Quick Look pdf capture composes the file's thumbnail because `QLPreviewView` draws out of process and an offscreen window captures it blank; the cloud preview is the glyph and the meta line, no fetch (DEC-55).
+- D23. A drop on the status item opens the popover with the overlay; a drop with no tenant sends `reveal`, which opens the popover on the first-run panel. The legacy `NSMenu` keeps the old publish dialog (`LegacyMenu`).
+
+## Open questions
+
+- `share state` prints no port for a port share, so Quick Look reads it from a name like `localhost:3000`. A `port` key in the row would remove the guess.
+- The footer drag hint names the dragged link, as the prototype does; AppKit gives the source no way to learn the destination app's name.
+- Not exercised on a live desktop (owner rule): a real Finder drag onto the status item, a real ⌃⌥S press from another app, a real Space on a focused row, a real drag of a row into TextEdit. The reducer, the Carbon registration and the offscreen captures stand in; SG-16 or the owner's own run closes them.
