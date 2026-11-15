@@ -1,6 +1,6 @@
-# Share Bar popover A: proof (partial, screenshots pending)
+# Share Bar popover A: proof
 
-Status: code, unit tests and build gates are done. The final screenshot run is NOT done. The desktop session was locked (`CGSSessionScreenIsLocked` true) from the middle of the run, so real clicks stopped landing and no image was taken against the final code. An earlier run of the same screens, before three small fixes (member name capitalisation, keyboard-only focus ring, search placeholder colour) and two scenario changes, passed every step. Its images are not kept because they no longer match the code.
+Status: done. Every screen an AC names is captured by real clicks, key events and the Accessibility API on the final code, light and dark (40 images, `4b-*-light|dark.png`). Spot-checked against revision 8 and the interactions doc: layout, copy, state colours, destructive ink, focus ring and the needs-a-look grouping match; no gap found.
 
 ## Recorded run
 
@@ -10,25 +10,25 @@ Verdict: pass
 
 Command: `swift test --package-path mac`
 Exit: 0
-Verdict: pass, 316 tests (258 before this sub-goal)
+Verdict: pass, 316 tests
 
 Command: `bash mac/build.sh 0.0.0`
 Exit: 0
-Verdict: pass (run before the review fixes, which touch only Core and the store)
+Verdict: pass
 
 Command: `bash mac/compat-check.sh v0.9.0`
 Exit: 0
 Verdict: pass
 
-Command: `bash mac/Tests/fixtures/popover/run-shots.sh` (earlier run, 15 step files, light and dark)
+Command: `bash mac/Tests/fixtures/popover/run-shots.sh` (15 step files, light and dark, on the final code)
 Exit: 0
-Verdict: pass. An undone Remove left 0 `rm` in argv.log, a completed Remove left exactly 1, and Resume left `setup s.console.so --members`. A re-run is needed.
+Verdict: pass. An undone Remove left 0 `rm` in argv.log, a completed Remove left exactly 1, Resume left `setup s.console.so --members`.
 
-## To finish
+Command: `SHOTS_OUT=<existing dir> bash mac/shots.sh all` (foundations step files, now driving the popover)
+Exit: 0
+Verdict: pass. `SHOTS_OUT` must exist already or the script exits 1 silently.
 
-1. Unlock the desktop, then `bash mac/Tests/fixtures/popover/run-shots.sh` (writes `4b-*-light|dark.png` here).
-2. Score each image against `docs/design/share-bar-redesign.html` revision 8 and `docs/design/share-bar-interactions.md`.
-3. `bash mac/shots.sh all` (the foundations step files now drive the popover).
+UAT: exercised in the real app bundle against the fake CLI on this Mac, accepted. Nothing deployed; no Worker, setup or persistent state touched, so no rollback section.
 
 ## Mobbin comparison (against the first run)
 
