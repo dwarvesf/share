@@ -14,6 +14,14 @@ Unexercised against Cloudflare (R2 off on Console Labs): the live member WebSock
 ```
 Command: SHARE_TEST_PORT_BASE=34500 SHARE_TEST_ONLY='tenant docs' bash tests/share.sh
 Exit:    0
+Output:
+  ok    every tenant command, flag, and state key in the docs is in bin/share
+  ok    every member verb, flag, config key and code in the docs is in bin/share, and the docs name each
+  ok    negative control: the docs without member adopt fail the member check, naming it
+  ok    negative control: a bin/share without --invite-ttl fails the member check, naming it
+  ok    negative control: a bin/share that no longer dispatches member pause fails the member check
+  ok    negative control: --cloud-links gone from bin/share is caught though --cloud remains
+559 checks, PASS (filtered by SHARE_TEST_ONLY: 25 sections ran, the rest skipped)
 Verdict: PASS (the new member docs check and its four negative controls: docs without member adopt, bin/share without --invite-ttl, bin/share that no longer dispatches pause, --cloud-links gone while --cloud remains)
 ```
 
