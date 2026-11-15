@@ -58,6 +58,42 @@ Output:
   total 210s
 ```
 
+Command: `gh run view 43705138181` (PR run on the shard branch, every job green)
+Exit: 0
+Verdict: PASS
+Output:
+```
+job                 result   wall
+lint                success  0m50s
+test (members-b)    success  2m49s
+test (members-a)    success  4m00s
+test-macos          success  5m08s   (bash 3.2 parse + members-b)
+mac                 success  2m06s
+test (chain)        success  12m19s
+run total (first job start to last end): 12m29s
+checks: members-a 136, members-b 147, chain 1560 (Ubuntu); test-macos members-b 147
+```
+
+Command: `bash tests/ci/run-shard.sh members-a`, `members-b`, `chain` on the Mac mini, then `SHARE_TEST_ONLY` on `^worker \(`, `^members: the invite seal`, and both
+Exit: 0 for members-a and members-b; 1 for chain (one check, see below)
+Verdict: PASS for the count; the chain run has one failure from other sessions' processes on the shared host
+Output:
+```
+members-a   136 checks, PASS
+members-b   147 checks, PASS
+chain      1570 of 1571 checks pass; FAIL  no orphaned prune sleeps: expected '0', got '2'
+always-run setup and tail checks (every shard runs them): 15 + 18 - 19 = 14
+sum 136 + 147 + 1571 = 1854; minus 2 extra copies of the 14 = 1826 = the unfiltered run's "1826 checks, PASS"
+```
+The failing check counts `sleep 3600` processes whose parent is pid 1. `ps` showed two such sleeps started during the run by other sessions' suites on the same host (pids 25758 and 26385). The chain shard on CI, a clean host, is green with 1560 checks (the 11 fewer are Mac-only checks: the tty and `fr_FR` locale rows and the `r2 api-token` form).
+
+## Result against the goal
+
+- The PR wall time fell from the unsharded Ubuntu run (822 s of suite plus setup, measured in the goal) to 12m29s of run, set by `chain` at 12m19s. The target of 2 to 3 minutes is not met: `chain` is the `core`, `r2`, `groundwork` and `late` groups, which cannot run apart (see above). The members shards finish in 2m49s and 4m00s.
+- A shorter wall needs `tests/share.sh` changes that make `r2`, `groundwork` and the heavy core sections independent of core's variables (`QPATH`, the suite's server). Heaviest chain sections on the mini: access 145 s, r2 compat 105 s, G2c 100 s, G2b 55 s, refresh racing rm 54 s.
+- macOS: five shards would still exceed 4 minutes, so the whole suite runs on main only; a PR runs the parse check and `members-b` there.
+- The main-push run (one full run per OS) is the first run of `test-full`; it is not part of this PR's proof.
+
 ## Negative control
 
 The new section "members: a section no shard names" appended to a copy of `tests/members.sh` turns `shard-check.sh` red (exit 1, "no shard runs section"); the committed tree is green (exit 0). Both lines are in the first run above.
