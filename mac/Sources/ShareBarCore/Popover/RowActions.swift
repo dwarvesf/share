@@ -84,7 +84,9 @@ public enum LinkRemoval {
     /// Whether the viewer may start a removal on this row at all (the Delete key on a row
     /// the menu would not list does nothing).
     public static func allowed(for row: RowModel) -> Bool {
-        RowMenu.items(for: row).contains(row.own ? .remove : .revoke)
+        // An id the CLI printed never becomes an option: no leading dash.
+        guard !row.id.hasPrefix("-"), !row.id.isEmpty else { return false }
+        return RowMenu.items(for: row).contains(row.own ? .remove : .revoke)
     }
 }
 
@@ -108,16 +110,22 @@ extension PopoverState {
     /// for the whole window. Nil when the menu would not offer the action.
     public func removing(_ row: RowModel, now: Date) -> PopoverState? {
         guard LinkRemoval.allowed(for: row) else { return nil }
-        var next = reduce(.remove(action: LinkRemoval.action(for: row), ids: [row.id], argv: LinkRemoval.argv(for: row), now: now)).state
-        next.footer = Footer(text: LinkRemoval.footer(for: row), kind: .toast, expires: now.addingTimeInterval(Undo.window))
+        let text = LinkRemoval.footer(for: row)
+        var next = reduce(.remove(action: LinkRemoval.action(for: row), ids: [row.id], argv: LinkRemoval.argv(for: row), now: now, message: text)).state
+        next.footer = Footer(text: text, kind: .toast, expires: now.addingTimeInterval(Undo.window))
         return next
     }
 
     /// Undo or Command-Z: cancels the newest undo with no CLI call and clears the footer.
     public func undone() -> PopoverState {
         var next = reduce(.undo).state
-        next.footer = nil
-        next.undoHeld = false
+        // An older undo may still be open: its sentence and deadline come back.
+        if let older = next.pending.last {
+            next.footer = Footer(text: older.message, kind: .toast, expires: older.deadline)
+        } else {
+            next.footer = nil
+            next.undoHeld = false
+        }
         return next
     }
 }

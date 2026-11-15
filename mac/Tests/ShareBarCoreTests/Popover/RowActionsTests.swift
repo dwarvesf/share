@@ -157,3 +157,43 @@ extension RowModel {
                  storage: storage, isMemberLink: isMemberLink, servesHere: servesHere, isAdmin: isAdmin)
     }
 }
+
+/// Review findings: a stale hold, an older undo after the newest is undone, a dash-led name.
+final class UndoReviewTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func row(_ id: String) -> RowModel {
+        let share = makeShare(id: id, name: "\(id).txt", url: "https://s.test/\(id)/x", expires: 4_102_444_800, storage: "machine", linkState: "live")
+        let snapshot = makeSnapshot(host: "s.test", shares: [share], role: "tenant_origin")
+        return PopoverViewModel.row(for: share, profile: "console", state: snapshot, role: .tenantOrigin, scope: .mine, now: now)
+    }
+
+    func testAHoldNeverSurvivesAClose() throws {
+        let first = try XCTUnwrap(PopoverState().removing(row("aaaaaa"), now: now))
+        let held = first.reduce(.holdUndo(held: true, now: now)).state
+        let closed = held.reduce(.close).state
+        XCTAssertFalse(closed.undoHeld)
+        let again = try XCTUnwrap(closed.removing(row("bbbbbb"), now: now.addingTimeInterval(100)))
+        XCTAssertEqual(again.reduce(.tick(now: now.addingTimeInterval(106))).effects, [.run(["--profile", "console", "rm", "bbbbbb"])])
+    }
+
+    func testUndoingTheNewestKeepsTheOlderOnesFooter() throws {
+        let first = try XCTUnwrap(PopoverState().removing(row("aaaaaa"), now: now))
+        let second = try XCTUnwrap(first.removing(row("bbbbbb"), now: now.addingTimeInterval(1)))
+        let undone = second.undone()
+        XCTAssertEqual(undone.pending.map(\.ids), [["aaaaaa"]])
+        XCTAssertEqual(undone.footer?.text, "Removed aaaaaa.txt. The link stops answering.")
+        XCTAssertEqual(undone.footer?.expires, now.addingTimeInterval(6))
+        XCTAssertNil(undone.undone().footer, "the last undo clears it")
+    }
+
+    func testADashLedIdOrMemberNameNeverReachesArgv() {
+        XCTAssertNil(PopoverState().removing(row("-rf"), now: now))
+        let members = MemberList(members: [
+            MemberRecord(memberID: "m---all-1a2b3c4d", name: "--all", status: "paused", can: ["resume"]),
+        ])
+        let state = makeSnapshot(host: "s.test", role: "tenant_origin")
+        let list = IssueList(profiles: makeProfiles([("console", state)]), current: "console", members: ["console": members])
+        XCTAssertEqual(list.count, 0)
+    }
+}

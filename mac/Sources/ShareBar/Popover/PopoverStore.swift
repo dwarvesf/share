@@ -22,8 +22,9 @@ final class PopoverStore: ObservableObject {
 
     let prefs: PopoverPrefs
     let router: AppRouter
-    /// Runs one CLI call; replaced in tests of the view layer, never in the app.
-    var runCLI: ([String]) async -> CLIResult = { await CLI.run($0, timeout: 120) }
+    /// Runs one mutating CLI call. The controller points it at the app's `MutationQueue`, so a
+    /// popover action never runs beside an add and never carries a timeout that kills a journal.
+    var runCLI: ([String]) async -> CLIResult = { await CLI.run($0, timeout: nil) }
     /// Re-reads `profiles` after a verb: set by the controller.
     var onChanged: () -> Void = {}
     /// The + button: the controller's file picker and publish dialog.
@@ -248,17 +249,21 @@ final class PopoverStore: ObservableObject {
             send(.close)
             return
         }
-        // The app is quitting: the calls must finish before the process ends.
+        // The app is quitting: the calls must finish before the process ends, within one bound.
         let result = state.reduce(.close)
         state = result.state
-        for case .run(let argv) in result.effects {
-            let done = DispatchSemaphore(value: 0)
-            Task.detached {
-                _ = await CLI.run(argv, timeout: 20)
-                done.signal()
-            }
-            _ = done.wait(timeout: .now() + 25)
+        let calls = result.effects.compactMap { effect -> [String]? in
+            if case .run(let argv) = effect { return argv }
+            return nil
         }
+        guard !calls.isEmpty else { return }
+        let done = DispatchSemaphore(value: 0)
+        let run = runCLI
+        Task.detached {
+            for argv in calls { _ = await run(argv) }
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + 10)
     }
 
     // MARK: members

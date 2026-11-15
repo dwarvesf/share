@@ -198,6 +198,8 @@ final class StatusItemController: NSObject, @unchecked Sendable {
             popoverController.onWillShow = { [weak self] in self?.triggerRefresh() }
             popoverStore.onChanged = { [weak self] in self?.triggerRefresh(fresh: true) }
             popoverStore.onAddFile = { [weak self] in self?.shareFile() }
+            let queue = mutationQueue
+            popoverStore.runCLI = { await queue.run($0) }
         }
         guard let button = statusItem.button else { return }
         MainActor.assumeIsolated { popoverController.attach(to: button) }

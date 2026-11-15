@@ -210,7 +210,8 @@ public struct IssueList: Sendable, Equatable {
         func line(_ key: String, _ title: String, _ detail: String, _ symbol: String, _ action: IssueAction) -> IssueLine {
             IssueLine(id: "\(profile):m:\(key)", profile: profile, host: host, kind: .member, title: title, detail: detail, symbol: symbol, action: action)
         }
-        for member in members.members {
+        // A name from `member ls` never becomes an option: no leading dash.
+        for member in members.members where !member.name.hasPrefix("-") && !member.name.isEmpty {
             let name = display(member.name)
             let suffix = MemberID.suffix(of: member.memberID)
             let links = (state.shares).filter { share in
