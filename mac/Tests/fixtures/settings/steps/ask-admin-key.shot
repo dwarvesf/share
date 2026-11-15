@@ -1,0 +1,4 @@
+scenario owners
+script tab:tenants,select:han,button:turnOnCloud
+expect-no-argv setup
+label ask-admin-key

@@ -1,0 +1,4 @@
+scenario admin
+script tab:advanced,source:admin:1p,pick:admin:cf-console-labs-admin
+expect-argv admin-token --cmd op read op://vt01wx23yz45ab67cd89ef01gh/ab12cd34ef56gh78ij90kl12mn/credential
+label advanced-1password-admin

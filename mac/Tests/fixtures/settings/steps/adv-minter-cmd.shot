@@ -1,0 +1,4 @@
+scenario admin
+script tab:advanced,source:minter:cmd,cmd:minter=pass show cf-minter,commit:minter
+expect-argv minter-token --cmd pass show cf-minter
+label advanced-minter-command

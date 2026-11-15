@@ -1,0 +1,154 @@
+{
+  "schema": 1,
+  "profiles": [
+    {
+      "name": "console",
+      "state": {
+        "schema": 1,
+        "state": "serving",
+        "ready": true,
+        "mode": "named",
+        "host": "s.console.so",
+        "hosts": "Mac-mini",
+        "serves_here": true,
+        "service": true,
+        "access_pending": 0,
+        "r2": true,
+        "storage_default": "cloud",
+        "role": "tenant_origin",
+        "tier": "t1",
+        "serve": {
+          "phase": "serving",
+          "reason": "ok"
+        },
+        "ops": [],
+        "compat": {
+          "cli": "0.10.0",
+          "worker": "5 a1b2c3d4e5f6",
+          "status": "ok",
+          "min_cli": "0.10.0"
+        },
+        "shares": [
+          {
+            "id": "c0a0b1",
+            "name": "notes.txt",
+            "url": "https://s.console.so/c0a0b1/notes.txt",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 4102444800,
+            "storage": "machine",
+            "type": "text",
+            "by": "Mac-mini",
+            "link_state": "live"
+          },
+          {
+            "id": "c1a0b1",
+            "name": "brief-v2.pdf",
+            "url": "https://s.console.so/c1a0b1/brief-v2.pdf",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 4102444800,
+            "storage": "machine",
+            "type": "pdf",
+            "by": "Mac-mini",
+            "link_state": "live"
+          },
+          {
+            "id": "c2a0b1",
+            "name": "invoice-nov.pdf",
+            "url": "https://s.console.so/c2a0b1/invoice-nov.pdf",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 4102444800,
+            "storage": "machine",
+            "type": "pdf",
+            "by": "Mac-mini",
+            "link_state": "live"
+          },
+          {
+            "id": "c3a0b1",
+            "name": "roadmap.key",
+            "url": "https://s.console.so/c3a0b1/roadmap.key",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 4102444800,
+            "storage": "machine",
+            "type": "image",
+            "by": "Mac-mini",
+            "link_state": "live"
+          },
+          {
+            "id": "d0b1c2",
+            "name": "design-review.key",
+            "url": "https://s.console.so/d0b1c2/design-review.key",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 4102444800,
+            "storage": "cloud",
+            "type": "pdf",
+            "by": "Mac-mini",
+            "link_state": "live"
+          },
+          {
+            "id": "d1b1c2",
+            "name": "press-kit.zip",
+            "url": "https://s.console.so/d1b1c2/press-kit.zip",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 4102444800,
+            "storage": "cloud",
+            "type": "pdf",
+            "by": "Mac-mini",
+            "link_state": "live"
+          },
+          {
+            "id": "d2b1c2",
+            "name": "q3-plan.xlsx",
+            "url": "https://s.console.so/d2b1c2/q3-plan.xlsx",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 4102444800,
+            "storage": "cloud",
+            "type": "pdf",
+            "by": "Mac-mini",
+            "link_state": "live"
+          },
+          {
+            "id": "d3b1c2",
+            "name": "logo.png",
+            "url": "https://s.console.so/d3b1c2/logo.png",
+            "kind": "snapshot",
+            "own_host": null,
+            "expires": 4102444800,
+            "storage": "cloud",
+            "type": "pdf",
+            "by": "Mac-mini",
+            "link_state": "live"
+          }
+        ]
+      }
+    },
+    {
+      "name": "han",
+      "state": {
+        "schema": 1,
+        "state": "serving",
+        "ready": true,
+        "mode": "named",
+        "host": "s.han.ws",
+        "hosts": "Mac-mini",
+        "serves_here": true,
+        "service": true,
+        "access_pending": 0,
+        "role": "origin",
+        "tier": "t0",
+        "serve": {
+          "phase": "serving",
+          "reason": "ok"
+        },
+        "ops": [],
+        "shares": []
+      }
+    }
+  ]
+}

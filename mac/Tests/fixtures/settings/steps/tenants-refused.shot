@@ -1,0 +1,3 @@
+scenario admin
+script tab:tenants,select:console,remove
+label tenant-refused-removal

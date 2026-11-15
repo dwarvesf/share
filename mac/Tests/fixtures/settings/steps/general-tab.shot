@@ -1,0 +1,3 @@
+scenario admin
+script tab:general
+label general-tab

@@ -1,0 +1,3 @@
+scenario admin
+script tab:tenants,select:dfoundation
+label tenant-callout-setup

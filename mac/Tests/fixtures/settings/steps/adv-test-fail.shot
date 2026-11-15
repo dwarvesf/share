@@ -1,0 +1,4 @@
+scenario admin-test-fails
+script tab:advanced,source:admin:cmd,cmd:admin=pass show cf-admin,commit:admin,test:admin
+expect-argv admin-token --test --json
+label advanced-test-failed

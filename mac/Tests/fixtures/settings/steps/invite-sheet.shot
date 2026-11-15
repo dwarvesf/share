@@ -1,0 +1,3 @@
+scenario admin
+script tab:members,invite:console,name=linh
+label invite-sheet

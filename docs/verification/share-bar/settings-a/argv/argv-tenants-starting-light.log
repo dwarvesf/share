@@ -1,0 +1,7 @@
+profiles --json
+profiles --json
+--profile han config ttl
+profiles --json
+--profile han config ttl
+version
+version

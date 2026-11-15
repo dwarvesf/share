@@ -1,0 +1,5 @@
+scenario firstrun
+script add:join,join-host=s.console.so,code=SHR-7Q4K-M2XD-9PLA-3VTB,submit,wait:3.5,stop,wait:2,close,wait:1,tab:tenants
+hold 4
+expect-argv join s.console.so SHR-7Q4K-M2XD-9PLA-3VTB
+label interrupted-callout
