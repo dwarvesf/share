@@ -178,10 +178,40 @@ public struct RefusalSheet: Sendable, Equatable {
     /// other code shows its sentence and, when it names one, the next command to copy.
     public static func from(code: String, message: String, next: String?, host: String) -> RefusalSheet {
         if code == "members_present" { return Impact.refusedMembers(host: host) }
+        if let known = knownJoinOrMember(code: code, message: message) { return known }
         if let next, !next.isEmpty {
             return RefusalSheet(title: "Can't do that", sentence: message, next: "Copy command", action: .copyCommand(Redact.tokenShaped(next)))
         }
         return RefusalSheet(title: "Can't do that", sentence: message, next: nil, action: .none)
+    }
+}
+
+extension RefusalSheet {
+    /// The codes SPEC-009 maps to a sheet beyond `members_present`: a member verb refused for a
+    /// verb still running, a CLI below the Worker's minimum, and the join table of
+    /// `share-bar-interactions.md` 2a. Each reads as a sentence plus the way through.
+    static func knownJoinOrMember(code: String, message: String) -> RefusalSheet? {
+        let ask = "Ask your admin for a new code."
+        switch code {
+        case "member_busy":
+            return RefusalSheet(title: "Still working", sentence: message.isEmpty ? "Another change to this member is still running. Wait for it to finish, or press Finish in Members." : message,
+                                next: "Open Members", action: .openMembers)
+        case "cli_below_min":
+            return RefusalSheet(title: "Update share to \(AppState.defaultMinimum)", sentence: message.isEmpty ? "This share command is older than the team's server allows." : message,
+                                next: "Copy upgrade command", action: .copyCommand(AppState.upgradeCommand))
+        case "invite_unknown_or_used":
+            return RefusalSheet(title: "Can't join", sentence: "This code was already used, or it does not exist. \(ask)", next: nil, action: .none)
+        case "invite_expired":
+            return RefusalSheet(title: "Can't join", sentence: "This code expired. \(ask)", next: nil, action: .none)
+        case "invite_tampered":
+            return RefusalSheet(title: "Can't join", sentence: "This code was changed on the way. \(ask)", next: nil, action: .none)
+        case "member_changed":
+            return RefusalSheet(title: "Can't join", sentence: "The admin changed your invite. \(ask)", next: nil, action: .none)
+        case "invite_unavailable":
+            return RefusalSheet(title: "Can't join", sentence: "The invite is not available right now. \(ask)", next: nil, action: .none)
+        default:
+            return nil
+        }
     }
 }
 
