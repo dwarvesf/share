@@ -1,0 +1,8 @@
+# TASK-4b9: a completed Remove runs `rm <id>` exactly once (run-shots.sh counts).
+# expect-rm: 1
+scenario admin
+click status-item
+click more-c4c2a0
+click menu-remove
+wait 7
+expect-argv rm c4c2a0

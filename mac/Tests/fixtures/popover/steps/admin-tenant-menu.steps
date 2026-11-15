@@ -1,0 +1,8 @@
+# TASK-4b6 "admin tenant menu open, current tenant checked".
+scenario admin
+click status-item
+click tenant-button
+find manage-tenants
+find tenant-console
+shot admin-tenant-menu
+click manage-tenants

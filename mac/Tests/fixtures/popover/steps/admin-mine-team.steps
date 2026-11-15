@@ -1,0 +1,8 @@
+# TASK-4b7 "admin Mine" and "admin Team".
+scenario admin
+click status-item
+find scope-mine
+shot admin-mine
+click scope-team
+find row-7f3a21
+shot admin-team

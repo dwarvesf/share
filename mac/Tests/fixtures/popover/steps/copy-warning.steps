@@ -1,0 +1,7 @@
+# TASK-4b9 "copy warning on an offline link": a click copies and says what a visitor gets.
+scenario admin
+click status-item
+click scope-team
+click row-7f3a21
+find footer-status
+shot copy-warning-offline

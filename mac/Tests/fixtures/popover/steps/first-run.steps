@@ -1,0 +1,6 @@
+# First-run panel: the two buttons call the router.
+scenario firstrun
+click status-item
+find first-join
+shot first-run
+click first-join

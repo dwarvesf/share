@@ -1,9 +1,11 @@
-# Remove a link: status item, the row, Remove, the confirm. The fake CLI must log `rm <id>`.
+# Remove a link through the popover: status item, the row's More, Remove link…, then the 6 s Undo
+# window runs out. The fake CLI must log `rm <id>`.
 scenario calm
 click status-item
-click notes.txt
+find tenant-button
+click more-4f9ff2
 shot row-menu
-click Remove…
+click menu-remove
 shot remove-confirm
-click Remove
+wait 7
 expect-argv rm 4f9ff2

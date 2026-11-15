@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "profiles": [
+    {
+      "name": "console",
+      "state": {
+        "schema": 1,
+        "state": "serving",
+        "ready": true,
+        "mode": "named",
+        "host": "s.console.so",
+        "hosts": "Mac-mini",
+        "serves_here": true,
+        "service": true,
+        "access_pending": 0,
+        "role": "tenant_origin",
+        "tier": "t2",
+        "serve": {
+          "phase": "serving",
+          "reason": "ok"
+        },
+        "ops": [
+          {
+            "verb": "setup-members",
+            "step": 3,
+            "of": 9,
+            "name": "carry",
+            "alive": false,
+            "rerun": "share --profile console setup s.console.so --members",
+            "rerun_argv": [
+              "--profile",
+              "console",
+              "setup",
+              "s.console.so",
+              "--members"
+            ]
+          }
+        ],
+        "shares": []
+      }
+    }
+  ]
+}

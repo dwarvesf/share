@@ -1,0 +1,13 @@
+# TASK-4b9 "row menu on another member's link as admin", and the revoke undo footer.
+scenario admin
+click status-item
+click scope-team
+click more-7f3a21
+find menu-revoke
+shot row-menu-other-admin
+click menu-revoke
+find undo-button
+find footer-status
+shot undo-footer-revoke
+click undo-button
+wait 7

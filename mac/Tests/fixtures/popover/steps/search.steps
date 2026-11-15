@@ -1,0 +1,12 @@
+# TASK-4b7 "search with a match" and "search with no match": typed into the field with real key events.
+scenario admin
+click status-item
+click search
+key d
+find row-9d10aa
+shot search-match
+key delete
+key z
+key z
+find empty
+shot search-no-match

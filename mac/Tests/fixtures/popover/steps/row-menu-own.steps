@@ -1,0 +1,8 @@
+# TASK-4b9 "row menu on an own live link".
+scenario admin
+click status-item
+click more-c4c2a0
+find menu-copyLink
+find menu-showInFinder
+find menu-remove
+shot row-menu-own-live
