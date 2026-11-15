@@ -29,7 +29,7 @@ cp -f "$MAC/Info.plist" "$APP/Contents/Info.plist"
 codesign --force --sign - "$APP" >/dev/null 2>&1
 
 RUN="$WORK/run"
-mv "$RUN" "$RUN.gone.$$" 2>/dev/null || true
+mkdir -p "$WORK/gone"; mv "$RUN" "$WORK/gone/run.$$" 2>/dev/null || true
 mkdir -p "$RUN/scenario"
 command cp -f "$HERE/scenarios/parity-calm/member-ls.json" "$RUN/scenario/"
 sed -e "s/@D1@/$(date -v-1d +%F)/" -e "s/@D3@/$(date -v-3d +%F)/" -e "s/@D8@/$(date -v-8d +%F)/" \
@@ -39,7 +39,7 @@ sed -e "s/@D1@/$(date -v-1d +%F)/" -e "s/@D3@/$(date -v-3d +%F)/" -e "s/@D8@/$(d
 
 shoot() { # shoot <label> <light|dark> [menu row id]
   local label="$1" mode="$2" row="${3:-}" png="$OUT/$1-$2.png" args=()
-  mv -f "$png" "$png.gone.$$" 2>/dev/null || true
+  mkdir -p "$WORK/gone"; mv -f "$png" "$WORK/gone/$(basename "$png").$$" 2>/dev/null || true
   args=(-ShareBarShotsRender "$png")
   [[ $mode == dark ]] && args+=(-ShareBarShotsAppearance dark)
   [[ -n $row ]] && args+=(-ShareBarShotsMenuRow "$row")

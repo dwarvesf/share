@@ -38,3 +38,5 @@ Verdict: PASS
 
 - A capture of the real `NSPopover` over a light and a dark desktop: the harness takes no pointer input and a window capture of the vibrancy reads black here. The root fill is opaque, so the body does not depend on the desktop; the native arrow is unsampled.
 - `share state` does not print `added`, so the age column is empty on a live tenant until `bin/share` emits it (outside this change's touches).
+
+- Review: kit:advisor critique folded: stray capture files moved out, age gets a VoiceOver label, menu highlight resets per row. Real-popover sizing stays unproven (listed under Not attempted).

@@ -164,7 +164,8 @@ struct RowView: View {
             Spacer(minLength: 4)
             if let age = row.age {
                 Text(age).font(theme.metaFont).foregroundColor(theme.tertiary)
-                    .frame(minWidth: 46, alignment: .trailing).accessibilityHidden(true)
+                    .frame(minWidth: 46, alignment: .trailing)
+                    .accessibilityLabel(age == "today" ? "added today" : "added \(age) ago")
             }
             if store.flashRow == row.id {
                 Text("Copied").font(.system(size: 11, weight: .semibold)).foregroundColor(theme.ok)

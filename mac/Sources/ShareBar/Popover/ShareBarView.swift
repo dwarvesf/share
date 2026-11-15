@@ -28,7 +28,7 @@ struct ShareBarView: View {
             }
             if store.tenantMenuOpen { tenantMenu }
             if let id = store.menuRowID, let row = store.row(id) {
-                GeometryReader { proxy in rowMenu(for: row, bottom: proxy.size.height) }
+                GeometryReader { proxy in rowMenu(for: row, bottom: proxy.size.height) }.id(row.id)
             }
         }
         .frame(width: Self.width, alignment: .topLeading)
