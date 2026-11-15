@@ -12,51 +12,65 @@ Every check ran on the Mac Mini in the branch worktree or in a clone of it (a fi
 ```
 Command: /bin/bash -n tests/share.sh && /bin/bash -n tests/members.sh && shellcheck bin/share tests/share.sh tests/members.sh
 Exit:    0
-Verdict: PASS (bash 3.2 parse of both files, no shellcheck finding)
+Output:  (no output: both files parse under macOS /bin/bash 3.2 and shellcheck finds nothing)
+Verdict: PASS
 ```
 
 ```
 Command: SHARE_TEST_PORT_BASE=36000 bash tests/share.sh   (before: a copy of the worktree at main 7b39971, git history present)
 Exit:    0
-Verdict: PASS, "1826 checks, PASS"
+Output:  1826 checks, PASS
+Verdict: PASS
 ```
 
 ```
-Command: SHARE_TEST_PORT_BASE=36000 bash tests/share.sh   (after, the branch worktree, unfiltered, the third run, after the review folds)
+Command: SHARE_TEST_PORT_BASE=36000 bash tests/share.sh   (after: the branch worktree, unfiltered, the third run, after the review folds)
 Exit:    0
-Verdict: PASS, "1826 checks, PASS", the same count as before; total 1294 s
+Output:  1826 checks, PASS
+         === timing: seconds per section, slowest first ===
+             129s  access: a login gate per link (SHARE_ACCESS_DRY=1, every Cloudflare call answered from fixtures)
+             105s  r2 backend: byte identity of existing installs (compat)
+             104s  state groundwork: G2c
+             101s  members: member rm and member purge (TASK-2d)
+Verdict: PASS (the same check count as before; total 1294 s)
 ```
 
-Two earlier unfiltered runs (before the review folds) of the branch also totalled 1826 checks and each failed one check. The first failed `no suite serve still running`: 24 serve processes left by sweep runs I had killed (my debris; killed). The second failed `mm CC-14 (add-first)`, the load flake the lead already logged (a lease read racing a release); that section alone passes: `SHARE_TEST_ONLY='^members: member add$'` gave "34 checks, PASS".
+Two earlier unfiltered runs of the branch, before the review folds, also totalled 1826 checks and each failed one. The first failed `no suite serve still running`: 24 serve processes left by sweep runs I had killed (my debris; killed). The second failed `mm CC-14 (add-first)`, the load flake the lead already logged (a lease read racing a release); that section alone passes (next block).
 
 ```
 Command: SHARE_TEST_ONLY='^members: member add$' SHARE_TEST_PORT_BASE=30000 bash tests/share.sh
 Exit:    0
-Verdict: PASS, "34 checks, PASS"; 81 `skip <section>` lines, one per skipped section; the shared fixtures and the tail sections ran.
+Output:  34 checks, PASS      (81 `skip <section>` lines before it, one per skipped section; the shared fixtures and the tail sections ran)
+Verdict: PASS
 ```
 
 ```
 Command: SHARE_TEST_ONLY='^members: the invite seal$' SHARE_TEST_PORT_BASE=31500 /bin/bash tests/share.sh   (macOS /bin/bash 3.2.57)
 Exit:    0
-Verdict: PASS, "18 checks, PASS (filtered by SHARE_TEST_ONLY: 1 sections ran, the rest skipped)"; 81 skip lines. Group resolution ran under 3.2 too: a `groundwork` filter printed the `core` sections first.
+Output:  18 checks, PASS (filtered by SHARE_TEST_ONLY: 1 sections ran, the rest skipped)
+Verdict: PASS (81 skip lines; a `groundwork` filter under 3.2 printed the `core` sections first, so group resolution ran under 3.2 too)
 ```
 
 ```
 Command: SHARE_TEST_ONLY='^state groundwork: G5$' SHARE_TEST_PORT_BASE=30800 bash tests/share.sh
 Exit:    0
-Verdict: PASS, "845 checks, PASS" in 563 s: the group pulled `core`, every `state groundwork: G*` and `migrate: moving`; 41 sections skipped.
+Output:  845 checks, PASS     (563 s: the group pulled `core`, every `state groundwork: G*` and `migrate: moving`; 41 sections skipped)
+Verdict: PASS
 ```
 
 ```
-Command: SHARE_TEST_ONLY='(' bash tests/share.sh ; SHARE_TEST_ONLY='^NOMATCHX$' bash tests/share.sh
+Command: SHARE_TEST_ONLY='^NOMATCHX$' bash tests/share.sh ; SHARE_TEST_ONLY='(' bash tests/share.sh
 Exit:    2 for both
-Verdict: PASS (an invalid regex and a filter that names no section both stop before any test)
+Output:  SHARE_TEST_ONLY=^NOMATCHX$ matches no section name
+         SHARE_TEST_ONLY is not a valid extended regex: (
+Verdict: PASS (a filter that names no section and an invalid regex both stop before any test)
 ```
 
 ```
 Command: node tests/worker.mjs   (run inside the suite)
 Exit:    0
-Verdict: PASS ("worker.mjs exits 0")
+Output:  worker.mjs exits 0
+Verdict: PASS
 ```
 
 ## Section filter (Done = a)
