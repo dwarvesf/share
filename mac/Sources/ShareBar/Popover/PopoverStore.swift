@@ -312,7 +312,7 @@ final class PopoverStore: ObservableObject {
         searchFocused = false
         focusedRow = nil
         guard commitSynchronously else {
-            send(.close)
+            send(.popoverClosed)
             return
         }
         // The app is quitting: the calls must finish before the process ends, within one bound.

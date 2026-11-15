@@ -160,8 +160,9 @@ public struct AllLinksModel: Sendable, Equatable {
         return "\(all.count) \(all.count == 1 ? "link" : "links") · \(mine) yours · Views are counted for cloud links only"
     }
 
-    public var selectedRows: [AllLinksRow] { all.filter { state.selection.contains($0.id) } }
-    public var selectedText: String { "\(state.selection.count) selected" }
+    /// Only rows on screen count: a search that hides a selected row also takes it out of every bulk action.
+    public var selectedRows: [AllLinksRow] { rows.filter { state.selection.contains($0.id) } }
+    public var selectedText: String { "\(selectedRows.count) selected" }
 
     // MARK: bulk actions
 

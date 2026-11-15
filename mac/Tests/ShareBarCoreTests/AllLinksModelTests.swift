@@ -115,3 +115,17 @@ final class AllLinksModelTests: XCTestCase {
         XCTAssertEqual(model().footer, "5 links · 2 yours · Views are counted for cloud links only")
     }
 }
+
+final class AllLinksReviewFixTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func testASearchTakesHiddenSelectedRowsOutOfEveryBulkAction() {
+        let shares = ["a1", "b2", "c3"].map { makeShare(id: $0, name: "f-\($0).txt", url: "https://s.t/\($0)", expires: 4_102_444_800, storage: "machine", linkState: "live") }
+        let entry = makeEntry(name: "p", state: makeSnapshot(host: "s.t", shares: shares, role: "origin", tier: "t0"))
+        let state = AllLinksState(query: "b2", selection: ["a1", "b2", "c3"])
+        let model = AllLinksModel(entry: entry, state: state, now: now)
+        XCTAssertEqual(model.selectedText, "1 selected")
+        XCTAssertEqual(model.bulkRemoveArgv, ["--profile", "p", "rm", "b2"])
+        XCTAssertEqual(model.bulkCopyText, "https://s.t/b2")
+    }
+}

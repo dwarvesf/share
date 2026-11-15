@@ -20,9 +20,12 @@ extension SettingsStore {
     func requestMembers() {
         guard let entry = membersProfile, members.shouldRequest() else { return }
         members.begin(profile: entry.name)
-        collectKeys(keysNeedingAsk([.admin], profile: entry.name), asked: [:],
+        let asks = keysNeedingAsk([.admin], profile: entry.name)
+        members.askPending = !asks.isEmpty
+        collectKeys(asks, asked: [:],
                     purpose: "Share Bar uses it to read the members and forgets it right away.") { [weak self] keys in
             guard let self else { return }
+            self.members.askPending = false
             Task { await self.loadMembers(profile: entry.name, keys: keys) }
         }
     }
@@ -30,12 +33,14 @@ extension SettingsStore {
     /// `member ls --json`. A failure shows the CLI's sentence in place of the list.
     func loadMembers(profile: String, keys: [String: String] = [:]) async {
         let argv = MembersModel.listArgv(profile: profile)
+        let request = members.newRequest()
         let result: CLIResult
         if keys.isEmpty {
             result = await readCLI(argv)
         } else {
             result = await AskedKeyCommand(argv: argv, environment: keys).spawn().result
         }
+        guard members.isCurrent(request) else { return }
         guard result.status == 0, let list = MemberList.decode(result.stdout) else {
             members.failed(MembersModel.failureSentence(result), profile: profile)
             onMembers(nil, profile)

@@ -19,6 +19,17 @@ final class MembersStore: ObservableObject {
     /// The profile the list was read for.
     @Published private(set) var profile: String?
     private var pointedName: String?
+    private var requestCounter = 0
+    /// True while the ask opened for the roster is on screen.
+    var askPending = false
+
+    /// Each read takes a number; only the newest read may write its answer.
+    func newRequest() -> Int {
+        requestCounter += 1
+        return requestCounter
+    }
+
+    func isCurrent(_ request: Int) -> Bool { request == requestCounter }
     private var lastRequest = Date.distantPast
 
     /// A tab open and the refresh behind it can both ask; one read per second is enough.

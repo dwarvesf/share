@@ -36,6 +36,10 @@ public struct NotifyEvent: Sendable, Equatable {
 public struct AttentionNotifier: Sendable {
     private var seen: Set<String> = []
     private var primed = false
+    /// Profiles whose roster the last read held, and the toggles it had on: a roster that arrives
+    /// later, or a toggle switched on, primes instead of announcing what was already true.
+    private var rosters: Set<String> = []
+    private var lastPrefs: NotifyPrefs?
 
     public init() {}
 
@@ -81,12 +85,32 @@ public struct AttentionNotifier: Sendable {
                 }
             }
         }
-        let keys = Set(facts.map(\.key))
-        defer { seen = keys }
+        var keys = Set(facts.map(\.key))
+        // A profile whose state is briefly absent keeps what it had, so its facts never re-fire on return.
+        for entry in profiles.profiles where entry.state == nil {
+            keys.formUnion(seen.filter { $0.contains(":\(entry.name):") })
+        }
+        let rosterNow = Set(members.keys)
+        let newRosters = rosterNow.subtracting(rosters)
+        let switchedOn = lastPrefs.map { prev in
+            (offline: prefs.offline && !prev.offline, expiry: prefs.expiry && !prev.expiry, member: prefs.member && !prev.member)
+        } ?? (offline: false, expiry: false, member: false)
+        defer {
+            seen = keys
+            rosters = rosterNow
+            lastPrefs = prefs
+        }
         guard primed else {
             primed = true
             return []
         }
-        return facts.filter { !seen.contains($0.key) }.sorted { $0.key < $1.key }
+        return facts.filter { fact in
+            if seen.contains(fact.key) { return false }
+            if switchedOn.offline, fact.key.hasPrefix("offline:") { return false }
+            if switchedOn.expiry, fact.key.hasPrefix("expiry:") { return false }
+            if switchedOn.member, fact.key.hasPrefix("member:") { return false }
+            if fact.key.hasPrefix("member:"), newRosters.contains(where: { fact.key.hasPrefix("member:\($0):") }) { return false }
+            return true
+        }.sorted { $0.key < $1.key }
     }
 }

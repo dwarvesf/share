@@ -23,7 +23,7 @@ struct AllLinksView: View {
             Rectangle().fill(t.separator).frame(height: 1)
             VStack(alignment: .leading, spacing: 10) {
                 topBar(model, t)
-                if !model.state.selection.isEmpty { bulkBar(model, t) }
+                if !model.selectedRows.isEmpty { bulkBar(model, t) }
                 table(model, t)
             }
             .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 12)

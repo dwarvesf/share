@@ -58,7 +58,7 @@ final class AllLinksWindowController: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         clock?.invalidate()
         clock = nil
-        // A pending removal commits when its window closes, as it does when the popover closes.
-        store?.popover.send(.close)
+        // A pending bulk removal commits when its window closes; the popover keeps its own mode.
+        store?.popover.send(.commitBulk)
     }
 }

@@ -245,3 +245,19 @@ final class PopoverStateTests: XCTestCase {
         XCTAssertEqual(first.reduce(.profilesChanged(hasRole: true)).state.mode, .list(scope: .mine, query: ""))
     }
 }
+
+final class BulkRemoveCloseTests: XCTestCase {
+    func testPopoverCloseKeepsABulkRemoveAndTheWindowCloseCommitsOnlyIt() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var state = PopoverState()
+        state = state.reduce(.remove(action: .remove, ids: ["a"], argv: ["rm", "a"], now: now)).state
+        state = state.reduce(.remove(action: .bulkRemove, ids: ["b", "c"], argv: ["rm", "b", "c"], now: now)).state
+        let closed = state.reduce(.popoverClosed)
+        XCTAssertEqual(closed.effects, [.run(["rm", "a"])])
+        XCTAssertEqual(closed.state.pending.map(\.ids), [["b", "c"]])
+        let window = closed.state.reduce(.commitBulk)
+        XCTAssertEqual(window.effects, [.run(["rm", "b", "c"])])
+        XCTAssertEqual(window.state.pending, [])
+        XCTAssertEqual(window.state.mode, closed.state.mode, "the window never resets the popover")
+    }
+}

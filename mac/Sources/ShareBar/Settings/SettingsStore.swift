@@ -791,7 +791,8 @@ final class SettingsStore: ObservableObject {
         if !sheet.kind.escCloses { return }
         self.sheet = nil
         // Esc on the key the tab asked for: the list stays unread, with a way to ask again.
-        if case .askKey = sheet, pane == .members, members.list == nil, members.profile != nil {
+        if case .askKey = sheet, members.askPending, members.list == nil, members.profile != nil {
+            members.askPending = false
             members.failed("Reading the members needs the admin key.", profile: members.profile ?? "")
         }
     }
