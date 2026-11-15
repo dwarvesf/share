@@ -16,3 +16,9 @@ Delta from SPEC-009 TASK-4b6 to TASK-4b9. The spec rows are not restated. Founda
 
 - `<me>` for an admin's `share member renew <me>`: an admin profile has no member record, so the argv uses `state.member.name`, else the profile name. A refusal shows the CLI's sentence.
 - The tunnel line of the needs-a-look list says "for more than 2 minutes" in the interactions doc; `state` carries no since-time, so any `tunnel_down` phase is a line.
+
+## Harness quirks found in the final run
+
+- `mac/shots.sh` exits 1 with no message when `SHOTS_OUT` does not exist (its `find` fails under `set -e`). Create the directory first. SG-16 owns the fix.
+- The first launch after another run sometimes reports "status item never appeared"; a second run passes. Stale `Share Bar.app` processes under `mac/build/shots` make it more likely; kill them first.
+- `row-menu-other` clicked `more-7f3a21` once before the Team list rendered. A `find row-7f3a21` before the click would remove that race.
