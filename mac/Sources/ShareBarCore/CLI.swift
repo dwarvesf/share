@@ -114,7 +114,15 @@ public enum CLI {
 
     /// Spawns a long-running, cancellable verb (setup), streaming decoded output to
     /// `onOutput` as it arrives instead of buffering it until exit.
-    public static func spawnCancellable(_ args: [String], onOutput: @escaping (String) -> Void) -> CLIJob {
+    ///
+    /// `environment` adds variables to the child on top of `childEnvironment`; the queue
+    /// uses it for `SHARE_ERROR_JSON=1`. Never a token: a secret reaches a child through
+    /// its environment only, set by the caller that holds it (Q-SEC-6).
+    public static func spawnCancellable(
+        _ args: [String],
+        environment extra: [String: String] = [:],
+        onOutput: @escaping (String) -> Void
+    ) -> CLIJob {
         guard let url = locateForRun() else {
             logger.error(
                 "share CLI not found; verb=\(verbForLog(args), privacy: .public) args=\(args.joined(separator: " "), privacy: .private)"
@@ -125,7 +133,7 @@ public enum CLI {
         let env = childEnvironment(
             cliDirectory: url.deletingLastPathComponent().path,
             inherited: ProcessInfo.processInfo.environment
-        )
+        ).merging(extra) { _, new in new }
         let start = Date()
         let verb = verbForLog(args)
         let argvForLog = ([url.path] + args).joined(separator: " ")

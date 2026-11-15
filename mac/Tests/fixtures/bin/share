@@ -1,0 +1,100 @@
+#!/bin/bash
+# fake share CLI for mac/shots.sh (SPEC-009 TASK-4b4). It answers from a scenario
+# directory and never touches a real profile, bucket or Worker.
+#
+#   SHARE_FAKE_DIR     working directory (required): `scenario/` is the writable copy of
+#                      one scenario, `argv.log` collects one line per call, the arguments
+#                      after the program name, `--profile <name>` included.
+#   SHARE_FAKE_DELAY   seconds between progress lines (default 0.4).
+#   SHARE_PROGRESS=1   journaled verbs print `{"progress":{verb,step,of,name}}` to stderr,
+#                      the line SPEC-010 G9 defines.
+#   SHARE_ERROR_JSON=1 a failing verb ends its stderr with the `{"error":{...}}` line.
+#
+# A file `scenario/fail-<verb>` makes that verb fail with the file's text as its message.
+# Needs jq. bash 3.2 safe.
+set -u
+
+dir="${SHARE_FAKE_DIR:-}"
+[[ -n $dir && -d $dir/scenario ]] || { echo "share: fake CLI needs SHARE_FAKE_DIR with a scenario/ copy" >&2; exit 2; }
+scn="$dir/scenario"
+printf '%s\n' "$*" >> "$dir/argv.log"
+
+profile=default
+if [[ ${1:-} == --profile ]]; then
+  profile=${2:-default}
+  shift 2
+fi
+verb=${1:-}
+[[ $# -eq 0 ]] || shift
+command -v jq >/dev/null 2>&1 || { echo "share: fake CLI needs jq" >&2; exit 2; }
+
+fail_with() { # fail_with <code> <message> <next>
+  if [[ ${SHARE_ERROR_JSON:-} == 1 ]]; then
+    echo "share: $2" >&2
+    jq -nc --arg c "$1" --arg m "$2" --arg n "${3:-}" '{error: {code: $c, message: $m, next: $n}}' >&2
+  else
+    echo "share: $2" >&2
+  fi
+  exit 1
+}
+
+# The fixtures write 4102444800 for "far from expiry"; a screenshot reads better with a
+# plausible time left, so the fake CLI answers it as 14 days from now.
+fresh_expiry='(.. | objects | select(has("expires") and .expires == 4102444800) | .expires) |= (now | floor) + 1209600'
+
+steps_for() { # journaled verbs and their step names
+  case $1 in
+    add) echo "stage upload row" ;;
+    setup|join|teardown|migrate) echo "check provision verify" ;;
+    member) echo "lease records deploy" ;;
+    *) echo "" ;;
+  esac
+}
+
+progress() { # progress <verb>
+  [[ ${SHARE_PROGRESS:-} == 1 ]] || return 0
+  local names n=0 total name
+  names=$(steps_for "$1")
+  [[ -n $names ]] || return 0
+  total=$(wc -w <<<"$names" | tr -d ' ')
+  for name in $names; do
+    n=$((n + 1))
+    jq -nc --arg v "$1" --argjson n "$n" --argjson of "$total" --arg name "$name" '{progress: {verb: $v, step: $n, of: $of, name: $name}}' >&2
+    sleep "${SHARE_FAKE_DELAY:-0.4}"
+  done
+}
+
+case $verb in
+  profiles)
+    if [[ -f $scn/profiles.txt ]]; then cat "$scn/profiles.txt"; else jq -c "$fresh_expiry" "$scn/profiles.json"; fi
+    ;;
+  state)
+    jq -c --arg p "$profile" '.profiles[] | select(.name == $p) | .state' "$scn/profiles.json" | jq -c "$fresh_expiry"
+    ;;
+  version)
+    echo "share 0.10.0"
+    ;;
+  hits)
+    echo "3 hits"
+    ;;
+  member)
+    sub=${1:-}
+    if [[ $sub == ls ]]; then
+      cat "$scn/member-ls.json"
+    else
+      [[ ! -f $scn/fail-member ]] || fail_with member_failed "$(cat "$scn/fail-member")" "share member ls"
+      progress member
+    fi
+    ;;
+  *)
+    if [[ -f $scn/fail-$verb ]]; then
+      fail_with "${verb}_failed" "$(cat "$scn/fail-$verb")" "share --profile $profile $verb"
+    fi
+    progress "$verb"
+    if [[ $verb == rm && -n ${1:-} ]]; then
+      tmp="$scn/profiles.json.tmp"
+      jq --arg p "$profile" --arg id "$1" '(.profiles[] | select(.name == $p) | .state.shares) |= map(select(.id != $id))' "$scn/profiles.json" > "$tmp" && mv -f "$tmp" "$scn/profiles.json"
+    fi
+    ;;
+esac
+exit 0

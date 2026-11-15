@@ -1,0 +1,1 @@
+usage: share <command> [args]

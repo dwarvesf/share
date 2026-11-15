@@ -14,6 +14,8 @@ let package = Package(
                 .copy("Fixtures/state.json"),
                 .copy("Fixtures/profiles.json"),
                 .copy("Fixtures/profiles-tenant.json"),
+                .copy("Fixtures/state-full.json"),
+                .copy("Fixtures/member-ls.json"),
             ]
         ),
     ]

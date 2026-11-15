@@ -2,7 +2,8 @@ import XCTest
 @testable import ShareBarCore
 
 /// CP-01 (state groundwork): today's types decode a `share state` carrying the additive keys
-/// `codes_v`, `cloud_error_code`, `role`, `tier`, and `ops`, unchanged from the same state without them.
+/// `codes_v`, `cloud_error_code`, `role`, `tier`, and `ops`; every other field decodes as it
+/// does without them, and `role`, `tier` and `ops` decode as optional keys (SPEC-010 G11a).
 /// A profile that moved away reads `not_setup`, which renders neutral with Set Up, never
 /// "Update Share Bar" or "Error: state not readable".
 final class GroundworkCompatTests: XCTestCase {
@@ -32,7 +33,31 @@ final class GroundworkCompatTests: XCTestCase {
 
     func testTodaysSnapshotDecodesTheNewKeysUnchanged() throws {
         let extended = try JSONDecoder().decode(Snapshot.self, from: groundworkState())
-        XCTAssertEqual(extended, try loadFixtureSnapshot(), "the new keys are ignored; every existing field decodes as before")
+        let base = try loadFixtureSnapshot()
+        XCTAssertEqual(extended.shares, base.shares, "every existing field decodes as before")
+        XCTAssertEqual(extended.state, base.state)
+        XCTAssertEqual(extended.ready, base.ready)
+        XCTAssertEqual(extended.hosts, base.hosts)
+        XCTAssertEqual(extended.schema, base.schema)
+        XCTAssertEqual(extended.mode, base.mode)
+        XCTAssertEqual(extended.host, base.host)
+        XCTAssertEqual(extended.servesHere, base.servesHere)
+        XCTAssertEqual(extended.service, base.service)
+        XCTAssertEqual(extended.skipped, base.skipped)
+        XCTAssertEqual(extended.accessPending, base.accessPending)
+        XCTAssertEqual(extended.backend, base.backend)
+        XCTAssertEqual(extended.r2, base.r2)
+        XCTAssertEqual(extended.storageDefault, base.storageDefault)
+        XCTAssertEqual(extended.cloudError, base.cloudError)
+        XCTAssertEqual(extended.cloudMore, base.cloudMore)
+        XCTAssertEqual(extended.role, "tenant_origin")
+        XCTAssertEqual(extended.tier, "t1")
+        XCTAssertEqual(extended.ops?.count, 2, "the unreadable-journal placeholder decodes too")
+        XCTAssertEqual(extended.ops?.first?.rerunArgv, ["setup", "s.example.test", "--r2", "--bucket", "b"])
+        XCTAssertEqual(
+            Health.of(makeEntry(name: "p", state: extended)), Health.of(makeEntry(name: "p", state: base)),
+            "health derives the same from a state with the new keys"
+        )
     }
 
     func testAMigratedProfileIsNotSetUpAndNeutral() throws {

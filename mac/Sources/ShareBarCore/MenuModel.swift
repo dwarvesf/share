@@ -39,9 +39,16 @@ public enum Health: Sendable, Equatable {
         return .error
     }
 
-    /// The status text the section title and the `Needs attention` header show.
+    /// The status text the section title and the `Needs attention` header show. A
+    /// `serve.phase` that agrees with the classification gives the copy; a `migrated`
+    /// role reads `Moved to another machine`; anything else is today's text (SB-01 to SB-03).
     public static func statusText(of entry: ProfileEntry) -> String {
-        switch of(entry) {
+        let health = of(entry)
+        if let state = entry.state, entry.error == nil {
+            if state.role == "migrated", health == .notSetUp { return "Moved to another machine" }
+            if let sentence = ServeSentence.text(of: state, health: health) { return sentence }
+        }
+        switch health {
         case .error:
             // "Error: Update Share Bar" reads oddly, so that one text stands alone.
             if let error = entry.error, error == "Update Share Bar" { return error }
@@ -73,7 +80,10 @@ public struct Row: Sendable, Equatable {
     /// The `--access` rule on a gated share; nil means public.
     public let access: String?
     public let canRefresh: Bool
+    /// False for a placeholder url and for a link that never copies (`expired`, `revoked`).
     public let canCopy: Bool
+    /// The row's `link_state`; an older CLI's row and an unknown value read as `live`.
+    public let linkState: LinkState
     public let removeText: String
     /// The file-type marker (`NSMenuItem.image`); `doc`/`file` on a row with no `type`.
     public let typeGlyph: RowGlyph
@@ -95,7 +105,8 @@ public struct Row: Sendable, Equatable {
         url = share.url
         access = share.access
         canRefresh = share.kind == "snapshot"
-        canCopy = !(url.contains("<pending>") || url.contains("<no-hostname>"))
+        linkState = LinkState(raw: share.linkState)
+        canCopy = !(url.contains("<pending>") || url.contains("<no-hostname>")) && linkState.canCopy
         typeGlyph = RowGlyphs.type(share.type)
         storageGlyph = RowGlyphs.storage(share.storage)
         linkGlyph = RowGlyphs.link(share.kind)
@@ -118,14 +129,53 @@ public struct Row: Sendable, Equatable {
     /// `live` for live kind; `never` for `expires == 0`; `expired` when `expires <= now`;
     /// else the largest whole unit left (floor, minimum `1m left`).
     static func trailingText(share: Share, now: Date) -> String {
+        if share.linkState == "expired" { return "expired" }
         if share.kind == "live" { return "live" }
         if share.expires == 0 { return "never" }
-        let nowEpoch = Int(now.timeIntervalSince1970)
-        let remaining = share.expires - nowEpoch
+        let remaining = secondsLeft(share.expires, now: now)
         if remaining <= 0 { return "expired" }
         if remaining >= 86_400 { return "\(remaining / 86_400)d left" }
         if remaining >= 3_600 { return "\(remaining / 3_600)h left" }
         return "\(max(1, remaining / 60))m left"
+    }
+}
+
+/// One journaled command of a profile, as a menu line: running (`Working: <verb>
+/// (<step>/<of>)`) or stopped (an attention line with the CLI's `rerun` display string,
+/// shown as text only and never run by the menu, DEC-21).
+public struct OpLine: Sendable, Equatable {
+    public let verb: String
+    public let alive: Bool
+    public let text: String
+
+    init?(_ op: OpInfo) {
+        // `{"verb":"?"}` stands for a journal file the CLI could not read: no step to show.
+        guard op.verb != "?" else { return nil }
+        verb = op.verb
+        alive = op.alive
+        let position: String
+        if let step = op.step, let of = op.of {
+            position = "\(step)/\(of)"
+        } else {
+            position = ""
+        }
+        if op.alive {
+            text = position.isEmpty ? "Working: \(op.verb)" : "Working: \(op.verb) (\(position))"
+        } else {
+            var line = "\(op.verb) stopped"
+            if let step = op.step, let of = op.of {
+                line += " at step \(step) of \(of)"
+                if let name = op.name, !name.isEmpty { line += " (\(OpLine.clean(name)))" }
+            }
+            if let rerun = op.rerun, !OpLine.clean(rerun).isEmpty { line += "; rerun: \(OpLine.clean(rerun))" }
+            text = line
+        }
+    }
+
+    /// One line, no control characters: a journal is a file any local process can write.
+    static func clean(_ text: String) -> String {
+        String(text.unicodeScalars.map { $0.value < 32 || $0.value == 127 ? " " : Character($0) })
+            .trimmingCharacters(in: .whitespaces)
     }
 }
 
@@ -145,6 +195,8 @@ public struct Section: Sendable, Equatable {
     public let showStop: Bool
     public let showSetUp: Bool
     public let accessPending: Int
+    /// The profile's journaled commands, running ones first.
+    public let ops: [OpLine]
     /// The `cloud_error` reason `state` reported, when the bucket listing failed but local
     /// rows still printed; the section shows it as a disabled line.
     public let cloudError: String?
@@ -170,7 +222,10 @@ public struct Section: Sendable, Equatable {
             showStop = false
             showSetUp = false
             cloudError = nil
+            ops = []
         } else {
+            let lines = (entry.state?.ops ?? []).compactMap(OpLine.init)
+            ops = lines.filter(\.alive) + lines.filter { !$0.alive }
             let allRows = (entry.state?.shares ?? []).map { Row(share: $0, profile: entry.name, now: now) }
             rows = Array(allRows.prefix(rowCap))
             // `cloud_more` counts rows `state` never fetched; they exist but are not
@@ -247,6 +302,7 @@ public struct MenuModel: Sendable {
         if case .oldCLI? = failure { return "Update share CLI" }
         if let profiles, profiles.schema > 1 { return "Update Share Bar" }
         if case .other(let message)? = failure { return message }
+        if let running = sections.lazy.flatMap(\.ops).first(where: \.alive) { return running.text }
         let attention = sections.filter { $0.health.isAttention }
         if attention.count == 1 {
             return "Needs attention: \(attention[0].profile) (\(attention[0].status))"
@@ -264,4 +320,11 @@ public struct MenuModel: Sendable {
         }
         return "Not set up"
     }
+}
+
+/// Seconds from `now` to an `expires` epoch. A value so far in the past that the
+/// subtraction would overflow reads as 0 (expired) and never traps.
+func secondsLeft(_ expires: Int, now: Date) -> Int {
+    let (remaining, overflow) = expires.subtractingReportingOverflow(Int(now.timeIntervalSince1970))
+    return overflow ? 0 : remaining
 }

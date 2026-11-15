@@ -33,7 +33,7 @@ public enum StorageField: Sendable, Equatable {
     /// No control at all: a tunnel profile with R2 off, or an older CLI with no `r2` key.
     case none
     /// An r2 member profile publishes cloud links only: a disabled `In the cloud` label.
-    case member
+    case cloudOnly
     /// An origin with R2 on (the tunnel runs here): an `On <machine>` / `In the cloud`
     /// popup, `machine` being this Mac's name out of the state `hosts` line (or its first
     /// entry when this Mac is not named there).
@@ -50,9 +50,10 @@ public enum PublishChoice {
         return snapshot.profiles.compactMap { isEligible($0) ? $0.name : nil }
     }
 
+    /// `ProfileView` holds the rule: today's `stopped` or `serving` test, narrowed by
+    /// `role`, `member.status`, `token.status` and `compat.status` when the CLI sends them.
     public static func isEligible(_ entry: ProfileEntry) -> Bool {
-        guard entry.error == nil, let state = entry.state else { return false }
-        return state.state == "stopped" || state.state == "serving"
+        ProfileView(entry: entry).publish.isEligible
     }
 
     /// argv for one add; nil unless `path` is absolute, so a bare `8080` can never reach
@@ -139,7 +140,7 @@ public struct PublishForm: Sendable, Equatable {
     /// here, a disabled `In the cloud` label on an r2 member, nothing otherwise.
     public var storageField: StorageField {
         guard let state = profiles.profiles.first(where: { $0.name == profile })?.state else { return .none }
-        if state.backend == "r2" { return .member }
+        if state.backend == "r2" { return .cloudOnly }
         if state.r2 == true && state.servesHere {
             guard !state.hosts.isEmpty else { return .picker(machine: "this machine") }
             let names = state.hosts.split(separator: " ").map(String.init)

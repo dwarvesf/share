@@ -10,6 +10,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         statusItemController = StatusItemController()
 
+        // Screenshot harness only (mac/shots.sh): `-ShareBarShotsAppearance dark` draws the
+        // app in the dark appearance without touching the machine's setting. #if DEBUG so a
+        // release build never reads it.
+        #if DEBUG
+        if UserDefaults.standard.string(forKey: "ShareBarShotsAppearance") == "dark" {
+            let dark = NSAppearance(named: .darkAqua)
+            NSApp.appearance = dark
+            statusItemController?.applyShotsAppearance(dark)
+        }
+        #endif
+
         // Manual-verification-only debug entry (TASK-017/TASK-010): a colon-separated list
         // of paths in `SHAREBAR_DEBUG_ADD_PATHS` runs through the same publish path a real
         // Share File… selection or drop would, without driving `NSOpenPanel` or a real

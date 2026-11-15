@@ -46,6 +46,14 @@ private final class RowMenu: NSMenu {
 final class StatusItemController: NSObject, @unchecked Sendable {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
+
+    #if DEBUG
+    /// Screenshot harness only: the status item's menu follows the menu bar, so it takes the
+    /// appearance explicitly.
+    func applyShotsAppearance(_ appearance: NSAppearance?) {
+        menu.appearance = appearance
+    }
+    #endif
     private let mutationQueue = MutationQueue()
     private let defaults: UserDefaults = .standard
 
@@ -64,6 +72,9 @@ final class StatusItemController: NSObject, @unchecked Sendable {
     private var currentFailure: Failure?
     private var working: Working?
     private var showStopWaitingItem = false
+    /// True while the running verb is an `add`: Stop Waiting then says what a stopped add
+    /// leaves behind.
+    private var runningIsAdd = false
     private var stopWaitingTimer: Timer?
     private var checkmarkRevertTimer: Timer?
     private var dropView: DropView?
@@ -234,6 +245,14 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         )
         titleItem.isEnabled = false
         menu.addItem(titleItem)
+
+        // A journaled command: running shows its step, stopped shows the CLI's rerun
+        // string as text. The menu never runs it (DEC-21).
+        for op in section.ops {
+            let opItem = NSMenuItem(title: op.text, action: nil, keyEquivalent: "")
+            opItem.isEnabled = false
+            menu.addItem(opItem)
+        }
 
         for row in section.rows {
             let item = NSMenuItem(title: row.title, action: nil, keyEquivalent: "")
@@ -480,7 +499,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
             RunLoop.main.perform(inModes: [.common]) {
                 guard let self else { return }
                 let alert = NSAlert()
-                alert.messageText = StopWaiting.confirmText
+                alert.messageText = StopWaiting.confirmText(isAdd: self.runningIsAdd)
                 alert.alertStyle = .warning
                 alert.addButton(withTitle: "Continue Waiting")
                 let stopButton = alert.addButton(withTitle: "Stop Waiting")
@@ -579,7 +598,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
             switch form.storageField {
             case .none:
                 storageRow.isHidden = true
-            case .member:
+            case .cloudOnly:
                 storageRow.isHidden = false
                 storagePopup.isHidden = true
                 storageLabel.isHidden = false
@@ -693,6 +712,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         notPublished: [String]? = nil
     ) async -> Bool {
         let idsBefore: Set<String> = isAdd ? Set(shares(of: profile).map(\.id)) : []
+        runningIsAdd = isAdd
         beginMutating(gated: args.contains("--access"))
         let result = await mutationQueue.run(args)
         let stateResult = await CLI.profiles(fresh: true)
@@ -790,17 +810,19 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         guard let names, !names.isEmpty else { return alert }
         let line = "Not published: \(names.joined(separator: ", "))"
         let detail = alert.detail.map { "\($0)\n\(line)" } ?? line
-        return MutationAlert(kind: alert.kind, message: alert.message, detail: detail, removeShareID: alert.removeShareID)
+        return MutationAlert(kind: alert.kind, message: alert.message, detail: detail, removeShareID: alert.removeShareID, next: alert.next)
     }
 
     private func present(_ alert: MutationAlert, profile: String?) {
         let nsAlert = NSAlert()
         nsAlert.messageText = alert.message
         nsAlert.alertStyle = alert.kind == .failure ? .warning : .informational
-        if let detail = alert.detail {
-            // The CLI's guided blocks (O1/O3, the gate timeout) are shown verbatim, as
-            // selectable monospaced text inside the alert.
-            nsAlert.accessoryView = detailView(detail)
+        // The CLI's guided blocks (O1/O3, the gate timeout) are shown verbatim, as
+        // selectable monospaced text inside the alert; so is the `next` command its JSON
+        // error line names, which a person can copy.
+        let shown = [alert.detail, alert.next.map { "Next: \($0)" }].compactMap { $0 }.joined(separator: "\n")
+        if !shown.isEmpty {
+            nsAlert.accessoryView = detailView(shown)
         }
         switch alert.kind {
         case .failure, .notServingHere:

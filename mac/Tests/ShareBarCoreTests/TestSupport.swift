@@ -37,13 +37,21 @@ func makeSnapshot(
     r2: Bool? = nil,
     storageDefault: String? = nil,
     cloudError: String? = nil,
-    cloudMore: Int? = nil
+    cloudMore: Int? = nil,
+    role: String? = nil,
+    tier: String? = nil,
+    serve: ServeInfo? = nil,
+    ops: [OpInfo]? = nil,
+    token: TokenInfo? = nil,
+    compat: CompatInfo? = nil,
+    member: MemberInfo? = nil
 ) -> Snapshot {
     Snapshot(
         schema: schema, state: state, ready: ready, mode: mode, host: host, hosts: hosts,
         servesHere: servesHere, service: service, shares: shares, skipped: skipped,
         accessPending: accessPending, backend: backend, r2: r2,
-        storageDefault: storageDefault, cloudError: cloudError, cloudMore: cloudMore
+        storageDefault: storageDefault, cloudError: cloudError, cloudMore: cloudMore,
+        role: role, tier: tier, serve: serve, ops: ops, token: token, compat: compat, member: member
     )
 }
 
@@ -59,9 +67,16 @@ func makeShare(
     access: String? = nil,
     storage: String? = nil,
     type: String? = nil,
-    by: String? = nil
+    by: String? = nil,
+    origin: String? = nil,
+    linkState: String? = nil,
+    reason: String? = nil,
+    views: Int? = nil
 ) -> Share {
-    Share(id: id, name: name, url: url, kind: kind, ownHost: ownHost, expires: expires, access: access, storage: storage, type: type, by: by)
+    Share(
+        id: id, name: name, url: url, kind: kind, ownHost: ownHost, expires: expires, access: access,
+        storage: storage, type: type, by: by, origin: origin, linkState: linkState, reason: reason, views: views
+    )
 }
 
 /// One profile entry: its `state`, or its `error` line (the JSON shape the CLI emits is
@@ -88,6 +103,14 @@ func loadFixtureSnapshot() throws -> Snapshot {
     }
     let data = try Data(contentsOf: url)
     return try JSONDecoder().decode(Snapshot.self, from: data)
+}
+
+/// Loads a named JSON fixture from `Fixtures/` as data.
+func loadFixtureData(_ name: String) throws -> Data {
+    guard let url = Bundle.module.url(forResource: name, withExtension: "json") else {
+        throw NSError(domain: "TestSupport", code: 1, userInfo: [NSLocalizedDescriptionKey: "fixture \(name) not found"])
+    }
+    return try Data(contentsOf: url)
 }
 
 /// Loads the `share profiles --json` fixture, saved from a real run on the Mini (default

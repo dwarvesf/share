@@ -207,6 +207,8 @@ any stopped or serving profile, publicly or behind a login rule (`group:`, `emai
 is doing, `log stream --predicate 'subsystem == "foundation.d.share.bar"'` shows every
 CLI call and action.
 
+Working on Share Bar: `swift test --package-path mac` runs the unit tests, `bash mac/build.sh <version>` builds the signed app, and `bash mac/compat-check.sh <tag>` decodes today's CLI output with the `ShareBarCore` sources of a release tag, so a shipped Share Bar keeps working against a newer CLI. `bash mac/shots.sh <scenario> <step file>` starts the app against a fake CLI (`mac/Tests/fixtures/bin/share`), replays real clicks through the Accessibility API, and saves a light and a dark screenshot under `docs/verification/share-bar/`; it needs Accessibility granted to your terminal.
+
 ## Docs
 
 - [docs/setup.md](docs/setup.md): API token setup (no browser), the R2 backend and teammate onboarding, a tenant's R2 and alias fold, moving machines, troubleshooting

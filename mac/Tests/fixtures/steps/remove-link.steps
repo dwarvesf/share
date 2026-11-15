@@ -1,0 +1,9 @@
+# Remove a link: status item, the row, Remove, the confirm. The fake CLI must log `rm <id>`.
+scenario calm
+click status-item
+click notes.txt
+shot row-menu
+click Remove…
+shot remove-confirm
+click Remove
+expect-argv rm 4f9ff2

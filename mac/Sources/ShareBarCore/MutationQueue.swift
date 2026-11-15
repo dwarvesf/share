@@ -24,6 +24,11 @@ public actor MutationQueue {
     /// Waiting", TASK-017).
     private var running: (token: JobToken, job: CLIJob)?
 
+    /// Every mutation asks the CLI for its machine-readable error line (SPEC-010 G1), so
+    /// a refusal shows the CLI's sentence and its `next` command (G11c). An older CLI
+    /// ignores the variable and the alert falls back to the last `share: ` line.
+    static let environment = ["SHARE_ERROR_JSON": "1"]
+
     public init() {}
 
     public func run(_ args: [String]) async -> CLIResult {
@@ -42,7 +47,7 @@ public actor MutationQueue {
     /// the run's duration.
     private func runTracked(_ args: [String]) async -> CLIResult {
         let token = JobToken()
-        let job = CLI.spawnCancellable(args) { _ in }
+        let job = CLI.spawnCancellable(args, environment: MutationQueue.environment) { _ in }
         running = (token, job)
         let result = await job.result
         running = nil

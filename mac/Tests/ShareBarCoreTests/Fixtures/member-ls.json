@@ -1,0 +1,39 @@
+[
+  {
+    "member_id": "m-an-1a2b3c4d", "name": "an", "mode": "machine", "status": "active", "expired": false,
+    "step": null, "of": null, "step_name": null, "lease": null,
+    "deploy": {"bound": true, "paused": false},
+    "account": {"tunnel": "t-an", "connectors": 0, "services": 1},
+    "token_expires": "2027-01-15", "invite_expires": null, "prev_status": null,
+    "drift": [],
+    "can": ["pause", "invite", "rotate", "renew", "rm"]
+  },
+  {
+    "member_id": "m-nam-5e6f7a8b", "name": "nam", "mode": "machine", "status": "pausing", "expired": false,
+    "step": 2, "of": 3, "step_name": "deploy",
+    "lease": {"holder": "mac-mini:4242:abcd1234", "verb": "pause", "step": 2, "live": false, "since": 1763000000},
+    "deploy": {"bound": true, "paused": false},
+    "account": {"tunnel": "t-nam", "connectors": 1, "services": 1},
+    "token_expires": "2027-01-15", "invite_expires": null, "prev_status": "active",
+    "drift": ["deploy_paused_record_active"],
+    "can": ["finish", "rm"]
+  },
+  {
+    "member_id": "m-linh-9c8d7e6f", "name": "linh", "mode": "cloud", "status": "invited", "expired": true,
+    "step": null, "of": null, "step_name": null, "lease": null,
+    "deploy": {"bound": false, "paused": false},
+    "account": {"tunnel": null, "connectors": 0, "services": 0},
+    "token_expires": null, "invite_expires": 1763600000, "prev_status": null,
+    "drift": [],
+    "can": ["invite", "rm"]
+  },
+  {
+    "member_id": "u/broken", "name": "?", "mode": null, "status": "invalid", "expired": false,
+    "step": null, "of": null, "step_name": null, "lease": null,
+    "deploy": {"bound": false, "paused": false},
+    "account": {"tunnel": null, "connectors": 0, "services": 0},
+    "token_expires": null, "invite_expires": null, "prev_status": null,
+    "drift": ["record_invalid"],
+    "can": []
+  }
+]
