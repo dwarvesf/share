@@ -4,22 +4,135 @@ Scope: state groundwork G11a, G11b and G11c, and the multi-member tasks 4b1 to 4
 
 ## Recorded run
 
-All runs on the Mac mini, from the SG-06 worktree, after the last code change.
+All runs on the Mac mini, from the SG-06 worktree, after the last code change. Paths are shortened to the repo root.
 
-| Command | Exit | Verdict |
-|---|---|---|
-| `swift build --package-path mac` | 0 | pass |
-| `swift test --package-path mac` | 0 | pass: 258 tests, 0 failures |
-| `bash mac/build.sh 0.0.0` | 0 | pass: builds, signs ad hoc, zips `Share-Bar-0.0.0.zip` |
-| `bash mac/compat-check.sh v0.9.0` | 0 | pass: 10 fixtures read clean by the v0.9.0 decoder (8 fixtures, the checked-out CLI's live `profiles --json` and `state`) |
-| `bash mac/compat-check.sh v0.9.0 <fixture with state schema 2>` | 1 | negative control: `FAIL ... newer: Update Share Bar` |
-| `bash mac/shots.sh calm open-popover` | 0 | pass: light and dark image written, reached by a real click on the status item |
-| `bash mac/shots.sh calm missing-control` | 1 | negative control: `missing control: No Such Control`, no image written |
-| `bash mac/shots.sh calm remove-link` | 0 | pass: `argv.log` holds `--profile default rm 4f9ff2` |
-| `bash mac/shots.sh all` | 0 | pass: the negative file must fail and leave no image; the other two files pass |
-| `/bin/bash -n` on `mac/shots.sh`, `mac/compat-check.sh`, `mac/Tests/fixtures/bin/share` | 0 | pass: parse under macOS bash 3.2.57 |
-| `/bin/bash mac/compat-check.sh v0.9.0`, `/bin/bash mac/shots.sh calm open-popover` | 0 | pass under bash 3.2.57 |
-| `shellcheck mac/shots.sh mac/compat-check.sh mac/Tests/fixtures/bin/share` | 0 | pass |
+```
+Command: swift build --package-path mac
+Exit: 0
+Output:
+Building for debugging...
+[1 / 1]
+Build complete! (0,46 secs)
+Verdict: PASS
+```
+
+```
+Command: swift test --package-path mac
+Exit: 0
+Output:
+	 Executed 258 tests, with 0 failures (0 unexpected) in 5.866 (5.885) seconds
+Test Suite 'All tests' passed at 2026-11-15 10:57:28.404.
+Verdict: PASS (258 tests, 0 failures)
+```
+
+```
+Command: bash mac/build.sh 0.0.0
+Exit: 0
+Output:
+Build complete! (4,38 secs)
+== assemble Share Bar.app
+== sign (ad-hoc)
+mac/build/Share Bar.app: replacing existing signature
+== zip
+mac/build/Share-Bar-0.0.0.zip
+Verdict: PASS
+```
+
+```
+Command: bash mac/compat-check.sh v0.9.0
+Exit: 0
+Output:
+== build ShareBarCore at v0.9.0
+== decode 10 fixtures with the v0.9.0 decoder
+ok   mac/Tests/ShareBarCoreTests/Fixtures/profiles.json (2 profiles)
+ok   mac/Tests/ShareBarCoreTests/Fixtures/profiles-tenant.json (3 profiles)
+ok   mac/Tests/ShareBarCoreTests/Fixtures/state.json (1 profile)
+ok   mac/Tests/ShareBarCoreTests/Fixtures/state-full.json (1 profile)
+ok   mac/Tests/fixtures/scenarios/admin/profiles.json (3 profiles)
+ok   mac/Tests/fixtures/scenarios/calm/profiles.json (1 profile)
+ok   mac/Tests/fixtures/scenarios/firstrun/profiles.json (1 profile)
+ok   mac/Tests/fixtures/scenarios/member/profiles.json (1 profile)
+ok   live/profiles.json (3 profiles)
+ok   live/state.json (1 profile)
+Verdict: PASS (every fixture reads clean with the v0.9.0 decoder)
+```
+
+```
+Command: bash mac/compat-check.sh v0.9.0 bad-fixture.json  (negative control: a state with schema 2)
+Exit: 1
+Output:
+ok   mac/Tests/fixtures/scenarios/member/profiles.json (1 profile)
+ok   live/profiles.json (3 profiles)
+ok   live/state.json (1 profile)
+FAIL bad-fixture.json: newer: Update Share Bar
+Verdict: PASS (the check fails, as it must)
+```
+
+```
+Command: bash mac/shots.sh calm open-popover
+Exit: 0
+Output:
+== build (debug)
+== calm / open-popover
+wrote docs/verification/share-bar/4b4-open-popover-dark.png
+wrote docs/verification/share-bar/4b4-open-popover-light.png
+argv.log (light): profiles --json;profiles --json;
+Verdict: PASS
+```
+
+```
+Command: bash mac/shots.sh calm missing-control  (negative control)
+Exit: 1
+Output:
+== build (debug)
+== calm / missing-control
+shots.sh: step 4 (click No Such Control): missing control: No Such Control
+Verdict: PASS (fails naming the control, no image written)
+```
+
+```
+Command: bash mac/shots.sh calm remove-link
+Exit: 0
+Output:
+== build (debug)
+== calm / remove-link
+wrote docs/verification/share-bar/4b4-remove-confirm-dark.png
+wrote docs/verification/share-bar/4b4-remove-confirm-light.png
+wrote docs/verification/share-bar/4b4-row-menu-dark.png
+wrote docs/verification/share-bar/4b4-row-menu-light.png
+argv.log (light): profiles --json;profiles --json;--profile default hits 7c1d20;--profile default hits 4f9ff2;--profile default rm 4f9ff2;profiles --json;
+Verdict: PASS (argv.log holds `rm 4f9ff2`)
+```
+
+```
+Command: bash mac/shots.sh all
+Exit: 0
+Output:
+== build (debug)
+== calm / missing-control: failed as required, no image
+== calm / open-popover
+wrote docs/verification/share-bar/4b4-open-popover-dark.png
+wrote docs/verification/share-bar/4b4-open-popover-light.png
+argv.log (light): profiles --json;profiles --json;
+== calm / remove-link
+wrote docs/verification/share-bar/4b4-remove-confirm-dark.png
+wrote docs/verification/share-bar/4b4-remove-confirm-light.png
+wrote docs/verification/share-bar/4b4-row-menu-dark.png
+wrote docs/verification/share-bar/4b4-row-menu-light.png
+argv.log (light): profiles --json;profiles --json;--profile default hits 7c1d20;--profile default hits 4f9ff2;profiles --json;--profile default rm 4f9ff2;profiles --json;
+Verdict: PASS
+```
+
+```
+Command: /bin/bash -n mac/shots.sh; /bin/bash -n mac/compat-check.sh; /bin/bash -n mac/Tests/fixtures/bin/share; shellcheck mac/shots.sh mac/compat-check.sh mac/Tests/fixtures/bin/share
+Exit: 0
+Output:
+parse ok under bash 3.2.57: mac/shots.sh
+parse ok under bash 3.2.57: mac/compat-check.sh
+parse ok under bash 3.2.57: mac/Tests/fixtures/bin/share
+shellcheck: no findings
+Verdict: PASS
+```
 
 ## Done line
 
@@ -31,9 +144,9 @@ All runs on the Mac mini, from the SG-06 worktree, after the last code change.
 
 Taken by `bash mac/shots.sh`, every control reached by a real mouse click through the Accessibility API; nothing sets state in the app.
 
-- `docs/verification/share-bar/4b4-open-popover-light.png`, `4b4-open-popover-dark.png`: the menu a click on the status item opens.
-- `docs/verification/share-bar/4b4-row-menu-light.png`, `4b4-row-menu-dark.png`: the row menu.
-- `docs/verification/share-bar/4b4-remove-confirm-light.png`, `4b4-remove-confirm-dark.png`: the remove confirm.
+- The menu a click on the status item opens, light then dark: ![open popover, light](4b4-open-popover-light.png) ![open popover, dark](4b4-open-popover-dark.png)
+- The row menu: ![row menu, light](4b4-row-menu-light.png) ![row menu, dark](4b4-row-menu-dark.png)
+- The remove confirm: ![remove confirm, light](4b4-remove-confirm-light.png) ![remove confirm, dark](4b4-remove-confirm-dark.png)
 
 The light images read grey because `screencapture -l` takes the translucent menu window alone, with no backdrop to blur (notes D8).
 
