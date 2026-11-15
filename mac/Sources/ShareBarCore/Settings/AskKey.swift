@@ -12,6 +12,12 @@ public struct AskedKeyCommand: Sendable {
         environment = [variable: key]
     }
 
+    /// One command that needs several keys (a member verb: the admin key and the minter key).
+    public init(argv: [String], environment: [String: String]) {
+        self.argv = argv
+        self.environment = environment
+    }
+
     /// Runs the command; the key reaches the child through its environment and nowhere else.
     public func spawn(onOutput: @escaping (String) -> Void = { _ in }) -> CLIJob {
         CLI.spawnCancellable(argv, environment: MutationQueue.environment.merging(environment) { _, new in new }, onOutput: onOutput)

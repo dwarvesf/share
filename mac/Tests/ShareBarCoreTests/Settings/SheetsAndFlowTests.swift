@@ -148,6 +148,27 @@ final class SheetsAndFlowTests: XCTestCase {
         }
     }
 
+    func testTheMembersConfirmCarriesTheCLIsWarning() {
+        let sheet = Impact.turnOnMembers(host: "s.console.so")
+        XCTAssertEqual(sheet.title, "Turn on members for s.console.so?")
+        XCTAssertTrue(sheet.body?.contains("older than 0.10") == true)
+        XCTAssertFalse(sheet.destructive)
+    }
+
+    func testAPartialLineBeforeTheProgressLineStillParses() {
+        var stream = ProgressStream()
+        let lines = stream.feed("partial stdout {\"progress\":{\"verb\":\"join\",\"step\":2,\"of\":6,\"name\":\"keys\"}}\n")
+        XCTAssertEqual(lines.map(\.step), [2])
+    }
+
+    func testAFailureNeverShowsACredentialShapedRun() {
+        let token = String(repeating: "Ab1", count: 14)
+        var run = FlowRun(kind: .join, title: "t")
+        run.exited(status: 1, stderr: "share: bad \(token)\n{\"error\":{\"code\":\"x\",\"message\":\"bad \(token)\",\"next\":\"share y \(token)\"}}\n")
+        XCTAssertEqual(run.phase, .failed(sentence: "bad …", next: "share y …"))
+        XCTAssertEqual(RefusalSheet.from(code: "x", message: "m", next: "share y \(token)", host: "h").action, .copyCommand("share y …"))
+    }
+
     func testAFinishedRunMarksEveryStepDone() {
         var run = FlowRun(kind: .setupMembers, title: "t")
         run.apply(Progress(verb: "setup-members", step: 5, of: 5, name: "release"))
@@ -226,7 +247,7 @@ final class SheetsAndFlowTests: XCTestCase {
         XCTAssertNil(FlowArgv.setup(host: "Bad Host"))
         XCTAssertEqual(FlowArgv.turnOnCloud(profile: "console", host: "s.console.so"),
                        ["--profile", "console", "setup", "s.console.so", "--r2", "--bucket", "share-s-console-so"])
-        XCTAssertEqual(FlowArgv.turnOnMembers(profile: "console", host: "s.console.so")?.last, "--members")
+        XCTAssertEqual(FlowArgv.turnOnMembers(profile: "console", host: "s.console.so")?.suffix(2), ["--members", "--yes"], "a non-terminal run needs --yes")
         // The profile name is always one the CLI's own pattern accepts.
         XCTAssertTrue(JournalRun.isProfileName(ProfileName.slug(host: "a-very-long-hostname-for-a-tenant.example.com")))
         XCTAssertLessThanOrEqual(ProfileName.slug(host: String(repeating: "a.", count: 40) + "com").count, 32)

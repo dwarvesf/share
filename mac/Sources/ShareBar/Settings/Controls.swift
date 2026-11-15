@@ -41,6 +41,9 @@ struct SBField: View {
     @Binding var text: String
     var mono = false
     var id = ""
+    /// What VoiceOver calls the field; the placeholder is only an example and is hidden from it.
+    var label = ""
+    var autofocus = false
     var onSubmit: () -> Void = {}
     @Environment(\.colorScheme) private var scheme
     @FocusState private var focused: Bool
@@ -50,6 +53,7 @@ struct SBField: View {
         ZStack(alignment: .leading) {
             if text.isEmpty {
                 Text(placeholder).font(mono ? t.monoFont : t.bodyFont).foregroundColor(t.tertiary).allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
             TextField("", text: $text)
                 .textFieldStyle(.plain)
@@ -57,10 +61,14 @@ struct SBField: View {
                 .foregroundColor(t.label)
                 .focused($focused)
                 .onSubmit(onSubmit)
-                .accessibilityLabel(placeholder)
+                .accessibilityLabel(label.isEmpty ? placeholder : label)
+                .accessibilityHint(label.isEmpty ? "" : "For example \(placeholder)")
                 .accessibilityIdentifier(id)
         }
         .padding(.horizontal, 8).padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .onTapGesture { focused = true }
+        .onAppear { if autofocus { DispatchQueue.main.async { focused = true } } }
         .background(RoundedRectangle(cornerRadius: 6).fill(t.field))
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(focused ? t.focus : t.softBorder, lineWidth: focused ? 2 : 1))
     }
@@ -71,6 +79,8 @@ struct SBSecureField: View {
     let placeholder: String
     @Binding var text: String
     var id = ""
+    var label = ""
+    var autofocus = false
     var onSubmit: () -> Void = {}
     @Environment(\.colorScheme) private var scheme
     @FocusState private var focused: Bool
@@ -80,16 +90,20 @@ struct SBSecureField: View {
         ZStack(alignment: .leading) {
             if text.isEmpty {
                 Text(placeholder).font(t.bodyFont).foregroundColor(t.tertiary).allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
             SecureField("", text: $text)
                 .textFieldStyle(.plain)
                 .font(t.bodyFont)
                 .focused($focused)
                 .onSubmit(onSubmit)
-                .accessibilityLabel(placeholder)
+                .accessibilityLabel(label.isEmpty ? placeholder : label)
                 .accessibilityIdentifier(id)
         }
         .padding(.horizontal, 8).padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .onTapGesture { focused = true }
+        .onAppear { if autofocus { DispatchQueue.main.async { focused = true } } }
         .background(RoundedRectangle(cornerRadius: 6).fill(t.field))
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(focused ? t.focus : t.softBorder, lineWidth: focused ? 2 : 1))
     }
@@ -136,12 +150,15 @@ struct SBPopup<Value: Hashable>: View {
     @Binding var selection: Value
     var id = ""
     var fullWidth = false
+    /// The accessible name: the visible caption of the row.
+    var label = ""
 
     var body: some View {
-        Picker("", selection: $selection) {
+        Picker(label, selection: $selection) {
             ForEach(Array(options.enumerated()), id: \.offset) { _, option in Text(option.1).tag(option.0) }
         }
         .labelsHidden()
+        .accessibilityLabel(label)
         .pickerStyle(.menu)
         .frame(maxWidth: fullWidth ? .infinity : nil)
         .fixedSize(horizontal: !fullWidth, vertical: false)
@@ -153,6 +170,7 @@ struct SBPopup<Value: Hashable>: View {
 struct SBSpinner: View {
     var size: CGFloat = 12
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var angle = 0.0
 
     var body: some View {
@@ -163,7 +181,7 @@ struct SBSpinner: View {
             .background(Circle().stroke(t.separator, lineWidth: 2))
             .frame(width: size, height: size)
             .rotationEffect(.degrees(angle))
-            .onAppear { withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) { angle = 360 } }
+            .onAppear { if !reduceMotion { withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) { angle = 360 } } }
             .accessibilityLabel("Working")
     }
 }

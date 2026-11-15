@@ -7,4 +7,4 @@ profiles --json
 --profile console config storage_default
 version
 version
---profile console setup s.console.so --r2 --bucket share-s-console-so --members
+--profile console setup s.console.so --r2 --bucket share-s-console-so --members --yes

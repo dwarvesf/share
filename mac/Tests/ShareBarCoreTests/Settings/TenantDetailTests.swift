@@ -44,12 +44,15 @@ final class TenantDetailTests: XCTestCase {
             Case(name: "admin T2 serving", entry: entry(role: "tenant_origin", tier: "t2", phase: "serving"),
                  actions: [.stop, .openInBrowser]),
             Case(name: "member serving", entry: entry(role: "member", tier: "t2", phase: "serving"),
+                 actions: [.stop, .openInBrowser]),
+            Case(name: "member serving with a key about to expire",
+                 entry: entry(role: "member", tier: "t2", phase: "serving", token: TokenInfo(source: "keychain", status: "expiring", expiresOn: "2026-12-01")),
                  actions: [.stop, .copyRequest, .openInBrowser]),
             Case(name: "member stopped", entry: entry(role: "member", tier: "t2", phase: "stopped"),
-                 actions: [.start, .copyRequest, .openInBrowser]),
+                 actions: [.start, .openInBrowser]),
             Case(name: "cloud-mode member has no serve buttons",
                  entry: entry(role: "member", tier: "t2", phase: "stopped", member: MemberInfo(id: "m-an-1a2b3c4d", mode: "cloud", status: "active")),
-                 actions: [.copyRequest, .openInBrowser]),
+                 actions: [.openInBrowser]),
             Case(name: "owner T1 with a stopped cloud setup",
                  entry: entry(role: "tenant_origin", tier: "t1", phase: "stopped", ops: [dead]),
                  actions: [.resume, .rollBack, .start, .openInBrowser]),
@@ -165,6 +168,13 @@ final class TenantDetailTests: XCTestCase {
         XCTAssertEqual(f.callout?.canRollBack, false)
         XCTAssertFalse(f.actions.contains(.resume))
         XCTAssertFalse(f.actions.contains(.rollBack))
+
+        // A teardown or member journal is finished in a terminal or on its own tab: no Resume button here.
+        let teardown = OpInfo(verb: "teardown-purge", step: 3, of: 7, name: "marker", alive: false, rerun: "share teardown --yes --purge",
+                              rerunArgv: ["--profile", "test", "teardown", "--yes", "--purge"])
+        let t = try detail(entry(role: "origin", tier: "t0", phase: "serving", ops: [teardown]))
+        XCTAssertEqual(t.callout?.canResume, false)
+        XCTAssertFalse(t.actions.contains(.resume))
 
         // A live op is another process's work: no callout.
         let live = OpInfo(verb: "setup-r2", step: 3, of: 16, name: "bucket", alive: true)

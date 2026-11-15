@@ -10,7 +10,20 @@ struct TenantsPane: View {
         let t = SettingsTheme(scheme)
         let entries = store.tenants
         Group {
-            if entries.isEmpty {
+            if !store.loaded {
+                HStack(spacing: 6) { SBSpinner(size: 10); Text("Reading your tenants…").font(t.bodyFont).foregroundColor(t.secondary) }
+                    .frame(maxWidth: .infinity, minHeight: 360)
+                    .accessibilityIdentifier("tenants-loading")
+            } else if entries.isEmpty, let failure = store.failure {
+                VStack(spacing: 8) {
+                    Text("Couldn't read your tenants").font(t.titleFont).foregroundColor(t.label)
+                    Text(failure.sentence).font(t.bodyFont).foregroundColor(t.secondary).multilineTextAlignment(.center)
+                    Button("Try again") { Task { await store.refresh() } }.sbButton().accessibilityIdentifier("tenants-retry").padding(.top, 4)
+                }
+                .padding(.horizontal, 40)
+                .frame(maxWidth: .infinity, minHeight: 360)
+                .accessibilityIdentifier("tenants-failure")
+            } else if entries.isEmpty {
                 VStack(spacing: 8) {
                     Text("No tenants yet").font(t.titleFont).foregroundColor(t.label)
                     Text("Join your team with an invite code, or set up a hostname you own.").font(t.bodyFont).foregroundColor(t.secondary)
@@ -32,13 +45,14 @@ struct TenantsPane: View {
 
     private func sourceColumn(_ entries: [ProfileEntry], _ t: SettingsTheme) -> some View {
         VStack(spacing: 0) {
-            VStack(spacing: 2) {
-                ForEach(entries, id: \.name) { entry in
-                    if let detail = store.detail(of: entry) {
-                        SourceRow(detail: detail, selected: store.selectedEntry?.name == entry.name) { store.select(entry.name) }
+            ScrollView {
+                VStack(spacing: 2) {
+                    ForEach(entries, id: \.name) { entry in
+                        if let detail = store.detail(of: entry) {
+                            SourceRow(detail: detail, selected: store.selectedEntry?.name == entry.name) { store.select(entry.name) }
+                        }
                     }
                 }
-                Spacer(minLength: 0)
             }
             .padding(4)
             .frame(width: 190, height: 300, alignment: .top)
@@ -88,7 +102,7 @@ private struct SourceRow: View {
                     Text(detail.host).font(.system(size: 12, weight: .medium, design: .monospaced))
                         .foregroundColor(selected ? .white : t.label).lineLimit(1).truncationMode(.middle)
                     Text(detail.listLine).font(t.metaFont)
-                        .foregroundColor(selected ? .white.opacity(0.85) : t.secondary).lineLimit(1)
+                        .foregroundColor(selected ? .white : t.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 0)
                 if detail.needsLook {

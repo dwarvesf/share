@@ -137,7 +137,8 @@ public struct FlowRun: Sendable, Equatable {
             } else {
                 let error = ErrorLine.last(inStderr: stderr)
                 let line = error?.message ?? CLIResult(status: status, stdout: "", stderr: stderr, timedOut: false).lastErrorLine
-                phase = .failed(sentence: line.hasPrefix("share: ") ? String(line.dropFirst(7)) : line, next: error?.next)
+                let sentence = line.hasPrefix("share: ") ? String(line.dropFirst(7)) : line
+                phase = .failed(sentence: Redact.tokenShaped(sentence), next: error?.next.map(Redact.tokenShaped))
             }
         default: break
         }
@@ -231,10 +232,11 @@ public enum FlowArgv {
         return ProfileArgs.argv(profile, ["setup", host, "--r2", "--bucket", ProfileName.bucket(host: host)])
     }
 
-    /// The T1 to T2 button of an admin.
+    /// The T1 to T2 button of an admin. `--yes` answers the CLI's prompt, which a non-terminal
+    /// run refuses without; the confirm sheet (`Impact.turnOnMembers`) shows the same warning first.
     public static func turnOnMembers(profile: String, host: String) -> [String]? {
         guard HostnameValidation.isValid(host) else { return nil }
-        return ProfileArgs.argv(profile, ["setup", host, "--r2", "--bucket", ProfileName.bucket(host: host), "--members"])
+        return ProfileArgs.argv(profile, ["setup", host, "--r2", "--bucket", ProfileName.bucket(host: host), "--members", "--yes"])
     }
 }
 
@@ -251,7 +253,9 @@ public struct ProgressStream: Sendable {
         while let newline = buffer.firstIndex(of: "\n") {
             let line = String(buffer[buffer.startIndex..<newline])
             buffer.removeSubrange(buffer.startIndex...newline)
-            if let progress = Progress.parse(line: line) { found.append(progress) }
+            // A partial stdout line may precede the stderr progress line in the shared chunk stream.
+            let start = line.range(of: "{\"progress\"")?.lowerBound ?? line.startIndex
+            if let progress = Progress.parse(line: String(line[start...])) { found.append(progress) }
         }
         return found
     }

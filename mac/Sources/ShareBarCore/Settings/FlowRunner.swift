@@ -26,12 +26,12 @@ public final class FlowRunner: @unchecked Sendable {
         return current
     }
 
+    /// Snapshots reach `onChange` in the order the changes were made: the call stays inside the lock.
     private func mutate(_ change: (inout FlowRun) -> Void) {
         lock.lock()
+        defer { lock.unlock() }
         change(&current)
-        let snapshot = current
-        lock.unlock()
-        onChange(snapshot)
+        onChange(current)
     }
 
     public func start() {

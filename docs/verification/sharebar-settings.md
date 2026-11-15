@@ -33,8 +33,8 @@ Output: `Build complete!`
 
 Command: `swift test --package-path mac`
 Exit: 0
-Verdict: pass, 355 tests (the 45 new ones are under `Tests/ShareBarCoreTests/Settings/`)
-Output: `Executed 355 tests, with 0 failures (0 unexpected)`
+Verdict: pass, 358 tests (the 42 new ones are under `Tests/ShareBarCoreTests/Settings/`)
+Output: `Executed 358 tests, with 0 failures (0 unexpected)`
 
 Command: `bash mac/build.sh 0.0.0`
 Exit: 0
@@ -46,9 +46,9 @@ Exit: 0
 Verdict: pass; the shipped Share Bar keeps working against the new CLI
 Output: `ok .../scenarios/member/profiles.json (1 profile)`, `ok .../live/state.json (1 profile)`
 
-Command: `bash mac/Tests/fixtures/settings/run-shots.sh` (30 step files, light and dark)
+Command: `bash mac/Tests/fixtures/settings/run-shots.sh` (33 step files, light and dark)
 Exit: 0
-Verdict: pass; every `expect-argv`, `expect-no-argv` and `expect-env` held, 60 captures written
+Verdict: pass; every `expect-argv`, `expect-no-argv` and `expect-env` held against a fake CLI that refuses what the real one refuses (no key, `--members` without `--yes`), 66 captures written
 Output: `wrote docs/verification/share-bar/settings-a/4b-<label>-<light|dark>.png`; argv logs in `settings-a/argv/`
 
 Command: `bash mac/Tests/fixtures/settings/parity/render-reference.sh` then `compare.sh`
@@ -60,6 +60,13 @@ Command: `shellcheck -x` over the new scripts, and `/bin/bash -n` on each
 Exit: 0
 Verdict: pass (bash 3.2 parses)
 Output: none
+
+## Review
+
+Command: `kit:advisor` (critique, opus) and `kit:frontend-reviewer` on the frozen diff
+Exit: 0
+Verdict: 1 critical, 4 major and 8 minor findings from the advisor, 3 critical and 6 high from the frontend lens; every critical and major finding was fixed or recorded (implementation notes D14, D15 and Open questions)
+Output: fixed: `setup --members` now passes `--yes` after a confirm sheet; every admin path asks for the admin key (and the minter key for add and remove) and passes it through the environment only; Set up always asks for the key; Resume shows only for the four journals this window starts; Roll back names the checked argv; the remembered key source changes after the CLI stored it; Copy request only for a key that is expiring, expired or invalid; progress lines parse after a partial line; failure sentences are redacted; the sheet is modal in behavior; Left and Right move tabs; sheets focus their first field; pop-ups and fields carry accessible names; Return submits the add and invite forms; Tenants shows loading and failure; the source list scrolls; a destructive confirm never takes Return; announcements post to VoiceOver; the spinner stops under Reduce Motion. Recorded: General's five toggles have no reader yet (SG-16); the source-row attention dot is the design's orange dot beside a word in the detail pane.
 
 ## UAT
 

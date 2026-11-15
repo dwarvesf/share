@@ -57,6 +57,14 @@ env_note() { # env_note <variable>: whether the call got it, never the value
   printf '%s=%s\n' "$var" "$state" >> "$dir/env.log"
 }
 
+# need_key <admin|minter> <variable>: the real CLI refuses an admin or minter path with no key. The
+# key is either in the call's environment or a command was stored with `<kind>-token --cmd`.
+need_key() {
+  local kind=$1 var=$2
+  [[ -n ${!var:-} || -f $scn/stored-$kind-$profile ]] && return 0
+  fail_with "${kind}_token_missing" "this needs the $kind token: set $var, or store a command that prints it with share $kind-token --cmd '<command>'; nothing was changed" "share $kind-token --cmd '<command>'"
+}
+
 has_profile() { jq -e --arg p "$profile" '.profiles[] | select(.name == $p)' "$scn/profiles.json" >/dev/null 2>&1; }
 
 host_of() { jq -r --arg p "$profile" '.profiles[] | select(.name == $p) | .state.host // .name' "$scn/profiles.json"; }
@@ -140,8 +148,8 @@ case $verb in
     record
     kind=${verb%-token}
     case ${1:-} in
-      --cmd) echo "token:      ${kind}_token_cmd stored (a command, never the token)" ;;
-      --clear) echo "token:      ${kind}_token_cmd removed" ;;
+      --cmd) : > "$scn/stored-$kind-$profile"; echo "token:      ${kind}_token_cmd stored (a command, never the token)" ;;
+      --clear) command rm -f "$scn/stored-$kind-$profile"; echo "token:      ${kind}_token_cmd removed" ;;
       --test)
         if [[ $kind == admin ]]; then env_note CLOUDFLARE_API_TOKEN; else env_note SHARE_MINTER_TOKEN; fi
         if [[ -f $scn/fail-test-$verb ]]; then fail_with "${kind}_token_cmd_failed" "$(cat "$scn/fail-test-$verb")" "share $verb --test"; fi
@@ -172,8 +180,11 @@ case $verb in
     for a in "$@"; do
       case $a in --r2) jv=setup-r2 ;; --members) jv=setup-members ;; esac
     done
-    [[ $jv == setup-members ]] || true
-    case $jv in setup-r2|setup-members) env_note CLOUDFLARE_API_TOKEN ;; *) env_note CLOUDFLARE_API_TOKEN ;; esac
+    env_note CLOUDFLARE_API_TOKEN
+    if [[ $jv == setup-r2 || $jv == setup-members ]]; then need_key admin CLOUDFLARE_API_TOKEN; fi
+    if [[ $jv == setup-members ]]; then
+      case " $* " in *" --yes "*) ;; *) fail_with members_confirm_needed "Members on: a share older than 0.10 never sees member links; rerun with --yes to confirm; nothing was changed" "share setup $host --r2 --members --yes" ;; esac
+    fi
     [[ ! -f $scn/fail-setup ]] || fail_with admin_token_missing "$(cat "$scn/fail-setup")" "share admin-token --cmd '<command>'"
     from=1
     if has_profile; then
@@ -212,9 +223,12 @@ case $verb in
     edit '.profiles |= map(select(.name != $p))' --arg p "$profile"
     ;;
   member)
+    case ${1:-} in
+      add|rm|rotate|renew|invite) env_note CLOUDFLARE_API_TOKEN; env_note SHARE_MINTER_TOKEN; need_key admin CLOUDFLARE_API_TOKEN; need_key minter SHARE_MINTER_TOKEN ;;
+      pause|resume) env_note CLOUDFLARE_API_TOKEN; need_key admin CLOUDFLARE_API_TOKEN ;;
+    esac
     if [[ ${1:-} == add ]]; then
       record
-      env_note SHARE_MINTER_TOKEN
       [[ ! -f $scn/fail-member ]] || fail_with minter_token_missing "$(cat "$scn/fail-member")" "share minter-token --cmd '<command>'"
       echo "share join $(host_of) SHR-7Q4K-M2XD-9PLA-3VTB"
     else

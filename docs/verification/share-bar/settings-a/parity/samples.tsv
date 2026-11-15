@@ -24,7 +24,7 @@ advanced-test-passed	light	primary ink	#1d1d1f	#1d1d1f	0
 advanced-test-passed	light	title ink	#5f5f64	#5f5f64	0
 advanced-test-passed	light	header rule	#dedee0	#dfdfe1	1
 cloud-storage-progress	light	surface	#c7c7c9	#c9c9cb	2
-cloud-storage-progress	light	primary ink	#161618	#121213	5
+cloud-storage-progress	light	primary ink	#161618	#1d1d1f	7
 cloud-storage-progress	light	title ink	#4c4c51	#4e4e52	2
 cloud-storage-progress	light	header rule	#b6b6b7	#b7b7b8	1
 code-sheet	light	surface	#c9c9ca	#c9c9cb	1
@@ -44,7 +44,7 @@ invite-sheet	light	primary ink	#101011	#1d1d1f	14
 invite-sheet	light	title ink	#4d4d52	#4e4e52	1
 invite-sheet	light	header rule	#b6b6b8	#b7b7b8	1
 members-progress	light	surface	#c7c7c9	#c9c9cb	2
-members-progress	light	primary ink	#0e0e10	#101011	2
+members-progress	light	primary ink	#0e0e10	#1d1d1f	15
 members-progress	light	title ink	#4c4c51	#4e4e52	2
 members-progress	light	header rule	#b6b6b7	#b7b7b8	1
 pause-confirm	light	surface	#c9c9ca	#c9c9cb	1
@@ -64,7 +64,7 @@ settings-member	light	primary ink	#1d1d1f	#1d1d1f	0
 settings-member	light	title ink	#5f5f64	#5f5f64	0
 settings-member	light	header rule	#dedee0	#dfdfe1	1
 stop-serving-confirm	light	surface	#c7c7c9	#c9c9cb	2
-stop-serving-confirm	light	primary ink	#0d0d0f	#121213	5
+stop-serving-confirm	light	primary ink	#0d0d0f	#131314	6
 stop-serving-confirm	light	title ink	#4c4c51	#4e4e52	2
 stop-serving-confirm	light	header rule	#b6b6b7	#b7b7b8	1
 tenant-admin-serving	light	surface	#f5f5f7	#f5f5f7	0
@@ -92,7 +92,7 @@ tenant-owner-stopped	light	primary ink	#1d1d1f	#1d1d1f	0
 tenant-owner-stopped	light	title ink	#5f5f64	#5f5f64	0
 tenant-owner-stopped	light	header rule	#dedee0	#dfdfe1	1
 tenant-refused-removal	light	surface	#c7c7c9	#c9c9cb	2
-tenant-refused-removal	light	primary ink	#111113	#121213	1
+tenant-refused-removal	light	primary ink	#111113	#141414	3
 tenant-refused-removal	light	title ink	#4c4c51	#4e4e52	2
 tenant-refused-removal	light	header rule	#b6b6b7	#b7b7b8	1
 tenant-starting	light	surface	#f5f5f7	#f5f5f7	0

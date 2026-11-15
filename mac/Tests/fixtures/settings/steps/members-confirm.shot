@@ -1,0 +1,4 @@
+scenario owners
+script tab:tenants,select:console,button:turnOnMembers
+expect-no-argv setup
+label members-confirm

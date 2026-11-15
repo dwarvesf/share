@@ -1,7 +1,7 @@
 profiles --json
 profiles --json
-profiles --json
 --profile console config ttl
+profiles --json
 --profile console config ttl
 --profile console config storage_default
 --profile console config storage_default

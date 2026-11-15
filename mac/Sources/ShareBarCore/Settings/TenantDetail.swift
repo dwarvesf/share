@@ -167,7 +167,10 @@ public struct TenantDetail: Sendable, Equatable {
                 title: TenantDetail.calloutTitle(op),
                 detail: TenantDetail.calloutDetail(op),
                 op: op,
-                canResume: JournalRun.argv(op: op, kind: .rerun, profile: entry.name) != nil,
+                // Resume is offered only for the journals this window starts (join and the three
+                // setup flows); a teardown, migrate or member journal is finished in a terminal
+                // or on its own tab, never by one click here.
+                canResume: FlowKind(rawValue: op.verb) != nil && JournalRun.argv(op: op, kind: .rerun, profile: entry.name) != nil,
                 canRollBack: JournalRun.argv(op: op, kind: .rollback, profile: entry.name) != nil
             )
         } else {
@@ -203,7 +206,7 @@ public struct TenantDetail: Sendable, Equatable {
         switch banner {
         case .removed?: buttons.append(.cleanUp)
         case .keyExpired?, .keyInvalid?: buttons.append(.copyRequest)
-        case nil: if isMember { buttons.append(.copyRequest) }
+        case nil: if isMember, state.token?.status == "expiring" { buttons.append(.copyRequest) }
         }
         if state.host != nil { buttons.append(.openInBrowser) }
         actions = buttons

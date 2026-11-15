@@ -25,7 +25,7 @@ struct AdvancedPane: View {
                 FormRow(label: "Keys for") {
                     SBPopup(options: store.keyTargets.map { ($0.name, $0.state?.host ?? $0.name) },
                             selection: Binding(get: { store.configTarget?.name ?? "" }, set: { store.keyProfileOverride = $0; store.loadKeysAgain() }),
-                            id: "a-tenant")
+                            id: "a-tenant", label: "Keys for")
                 }
             }
             KeyRows(store: store, kind: .admin)
@@ -67,7 +67,7 @@ private struct KeyRows: View {
             SBPopup(
                 options: [(SettingsStore.SourceChoice.onePassword, "From 1Password"), (.command, "From a command"), (.ask, "Ask me each time")],
                 selection: Binding(get: { choice }, set: { store.chooseSourceKind(kind, $0) }),
-                id: "\(prefix)-src"
+                id: "\(prefix)-src", label: kind.title
             )
             if choice == .ask {
                 SmallText(kind.askNote)

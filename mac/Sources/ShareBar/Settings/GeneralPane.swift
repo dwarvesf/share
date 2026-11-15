@@ -15,17 +15,17 @@ struct GeneralPane: View {
             }
             FormRow(label: "Menu shows") {
                 SBPopup(options: [(LinkScope.mine, "My links"), (LinkScope.team, "Team links")],
-                        selection: Binding(get: { store.menuShows }, set: store.setMenuShows), id: "g-scope")
+                        selection: Binding(get: { store.menuShows }, set: store.setMenuShows), id: "g-scope", label: "Menu shows")
                 SmallText("You can switch in the menu at any time.")
             }
             FormRow(label: "Recent links") {
                 SBPopup(options: PopoverPrefs.recentChoices.map { ($0, "\($0)") },
-                        selection: Binding(get: { store.recentCount }, set: store.setRecent), id: "g-count")
+                        selection: Binding(get: { store.recentCount }, set: store.setRecent), id: "g-count", label: "Recent links")
             }
             FormRule()
             FormRow(label: "New links expire") {
                 SBPopup(options: ExpiryChoice.allCases.map { ($0, $0.label) },
-                        selection: Binding(get: { store.ttl ?? .sevenDays }, set: store.setExpiry), id: "g-exp")
+                        selection: Binding(get: { store.ttl ?? .sevenDays }, set: store.setExpiry), id: "g-exp", label: "New links expire")
                 SmallText("Saved as ttl= in the share config, so the command line uses it too.")
             }
             if store.offersStorage {

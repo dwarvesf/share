@@ -104,6 +104,15 @@ public enum Impact {
         )
     }
 
+    /// Turn on members: the CLI's own warning, shown before `--yes` is passed.
+    public static func turnOnMembers(host: String) -> ImpactSheet {
+        ImpactSheet(
+            title: "Turn on members for \(host)?",
+            body: "A share older than 0.10 still lists, adds and removes cloud links here, but never sees member links, and its orphan sweep is skipped.",
+            actionTitle: "Turn on members"
+        )
+    }
+
     /// Roll back names its command.
     public static func rollBack(what: String, command: String) -> ImpactSheet {
         ImpactSheet(
@@ -170,7 +179,7 @@ public struct RefusalSheet: Sendable, Equatable {
     public static func from(code: String, message: String, next: String?, host: String) -> RefusalSheet {
         if code == "members_present" { return Impact.refusedMembers(host: host) }
         if let next, !next.isEmpty {
-            return RefusalSheet(title: "Can't do that", sentence: message, next: "Copy command", action: .copyCommand(next))
+            return RefusalSheet(title: "Can't do that", sentence: message, next: "Copy command", action: .copyCommand(Redact.tokenShaped(next)))
         }
         return RefusalSheet(title: "Can't do that", sentence: message, next: nil, action: .none)
     }

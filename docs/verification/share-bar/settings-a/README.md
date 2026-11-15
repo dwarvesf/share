@@ -22,8 +22,9 @@ Deliberate deviations:
 2. Search placeholder. The design's field has no placeholder style, so the browser's `#757575` shows. The capture uses the deliberately darker tertiary token (`#6b6b70` light, `#919196` dark) that passes 4.5:1, as SG-20 keeps for the popover.
 3. Native controls. Pop-up buttons, checkboxes and radios are AppKit controls, so their chevrons and edges differ from the HTML ones. Colors of text, surface and separators are tokens.
 4. The source list row's second line is left-aligned; the design's is right-aligned, which reads as an accident (host and role would not share an edge). Screens: the Tenants set.
-5. Progress step order follows the journal (`redeem`, `keys`, `record`, ...), the design lists "Tell the team" before "Save your keys". Screen: `progress-step-4-of-6`.
-6. Screens with no design twin: `ask-admin-key` (the design has no ask sheet), `advanced-minter-1password`, `advanced-test-failed`, `tenant-owner-stopped` is the design's failed owner, `tenant-member-removed` and `tenant-key-expired` (the design shows no removed or expired banner). They are checked against the design's neighbouring sheet and Advanced layout, not sampled.
+5. Add sheet, set up: the design has a pop-up for the admin key source; a new hostname has no stored command, so the form states that the key is asked next and used once.
+6. Progress step order follows the journal (`redeem`, `keys`, `record`, ...), the design lists "Tell the team" before "Save your keys". Screen: `progress-step-4-of-6`.
+7. Screens with no design twin: `ask-admin-key` (the design has no ask sheet), `advanced-minter-1password`, `advanced-test-failed`, `tenant-owner-stopped` is the design's failed owner, `tenant-member-removed` and `tenant-key-expired` (the design shows no removed or expired banner). They are checked against the design's neighbouring sheet and Advanced layout, not sampled.
 
 ## Screens
 
@@ -32,7 +33,7 @@ Deliberate deviations:
 | 4b14 | General tab | `4b-general-tab-*` | `parity/general-tab-*` | Quo and Base44 settings (form rows, label left, controls right): same label column and grouped rules |
 | 4b14 | Settings for a member without the Members tab | `4b-settings-member-*` | `parity/settings-member-*` | same; tab row shows three tabs |
 | 4b15 | Advanced, 1Password item picked | `4b-advanced-1password-admin-*` | `parity/advanced-1password-admin-*` | Base44 data hosting rows: picked item as a bordered row with Choose |
-| 4b15 | Minter key from 1Password | `4b-advanced-minter-1password-*` | none | same pattern as the admin row |
+| 4b15 | Minter key from 1Password, from a command, Ask me each time | `4b-advanced-minter-1password-*`, `4b-advanced-minter-command-*`, `4b-advanced-minter-ask-*` | none | same pattern as the admin row; each leaves its argv in `argv/` |
 | 4b15 | With a command | `4b-advanced-command-*` | `parity/advanced-command-*` | mono field under the source pop-up |
 | 4b15 | With Ask me each time | `4b-advanced-ask-*` | `parity/advanced-ask-*` | one sentence under the pop-up |
 | 4b15 | Test passed | `4b-advanced-test-passed-*` | `parity/advanced-test-passed-*` | check mark and one summary sentence |
@@ -47,6 +48,7 @@ Deliberate deviations:
 | 4b17 | Owner tenant stopped with its reason | `4b-tenant-owner-stopped-*` | `parity/tenant-owner-stopped-*` | status word with a dot |
 | 4b17 | Starting | `4b-tenant-starting-*` | `parity/tenant-starting-*` | spinner beside the word |
 | 4b17 | Refused removal of a T2 tenant | `4b-tenant-refused-removal-*` | `parity/tenant-refused-removal-*` | sentence plus Open Members |
+| 4b17 | Turn on members confirm (extra) | `4b-members-confirm-*` | none | the CLI's own warning before `--yes` |
 | 4b17 | Owner removal sheet | `4b-tenant-owner-removal-*` | `parity/tenant-owner-removal-*` | destructive action in the filled red |
 | 4b17 | Member: You were removed | `4b-tenant-member-removed-*` | `parity/tenant-member-removed-*` | callout with Clean up |
 | 4b17 | Key expired (extra) | `4b-tenant-key-expired-*` | `parity/tenant-key-expired-*` | callout with Copy request, no Clean up |
@@ -67,6 +69,10 @@ References (Mobbin): [Base44 workspace settings](https://mobbin.com/screens/7bef
 - The separator was the label color at 9%; it is black or white at 9% as the design has it (header rule 4 steps off before, 1 to 2 after).
 - A tenant of role `tenant_origin` read "Owner" at T1; the design words it "Admin" at every tier.
 - The sheet pop-ups did not fill the sheet width; they do now.
+
+## Review round
+
+The advisor and frontend reviews found gaps that the first shot run hid because the fake CLI was looser than the real one. The fake now refuses what the real one refuses, the fixes are in the implementation notes (D14, D15), and every capture here was retaken after them.
 
 ## Recorded run
 

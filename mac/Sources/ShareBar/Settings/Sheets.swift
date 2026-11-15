@@ -88,16 +88,12 @@ struct AddSheetView: View {
             SheetTitle(text: "Add a tenant")
             SBSegmented(options: [(AddForm.Path.join, "Join a team"), (.setup, "Set up a hostname")], selection: formBinding.path, idPrefix: "sp")
             if form.path == .join {
-                field("Hostname", placeholder: "s.example.com", text: formBinding.host, id: "sh-host-join", mono: true)
+                field("Hostname", placeholder: "s.example.com", text: formBinding.host, id: "sh-host-join", mono: true, focus: true)
                 field("Invite code", placeholder: "SHR-7Q4K-M2XD-9PLA-3VTB", text: formBinding.code, id: "sh-code", mono: true)
                 SmallText("Your admin sends this code. It works once. Joining takes about a minute and sets up this Mac to serve your links.")
             } else {
-                field("Hostname", placeholder: "s.example.com", text: formBinding.host, id: "sh-host", mono: true)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Cloudflare admin key").font(t.metaFont).foregroundColor(t.secondary)
-                    SBPopup(options: [(true, "Ask me now (not saved)"), (false, "Run the admin key command from Advanced")],
-                            selection: formBinding.askKey, id: "sh-tok", fullWidth: true)
-                }
+                field("Hostname", placeholder: "s.example.com", text: formBinding.host, id: "sh-host", mono: true, focus: true)
+                SmallText("Share Bar asks for your Cloudflare admin key next, uses it for this setup only and does not save it.")
                 Toggle(isOn: formBinding.alsoCloud) { Text("Also turn on cloud storage").font(t.bodyFont).foregroundColor(t.label) }
                     .toggleStyle(.checkbox).accessibilityIdentifier("sh-r2")
                 SmallText("Creates a tunnel and a DNS record in your Cloudflare account. Links are served from this Mac.")
@@ -110,10 +106,12 @@ struct AddSheetView: View {
         }
     }
 
-    private func field(_ title: String, placeholder: String, text: Binding<String>, id: String, mono: Bool) -> some View {
+    private func field(_ title: String, placeholder: String, text: Binding<String>, id: String, mono: Bool, focus: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(SettingsTheme(scheme).metaFont).foregroundColor(SettingsTheme(scheme).secondary)
-            SBField(placeholder: placeholder, text: text, mono: mono, id: id)
+            SBField(placeholder: placeholder, text: text, mono: mono, id: id, label: title, autofocus: focus) {
+                if canSubmit { store.submitAdd() }
+            }
         }
     }
 }
@@ -234,14 +232,18 @@ struct ConfirmSheetView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(choice.label).font(t.metaFont).foregroundColor(t.secondary)
                     SBPopup(options: choice.options.enumerated().map { ($0.offset, $0.element) },
-                            selection: Binding(get: { store.impactChoice }, set: { store.impactChoice = $0 }), id: "sh-cl", fullWidth: true)
+                            selection: Binding(get: { store.impactChoice }, set: { store.impactChoice = $0 }), id: "sh-cl", fullWidth: true, label: choice.label)
                 }
             }
             Buttons {
-                Button("Cancel") { store.dismissSheet() }.sbButton().keyboardShortcut(.cancelAction).accessibilityIdentifier("sh-cancel")
-                Button(sheet.actionTitle) { store.confirm(action) }
-                    .sbButton(sheet.destructive ? .destructiveFill : .primary)
-                    .keyboardShortcut(.defaultAction).accessibilityIdentifier("sh-ok")
+                // A destructive confirm never takes Return: Return and Esc both cancel.
+                if sheet.destructive {
+                    Button("Cancel") { store.dismissSheet() }.sbButton().keyboardShortcut(.defaultAction).accessibilityIdentifier("sh-cancel")
+                    Button(sheet.actionTitle) { store.confirm(action) }.sbButton(.destructiveFill).accessibilityIdentifier("sh-ok")
+                } else {
+                    Button("Cancel") { store.dismissSheet() }.sbButton().keyboardShortcut(.cancelAction).accessibilityIdentifier("sh-cancel")
+                    Button(sheet.actionTitle) { store.confirm(action) }.sbButton(.primary).keyboardShortcut(.defaultAction).accessibilityIdentifier("sh-ok")
+                }
             }
         }
     }
@@ -335,7 +337,9 @@ struct InviteSheetView: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text("Name").font(t.metaFont).foregroundColor(t.secondary)
-                SBField(placeholder: "As the team will see it", text: formBinding.name, id: "sh-name")
+                SBField(placeholder: "As the team will see it", text: formBinding.name, id: "sh-name", label: "Name", autofocus: true) {
+                    if form.isValid { store.submitInvite(profile: profile) }
+                }
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text("Where their links live").font(t.metaFont).foregroundColor(t.secondary)
@@ -397,8 +401,8 @@ struct AskKeySheetView: View {
                 SheetTitle(text: request.kind == .admin ? "Cloudflare admin key" : "Cloudflare minter key")
                 SmallText(request.purpose)
             }
-            SBSecureField(placeholder: "Paste the token", text: $key, id: "ask-key", onSubmit: submit)
-            SmallText("It goes to this one command and is dropped when the command ends. Nothing is saved.")
+            SBSecureField(placeholder: "Paste the token", text: $key, id: "ask-key", label: "Cloudflare token", autofocus: true, onSubmit: submit)
+            SmallText("It goes to the commands of this action and is dropped when they end. Nothing is saved.")
             Buttons {
                 Button("Cancel") { key = ""; store.dismissSheet() }.sbButton().keyboardShortcut(.cancelAction).accessibilityIdentifier("sh-cancel")
                 Button("Use once") { submit() }.sbButton(.primary).disabled(key.isEmpty).keyboardShortcut(.defaultAction).accessibilityIdentifier("sh-go")

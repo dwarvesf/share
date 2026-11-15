@@ -6,5 +6,6 @@ profiles --json
 --profile console config ttl
 version
 --profile console config storage_default
+--profile console admin-token --cmd pass show cf-admin
 --profile console minter-token --cmd pass show cf-minter
 --profile console member add linh --machine --invite-ttl 7d

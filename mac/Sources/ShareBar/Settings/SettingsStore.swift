@@ -32,9 +32,12 @@ enum SheetContent {
 enum ConfirmAction {
     case stopServing(profile: String)
     case run(argv: [String], done: String)
+    /// A verb that needs the admin key, and the minter key for a member add or removal.
+    case runKeyed(argv: [String], kinds: [KeyKind], profile: String, done: String)
+    case flow(FlowStepPlan, profile: String, done: String)
     case rollBack(op: OpInfo, profile: String)
     /// A verb whose argv depends on the sheet's pop-up (Remove member: keep or delete cloud links).
-    case runChoice(done: String, argv: (Int) -> [String])
+    case runChoice(done: String, kinds: [KeyKind], profile: String, argv: (Int) -> [String])
 }
 
 struct AddForm: Equatable {
@@ -43,8 +46,6 @@ struct AddForm: Equatable {
     var host = ""
     var code = ""
     var alsoCloud = false
-    /// "Ask me now (not saved)" or "Run the admin key command from Advanced".
-    var askKey = true
 }
 
 /// A request for a key typed once (gap G3). `purpose` is the sentence under the title.
@@ -132,7 +133,7 @@ final class SettingsStore: ObservableObject {
 
     private var runner: FlowRunner?
     private var plan: [FlowStepPlan] = []
-    private var planKey: String?
+    private var planKeys: [String: String] = [:]
     private var planDone: (() -> Void)?
     private var noticeTask: Task<Void, Never>?
 
@@ -223,6 +224,8 @@ final class SettingsStore: ObservableObject {
 
     func announce(_ text: String, tone: Notice.Tone = .ok) {
         notice = Notice(text: text, tone: tone)
+        NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
+                             userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
         noticeTask?.cancel()
         noticeTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 6_000_000_000)
@@ -339,12 +342,12 @@ final class SettingsStore: ObservableObject {
         case .ask:
             panel.source = .askEachTime
             keys[kind] = panel
-            keyStore.save(.askEachTime, kind: kind, profile: target.name)
             writeSource(kind, panel.source, profile: target.name)
             return
         }
+        // 1Password and a command are only a choice on screen until the CLI has stored them:
+        // the remembered source changes when the write succeeds, never before.
         keys[kind] = panel
-        keyStore.save(panel.source, kind: kind, profile: target.name)
     }
 
     func setCommandText(_ kind: KeyKind, _ text: String) {
@@ -357,9 +360,7 @@ final class SettingsStore: ObservableObject {
 
     func commitCommand(_ kind: KeyKind) {
         guard let target = configTarget else { return }
-        let source = KeySource.command(panel(kind).commandText)
-        keyStore.save(source, kind: kind, profile: target.name)
-        writeSource(kind, source, profile: target.name)
+        writeSource(kind, KeySource.command(panel(kind).commandText), profile: target.name)
     }
 
     func pickItem(_ kind: KeyKind, _ item: OnePasswordItem) {
@@ -368,7 +369,6 @@ final class SettingsStore: ObservableObject {
         panel.source = .onePassword(item)
         panel.test = .idle
         keys[kind] = panel
-        keyStore.save(panel.source, kind: kind, profile: target.name)
         sheet = nil
         writeSource(kind, panel.source, profile: target.name)
     }
@@ -378,6 +378,7 @@ final class SettingsStore: ObservableObject {
         Task {
             let result = await writeCLI(argv)
             if result.status == 0 {
+                keyStore.save(source, kind: kind, profile: profile)
                 var panel = self.panel(kind)
                 panel.saved = true
                 keys[kind] = panel
@@ -480,31 +481,27 @@ final class SettingsStore: ObservableObject {
         let shares = entry(profile)?.state?.shares ?? []
         impactChoice = 0
         sheet = .confirm(Impact.pause(member: member, shares: shares),
-                         .run(argv: ProfileArgs.argv(profile, ["member", "pause", member]), done: "\(member) is paused."))
+                         .runKeyed(argv: ProfileArgs.argv(profile, ["member", "pause", member]), kinds: [.admin], profile: profile, done: "\(member) is paused."))
     }
 
     func presentRemoveMember(member: String, profile: String) {
         let shares = entry(profile)?.state?.shares ?? []
         impactChoice = 0
         sheet = .confirm(Impact.removeMember(member: member, shares: shares),
-                         .runChoice(done: "\(member) is removed. Their machine links stopped answering.") { choice in
+                         .runChoice(done: "\(member) is removed. Their machine links stopped answering.", kinds: [.admin, .minter], profile: profile) { choice in
                              ProfileArgs.argv(profile, ["member", "rm", member, "--cloud-links", choice == 0 ? "keep" : "delete"])
                          })
     }
 
-    /// Create code: runs `member add`, then shows the code once.
+    /// Create code: runs `member add` (admin and minter keys), then shows the code once.
     func submitInvite(profile: String) {
         guard let argv = inviteForm.argv(profile: profile) else { return }
         let form = inviteForm
-        let run: (String?) -> Void = { [weak self] key in
+        collectKeys(keysNeedingAsk([.admin, .minter], profile: profile), asked: [:],
+                    purpose: "Share Bar uses it to add this member and forgets it right away.") { [weak self] keys in
             guard let self else { return }
             Task {
-                let result: CLIResult
-                if let key {
-                    result = await AskedKeyCommand(argv: argv, variable: KeyKind.minter.environmentName, key: key).spawn().result
-                } else {
-                    result = await self.writeCLI(argv)
-                }
+                let result = await self.runWith(argv, keys: keys)
                 guard result.status == 0, let code = InviteForm.code(fromStdout: result.stdout) else {
                     self.showFailure(result, host: self.entry(profile)?.state?.host ?? profile)
                     return
@@ -512,13 +509,46 @@ final class SettingsStore: ObservableObject {
                 self.sheet = .code(CodeSheet(member: form.name.trimmingCharacters(in: .whitespaces), code: code, rotate: false, ttlDays: form.ttlDays))
             }
         }
-        if case .askEachTime = keyStore.load(.minter, profile: profile) {
-            sheet = .askKey(AskKeyRequest(kind: .minter, purpose: "Share Bar uses it to mint this member's key and forgets it right away.") { [weak self] key in
-                self?.sheet = nil
-                run(key)
-            })
-        } else {
-            run(nil)
+    }
+
+    // MARK: asked keys
+
+    /// The keys among `kinds` whose source is "Ask me each time" for this profile.
+    func keysNeedingAsk(_ kinds: [KeyKind], profile: String) -> [KeyKind] {
+        kinds.filter { kind in
+            if case .askEachTime = keyStore.load(kind, profile: profile) { return true }
+            return false
+        }
+    }
+
+    /// Opens one ask sheet per key, in order, gathering each value in `asked` only; calls `then`
+    /// with everything asked. Cancel (Esc) leaves nothing running and nothing kept.
+    func collectKeys(_ remaining: [KeyKind], asked: [String: String], purpose: String, then: @escaping ([String: String]) -> Void) {
+        guard let kind = remaining.first else { then(asked); return }
+        sheet = .askKey(AskKeyRequest(kind: kind, purpose: purpose) { [weak self] key in
+            self?.sheet = nil
+            var next = asked
+            next[kind.environmentName] = key
+            self?.collectKeys(Array(remaining.dropFirst()), asked: next, purpose: purpose, then: then)
+        })
+    }
+
+    /// Runs one command with the asked keys in its environment, through the app's queue when
+    /// there are none.
+    private func runWith(_ argv: [String], keys: [String: String]) async -> CLIResult {
+        if keys.isEmpty { return await writeCLI(argv) }
+        return await AskedKeyCommand(argv: argv, environment: keys).spawn().result
+    }
+
+    private func runKeyed(_ argv: [String], kinds: [KeyKind], profile: String, host: String, done: String) {
+        collectKeys(keysNeedingAsk(kinds, profile: profile), asked: [:],
+                    purpose: "Share Bar uses it for this one action and forgets it right away.") { [weak self] keys in
+            guard let self else { return }
+            Task {
+                let result = await self.runWith(argv, keys: keys)
+                await self.refresh()
+                if result.status == 0 { self.announce(done) } else { self.showFailure(result, host: host) }
+            }
         }
     }
 
@@ -552,13 +582,16 @@ final class SettingsStore: ObservableObject {
                       needsKey: true, profile: detail.profile, done: "\(detail.host): cloud storage is on.")
         case .turnOnMembers:
             guard let argv = FlowArgv.turnOnMembers(profile: detail.profile, host: detail.host) else { return }
-            startPlan([FlowStepPlan(argv: argv, kind: .setupMembers, title: "Turning on members for \(detail.host)")],
-                      needsKey: true, profile: detail.profile, done: "\(detail.host): members are on. Invite people from the Members tab.")
+            sheet = .confirm(Impact.turnOnMembers(host: detail.host),
+                             .flow(FlowStepPlan(argv: argv, kind: .setupMembers, title: "Turning on members for \(detail.host)"),
+                                   profile: detail.profile, done: "\(detail.host): members are on. Invite people from the Members tab."))
         case .resume:
             resume(detail)
         case .rollBack:
-            guard let op = detail.callout?.op else { return }
-            let command = op.rollback ?? "the journal's rollback"
+            guard let op = detail.callout?.op,
+                  let checked = JournalRun.argv(op: op, kind: .rollback, profile: detail.profile) else { return }
+            // The sheet names the checked argv that will run, never the journal's display string.
+            let command = "share " + checked.joined(separator: " ")
             let what = op.verb == "setup-r2" ? "cloud storage" : (op.verb == "join" ? "the join" : op.verb)
             sheet = .confirm(Impact.rollBack(what: what, command: command), .rollBack(op: op, profile: detail.profile))
         case .openInBrowser:
@@ -588,17 +621,19 @@ final class SettingsStore: ObservableObject {
         case .stopServing(let profile):
             let host = entry(profile)?.state?.host ?? profile
             runQuiet(ProfileArgs.stop(profile), host: host, done: "\(host) stopped serving from this Mac.")
-        case .runChoice(let done, let argv):
-            let built = argv(impactChoice)
-            let host = built.first == "--profile" && built.count > 2 ? (entry(built[1])?.state?.host ?? built[1]) : ""
-            runQuiet(built, host: host, done: done)
+        case .runChoice(let done, let kinds, let profile, let argv):
+            runKeyed(argv(impactChoice), kinds: kinds, profile: profile, host: entry(profile)?.state?.host ?? profile, done: done)
+        case .runKeyed(let argv, let kinds, let profile, let done):
+            runKeyed(argv, kinds: kinds, profile: profile, host: entry(profile)?.state?.host ?? profile, done: done)
+        case .flow(let step, let profile, let done):
+            startPlan([step], needsKey: true, profile: profile, done: done)
         case .run(let argv, let done):
             let host = argv.first == "--profile" && argv.count > 2 ? (entry(argv[1])?.state?.host ?? argv[1]) : ""
             runQuiet(argv, host: host, done: done)
         case .rollBack(let op, let profile):
             guard let argv = JournalRun.argv(op: op, kind: .rollback, profile: profile) else { return }
             let host = entry(profile)?.state?.host ?? profile
-            runQuiet(argv, host: host, done: "Rolled back: \(host).")
+            runKeyed(argv, kinds: op.verb == "join" ? [] : [.admin], profile: profile, host: host, done: "Rolled back: \(host).")
         }
     }
 
@@ -650,7 +685,7 @@ final class SettingsStore: ObservableObject {
             if form.alsoCloud, let r2 = FlowArgv.turnOnCloud(profile: ProfileName.slug(host: host), host: host) {
                 steps.append(FlowStepPlan(argv: r2, kind: .setupR2, title: "Turning on cloud storage for \(host)"))
             }
-            startPlan(steps, needsKey: form.askKey, profile: ProfileName.slug(host: host), done: "\(host) is serving from this Mac.")
+            startPlan(steps, needsKey: true, profile: ProfileName.slug(host: host), done: "\(host) is serving from this Mac.")
         }
     }
 
@@ -659,10 +694,11 @@ final class SettingsStore: ObservableObject {
     /// environment only.
     func startPlan(_ steps: [FlowStepPlan], needsKey: Bool, profile: String, done: String) {
         guard !steps.isEmpty, runner == nil || !(flow?.isActive ?? false) else { return }
-        let begin: (String?) -> Void = { [weak self] key in
+        let asking = needsKey ? keysNeedingAsk([.admin], profile: profile) : []
+        collectKeys(asking, asked: [:], purpose: "Share Bar uses it for this action and forgets it when the action ends.") { [weak self] keys in
             guard let self else { return }
             self.plan = steps
-            self.planKey = key
+            self.planKeys = keys
             self.planDone = { [weak self] in
                 guard let self else { return }
                 Task {
@@ -672,22 +708,12 @@ final class SettingsStore: ObservableObject {
             }
             self.startNext()
         }
-        let source = keyStore.load(.admin, profile: profile)
-        if needsKey, case .askEachTime = source {
-            sheet = .askKey(AskKeyRequest(kind: .admin, purpose: "Share Bar uses it for this one action and forgets it right away.") { [weak self] key in
-                self?.sheet = nil
-                begin(key)
-            })
-        } else {
-            begin(nil)
-        }
     }
 
     private func startNext() {
         guard !plan.isEmpty else { return }
         let step = plan.removeFirst()
-        let env = planKey.map { [KeyKind.admin.environmentName: $0] } ?? [:]
-        let runner = FlowRunner(argv: step.argv, kind: step.kind, title: step.title, environment: env) { [weak self] run in
+        let runner = FlowRunner(argv: step.argv, kind: step.kind, title: step.title, environment: planKeys) { [weak self] run in
             Task { @MainActor in self?.flowChanged(run) }
         }
         self.runner = runner
@@ -698,6 +724,8 @@ final class SettingsStore: ObservableObject {
 
     private func flowChanged(_ run: FlowRun) {
         guard flow?.kind == run.kind || flow == nil else { return }
+        // Snapshots hop threads before they reach here: a late running one never undoes a later phase.
+        if case .running = run.phase, let current = flow, current.kind == run.kind, !current.isActive || current.phase == .stopping { return }
         flow = run
         guard case .done = run.phase else {
             if case .failed = run.phase { dropKey() }
@@ -718,7 +746,7 @@ final class SettingsStore: ObservableObject {
     }
 
     private func dropKey() {
-        planKey = nil
+        planKeys = [:]
         plan = []
     }
 

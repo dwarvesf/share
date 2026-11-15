@@ -6,4 +6,3 @@ profiles --json
 --profile console config ttl
 --profile console config storage_default
 version
-version

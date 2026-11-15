@@ -19,6 +19,9 @@ struct SettingsRootView: View {
                     noticeBar(notice, t)
                 }
             }
+            // A sheet is modal in behavior too: nothing behind it takes focus or VoiceOver.
+            .disabled(store.sheet != nil)
+            .accessibilityHidden(store.sheet != nil)
             if let sheet = store.sheet {
                 SheetOverlay(store: store, content: sheet)
             }
@@ -45,6 +48,13 @@ struct SettingsRootView: View {
                 }
             }
             .padding(.bottom, 6)
+            .focusable()
+            .onMoveCommand { direction in
+                guard direction == .left || direction == .right else { return }
+                store.pane = SettingsTabs.moved(from: store.pane, forward: direction == .right, in: store.visibleTabs)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Settings sections")
         }
         .frame(maxWidth: .infinity)
     }
