@@ -1,9 +1,9 @@
 # Proof of done: member docs (SPEC-009 TASK-4c, without the suite docs grep)
 
-Branch: docs/member-docs, on main at 7b39971.
+Branch: docs/member-docs, on main at 7b39971. The suite grep was added later by the live e2e sub-goal (docs/verification/member-docs-grep.md).
 Notes: docs/implementation-notes/member-docs.md
 
-Docs only. `tests/` is untouched; the "tenant docs" suite grep is the live e2e sub-goal's.
+Docs only when written; `tests/` was untouched.
 
 ## Doc claims a later check re-reads against the built code
 
