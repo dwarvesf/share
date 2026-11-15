@@ -10,7 +10,8 @@
 // the same Worker over a BUCKET loaded from a SHARE_R2_DRY_DIR, one "<code> <path>" line per path.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync, unlinkSync, mkdirSync } from "node:fs";
+import http from "node:http";
 import { tmpdir } from "node:os";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -145,15 +146,51 @@ const rec = (over = {}) => ({ v: 1, id: ID, name: "f.txt", src: "/tmp/x", added:
 const putRec = (b, over = {}) => b.put("m/" + ID, JSON.stringify(rec(over)));
 
 if (process.argv[2] === "--dir") {
-  const dir = process.argv[3], host = process.argv[5], bucket = new Bucket();
+  // options after --dir <d> --host <h>: --bind M_<8hex>=127.0.0.1:<port> (a vpc_service binding that reaches a local listener, Host kept),
+  // --post <path> <body> (one POST; prints "<code> <path>", then the body). The deployed PAUSED and MEMBERS come from <d>/.cf/script.json.
+  // Every bucket change a call makes (the redeem's claim and delete) is written back to <d>, so the dry bucket sees it.
+  const dir = process.argv[3], host = process.argv[5], bucket = new Bucket(), over = { HOST: host }, posts = [], paths = [];
   const walk = (d) => readdirSync(d, { withFileTypes: true }).forEach((e) => {
     if (e.name.startsWith(".")) return;   // the dry seam's .cf, .fx, and .resume are not objects
     const f = join(d, e.name);
     if (e.isDirectory()) walk(f); else bucket.put(relative(dir, f), readFileSync(f));
   });
   walk(dir);
-  const worker = await loadWorker(), env = envOf(bucket, { HOST: host });
-  for (const path of process.argv.slice(6)) console.log(`${(await call(worker, env, "https://" + host + path)).status} ${path}`);
+  const before = new Map([...bucket.m].map(([k, v]) => [k, v.etag]));
+  try {
+    for (const b of JSON.parse(readFileSync(join(dir, ".cf/script.json"), "utf8")).bindings || [])
+      if (b.type === "plain_text" && (b.name === "PAUSED" || b.name === "MEMBERS")) over[b.name] = b.text;
+  } catch {}
+  const args = process.argv.slice(6);
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--bind") {
+      const [name, addr] = args[++i].split("="), [h, port] = addr.split(":");
+      over[name] = { fetch: (req) => new Promise((res, rej) => {
+        const u = new URL(req.url), hdrs = Object.fromEntries(req.headers);
+        hdrs.host = u.host;
+        const r = http.request({ host: h, port: +port, path: u.pathname + u.search, method: req.method, headers: hdrs }, (resp) => {
+          const chunks = [];
+          resp.on("data", (c) => chunks.push(c));
+          resp.on("end", () => {
+            const hs = new Headers();
+            for (const [k, v] of Object.entries(resp.headers)) hs.set(k, Array.isArray(v) ? v.join(", ") : v);
+            const nb = [101, 204, 205, 304].includes(resp.statusCode) || req.method === "HEAD";
+            res(new Response(nb ? null : Buffer.concat(chunks), { status: resp.statusCode, headers: hs }));
+          });
+        });
+        r.on("error", rej); r.end();
+      }) };
+    } else if (args[i] === "--post") { posts.push([args[i + 1], args[i + 2]]); i += 2; }
+    else paths.push(args[i]);
+  }
+  const worker = await loadWorker(), env = envOf(bucket, over);
+  for (const [path, body] of posts) {
+    const r = await call(worker, env, "https://" + host + path, { method: "POST", body });
+    console.log(`${r.status} ${path}`); console.log(await bodyOf(r));
+  }
+  for (const path of paths) console.log(`${(await call(worker, env, "https://" + host + path)).status} ${path}`);
+  for (const [k, etag] of before) if (!bucket.m.has(k)) unlinkSync(join(dir, k));
+  for (const [k, v] of bucket.m) if (before.get(k) !== v.etag) { mkdirSync(dirname(join(dir, k)), { recursive: true }); writeFileSync(join(dir, k), v.bytes); }
   process.exit(0);
 }
 

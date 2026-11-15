@@ -5047,16 +5047,20 @@ gt_restore_on; out=$(gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1); r
 check "mm DY-05: with the nonce served, the same rerun converges" "0 1" "$rc $(gt_on)"
 
 # TASK-0f, TN-10: the member keys ride config_put across a setup <host> rerun and an api-token --cmd write
-gu_restore
-printf 'members=on\nrole=member\nmember_id=m-an-aaaaaaa1\nmember_mode=machine\n' >>"$GU_CONF"
+gu_restore   # an origin config holds members=on; the member keys ride along unread (a member config, role=member, refuses setup: "share leave first")
+printf 'members=on\nmember_id=m-an-aaaaaaa1\nmember_mode=machine\n' >>"$GU_CONF"
 before="$(grep -nE '^(members|role|member_id|member_mode)=' "$GU_CONF")"
 gwu setup gu.example.test --no-service >/dev/null 2>&1; rc=$?
-check "mm TN-10: a setup <host> rerun keeps the four member lines byte for byte, in place" "0|$before" "$rc|$(grep -nE '^(members|role|member_id|member_mode)=' "$GU_CONF")"
+check "mm TN-10: a setup <host> rerun keeps the member lines byte for byte, in place" "0|$before" "$rc|$(grep -nE '^(members|role|member_id|member_mode)=' "$GU_CONF")"
 gwu api-token --cmd 'echo t' >/dev/null 2>&1   # its Access preflight has no fake here; the write is what TN-10 checks
 check "mm TN-10: an api-token --cmd write keeps them too" "$before|1" "$(grep -nE '^(members|role|member_id|member_mode)=' "$GU_CONF")|$(grep -c '^api_token_cmd=echo t$' "$GU_CONF")"
-gt_fresh; printf 'members=on\nrole=member\nmember_id=m-an-aaaaaaa1\nmember_mode=machine\n' >>"$GT_CONF"; before="$(grep -nE '^(members|role|member_id|member_mode)=' "$GT_CONF")"
+gt_fresh; printf 'members=on\nmember_id=m-an-aaaaaaa1\nmember_mode=machine\n' >>"$GT_CONF"; before="$(grep -nE '^(members|role|member_id|member_mode)=' "$GT_CONF")"
 gwt setup ten.example.test --r2 --bucket ok-bucket >/dev/null 2>&1; rc=$?
 check "mm TN-10: a setup --r2 write (tenant_config) keeps them too" "0|$before" "$rc|$(grep -nE '^(members|role|member_id|member_mode)=' "$GT_CONF")"
+
+# SPEC-009 Phase 1 (TASK-1b to 1i): its own file, sourced here; MX_ONLY=<section words> runs one section of it
+# shellcheck disable=SC1091 # tests/members.sh is linted on its own (ci.yml)
+. "$(dirname "$SH")/../tests/members.sh"
 
 echo "=== worker (tests/worker.mjs) ==="
 if command -v node >/dev/null; then
