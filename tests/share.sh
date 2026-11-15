@@ -5136,7 +5136,7 @@ v3() { # v3 <id> [jq over the record]: a member pointer in the dry bucket, aged 
 mkdir -p "$DRYT/m"
 out=$(SHARE_TEST_IDS=5d1001 tn org add "$tn2" 2>&1)
 v3 5d0001
-v3 5d0002 '.origin = "m-x-../aaaaaaa1"'; v3 5d0003 '.name = "a\tb"'; v3 5d0004 '.opts = "live"'; v3 5d0005 '.expires = "0"'; v3 5d0006 '.own_host = "x.example.test"'
+v3 5d0002 '.origin = "m-x-../aaaaaaa1"'; v3 5d0003 '.name = "a\tb"'; v3 5d0004 '.opts = "gated"'; v3 5d0005 '.expires = "0"'; v3 5d0006 '.own_host = "x.example.test"'
 v3 5d0007 '.expires = 1000'
 mkdir -p "$DRYT/o/9e0001.00000001"; printf 'x\n' >"$DRYT/o/9e0001.00000001/x"; aged 90000 "$DRYT/o/9e0001.00000001/x"
 : >"$tlog"
@@ -5224,7 +5224,7 @@ for fx in binding marker; do
 done
 gt_restore_on; jq -c '(.bindings |= map(if .name == "VERSION" then .text = "9" else . end))' "$GT_DRY/.cf/script.json" >"$GT_DRY/.cf/script.tmp" && mv -f "$GT_DRY/.cf/script.tmp" "$GT_DRY/.cf/script.json"
 out=$(gwt setup ten.example.test --r2 --bucket ok-bucket --force 2>&1); rc=$?
-check "mm DY-03: with no member state, --force still downgrades (unchanged)" "0 5" "$rc $(jq -r '.bindings[] | select(.name == "VERSION") | .text' "$GT_DRY/.cf/script.json")"
+check "mm DY-03: with no member state, --force still downgrades (unchanged)" "0 $(sed -n 's/^WORKER_VERSION=\([0-9]*\).*/\1/p' "$SH")" "$rc $(jq -r '.bindings[] | select(.name == "VERSION") | .text' "$GT_DRY/.cf/script.json")"
 # DY-04: 20 bindings in one metadata body
 gt_restore_on; mkdir -p "$GT_DRY/.cf/services"
 b20='[]'; for i in $(seq 1 20); do sx="$(printf 'c%07x' "$i")"; printf '{"service_id":"svc-%s"}\n' "$sx" >"$GT_DRY/.cf/services/svc-$sx.json"
