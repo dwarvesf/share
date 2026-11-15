@@ -36,3 +36,18 @@ Input: `docs/research/2026-11-13-implicit-state-machines.md` (19 rows, 6 `must`)
 6. **Row 7, 401 on add.** Add to G10 AC: a failed add with 401 sets `verify:"invalid"` in `.health`.
 7. **Row 18, join step 2.** Unseal, two Keychain stores and the config write share one `op_step`; a die inside leaves `step=2` with the unsealed bundle lost. Split step 2 in the SPEC-009 `seq-join` table, one `op_step` per write, with a DP-join row per cut.
 8. **Concurrent add (no audit row).** With the G9 `add` journal, `op_begin` refuses `op_running`, so a second concurrent `share add` dies instead of waiting on the index lock. Add to G9 AC: journal `add` per invocation, or exempt it from `op_running`.
+
+## Status 2026-11-15
+
+Checked against main at f8042fa before the SG-18 run. Five of the eight gaps were already handled, three needed a fix, and one optional leg of gap 3 was added.
+
+| Gap | Status | Where |
+|---|---|---|
+| 1 (row 3, OQ-1) | handled | OQ-1 closed by SPEC-010 DEC-19; the RL-09 and RL-10 rows cover a `token_cmd` origin |
+| 2 (row 4, dead `setup-r2`) | fixed by SG-18 | SPEC-010 G2b and DEC-37, row JN-16; `op_interrupted_guard` in `cmd_add` |
+| 3 (row 8, gate lost) | the `ls` half was already in G7 and G10; the prune leg is fixed by SG-18 | SPEC-010 G7, DEC-38, row LS-06: the bare `prune` verb runs `access_ls_check`, from an exported token only |
+| 4 (row 8, phase) | handled | G7 added to SPEC-009 `Depends on` and TASK-0c |
+| 5 (row 9, version source) | handled | SPEC-009 TASK-0a gives `SHARE_VERSION` and `share version`; the G10 suite checks `worker_older`, `worker_newer` and `cli_below_min` |
+| 6 (row 7, 401 on add) | fixed by SG-18 | SPEC-010 G10 and DEC-39, row TK-07; `r2_auth_verdict` after a failed upload, record PUT or pointer PUT |
+| 7 (row 18, join step 2) | fixed by SG-18 | SPEC-009 DEC-81; `op_steps_join` has nine rows; rows DP-join-1a to 1d |
+| 8 (concurrent add) | handled | SPEC-010 DEC-22 and row AD-04; `add` journals with `--concurrent` |

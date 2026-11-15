@@ -153,3 +153,21 @@ Decisions the spec left open, and changes from it, made while building Phase 2. 
 | P5 minor | a killed `health_put` leaves `.health.XXXXXX`, which blocks `rmdir` | folded: every teardown removes `.health.??????` too |
 | P6 minor | one flaky Access GET clears a true `gate_missing` | open: `gates_put` records only a 404; a retry keeps the old list when a GET errors is a follow-up |
 | P7 minor | a cloud row's `revoked_by=` is printed raw by `ls` | open: bucket opts are not sanitized like local rows |
+
+## Audit spec gaps (SG-18)
+
+The delta from the audit-to-spec trace (`docs/research/2026-11-14-audit-to-spec-trace.md`, status section at its end). Three gaps and one optional leg closed in `bin/share`.
+
+| Decision the spec left open | Choice | Why |
+|---|---|---|
+| Where the `op_interrupted` guard sits in `cmd_add` | before every R2 refusal, as soon as the target count is known, and only when the add publishes to the bucket (`--cloud`, or an r2 profile) | a `setup-r2` killed at step 11 has no config yet, so `add --cloud` would die "R2 is off" first and hide the real cause (DEC-37) |
+| Which journal steps refuse | 11 and 12 only | step 11 writes the config and step 12 the marker; steps 1 to 10 leave no config (the R2-off refusal already stops the add), 13 and later are a finished tenant |
+| A live `setup-r2` at step 11 or 12 | not refused here | `op_running` is the live case's guard, and it fires on the second `setup`, not on an add |
+| `op_interrupted` raiser (earlier note B2: "not added, no raiser") | added to `code_table`, raised by `op_interrupted_guard` | the guard is the raiser the note asked for |
+| 401 or 403 on an add | `health_token_put invalid` at the upload failure, the record PUT failure, and the local add's pointer PUT failure | the three places an add first learns the publisher token is bad (DEC-39); a 403 from a bucket policy also reads `invalid` until the next verify |
+| `SHARE_R2_DRY_FAIL` for a PUT | now a glob (`PUT m/*`), with `SHARE_R2_DRY_FAIL_CODE` choosing the answer (default 500) | the record's key holds a random id, so an exact key cannot name it; every existing use is a literal key, which a glob matches the same |
+| Prune leg (audit row 8) | the bare `prune` verb calls `access_ls_check` last | the check reads `CLOUDFLARE_API_TOKEN` only, so the "a listing never runs a credential command" rule holds; serve's hourly prune resolves no token (`SHARE_API_TOKEN_OFF=1`), so it is a no-op there (DEC-38) |
+
+Test names (each run red on the old `bin/share`, green on the new): `JN-16` (three rows plus the rerun), `TK-07` (six rows), `LS-06` (two rows), `mm DP-join-1a` to `1d`, `mm DP-join-2`, `3b`, `4`, `6`, `mm DP-join-1d (re-join)`. Proof: `docs/verification/audit-spec-gaps.md`.
+
+Open: the Share Bar reads `gate_missing` from the last interactive run only; its copy must not say the link is checked hourly.

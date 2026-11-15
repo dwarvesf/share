@@ -10,7 +10,7 @@ The criticals were folded into the spec (DEC-58 to DEC-73). These warnings were 
 - Add DP rows the spec does not list: resume (TASK-3a); renew; invite at the VPC Service PUT, the record hash, the old `i/` delete and the `invited` write; rotate at the token re-mint, the new invite and the `rotation+1` write; rm with `--cloud-links delete` part done and at the `i/` delete; admin revoke between the `t/` write and the `m/` delete; `sync --rebind` at its deploy.
 - `rotation` increments only when rotate starts from `active` or `paused`, never on a rerun from `rotating`. "Old" means every tunnel or service of this member whose name is not `-r<rotation>`.
 - `r2_api_retry` retries POST on any 5xx. Never auto-retry a create (tunnel, service, token): a committed create that answered 500 leaves a second object. A rerun finds it by name. Add a dry seam that commits and then answers 500.
-- Join: step 3 finding a status that is not `invited` with no 412 (for example `removing`) removes local config and tokens, as a 412 does. Step 6 hitting a 412 because the admin ran `member invite` from `joining` dies `member_changed`. A new `join <code>` retires a stale `ops/join.*`.
+- Join: step 6 (the record, once step 3 of the old numbering) finding a status that is not `invited` with no 412 (for example `removing`) removes local config and tokens, as a 412 does. Step 9 (the final record write) hitting a 412 because the admin ran `member invite` from `joining` dies `member_changed`. A new `join <code>` retires a stale `ops/join.*`.
 
 ### Worker
 - `decide()` cannot be pure for `V3_DOWN`, `V3_SERVED` and the `REDEEM_*` rows: split it into `decide` before I/O (an intent row) and a pure `settle(intent, outcome)`, so SV-26 asserts both.
@@ -315,3 +315,17 @@ Built on main at f8042fa. Dry seams only; nothing live.
 | MB-21, MB-30, MB-31, OT-03 | `mm MB-21 (a): ...`, `mm MB-21 (b), MB-31, OT-03: ...`, `mm OT-03: ...`, `mm MB-30: ...`, `mm TASK-2e: a record gone (404) ...` |
 | review TODO (teardown) | `mm TN-12 (no admin token): ...` |
 | NC-1, NC-8, NC-10, NC-14, NC-loop | red runs on mutants of bin/share; green in the suite (`docs/verification/members-rm-reconcile.md`) |
+
+## Audit spec gaps (SG-18): join step 2 split
+
+The delta from the audit-to-spec trace, row 18. Decision record: SPEC-009 DEC-81.
+
+| Decision the spec left open | Choice | Why |
+|---|---|---|
+| Step names and count | `1 redeem`, `2 unseal`, `3 api-key`, `4 conn-key`, `5 config`, `6 record`, `7 service`, `8 probe`, `9 active` | one write per `op_step`, so `status` names which write a die cut |
+| Cloud members at step 4 | the step is journaled and does nothing | a fixed step table keeps `of` and the names the Share Bar shows the same for both modes |
+| Resume threshold | `op_prev_step` below 6 refuses `invite_unavailable`; 6 and above resumes (needs `role=member`) | the unsealed bundle is in memory only; from step 6 the config on disk holds what later steps read |
+| A cut at step 5 where the config landed but the journal still says 5 | refuses | the journal cannot tell "before" from "after" the write; the admin's new invite recovers it, since a re-join replaces both keys in place |
+| Keys a refused cut leaves (steps 4 and 5) | left in the Keychain | bare join has no config, so no host name to forget them by; the re-join replaces them |
+| Record `step` of a `joining` record | 6 | it is the journal step, so `member ls` and the journal agree |
+| Spec tables | `seq-join`, the status table row `join step 6`, TASK-1h, the DP-join rows, NC-11, and the `join step 3` grep in `mm member_can` all renumbered | the member_can test reads the spec row by its label |
