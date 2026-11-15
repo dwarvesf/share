@@ -32,6 +32,9 @@
 #   share migrate --to <ssh-target>   move this tenant's origin to another machine (snapshots only, R2 off)
 #   share setup <hostname> --r2 --bucket <name> [--storage-default local|cloud] [--alias <old-host>]   on the origin: R2 on, per-link storage
 #   share setup <hostname> --no-r2   on the origin: R2 off again (refuses while an alias is set)
+#   share setup <hostname> --r2 --bucket <name> --members|--no-members [--yes]   on the origin: members on (T2) or off again
+#   share member add|ls|sync [args] [--tenant <host>]   the tenant admin's member verbs (admin token; add also the minter token)
+#   share join <host> <code>   join a tenant as a member with the code the admin sent; bare share join resumes a stopped join
 #   share setup <hostname> --backend r2 --bucket <name>   an R2 profile: a private bucket and a Worker
 #      serve links while this machine is off; teardown --yes --purge (admin token) deletes it all
 #
@@ -7280,6 +7283,8 @@ A refusal ends with `share: <message>` on stderr and exit 1. Set `SHARE_ERROR_JS
 | `share rm <id>` | Unpublish; for `--host` shares also deletes the CNAME and tunnel rule |
 | `share start` / `share stop` | Serving on or off |
 | `share --profile <name> <command>` | Run any command against another setup (a second account or hostname); `share profiles` lists them. No flag is the default setup |
+| `share member add <name> [--machine\|--cloud]` / `share member ls [--json]` / `share member sync [--rebind]` | The tenant admin's member verbs (admin token; `add` also the minter token). `add` prints one `share join <host> <code>` line; send it to the member once. `ls --json` lists each member's `can[]` (the verbs allowed now) and `drift[]` codes |
+| `share join <host> <code>` | Join a tenant as a member on this Mac; a bare `share join` resumes a join that stopped. A refusal's code names the admin's next command |
 | `share setup <hostname> --backend r2 --bucket <name>` | An R2 profile: a Worker serves links from a private bucket, so they stay up while this machine is off, and several people publish to one hostname. Live shares, `--host`, `start`, and `stop` are refused there; `share rm <id>` unpublishes |
 | `share config ttl\|storage_default [<value>\|--unset]` | The two defaults a person sets: the `add` expiry (`12h`, `7d`, `never`) and where `add` stores a link on a tenant with R2 on (`local` or `cloud`); with no value it prints the current one |
 | `share admin-token --cmd '<command>'` / `--clear` / `--test [--json]` | The command that prints the admin token for `setup --r2`, `--no-r2` and `teardown --purge` (never the token itself); `--test` names what the token can do |
