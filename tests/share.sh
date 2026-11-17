@@ -530,6 +530,62 @@ check "nested folder answers" "200" "$(wait_code 200 "$nested_url")"
 nested_body=$(curl -s "$(local_url "$nested_url")")
 check "nested file listed by path" "1" "$(grep -c 'href="sub/deep.txt"' <<<"$nested_body")"
 check "no subfolder entry" "0" "$(grep -cE 'href="sub/?"' <<<"$nested_body")"
+
+# the media-aware page: video and images inline, rows grouped by folder, a real type and size on every row
+mm_dir="$WORK/mediafolder"
+mkdir -p "$mm_dir/sub"
+head -c 2048 /dev/zero >"$mm_dir/clip.mp4"; echo png >"$mm_dir/a.png"; echo jpg >"$mm_dir/b.JPG"; echo pdf >"$mm_dir/doc.pdf"
+echo webp >"$mm_dir/sub/c.webp"; echo txt >"$mm_dir/sub/notes.txt"
+mm_url=$("$SH" add "$mm_dir" 2>/dev/null | head -1)   # run by its own shebang, so /bin/bash 3.2 on a Mac
+mm_id=$(cut -d/ -f4 <<<"$mm_url")
+check "media folder answers" "200" "$(wait_code 200 "$mm_url")"
+mm_body=$(curl -s "$(local_url "$mm_url")")
+check "media: the generated-listing marker stays exact on line 1" "1" "$(head -1 "$SHARE_ROOT/pub/$mm_id/mediafolder/index.html" | grep -c '<title>index</title>')"
+check "media: a video is an inline player with its attributes" "1" "$(grep -o '<video controls playsinline preload="metadata" src="clip.mp4#t=0.1"' <<<"$mm_body" | wc -l | tr -d ' ')"
+check "media: the video has a download link" "1" "$(grep -c 'href="clip.mp4" download>Download</a>' <<<"$mm_body")"
+check "media: the video src carries #t=0.1 for a first frame, and nothing else does" "1 1 1 1" "$(grep -c 'preload="metadata" src="clip.mp4#t=0.1"></video>' <<<"$mm_body") $(grep -o '#t=0.1' <<<"$mm_body" | wc -l | tr -d ' ') $(grep -c '<a class="n" href="clip.mp4">clip.mp4</a>' <<<"$mm_body") $(grep -c 'href="clip.mp4" download>Download</a>' <<<"$mm_body")"
+check "media: every image is lazy and async, uppercase extension included" "3" "$(grep -o 'loading="lazy" decoding="async"' <<<"$mm_body" | wc -l | tr -d ' ')"
+check "media: the lightbox and its script ship once" "1 1" "$(grep -c 'id="lb"' <<<"$mm_body") $(grep -o '<script' <<<"$mm_body" | wc -l | tr -d ' ')"
+check "media: rows group by folder, the root has no heading" "2 1" "$(grep -o '<section class="grp">' <<<"$mm_body" | wc -l | tr -d ' ') $(grep -c '<h2>sub</h2>' <<<"$mm_body")"
+check "media: a non-media file is a plain row with its type and size" "1" "$(grep -c '<li><a class="n" href="doc.pdf">doc.pdf</a><span class="m"><span class="t">pdf</span><span class="s">4 B</span></span></li>' <<<"$mm_body")"
+check "media: a human size on the video" "1" "$(grep -c '<span class="s">2.0 KB</span>' <<<"$mm_body")"
+check "media: the page loads nothing from outside" "0" "$(grep -cE '(src|href|action)="(https?:)?//|url\(|@import|<link ' <<<"$mm_body")"
+check "media: the folder still types as a folder, not a site" "folder" "$(bash "$SH" state | jq -r --arg i "$mm_id" '.shares[] | select(.id == $i) | .type')"
+
+mkdir -p "$WORK/textonly" && echo a >"$WORK/textonly/one.txt" && echo b >"$WORK/textonly/two.csv"
+to_url=$(bash "$SH" add "$WORK/textonly" 2>/dev/null | head -1)
+check "text-only folder answers" "200" "$(wait_code 200 "$to_url")"
+to_body=$(curl -s "$(local_url "$to_url")")
+check "text-only: a clean grouped list, no player, no lightbox, no script" "1 0 0 0" "$(grep -c 'class="rows"' <<<"$to_body") $(grep -c '<video' <<<"$to_body") $(grep -c 'id="lb"' <<<"$to_body") $(grep -c '<script' <<<"$to_body")"
+check "text-only: both files listed with a size" "2" "$(grep -c '<li><a class="n" href="[a-z.]*">[a-z.]*</a><span class="m"><span class="t">[a-z]*</span><span class="s">2 B</span></span></li>' <<<"$to_body")"
+
+mkdir -p "$WORK/ownindex" && echo '<h1>mine</h1>' >"$WORK/ownindex/index.html" && echo p >"$WORK/ownindex/pic.png"
+oi_url=$(bash "$SH" add "$WORK/ownindex" 2>/dev/null | head -1)
+check "a folder with its own index.html answers" "200" "$(wait_code 200 "$oi_url")"
+check "a folder with its own index.html keeps it byte for byte" "<h1>mine</h1>" "$(curl -s "$(local_url "$oi_url")")"
+mkdir -p "$WORK/noidxmedia" && echo p >"$WORK/noidxmedia/pic.png" && echo t >"$WORK/noidxmedia/t.txt"
+bash "$SH" add --no-index "$WORK/noidxmedia" >/dev/null 2>&1
+check "--no-index on a media folder writes no index.html" "0" "$(find "$SHARE_ROOT/pub" -path '*noidxmedia/index.html' | wc -l | tr -d ' ')"
+
+# hostile names: quotes, markup, spaces, unicode; a name with a slash cannot exist, so no closing tag
+hos="$WORK/hostile"
+mkdir -p "$hos/d\"<q>"
+hn1='a"b'"'"'c <script>alert(1)<.txt'; hn2='x" onerror="alert(1).png'; hn3='sp ace é & ü.png'; hn4='javascript:alert(1).txt'; hn5='v"><b>.mp4'
+for hn in "$hn1" "$hn2" "$hn3" "$hn4" "$hn5"; do echo x >"$hos/$hn"; done
+echo x >"$hos/d\"<q>/f.txt"
+hos_url=$(bash "$SH" add "$hos" 2>/dev/null | head -1)
+check "hostile folder answers" "200" "$(wait_code 200 "$hos_url")"
+hos_body=$(curl -s "$(local_url "$hos_url")")
+check "hostile: no injected script or tag, the page's own script is the only one" "1 0 0 0" "$(grep -o '<script' <<<"$hos_body" | wc -l | tr -d ' ') $(grep -c 'alert(1)<' <<<"$hos_body") $(grep -c '<b>' <<<"$hos_body") $(grep -c '" onerror="' <<<"$hos_body")"
+check "hostile: no element beyond ours, three img (two files and the viewer) and one video" "3 1" "$(grep -o '<img ' <<<"$hos_body" | wc -l | tr -d ' ') $(grep -o '<video ' <<<"$hos_body" | wc -l | tr -d ' ')"
+check "hostile: the fragment lands after the encoded video name" "1" "$(grep -c 'src="v%22%3E%3Cb%3E.mp4#t=0.1"' <<<"$hos_body")"
+check "hostile: the label is escaped text" "1" "$(grep -c '>a&quot;b&#39;c &lt;script&gt;alert(1)&lt;.txt</a>' <<<"$hos_body")"
+check "hostile: the href is percent-encoded" "1" "$(grep -c 'href="a%22b%27c%20%3Cscript%3Ealert%281%29%3C.txt"' <<<"$hos_body")"
+check "hostile: unicode and ampersand encode byte for byte" "1" "$(grep -c 'href="sp%20ace%20%C3%A9%20%26%20%C3%BC.png"' <<<"$hos_body")"
+check "hostile: a name that looks like a scheme stays a relative link" "1" "$(grep -c 'href="javascript%3Aalert%281%29.txt"' <<<"$hos_body")"
+check "hostile: an attribute-breaking alt is escaped" "1" "$(grep -c 'alt="x&quot; onerror=&quot;alert(1).png"' <<<"$hos_body")"
+check "hostile: a hostile folder name is an escaped heading" "1" "$(grep -c '<h2>d&quot;&lt;q&gt;</h2>' <<<"$hos_body")"
+check "hostile: the encoded link serves the file" "200" "$(curl -s -o /dev/null -w '%{http_code}' "$(local_url "$hos_url")a%22b%27c%20%3Cscript%3Ealert%281%29%3C.txt")"
 fi
 
 if section "TASK-003: pure-bash urlenc / fork-free share_url"; then
@@ -2042,6 +2098,8 @@ if [[ -s $main_bin ]]; then
   for c in main new; do   # the listing additions are the one allowed difference, with the groundwork's additive state keys
     caddy_norm "$WORK/compat-$c/Caddyfile"
     sed -i.bak -E 's/^(machine|live|cloud) +[a-z]+ +by=[a-z0-9.-]+  (https:)/\2/' "$WORK/compat-$c/ls.out"
+    # size= is du of the whole pub/<id>, and that tree holds the generated index.html, which the media-aware page made larger on purpose
+    sed -i.bak -E 's/ size=[0-9.]+[BKMGT]? / size=N /' "$WORK/compat-$c/ls.out"
     jq -S 'del(.r2, .storage_default, .cloud_error, .cloud_more, .codes_v, .role, .tier, .ops, .serve, .access_inflight, .access_bad, .token, .compat) | .shares |= map(del(.storage, .type, .by, .link_state, .reason))' "$WORK/compat-$c/state.out" >"$WORK/compat-$c/state.tmp" && mv -f "$WORK/compat-$c/state.tmp" "$WORK/compat-$c/state.out"
     jq -S '.profiles |= map(if .state then .state |= (del(.r2, .storage_default, .cloud_error, .cloud_more, .codes_v, .role, .tier, .ops, .serve, .access_inflight, .access_bad, .token, .compat) | .shares |= map(del(.storage, .type, .by, .link_state, .reason))) else . end)' "$WORK/compat-$c/profiles.out" >"$WORK/compat-$c/p.tmp" && mv -f "$WORK/compat-$c/p.tmp" "$WORK/compat-$c/profiles.out"
     # another allowed difference: svc_path (TASK-7b) now walks the caller's own PATH directories in

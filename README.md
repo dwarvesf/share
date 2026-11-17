@@ -30,7 +30,7 @@ share profiles                                                       # default a
 | **Snapshots** | `share add <file\|dir>` copies it; the link survives deleting the source. `share refresh` updates under the same link |
 | **Live dev servers** | `share add 3000` proxies `127.0.0.1:3000` while it runs |
 | **Own hostname per share** | `--host dev.example.com` for apps that emit absolute paths |
-| **Folder index** | folders without `index.html` list their files (`--no-index` to refuse) |
+| **Folder index** | folders without `index.html` get a generated page: videos play inline, images show as a click-to-enlarge grid, other files list with type and size, all grouped by folder (`--no-index` to refuse) |
 | **Markdown rendering** | with pandoc, `.md` renders in [Spacedown](https://github.com/dwarvesf/spacedown)'s paper reading theme (light/dark, KaTeX math) |
 | **Safe copy** | dotfiles (`.env`, `.git`) and symlinks are never copied |
 | **Expiry** | 30 days by default; `--ttl 12h\|7d\|never` |
