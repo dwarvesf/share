@@ -32,3 +32,60 @@ Restored (the real tree was never edited): the same rows are ok in the green run
 ## Not covered
 
 The Cloudflare tunnel and R2 serving paths are not run here: `gen_index` is one call inside `stage_copy`, shared by both, and the suite exercises it through the local server. Video seeking over R2 depends on the Worker's range handling, which this change does not touch.
+
+## Recorded run
+
+```
+Command: SHARE_TEST_ONLY='folder index' bash tests/share.sh
+Exit:    0
+Output:
+=== folder index ===
+  ok    folder without index gets a listing
+  ok    txt linked by name
+  ok    .md listed by its render
+  ok    --no-index keeps the 404
+  ok    README folder answers
+  ok    README render is the index
+  ok    no generated list under a README
+  ok    refresh keeps the listing
+  ok    nested folder answers
+  ok    nested file listed by path
+  ok    no subfolder entry
+  ok    media folder answers
+  ok    media: the generated-listing marker stays exact on line 1
+  ok    media: a video is an inline player with its attributes
+  ok    media: the video has a download link
+  ok    media: every image is lazy and async, uppercase extension included
+  ok    media: the lightbox and its script ship once
+  ok    media: rows group by folder, the root has no heading
+  ok    media: a non-media file is a plain row with its type and size
+  ok    media: a human size on the video
+  ok    media: the page loads nothing from outside
+  ok    media: the folder still types as a folder, not a site
+  ok    text-only folder answers
+  ok    text-only: a clean grouped list, no player, no lightbox, no script
+  ok    text-only: both files listed with a size
+  ok    a folder with its own index.html answers
+  ok    a folder with its own index.html keeps it byte for byte
+  ok    --no-index on a media folder writes no index.html
+  ok    hostile folder answers
+  ok    hostile: no injected script or tag, the page's own script is the only one
+  ok    hostile: no element beyond ours, three img (two files and the viewer) and one video
+  ok    hostile: the label is escaped text
+  ok    hostile: the href is percent-encoded
+  ok    hostile: unicode and ampersand encode byte for byte
+  ok    hostile: a name that looks like a scheme stays a relative link
+  ok    hostile: an attribute-breaking alt is escaped
+  ok    hostile: a hostile folder name is an escaped heading
+  ok    hostile: the encoded link serves the file
+586 checks, PASS (filtered by SHARE_TEST_ONLY: 25 sections ran, the rest skipped)
+Verdict: PASS
+```
+
+```
+Command: shellcheck bin/share tests/share.sh
+Exit:    0
+Output:
+(no output)
+Verdict: PASS
+```
