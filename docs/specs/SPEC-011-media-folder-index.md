@@ -11,7 +11,7 @@ Lane: normal
 
 - Unchanged: a folder with its own `index.html` or `README.html` keeps it; `--no-index` writes no index; dotfiles and symlinks never ship; line 1 of the generated page keeps `<title>index</title>` (`type_of` reads it to type the share as a `folder`, not a `site`).
 - Rows are grouped by folder path (the root first, no heading). Each row has the name as a link, a short type and a human size. A `.md` that pandoc rendered is listed by its `.html`.
-- `mp4 mov m4v webm`: an inline `<video controls playsinline preload="metadata">` plus a download link.
+- `mp4 mov m4v webm`: an inline `<video controls playsinline preload="metadata">` whose `src` ends in `#t=0.1` (a first frame with no poster file), plus a download link to the plain path.
 - `png jpg jpeg gif webp avif svg`: a responsive grid of `<img loading="lazy" decoding="async">` on the originals, with a lightbox (click opens, Esc closes, arrows and swipe move, a link to the full file; fits the viewport, covers the page on a phone).
 - Everything else: a plain row. A folder with no media is a clean grouped list with no script.
 - The look is `write_md_style`'s paper theme, light and dark, readable at 400 px with no horizontal scroll; inline CSS and one inline script; no external font, script, image or request.

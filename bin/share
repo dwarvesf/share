@@ -743,7 +743,7 @@ gen_index() { # gen_index <stage>: a folder with no index of its own gets a gene
     case $kind_out in
       video)
         nv=$((nv + 1))
-        gi_vid+="<figure class=\"vid\"><video controls playsinline preload=\"metadata\" src=\"$enc\"></video><figcaption><a class=\"n\" href=\"$enc\">$lab</a><span class=\"m\">$meta<a class=\"dl\" href=\"$enc\" download>Download</a></span></figcaption></figure>"$'\n' ;;
+        gi_vid+="<figure class=\"vid\"><video controls playsinline preload=\"metadata\" src=\"$enc#t=0.1\"></video><figcaption><a class=\"n\" href=\"$enc\">$lab</a><span class=\"m\">$meta<a class=\"dl\" href=\"$enc\" download>Download</a></span></figcaption></figure>"$'\n' ;;
       image)
         ni=$((ni + 1))
         gi_img+="<figure class=\"pic\"><a class=\"shot\" href=\"$enc\"><img src=\"$enc\" alt=\"$lab\" loading=\"lazy\" decoding=\"async\"></a><figcaption><a class=\"n\" href=\"$enc\">$lab</a><span class=\"m\">$meta</span></figcaption></figure>"$'\n' ;;

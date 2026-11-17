@@ -541,8 +541,9 @@ mm_id=$(cut -d/ -f4 <<<"$mm_url")
 check "media folder answers" "200" "$(wait_code 200 "$mm_url")"
 mm_body=$(curl -s "$(local_url "$mm_url")")
 check "media: the generated-listing marker stays exact on line 1" "1" "$(head -1 "$SHARE_ROOT/pub/$mm_id/mediafolder/index.html" | grep -c '<title>index</title>')"
-check "media: a video is an inline player with its attributes" "1" "$(grep -o '<video controls playsinline preload="metadata" src="clip.mp4"' <<<"$mm_body" | wc -l | tr -d ' ')"
+check "media: a video is an inline player with its attributes" "1" "$(grep -o '<video controls playsinline preload="metadata" src="clip.mp4#t=0.1"' <<<"$mm_body" | wc -l | tr -d ' ')"
 check "media: the video has a download link" "1" "$(grep -c 'href="clip.mp4" download>Download</a>' <<<"$mm_body")"
+check "media: the video src carries #t=0.1 for a first frame, and nothing else does" "1 1 1 1" "$(grep -c 'preload="metadata" src="clip.mp4#t=0.1"></video>' <<<"$mm_body") $(grep -o '#t=0.1' <<<"$mm_body" | wc -l | tr -d ' ') $(grep -c '<a class="n" href="clip.mp4">clip.mp4</a>' <<<"$mm_body") $(grep -c 'href="clip.mp4" download>Download</a>' <<<"$mm_body")"
 check "media: every image is lazy and async, uppercase extension included" "3" "$(grep -o 'loading="lazy" decoding="async"' <<<"$mm_body" | wc -l | tr -d ' ')"
 check "media: the lightbox and its script ship once" "1 1" "$(grep -c 'id="lb"' <<<"$mm_body") $(grep -o '<script' <<<"$mm_body" | wc -l | tr -d ' ')"
 check "media: rows group by folder, the root has no heading" "2 1" "$(grep -o '<section class="grp">' <<<"$mm_body" | wc -l | tr -d ' ') $(grep -c '<h2>sub</h2>' <<<"$mm_body")"
@@ -577,6 +578,7 @@ check "hostile folder answers" "200" "$(wait_code 200 "$hos_url")"
 hos_body=$(curl -s "$(local_url "$hos_url")")
 check "hostile: no injected script or tag, the page's own script is the only one" "1 0 0 0" "$(grep -o '<script' <<<"$hos_body" | wc -l | tr -d ' ') $(grep -c 'alert(1)<' <<<"$hos_body") $(grep -c '<b>' <<<"$hos_body") $(grep -c '" onerror="' <<<"$hos_body")"
 check "hostile: no element beyond ours, three img (two files and the viewer) and one video" "3 1" "$(grep -o '<img ' <<<"$hos_body" | wc -l | tr -d ' ') $(grep -o '<video ' <<<"$hos_body" | wc -l | tr -d ' ')"
+check "hostile: the fragment lands after the encoded video name" "1" "$(grep -c 'src="v%22%3E%3Cb%3E.mp4#t=0.1"' <<<"$hos_body")"
 check "hostile: the label is escaped text" "1" "$(grep -c '>a&quot;b&#39;c &lt;script&gt;alert(1)&lt;.txt</a>' <<<"$hos_body")"
 check "hostile: the href is percent-encoded" "1" "$(grep -c 'href="a%22b%27c%20%3Cscript%3Ealert%281%29%3C.txt"' <<<"$hos_body")"
 check "hostile: unicode and ampersand encode byte for byte" "1" "$(grep -c 'href="sp%20ace%20%C3%A9%20%26%20%C3%BC.png"' <<<"$hos_body")"
