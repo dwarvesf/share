@@ -2098,6 +2098,8 @@ if [[ -s $main_bin ]]; then
   for c in main new; do   # the listing additions are the one allowed difference, with the groundwork's additive state keys
     caddy_norm "$WORK/compat-$c/Caddyfile"
     sed -i.bak -E 's/^(machine|live|cloud) +[a-z]+ +by=[a-z0-9.-]+  (https:)/\2/' "$WORK/compat-$c/ls.out"
+    # size= is du of the whole pub/<id>, and that tree holds the generated index.html, which the media-aware page made larger on purpose
+    sed -i.bak -E 's/ size=[0-9.]+[BKMGT]? / size=N /' "$WORK/compat-$c/ls.out"
     jq -S 'del(.r2, .storage_default, .cloud_error, .cloud_more, .codes_v, .role, .tier, .ops, .serve, .access_inflight, .access_bad, .token, .compat) | .shares |= map(del(.storage, .type, .by, .link_state, .reason))' "$WORK/compat-$c/state.out" >"$WORK/compat-$c/state.tmp" && mv -f "$WORK/compat-$c/state.tmp" "$WORK/compat-$c/state.out"
     jq -S '.profiles |= map(if .state then .state |= (del(.r2, .storage_default, .cloud_error, .cloud_more, .codes_v, .role, .tier, .ops, .serve, .access_inflight, .access_bad, .token, .compat) | .shares |= map(del(.storage, .type, .by, .link_state, .reason))) else . end)' "$WORK/compat-$c/profiles.out" >"$WORK/compat-$c/p.tmp" && mv -f "$WORK/compat-$c/p.tmp" "$WORK/compat-$c/profiles.out"
     # another allowed difference: svc_path (TASK-7b) now walks the caller's own PATH directories in

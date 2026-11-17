@@ -93,3 +93,18 @@ Output:
 (no output)
 Verdict: PASS
 ```
+
+```
+Command: bash tests/ci/run-shard.sh chain   (the CI shard that failed the compat row)
+Exit:    0
+Output:
+=== folder index ===
+  ok    row 1: every artifact byte-identical but the listing additions
+  ok    CD-01 start outside hosts=: stderr and exit byte-identical to HEAD's
+  ok    CD-01 serve outside hosts=: stderr and exit byte-identical to HEAD's
+  ok    media: the video src carries #t=0.1 for a first frame, and nothing else does
+  ok    hostile: the fragment lands after the encoded video name
+Verdict: PASS
+```
+
+Compat row fix: `share ls` prints `size=` from `du` of the whole `pub/<id>`, which holds the generated index.html; the larger page changes that figure on purpose, so the row normalizes `size=` in both listings and still diffs every other artifact byte for byte.
