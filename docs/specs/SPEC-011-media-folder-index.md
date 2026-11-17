@@ -25,3 +25,9 @@ Lane: normal
 ## After state
 
 `gen_index` in `bin/share` emits the page above; `README.md` and `docs/how-it-works.md` describe it; `tests/share.sh` holds the new rows.
+
+## Task Breakdown
+
+- [x] TASK-1: rewrite `gen_index` and its helpers (`html_esc`, `human_size`, `gi_kind`, `gi_flush`, the page CSS and script) in `bin/share`
+- [x] TASK-2: add the media, text-only, own-index, `--no-index` and hostile-name rows to the `folder index` section of `tests/share.sh`
+- [x] TASK-3: document the page in `README.md` and `docs/how-it-works.md`
