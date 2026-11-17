@@ -35,7 +35,7 @@
      │     handle): the Access edge does not decode those, Caddy would, so an encoded
      │     separator must never reach a gated pub/<id>
      │     no directory listing; folder index = index.html, then README.html,
-     │     else a generated listing (unless --no-index); site root still 404s,
+     │     else a generated page (unless --no-index; see "Folder index page" below); site root still 404s,
      │     so probes use /healthz
      │     admin API on unix socket ~/share/admin.sock (owner-only); Caddyfile is
      │     re-rendered from index.tsv and caddy reload runs on add / rm / refresh / prune
@@ -203,6 +203,16 @@ or whose `access_rule=` fails the rule grammar is skipped like any forged row; i
 if any, stays until removed in the dashboard.
 
 `share refresh <id>` runs the same copy from the recorded source path and swaps it in under the same id (a live share is a no-op). `share rm <id>` moves `pub/<id>` to the Trash (or `~/share/trash` without a `trash` command) and drops the row. An own-host share (`--host`) refuses to be removed without a Cloudflare credential (`CLOUDFLARE_API_TOKEN` or a `share setup --login` cert), so its DNS record and ingress rule are never orphaned. `prune` still removes an expired one and warns that they stay behind.
+
+### Folder index page
+
+`gen_index` (called by `stage_copy`, so a tunnel share and an R2 share get the same page) writes `index.html` into the stage unless the folder already has an `index.html` or `README.html`, or the add carries `--no-index`. The page is built from the stage tree alone:
+
+- Rows are grouped by folder path (the root first, no heading), each with the name as a link, a short type (the extension) and a human size (powers of 1024, from one `find ... -exec stat`, GNU form first and BSD form second). A `.md` that pandoc rendered is listed by its `.html`.
+- `mp4 mov m4v webm` get an inline `<video controls playsinline preload="metadata">` and a download link. `png jpg jpeg gif webp avif svg` get a responsive grid of lazy, async `<img>` that use the originals (no thumbnails), with a lightbox: click to enlarge, Esc closes, arrow keys or a swipe move, a link opens the full file. Everything else is a plain row. A folder with no media has no script at all.
+- The look is the paper reading theme from `write_md_style` (light and dark), with the page's own rules after it. Everything is inline: no external font, script, image or request.
+- Every label goes through `html_esc` and every `href` and `src` through `urlenc`. A name holding a control character (a tab or a newline) is served but not listed.
+- Line 1 stays `<!doctype html>...<title>index</title>`: `type_of` reads it to tell a generated page (a `folder`) from a site.
 
 ## R2 backend
 
