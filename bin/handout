@@ -8473,6 +8473,12 @@ A refusal ends with `handout: <message>` on stderr and exit 1. Set `SHARE_ERROR_
 - A gated link (`--access`) needs the API token first; if `handout add --access` prints a "needs a Cloudflare API token" block, run the `handout api-token` command it names (or `--cmd` with a token the user already has) and rerun the add. `handout rm` of a gated share needs the same token; `handout state` counts Access apps waiting for deletion in `access_pending`.
 EOF
   [[ -n $d ]] && echo "installed $out"
+  # the skill was named share before the rename; two skills for one tool confuse the agent
+  local old="$HOME/.claude/skills/share"
+  if [[ -n $d && -z ${SHARE_SKILL_DIR:-} ]] && grep -qx 'name: share' "$old/SKILL.md" 2>/dev/null; then
+    echo "handout: the old share skill is still at $old; remove that folder so only the handout skill answers" >&2
+  fi
+  return 0
 }
 
 cmd_config() { # cmd_config <key> [<value> | --unset]: the two CLI defaults a person sets (G14); every write goes through config_put with the one key owned

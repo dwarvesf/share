@@ -1965,6 +1965,10 @@ check "skill teaches --profile and handout profiles" "1" "$(bash "$SH" skill | g
 check "skill teaches the r2 backend" "1" "$(bash "$SH" skill | grep -c -- 'setup <hostname> --backend r2 --bucket <name>. | An R2 profile')"
 SHARE_SKILL_DIR="$WORK/skilldir" bash "$SH" skill --install >/dev/null
 check "skill --install writes SKILL.md" "handout" "$(sed -n 's/^name: //p' "$WORK/skilldir/SKILL.md")"
+mkdir -p "$WORK/skillhome/.claude/skills/share" && printf -- '---\nname: share\n---\n' >"$WORK/skillhome/.claude/skills/share/SKILL.md"
+skill_note="$(env -u SHARE_SKILL_DIR HOME="$WORK/skillhome" bash "$SH" skill --install 2>&1 >/dev/null)"
+check "skill --install names a leftover share skill and keeps it" "1 1" "$([[ $skill_note == *"old share skill"* ]] && echo 1 || echo 0) $([[ -f $WORK/skillhome/.claude/skills/share/SKILL.md ]] && echo 1 || echo 0)"
+check "skill --install with no leftover prints no note" "" "$(env -u SHARE_SKILL_DIR HOME="$WORK/skillhome2" bash "$SH" skill --install 2>&1 >/dev/null)"
 fi
 
 if section "r2 backend: setup argument refusals"; then
