@@ -14,10 +14,15 @@ final class MutationQueueTests: XCTestCase {
         let queue = MutationQueue()
 
         // The first verb sleeps before writing; if the queue did not serialize, the
-        // second (instant) write would land first.
-        async let first = queue.run(["-c", "sleep 0.3; echo A >> \"\(logPath)\""])
-        async let second = queue.run(["-c", "echo B >> \"\(logPath)\""])
-        _ = await (first, second)
+        // second (instant) write would land first. Two `async let`s reach the queue in
+        // no fixed order, so the second is queued only once the first has started.
+        let startedPath = dir.appendingPathComponent("started").path
+        let first = Task { await queue.run(["-c", "touch \"\(startedPath)\"; sleep 0.3; echo A >> \"\(logPath)\""]) }
+        for _ in 0..<500 where !FileManager.default.fileExists(atPath: startedPath) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let second = Task { await queue.run(["-c", "echo B >> \"\(logPath)\""]) }
+        _ = await (first.value, second.value)
 
         let contents = try String(contentsOfFile: logPath, encoding: .utf8)
         XCTAssertEqual(contents, "A\nB\n")
