@@ -19,6 +19,8 @@ never over-claim portable enforcement) and `CLAUDE.md` for the CC-specific layer
 backstops what and why (hard / advisory / convenience), is
 `docs/architecture.md` "Hook fallback layer".
 
+Repo rules for Handout itself (commands, PR contents, one-way doors, docs layout) are in the last section, "This repo: team rules for agents".
+
 The rest of this file is four portable zones. The goal-crafter
 (`commands/assign.md`) projects them into a six-section `/goal` (see "How a goal
 is composed" at the end).
@@ -225,5 +227,88 @@ not from this file. Keep the four zone names stable; renaming one without updati
 | Validation loop | the active spec's `## Verification` |
 | Done-when | AGENTS.md zone 3 (Done means) + the active spec's `## After state` |
 | Pause-if | AGENTS.md zone 4 (Pause if) |
+
+## This repo: team rules for agents
+
+Handout (the CLI, the Worker it deploys, and the Handout Bar menu bar app) is a public repo. These rules apply to every agent and teammate. They live only here. The kit sections above are the generic operate-contract; where they differ, this section wins. Start at [docs/README.md](docs/README.md) and [docs/team/HANDOVER.md](docs/team/HANDOVER.md).
+
+### Commands
+
+Run the parse, lint and suite commands before every push. The suite is isolated and needs no account.
+
+| Area | Run | When |
+|---|---|---|
+| Parse | `/bin/bash -n bin/handout && /bin/bash -n install.sh` | any change to either (the macOS system bash 3.2 is the floor) |
+| Lint | `shellcheck bin/handout install.sh` | any change to either |
+| Suite | `bash tests/share.sh`; `SHARE_TEST_ONLY='<regex>'` while iterating | any CLI change, and any change to a doc the suite greps |
+| Shards | `bash tests/ci/shard-check.sh` | a new or renamed suite section; it must join exactly one shard |
+| Handout Bar | `swift test --package-path mac` | any change in `mac/` or in the JSON the CLI prints |
+| App compat | `bash mac/compat-check.sh <last tag>` | a change to `state` or `profiles --json` |
+| Live legs | `tests/e2e.sh`, `e2e-r2.sh`, `e2e-tenant.sh`, `e2e-migrate.sh` | by hand, before a release that touches the area; they need a Cloudflare zone and token |
+
+- CI runs lint, the shards and the Swift job. The live legs never run in CI: you run them.
+- The suite starts a server on a spare port (`SHARE_TEST_PORT_BASE`). Run two at once only with two different bases.
+- Test tiers: `docs/team/testing.md`. How to write a proof: `docs/verification/README.md`.
+
+### Work queue
+
+- Your work comes from GitHub Issues. List yours: `gh issue list --assignee @me --label ready --state open`.
+- An issue is one unit of work for one agent run. Body: `Goal`, `Done when` (one check you can run), `Scope`, optional `Notes`. The Task form writes it.
+- Labels: `ready` (Goal and Done when are set, an agent may take it), `one-way-door` (a second person says yes before merge), `blocked` (waits on something named in the body).
+- Claim an issue by assigning yourself, before you build. An assigned issue with no linked PR after 7 days goes back to unassigned; anyone may release it.
+- Larger work starts as a spec in `docs/specs/` and, when it decides something lasting, a record in `docs/decisions/`. Write a spec only when it hits a gate; otherwise write docs.
+
+### What a PR carries
+
+- A title in the conventional-commit format, 72 characters or less. A squash merge makes it the commit subject, and `bin/release` reads the subjects to pick the version.
+- `Closes #<n>` in the body, or a line saying why there is no issue.
+- Tests for the change, and the docs it makes wrong, fixed in the same PR. The suite fails when a documented flag, verb or `state` key goes missing.
+- No `CHANGELOG.md` edit: `bin/changelog` generates it from commit subjects.
+- A proof file for a behavior change (see Proof).
+- Commits carry no co-author trailer and no "Generated with" line. The author is the operator.
+
+### Proof
+
+- A behavior change adds `docs/verification/<slug>.md`, shaped like the files there: a title `# Proof of done: <slug>`, the date and branch, a green run (`Command:`, `Exit:`, the trimmed output, `Verdict: PASS`) and a `## Negative control` section.
+- The negative control breaks the change on purpose, shows the check go red (`Verdict: RED as expected`, with a line on why it proves the check), restores, and shows green again. Commit first, so the restore is clean.
+- A change with no behavior effect (a rename, a comment, docs) says so in the PR body instead.
+- `docs/verification/README.md` is the marker that turns the kit's proof gate on. It is never a proof.
+- UI proof (screenshots) sits under `docs/verification/<slug>/` and is linked from the PR by the head commit sha. Never push to a branch made to hold evidence.
+
+### One-way doors
+
+A door is hard to undo after it ships. Get a second person's yes, recorded in the PR, before you change one: the line `One-way door: <door>. Second yes: <github login>` in the PR body. The author cannot be the second yes. Reversible work merges when checks pass, with no approval. Unsure? Treat it as a door.
+
+| Door | Second yes |
+|---|---|
+| A name kept from the share era: `~/share`, `~/.config/share`, a `SHARE_*` variable, a Keychain item `share-tunnel*` or `share-api*`, a service label `foundation.d.share*`, a Worker, tunnel or Access app name, the `share.json` marker, an `X-Share-*` header, `share-invite-id:`, a refusal code (list: `docs/team/development.md`) | Owner |
+| A wire or on-disk format a deployed Worker or an older CLI reads: record `v`, `state` `schema`, `codes_v`, the bucket marker, `min_cli`, the sealed invite | Any teammate |
+| Money and pricing: prices, tiers, billing, the licence (`docs/product/DIRECTION.md`) | Owner |
+| Brand and naming: the product name, the mark, the domain | Owner |
+| Secrets and access: tokens, the signing identity, who can release or push to the tap | Owner |
+| Production data deletion: a change to `teardown --purge`, `member purge` or `migrate` | Any teammate |
+| Cutting a release | Maintainer |
+
+### Merge
+
+- One worktree per branch under `.claude/worktrees/<name>`. Do not switch branches in the main checkout.
+- Branches are `<type>/<short-slug>`: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, two to five kebab-case words.
+- Merge with a squash when checks are green and there is no conflict. Never push to `main`, never force-push, never rewrite history. `bin/release` is the one script that pushes to `main`, and only a maintainer runs it.
+- Fix CI by pushing to the branch, never by moving the repo to a self-hosted runner: the repo is public, and a fork's PR would run its code there.
+
+### Docs layout
+
+- Docs sit in `docs/` grouped by reader: `team/` (how we work), `product/` (what the product is), `brand/` and `design/`.
+- `how-it-works.md`, `setup.md`, `SYSTEM-DESIGN.md` and `QUALITY.md` stay at the top of `docs/`: the suite and the specs cite them.
+- `decisions/`, `specs/`, `implementation-notes/`, `verification/`, `retro/`, `research/` and `briefs/` hold dated records. Add to them; never rewrite them. They keep the name `share`, because that was the product name when they were written.
+- A new doc goes in `team/` if it tells people how to work, and in `product/` if it says what the product is or does. Update the index in `docs/README.md` when you add one.
+
+### Never
+
+- Never touch secrets or access. Stop and ask a human.
+- Never touch a live profile to test a change. Isolate the run: use the suite, which isolates itself, or throwaway `SHARE_ROOT`, `SHARE_CONFIG_DIR`, `SHARE_PORT` and `SHARE_SERVICE_LABEL`, or a named `--profile` of your own.
+- Never write a real hostname, email or person into a doc, a test or a comment. Use `s.example.com` and `a@example.com`.
+- Do not use em or en dashes in code, comments or docs.
+- Rename nothing in the "names kept" list without the door above.
 
 <!-- provenance: SPEC-070 (one rid per run), SPEC-063 (run legibility), ADR-0031 (the understanding axis, advisory), SPEC-128 (wavefront spec-reservation), SPEC-129 (gate-outcome marker), SPEC-132 (generated proof-table) -->
