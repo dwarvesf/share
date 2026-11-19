@@ -18,7 +18,7 @@ die() { echo "release: $*" >&2; exit 1; }
 # -c fetch.prune=false: a user-global fetch.prune=true would delete
 # refs/remotes/origin/main here (it's not in this fetch's refspec set),
 # so the rev-parse below fails even though main IS in sync.
-git -c fetch.prune=false fetch --quiet https://github.com/dwarvesf/share.git main:refs/remotes/origin/main
+git -c fetch.prune=false fetch --quiet https://github.com/consolelabs/handout.git main:refs/remotes/origin/main
 [[ $(git rev-parse HEAD) == "$(git rev-parse origin/main)" ]] || die "main is not in sync with origin"
 
 last="$(git tag --sort=-v:refname | head -1)"
@@ -48,19 +48,19 @@ while IFS= read -r s; do echo "  $s"; done <<<"$commits"
 # regenerate the changelog with the new version section, land it on main,
 # then tag that commit so the tag carries its own section
 bin/changelog --next "$next" >CHANGELOG.md
-sed -i.bak "s/^SHARE_VERSION=[0-9.]*/SHARE_VERSION=${next#v}/" bin/share && rm -f bin/share.bak   # share version names the tag it ships in
-grep -q "^SHARE_VERSION=${next#v} " bin/share || die "could not set SHARE_VERSION=${next#v} in bin/share"
-git add CHANGELOG.md bin/share
+sed -i.bak "s/^SHARE_VERSION=[0-9.]*/SHARE_VERSION=${next#v}/" bin/handout && rm -f bin/handout.bak   # handout version names the tag it ships in
+grep -q "^SHARE_VERSION=${next#v} " bin/handout || die "could not set SHARE_VERSION=${next#v} in bin/handout"
+git add CHANGELOG.md bin/handout
 git commit -q -m "docs: changelog for $next"
-git push https://github.com/dwarvesf/share.git HEAD:main
+git push https://github.com/consolelabs/handout.git HEAD:main
 
 git tag -a "$next" -m "$next"
-git push https://github.com/dwarvesf/share.git "$next"
+git push https://github.com/consolelabs/handout.git "$next"
 echo "tagged $next (release.yml publishes the GitHub release)"
 
 # tap formula: url + sha256 of the tag tarball, bumped through a throwaway clone
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
-tarball="https://github.com/dwarvesf/share/archive/refs/tags/$next.tar.gz"
+tarball="https://github.com/consolelabs/handout/archive/refs/tags/$next.tar.gz"
 for _ in 1 2 3 4 5; do
   curl -fsSL "$tarball" -o "$work/t.tar.gz" && break
   sleep 2   # the archive takes a second to materialize on a fresh tag
@@ -69,14 +69,14 @@ done
 sha="$(shasum -a 256 "$work/t.tar.gz" | cut -d' ' -f1)"
 
 git clone --quiet --depth 1 https://github.com/dwarvesf/homebrew-tools.git "$work/tap"
-f="$work/tap/Formula/share.rb"
+f="$work/tap/Formula/handout.rb"
 sed -i.bak -e "s|refs/tags/v[0-9.]*\.tar\.gz|refs/tags/$next.tar.gz|" \
            -e "s|sha256 \"[0-9a-f]*\"|sha256 \"$sha\"|" "$f" && rm "$f.bak"
-(cd "$work/tap" && git checkout -q -b "chore/share-$next" \
-  && git add Formula/share.rb && git commit -q -m "chore: share ${next#v}" \
-  && git push -q https://github.com/dwarvesf/homebrew-tools.git "chore/share-$next")
-pr="$(gh pr create --repo dwarvesf/homebrew-tools --title "chore: share ${next#v}" \
-      --head "chore/share-$next" --body "Bumps share to $next." 2>&1 | tail -1)"
+(cd "$work/tap" && git checkout -q -b "chore/handout-$next" \
+  && git add Formula/handout.rb && git commit -q -m "chore: handout ${next#v}" \
+  && git push -q https://github.com/dwarvesf/homebrew-tools.git "chore/handout-$next")
+pr="$(gh pr create --repo dwarvesf/homebrew-tools --title "chore: handout ${next#v}" \
+      --head "chore/handout-$next" --body "Bumps handout to $next." 2>&1 | tail -1)"
 echo "tap bump: $pr"
 gh pr merge --repo dwarvesf/homebrew-tools "$pr" --squash --delete-branch >/dev/null
 echo "formula bumped to $next"

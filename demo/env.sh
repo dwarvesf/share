@@ -1,6 +1,6 @@
-# Hidden prelude for the demo tapes: a clean prompt, Homebrew's share first on
+# Hidden prelude for the demo tapes: a clean prompt, Homebrew's handout first on
 # PATH, and a config, root, port, and service label of its own, so a recording
-# never touches a real share setup on the same machine.
+# never touches a real handout setup on the same machine.
 export PS1='$ ' BASH_SILENCE_DEPRECATION_WARNING=1
 export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_INSTALL_CLEANUP=1
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"

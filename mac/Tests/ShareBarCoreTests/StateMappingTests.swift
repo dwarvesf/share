@@ -7,7 +7,7 @@ import XCTest
 final class StateMappingTests: XCTestCase {
     func testCLINotFoundSentinelMapsToCliNotFoundFailure() {
         // The exact sentinel CLI.run returns when CLI.locate finds nothing.
-        let result = CLIResult(status: 127, stdout: "", stderr: "share: CLI not found", timedOut: false)
+        let result = CLIResult(status: 127, stdout: "", stderr: "handout: CLI not found", timedOut: false)
 
         XCTAssertEqual(ProfilesSnapshot.from(result), .failure(.cliNotFound))
     }
@@ -46,7 +46,7 @@ final class StateMappingTests: XCTestCase {
         // composes it: "share: " + the last non-empty stderr line.
         let result = CLIResult(status: 127, stdout: "", stderr: "bin/share: line 42: jq: command not found\n", timedOut: false)
 
-        XCTAssertEqual(ProfilesSnapshot.from(result), .failure(.other("share: bin/share: line 42: jq: command not found")))
+        XCTAssertEqual(ProfilesSnapshot.from(result), .failure(.other("handout: bin/share: line 42: jq: command not found")))
     }
 
     func testDieStderrLineAlreadyPrefixedIsNotDoublePrefixed() {
@@ -57,21 +57,35 @@ final class StateMappingTests: XCTestCase {
         XCTAssertEqual(ProfilesSnapshot.from(result), .failure(.other("share: no such id foo")))
     }
 
+    func testHandoutDieLineIsNotDoublePrefixed() {
+        // The renamed CLI's die() writes "handout: <msg>"; kept as-is, like an older CLI's "share: ".
+        let result = CLIResult(status: 1, stdout: "", stderr: "handout: no such id foo\n", timedOut: false)
+
+        XCTAssertEqual(ProfilesSnapshot.from(result), .failure(.other("handout: no such id foo")))
+    }
+
+    func testBothHelpBannersReadAsAnOldCLI() {
+        for banner in ["share: publish snapshots of local files", "handout: publish snapshots of local files"] {
+            let result = CLIResult(status: 1, stdout: banner + "\n", stderr: "", timedOut: false)
+            XCTAssertEqual(ProfilesSnapshot.from(result), .failure(.oldCLI), banner)
+        }
+    }
+
     func testLastNonEmptyStderrLineIsPickedOverTrailingBlankLines() {
         let result = CLIResult(status: 1, stdout: "", stderr: "first\nsecond\n\n", timedOut: false)
 
-        XCTAssertEqual(ProfilesSnapshot.from(result), .failure(.other("share: second")))
+        XCTAssertEqual(ProfilesSnapshot.from(result), .failure(.other("handout: second")))
     }
 
     func testEmptyStderrFallsBackToShareExitedN() {
         let result = CLIResult(status: 2, stdout: "", stderr: "", timedOut: false)
 
-        XCTAssertEqual(ProfilesSnapshot.from(result), .failure(.other("share exited 2")))
+        XCTAssertEqual(ProfilesSnapshot.from(result), .failure(.other("handout exited 2")))
     }
 
     func testBraceThatDoesNotDecodeOnExitZeroIsAnOtherFailure() {
         let result = CLIResult(status: 0, stdout: "{not json", stderr: "", timedOut: false)
 
-        XCTAssertEqual(ProfilesSnapshot.from(result), .failure(.other("share exited 0")))
+        XCTAssertEqual(ProfilesSnapshot.from(result), .failure(.other("handout exited 0")))
     }
 }

@@ -10,7 +10,7 @@
 #
 #   SHARE_E2E_TENANT_HOST=share-e2e-m1.example.com SHARE_E2E_AIR_HOST=share-e2e-m2.example.com \
 #     CLOUDFLARE_API_TOKEN=<admin> SHARE_E2E_ACCESS_RULE=group:<name> SHARE_E2E_AIR_SSH=air \
-#     SHARE_E2E_MINI_TARGET=mini-tieubao SHARE_BIN=bin/share tests/e2e-migrate.sh
+#     SHARE_E2E_MINI_TARGET=mini-tieubao SHARE_BIN=bin/handout tests/e2e-migrate.sh
 #
 # Inputs:
 #   SHARE_E2E_TENANT_HOST   an unused hostname whose first label starts with share-e2e, on a zone the admin token edits
@@ -31,7 +31,7 @@ admin="${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN to the admin token}"
 rule="${SHARE_E2E_ACCESS_RULE:-}"
 air_ssh="${SHARE_E2E_AIR_SSH:-}"
 mini_target="${SHARE_E2E_MINI_TARGET:-}"
-share="${SHARE_BIN:-share}"
+share="${SHARE_BIN:-handout}"
 for h in "$tenant" ${air_host:+"$air_host"}; do
   [[ ${h%%.*} == share-e2e* ]] || { echo "refused: hostname '$h' must have a first label starting with share-e2e"; exit 2; }
 done
@@ -237,7 +237,7 @@ check "M0: the switch moved the DNS record off A's tunnel" 1 "$([[ -n $b_tunnel 
 check "M0: A kept its rows and its trees (nothing moved aside)" 1 "$([[ -f $WORK/h-a/share/profiles/mga/index.tsv && ! -f $WORK/h-a/share/profiles/mga/index.migrated ]] && echo 1 || echo 0)"
 if [[ -n $rollback ]]; then
   note "running the printed rollback: $rollback"
-  read -ra rb_args <<<"${rollback#share --profile mga }"
+  read -ra rb_args <<<"${rollback#handout --profile mga }"
   out="$(mg_a "${rb_args[@]}" 2>&1)"; rc=$?
   indent <<<"$out"
   check "M0: the printed rollback exits 0" 0 "$rc"

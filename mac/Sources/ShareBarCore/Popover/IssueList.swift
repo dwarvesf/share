@@ -176,12 +176,12 @@ public struct IssueList: Sendable, Equatable {
         switch role {
         case .member:
             let when = token.expiresOn.map { " on \($0)" } ?? ""
-            let text = "Hi, my key for \(host) expires\(when) or has stopped working. Please run: share member renew \(me)"
+            let text = "Hi, my key for \(host) expires\(when) or has stopped working. Please run: handout member renew \(me)"
             return (title, "Ask the admin to renew it", .copyRequest(text: text))
         case .tenantOrigin:
-            return (title, "Renew it with share member renew", .renew(argv: ProfileArgs.argv(profile, ["member", "renew", me])))
+            return (title, "Renew it with handout member renew", .renew(argv: ProfileArgs.argv(profile, ["member", "renew", me])))
         default:
-            return (title, "Store a new key with share api-token", .renew(argv: ProfileArgs.argv(profile, ["api-token"])))
+            return (title, "Store a new key with handout api-token", .renew(argv: ProfileArgs.argv(profile, ["api-token"])))
         }
     }
 

@@ -17,7 +17,7 @@ import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
-const sharePath = process.env.SHARE_WORKER_SRC || join(repo, "bin/share");
+const sharePath = process.env.SHARE_WORKER_SRC || join(repo, "bin/handout");
 let fails = 0;
 const check = (label, want, got) => {
   const ok = want instanceof RegExp ? want.test(String(got)) : want === got;
@@ -43,8 +43,10 @@ const sha = createHash("sha256").update(src).digest("hex").slice(0, 12);
 check("WORKER_SHA matches the emitted source", constOf("WORKER_SHA", shareText), sha);
 
 let mainText = "";
-try { mainText = execFileSync("git", ["-C", repo, "show", "origin/main:bin/share"], { encoding: "utf8" }); }
-catch { if (process.env.CI === "true") check("origin/main fetched for the worker version check", "yes", "missing"); else console.log("  SKIP  origin/main not fetched; worker version check skipped"); }
+const showMain = (path) => execFileSync("git", ["-C", repo, "show", "origin/main:" + path], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+try { mainText = showMain("bin/handout"); }
+catch { try { mainText = showMain("bin/share"); } catch { mainText = ""; } }   // before the rename lands, origin/main has only bin/share
+if (!mainText) { if (process.env.CI === "true") check("origin/main fetched for the worker version check", "yes", "missing"); else console.log("  SKIP  origin/main not fetched; worker version check skipped"); }
 if (mainText) {
   const mSha = constOf("WORKER_SHA", mainText), mVer = parseInt(constOf("WORKER_VERSION", mainText) || "0", 10);
   const thisVer = parseInt(constOf("WORKER_VERSION", shareText) || "0", 10);

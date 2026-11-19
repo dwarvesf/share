@@ -243,8 +243,8 @@ final class RowAndModelRulesTests: XCTestCase {
         XCTAssertEqual(model.sections[0].profile, "default")
         XCTAssertNil(model.sections[0].host)
         XCTAssertEqual(model.sections[0].status, "Not set up")
-        XCTAssertEqual(model.sections[0].command, "share")
-        XCTAssertEqual(model.sections[1].command, "share --profile dfoundation")
+        XCTAssertEqual(model.sections[0].command, "handout")
+        XCTAssertEqual(model.sections[1].command, "handout --profile dfoundation")
     }
 
     func testShowCopyInstallCommandIsTrueOnlyWhenCLIIsNotFound() {
@@ -272,7 +272,7 @@ final class RowAndModelRulesTests: XCTestCase {
         let section = model.sections[1]
         XCTAssertEqual(section.rows.count, 25)
         XCTAssertEqual(section.more, 5)
-        XCTAssertEqual(section.command, "share --profile a")
+        XCTAssertEqual(section.command, "handout --profile a")
         XCTAssertEqual(section.rows.map(\.id), shares.prefix(25).map(\.id), "cap keeps the given order")
     }
 
@@ -312,7 +312,7 @@ final class RowAndModelRulesTests: XCTestCase {
         let model = MenuModel(profiles: profiles, failure: nil, now: Date())
 
         XCTAssertEqual(model.sections[0].accessPending, 2)
-        XCTAssertEqual(model.sections[0].command, "share --profile a")
+        XCTAssertEqual(model.sections[0].command, "handout --profile a")
     }
 
     // MARK: - cloud_error and cloud_more

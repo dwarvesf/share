@@ -35,7 +35,7 @@ set -uo pipefail
 tenant="${SHARE_E2E_TENANT_HOST:?set SHARE_E2E_TENANT_HOST to an unused share-e2e* hostname}"
 alias_host="${SHARE_E2E_ALIAS_HOST:?set SHARE_E2E_ALIAS_HOST to a second unused share-e2e* hostname}"
 admin="${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN to the admin token}"
-share="${SHARE_BIN:-share}"
+share="${SHARE_BIN:-handout}"
 rule="${SHARE_E2E_ACCESS_RULE:-${SHARE_E2E_ACCESS_EMAIL:+email:$SHARE_E2E_ACCESS_EMAIL}}"
 minter="${SHARE_E2E_R2_TOKEN_ADMIN:-}"
 for h in "$tenant" "$alias_host"; do

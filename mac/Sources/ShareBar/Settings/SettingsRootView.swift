@@ -31,7 +31,7 @@ struct SettingsRootView: View {
         .windowSurface()
         .onExitCommand { store.escape() }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Share Bar Settings")
+        .accessibilityLabel("Handout Bar Settings")
     }
 
     private func header(_ t: SettingsTheme) -> some View {

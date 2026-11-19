@@ -19,7 +19,7 @@ set -uo pipefail
 host="${SHARE_E2E_HOST:?set SHARE_E2E_HOST to an unused hostname on your Cloudflare zone}"
 token="${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN (Tunnel Edit, DNS Edit, Zone Read)}"
 mode=api; [[ ${1:-} == --login ]] && mode=login
-share="${SHARE_BIN:-share}"
+share="${SHARE_BIN:-handout}"
 WORK=$(mktemp -d)
 export SHARE_CONFIG_DIR="$WORK/cfg" SHARE_ROOT="$WORK/root" SHARE_PORT=8797
 export SHARE_SERVICE_LABEL="foundation.d.share-e2e" SHARE_CLIPBOARD=0

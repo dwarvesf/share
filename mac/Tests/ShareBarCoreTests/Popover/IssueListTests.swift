@@ -93,7 +93,7 @@ final class IssueListTests: XCTestCase {
                                                     member: MemberInfo(id: "m-an-1a2b3c4d", name: "an", status: "active")))]).lines[0]
         XCTAssertEqual(member.action?.label, "Copy request")
         guard case .copyRequest(let text)? = member.action else { return XCTFail("a member copies a request") }
-        XCTAssertTrue(text.contains("s.console.so") && text.contains("share member renew an"), text)
+        XCTAssertTrue(text.contains("s.console.so") && text.contains("handout member renew an"), text)
         XCTAssertNil(member.action?.argv)
     }
 

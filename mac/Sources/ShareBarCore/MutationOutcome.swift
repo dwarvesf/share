@@ -134,7 +134,7 @@ public enum MutationOutcome {
         stderr
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map(String.init)
-            .first { $0.hasPrefix("share: WARNING") }
+            .first { CLIPrefix.has($0) && CLIPrefix.strip($0).hasPrefix("WARNING") }
     }
 
     /// The last stderr line starting `share: `, or nil. That is the `die` line (or the
@@ -144,7 +144,7 @@ public enum MutationOutcome {
         stderr
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map(String.init)
-            .last { $0.hasPrefix("share: ") }
+            .last { CLIPrefix.has($0) }
     }
 
     /// The stderr a person reads: every line but the machine-readable error and progress
@@ -164,7 +164,7 @@ public enum MutationOutcome {
         let remaining = stderr
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map(String.init)
-            .filter { $0 != "share: \(message)" }
+            .filter { !(CLIPrefix.has($0) && CLIPrefix.strip($0) == message) }
             .joined(separator: "\n")
         return detailText(remaining)
     }
@@ -191,7 +191,7 @@ public enum StopWaiting {
         "If sharing was starting, this also stops it."
     /// What Stop Waiting says while an `add` runs: the add stops where it is and a bare
     /// `share prune` finishes or removes what it left (SPEC-010 G9).
-    public static let addConfirmText = "The add stops where it is; share prune cleans up what it left."
+    public static let addConfirmText = "The add stops where it is; handout prune cleans up what it left."
 
     public static func confirmText(isAdd: Bool) -> String {
         isAdd ? addConfirmText : confirmText

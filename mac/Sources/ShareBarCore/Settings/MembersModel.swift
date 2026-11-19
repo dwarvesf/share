@@ -236,9 +236,9 @@ public struct MembersModel: Sendable, Equatable {
     public static func failureSentence(_ result: CLIResult) -> String {
         if let error = ErrorLine.last(inStderr: result.stderr) { return error.message }
         guard !result.stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return "Couldn't read the members. Try again, or run share member ls."
+            return "Couldn't read the members. Try again, or run handout member ls."
         }
         let line = result.lastErrorLine
-        return line.hasPrefix("share: ") ? String(line.dropFirst(7)) : line
+        return CLIPrefix.strip(line)
     }
 }

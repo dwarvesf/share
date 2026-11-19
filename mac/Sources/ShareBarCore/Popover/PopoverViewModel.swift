@@ -165,7 +165,7 @@ public struct PopoverViewModel: Sendable, Equatable {
     public var statusItemLabel: String { PopoverViewModel.statusItemLabel(count: footer.count) }
 
     public static func statusItemLabel(count: Int) -> String {
-        count > 0 ? "Share Bar, \(count) need a look" : "Share Bar"
+        count > 0 ? "Handout Bar, \(count) need a look" : "Handout Bar"
     }
 
     public static let emptyTenant = "No links yet. Drop a file on the menu bar icon to share it."
@@ -191,7 +191,7 @@ public struct PopoverViewModel: Sendable, Equatable {
                 isCurrent: entry.name == currentEntry?.name
             )
         }
-        header = HeaderModel(title: tenants.first { $0.isCurrent }?.host ?? "Share Bar", tenants: tenants)
+        header = HeaderModel(title: tenants.first { $0.isCurrent }?.host ?? "Handout Bar", tenants: tenants)
         search = SearchModel(query: query)
         currentProfile = currentEntry?.name
         footer = FooterModel(count: needCount)

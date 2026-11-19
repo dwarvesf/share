@@ -115,7 +115,7 @@ public enum PublishOutcome {
         }
         let line = stderr.split(separator: "\n").map(String.init)
             .last { !$0.trimmingCharacters(in: .whitespaces).isEmpty && !$0.hasPrefix("{") }
-        let plain = line.map { $0.hasPrefix("share: ") ? String($0.dropFirst(7)) : $0 } ?? "share exited \(status)"
+        let plain = line.map { CLIPrefix.strip($0) } ?? "handout exited \(status)"
         return .failed(sentence: "Couldn't publish: \(plain)")
     }
 }

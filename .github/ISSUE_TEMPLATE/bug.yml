@@ -1,0 +1,46 @@
+name: Bug
+description: Something Handout does that it should not, or does not do.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste tokens, invite codes, real hostnames or personal emails. Replace them with `s.example.com` and `a@example.com`.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran and what it printed. If the problem is about serving, run `handout state` and paste the `serve` part.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `handout version`, and whether you installed from Homebrew, the install script or a clone.
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Which setup
+      options:
+        - A tunnel profile (the default)
+        - A quick tunnel (no domain)
+        - An R2 profile or a tenant with R2 on
+        - A member machine
+        - Handout Bar
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: For example macOS 15 on Apple silicon, or Ubuntu 24.04.

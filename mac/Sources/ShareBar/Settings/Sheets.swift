@@ -93,7 +93,7 @@ struct AddSheetView: View {
                 SmallText("Your admin sends this code. It works once. Joining takes about a minute and sets up this Mac to serve your links.")
             } else {
                 field("Hostname", placeholder: "s.example.com", text: formBinding.host, id: "sh-host", mono: true, focus: true)
-                SmallText("Share Bar asks for your Cloudflare admin key next, uses it for this setup only and does not save it.")
+                SmallText("Handout Bar asks for your Cloudflare admin key next, uses it for this setup only and does not save it.")
                 Toggle(isOn: formBinding.alsoCloud) { Text("Also turn on cloud storage").font(t.bodyFont).foregroundColor(t.label) }
                     .toggleStyle(.checkbox).accessibilityIdentifier("sh-r2")
                 SmallText("Creates a tunnel and a DNS record in your Cloudflare account. Links are served from this Mac.")
@@ -430,7 +430,7 @@ struct PickerSheetView: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 SheetTitle(text: "Choose a 1Password item")
-                SmallText("Share Bar keeps the item's name and ids. The token itself is read only when an action needs it.")
+                SmallText("Handout Bar keeps the item's name and ids. The token itself is read only when an action needs it.")
             }
             Group {
                 if let error = store.pickerError {

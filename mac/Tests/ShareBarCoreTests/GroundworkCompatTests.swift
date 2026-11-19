@@ -77,7 +77,7 @@ final class GroundworkCompatTests: XCTestCase {
         let listing = Data(#"{"schema":1,"profiles":[{"name":"default","state":\#(state)}]}"#.utf8)
         let snapshot = try JSONDecoder().decode(ProfilesSnapshot.self, from: listing)
         let entry = try XCTUnwrap(snapshot.profiles.first)
-        XCTAssertNil(entry.error, "no Update Share Bar, no decode error")
+        XCTAssertNil(entry.error, "no Update Handout Bar, no decode error")
         XCTAssertNotEqual(Health.of(entry), .error)
     }
 }

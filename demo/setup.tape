@@ -1,8 +1,8 @@
-# Story: install share and set up a hostname, from nothing to a live link.
+# Story: install handout and set up a hostname, from nothing to a live link.
 # Record from the repo root: vhs demo/setup.tape
 # Needs a Cloudflare domain and CLOUDFLARE_API_TOKEN in the environment
 # (without it, setup opens the browser login instead). Clean up after:
-#   source demo/env.sh && share teardown --yes && brew uninstall share
+#   source demo/env.sh && handout teardown --yes && brew uninstall handout
 
 Output demo/.frames/setup/
 
@@ -22,7 +22,7 @@ Show
 
 Type "# 1. install: pulls in caddy, cloudflared, and jq"
 Enter
-Type "brew install dwarvesf/tools/share"
+Type "brew install dwarvesf/tools/handout"
 Sleep 400ms
 Enter
 Wait@180s /^\$$/
@@ -36,7 +36,7 @@ Show
 
 Type "# 2. one-time setup: tunnel, DNS, login service, live check"
 Enter
-Type "share setup share-demo.han.ws"
+Type "handout setup share-demo.s.example.com"
 Sleep 400ms
 Enter
 Wait@180s /^\$$/

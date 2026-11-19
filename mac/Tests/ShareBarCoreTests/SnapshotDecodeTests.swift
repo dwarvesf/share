@@ -58,7 +58,7 @@ final class SnapshotDecodeTests: XCTestCase {
         """
         let snapshot = try JSONDecoder().decode(ProfilesSnapshot.self, from: Data(json.utf8))
 
-        XCTAssertEqual(snapshot.profiles[0].error, "Update Share Bar")
+        XCTAssertEqual(snapshot.profiles[0].error, "Update Handout Bar")
         XCTAssertNil(snapshot.profiles[0].state)
         XCTAssertEqual(snapshot.profiles[1].state?.state, "serving", "the good entry is intact")
     }

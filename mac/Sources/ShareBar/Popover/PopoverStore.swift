@@ -338,7 +338,7 @@ final class PopoverStore: ObservableObject {
     var dropOverlay: DropOverlayModel? {
         guard case .dropTarget = state.mode else { return nil }
         let entry = profiles?.profiles.first { $0.name == currentProfile }
-        return DropOverlayModel(host: entry?.state?.host ?? currentProfile ?? "Share Bar", storedOn: DropOverlayModel.storedOn(entry?.state))
+        return DropOverlayModel(host: entry?.state?.host ?? currentProfile ?? "Handout Bar", storedOn: DropOverlayModel.storedOn(entry?.state))
     }
 
     /// The placeholder rows of files being published, newest first.
@@ -364,7 +364,7 @@ final class PopoverStore: ObservableObject {
         guard let profile = currentProfile else {
             // Profiles have not loaded: no placeholder, no add, an answer in the footer.
             if case .dropTarget = state.mode { send(.dragLeave) }
-            state.footer = Footer(text: "Couldn't publish: Share Bar has not read your tenants yet. Try again in a moment.", kind: .failure)
+            state.footer = Footer(text: "Couldn't publish: Handout Bar has not read your tenants yet. Try again in a moment.", kind: .failure)
             return
         }
         for (index, path) in paths.enumerated() {
@@ -510,7 +510,7 @@ final class PopoverStore: ObservableObject {
             let result = await run(argv)
             guard let self else { return }
             if result.status != 0 {
-                self.state.footer = Footer(text: result.lastNonEmptyStderrLine ?? "share exited \(result.status)", kind: .failure)
+                self.state.footer = Footer(text: result.lastNonEmptyStderrLine ?? "handout exited \(result.status)", kind: .failure)
             }
             self.onChanged()
         }

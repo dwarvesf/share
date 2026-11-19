@@ -303,9 +303,9 @@ final class StatusItemController: NSObject, @unchecked Sendable {
 
         menu.addItem(.separator())
 
-        menu.addItem(actionItem("About Share Bar", action: #selector(aboutShareBar)))
+        menu.addItem(actionItem("About Handout Bar", action: #selector(aboutShareBar)))
 
-        let quitItem = NSMenuItem(title: "Quit Share Bar", action: #selector(quit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit Handout Bar", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
     }
@@ -609,7 +609,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
     private func presentPublishDialog(paths: [String]) {
         guard let profiles = currentProfiles, !PublishChoice.eligible(profiles).isEmpty else {
             let alert = NSAlert()
-            alert.messageText = "No share profile is ready. Set one up first."
+            alert.messageText = "No handout profile is ready. Set one up first."
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
             alert.runModal()
@@ -1015,7 +1015,7 @@ final class StatusItemController: NSObject, @unchecked Sendable {
         actionLogger.log("drop refused: file promise")
         let alert = NSAlert()
         alert.messageText =
-            "Share Bar can't share this drag (Mail, Photos, and similar apps hand over a promise, " +
+            "Handout Bar can't share this drag (Mail, Photos, and similar apps hand over a promise, " +
             "not a file). Save it to disk first, then drop the file."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
@@ -1100,12 +1100,12 @@ final class StatusItemController: NSObject, @unchecked Sendable {
 
     @objc private func copyInstallCommand() {
         actionLogger.log("copy-install-command")
-        setPasteboard("brew install dwarvesf/tools/share")
+        setPasteboard("brew install dwarvesf/tools/handout")
     }
 
     @objc private func copyUpgradeCommand() {
         actionLogger.log("copy-upgrade-command")
-        setPasteboard("brew upgrade dwarvesf/tools/share")
+        setPasteboard("brew upgrade dwarvesf/tools/handout")
     }
 
     @objc private func toggleOpenAtLogin() {

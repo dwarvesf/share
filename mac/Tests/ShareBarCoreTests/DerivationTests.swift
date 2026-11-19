@@ -126,8 +126,8 @@ final class DerivationTests: XCTestCase {
             Row(name: "removed", snapshot: makeSnapshot(role: "member", member: MemberInfo(id: "m-an-1a2b3c4d", status: "removed")), reason: "You were removed from s.han.ws.", neutral: false),
             Row(name: "member token expired", snapshot: makeSnapshot(role: "member", token: TokenInfo(status: "expired")), reason: "Your key expired; ask the admin to renew it.", neutral: false),
             Row(name: "member token invalid", snapshot: makeSnapshot(role: "member", token: TokenInfo(status: "invalid")), reason: "Your key stopped working; ask the admin.", neutral: false),
-            Row(name: "admin token expired", snapshot: makeSnapshot(role: "tenant_origin", token: TokenInfo(status: "expired")), reason: "The stored key expired; run share api-token.", neutral: false),
-            Row(name: "admin token invalid", snapshot: makeSnapshot(role: "tenant_origin", token: TokenInfo(status: "invalid")), reason: "Cloudflare rejected the stored key; run share api-token.", neutral: false),
+            Row(name: "admin token expired", snapshot: makeSnapshot(role: "tenant_origin", token: TokenInfo(status: "expired")), reason: "The stored key expired; run handout api-token.", neutral: false),
+            Row(name: "admin token invalid", snapshot: makeSnapshot(role: "tenant_origin", token: TokenInfo(status: "invalid")), reason: "Cloudflare rejected the stored key; run handout api-token.", neutral: false),
             Row(name: "cli below min", snapshot: makeSnapshot(role: "tenant_origin", compat: CompatInfo(status: "cli_below_min", minCLI: "0.10.0")), reason: "Upgrade share to 0.10.0; s.han.ws requires it.", neutral: false),
             Row(name: "not set up (today's rule)", snapshot: makeSnapshot(state: "not_setup", ready: false, servesHere: false), reason: "Not set up", neutral: true),
         ]

@@ -6,18 +6,15 @@ import Darwin
 
 private let logger = Logger(subsystem: ShareBarIdentity.bundleID, category: "cli")
 
-/// Locates, spawns, and runs the `share` CLI. This is the only place that knows how to find
+/// Locates, spawns, and runs the `handout` CLI (or its `share` alias). This is the only place that knows how to find
 /// or talk to the binary; everything else in the app goes through it.
 public enum CLI {
-    /// Fixed probe locations, checked in order after `SHARE_BIN`. `$HOME` is expanded here,
-    /// not left for the shell.
+    /// Fixed probe locations, checked in order after `SHARE_BIN`: every `handout` path first,
+    /// then the same paths as `share`, the alias a CLI from before the rename installs alone.
+    /// `$HOME` is expanded here, not left for the shell.
     private static func probeCandidates(home: String) -> [String] {
-        [
-            "/opt/homebrew/bin/share",
-            "/usr/local/bin/share",
-            "\(home)/.local/bin/share",
-            "/opt/local/bin/share",
-        ]
+        let dirs = ["/opt/homebrew/bin", "/usr/local/bin", "\(home)/.local/bin", "/opt/local/bin"]
+        return ["handout", "share"].flatMap { name in dirs.map { "\($0)/\(name)" } }
     }
 
     /// `SHARE_BIN` is a trusted, explicit override (same convention as `SHARE_ROOT` and
@@ -81,9 +78,9 @@ public enum CLI {
     public static func run(_ args: [String], timeout: TimeInterval?) async -> CLIResult {
         guard let url = locateForRun() else {
             logger.error(
-                "share CLI not found; verb=\(verbForLog(args), privacy: .public) args=\(args.joined(separator: " "), privacy: .private)"
+                "handout CLI not found; verb=\(verbForLog(args), privacy: .public) args=\(args.joined(separator: " "), privacy: .private)"
             )
-            return CLIResult(status: 127, stdout: "", stderr: "share: CLI not found", timedOut: false)
+            return CLIResult(status: 127, stdout: "", stderr: "handout: CLI not found", timedOut: false)
         }
         let env = childEnvironment(
             cliDirectory: url.deletingLastPathComponent().path,
@@ -125,10 +122,10 @@ public enum CLI {
     ) -> CLIJob {
         guard let url = locateForRun() else {
             logger.error(
-                "share CLI not found; verb=\(verbForLog(args), privacy: .public) args=\(args.joined(separator: " "), privacy: .private)"
+                "handout CLI not found; verb=\(verbForLog(args), privacy: .public) args=\(args.joined(separator: " "), privacy: .private)"
             )
-            onOutput("share: CLI not found")
-            return CLIJob.failed(CLIResult(status: 127, stdout: "", stderr: "share: CLI not found", timedOut: false))
+            onOutput("handout: CLI not found")
+            return CLIJob.failed(CLIResult(status: 127, stdout: "", stderr: "handout: CLI not found", timedOut: false))
         }
         let env = childEnvironment(
             cliDirectory: url.deletingLastPathComponent().path,
@@ -191,7 +188,7 @@ public enum CLI {
             logger.error(
                 "spawn failed for verb=\(verb, privacy: .public) argv=\(argvForLog, privacy: .private): \(String(describing: error), privacy: .public)"
             )
-            return CLIJob.failed(CLIResult(status: -1, stdout: "", stderr: "share: failed to spawn", timedOut: false))
+            return CLIJob.failed(CLIResult(status: -1, stdout: "", stderr: "handout: failed to spawn", timedOut: false))
         }
     }
 
@@ -216,7 +213,7 @@ public enum CLI {
             logger.error(
                 "spawn failed for verb=\(verb, privacy: .public) argv=\(argvForLog, privacy: .private): \(String(describing: error), privacy: .public)"
             )
-            return CLIResult(status: -1, stdout: "", stderr: "share: failed to spawn", timedOut: false)
+            return CLIResult(status: -1, stdout: "", stderr: "handout: failed to spawn", timedOut: false)
         }
 
         let drainGroup = DispatchGroup()
@@ -322,10 +319,10 @@ public enum ProfileArgs {
         argv(profile, quick ? ["setup", "--quick"] : ["setup", host])
     }
 
-    /// The command the menu's hint lines and failure text name: `share` for the default
-    /// profile, `share --profile <name>` otherwise.
+    /// The command the menu's hint lines and failure text name: `handout` for the default
+    /// profile, `handout --profile <name>` otherwise.
     public static func commandName(_ profile: String) -> String {
-        profile == "default" ? "share" : "share --profile \(profile)"
+        profile == "default" ? "handout" : "handout --profile \(profile)"
     }
 }
 

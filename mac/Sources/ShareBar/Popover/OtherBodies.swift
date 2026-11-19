@@ -93,7 +93,7 @@ struct FirstRunView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Share Bar").font(theme.titleFont).foregroundColor(theme.label).padding(.horizontal, 6)
+                Text("Handout Bar").font(theme.titleFont).foregroundColor(theme.label).padding(.horizontal, 6)
                 Spacer()
                 IconButton(theme: theme, symbol: "gearshape", id: "settings-button", label: "Settings") { store.openSettings(.general) }
             }
@@ -120,7 +120,7 @@ struct AppStateView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Share Bar").font(theme.titleFont).foregroundColor(theme.label).padding(.horizontal, 6)
+                Text("Handout Bar").font(theme.titleFont).foregroundColor(theme.label).padding(.horizontal, 6)
                 Spacer()
                 IconButton(theme: theme, symbol: "gearshape", id: "settings-button", label: "Settings") { store.openSettings(.general) }
             }

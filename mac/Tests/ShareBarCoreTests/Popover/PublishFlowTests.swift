@@ -67,7 +67,7 @@ final class PublishFlowTests: XCTestCase {
                        .failed(sentence: "Couldn't publish: the bucket refused the upload Next: share status"))
         XCTAssertEqual(PublishOutcome.result(status: 1, stdout: "", stderr: "share: disk full\n", fallbackURL: nil),
                        .failed(sentence: "Couldn't publish: disk full"))
-        XCTAssertEqual(PublishOutcome.result(status: 7, stdout: "", stderr: "", fallbackURL: nil), .failed(sentence: "Couldn't publish: share exited 7"))
+        XCTAssertEqual(PublishOutcome.result(status: 7, stdout: "", stderr: "", fallbackURL: nil), .failed(sentence: "Couldn't publish: handout exited 7"))
         // The finish copies the link and clears the placeholder; an empty link copies nothing.
         var state = PopoverState(publishing: [Publish(file: file, step: 3, of: 3)])
         let done = state.reduce(.publishFinished(file: file, result: ok, now: t0))
