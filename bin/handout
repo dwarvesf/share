@@ -1149,7 +1149,7 @@ prune_loop_member() { # prune --loop on a member machine (TASK-2c): the publishe
   ids="$(rows | awk -F'\t' -v now="$now" '$5 > 0 && $5 < now {print $1}')"
   for id in $ids; do cmd_rm "$id" prune | sed 's/$/ (expired)/' || true; done   # each own pointer goes with its row (r2_pointer_drop)
   # the bucket pass is a job: a TERM or INT ends it and waits for it, or it would run on orphaned after serve's stop
-  trap 'kill ${!:-} 2>/dev/null || true; wait ${!:-} 2>/dev/null || true; exit 143' TERM INT
+  trap 'set +u; kill $! 2>/dev/null || true; wait $! 2>/dev/null || true; exit 143' TERM INT
   ( r2_prune loop; r2_reconcile ) & wait $! || echo "handout: prune --loop: the bucket was not checked (see above); local expiry ran" >&2   # the reconcile reads the own record into .health
   trap - TERM INT
 }
@@ -1749,8 +1749,8 @@ cmd_serve() {
   # The loop unsets SHARE_EXIT_FILE: a prune that dies must never overwrite serve's own exit record (CD-05).
   # a member machine (R7) runs prune --loop with no CLOUDFLARE_API_TOKEN: its bucket work uses its own Keychain key only (TASK-2c)
   local loopv=(bash "$0" prune); [[ $role != member ]] || loopv=(env -u CLOUDFLARE_API_TOKEN bash "$0" prune --loop)
-  # The loop waits on its sleep and its prune as jobs, so a TERM ends the current one and waits for it: no pass outlives serve
-  (unset SHARE_EXIT_FILE; trap 'kill ${!:-} 2>/dev/null || true; wait ${!:-} 2>/dev/null || true; exit 0' TERM
+  # The loop waits on its sleep and its prune as jobs, so a TERM ends the current one and reaps it before the loop exits
+  (unset SHARE_EXIT_FILE; trap 'set +u; kill $! 2>/dev/null || true; wait $! 2>/dev/null || true; exit 0' TERM
     while sleep "${SHARE_PRUNE_EVERY:-3600}" & wait $!; do "${loopv[@]}" & wait $! || true; done) >>"$root/serve.log" 2>&1 &
   loop_pid=$!
   # The trap lands before the tunnel work and reads the pids at run time:
