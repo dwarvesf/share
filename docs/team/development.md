@@ -109,7 +109,7 @@ The suite starts its own server on a spare port (`SHARE_TEST_PORT_BASE`, default
 | `lint` | every run | `shellcheck` on the CLI, the installer, the suites, the shard scripts, the demo and `mac/*.sh`; the shard check |
 | `test` | a pull request that can affect the CLI | The suite in shards on Ubuntu (the names and section filters are in `tests/ci/shards.txt`) |
 | `test-macos` | the same | The bash 3.2 parse check and one shard on macOS |
-| `test-full` | a push to `main` | The whole suite on Ubuntu and macOS |
+| `test-full` | a push to `main` | Every shard (`tests/ci/shards.txt`) on Ubuntu and macOS, in parallel |
 | `mac` | a diff that touches `mac/` | `swift test` and an unsigned build |
 
 A new suite section must join exactly one shard, or `bash tests/ci/shard-check.sh` fails the lint job. `.github/workflows/release.yml` publishes the GitHub release when a `v*` tag is pushed. Lint a workflow change with `actionlint`.
