@@ -1496,12 +1496,12 @@ check "mm OC-07: after adopt the same link still serves, and member ls lists pu 
 mxa member rm pu >/dev/null 2>&1
 check "mm MB-17: member rm of the adopted member revokes its token by the new name" "removed " "$(ad_rec .status) $(ad_names)"
 # refusals: each before any write
-fails=""
+ad_fails=""
 ad_try() { # ad_try <label> <want code> <setup eval> <adopt args...>
   local label=$1 want=$2 setup=$3 o r; shift 3
   mx_load t2; eval "$setup"; : >"$MX_LOG"
   o=$(mx_env=(SHARE_ERROR_JSON=1); ad_adopt "$@" 2>&1); r=$?
-  [[ "$r $(mx_jcode "$o") $(mx_writes) $([[ -f $MX_DRY/u/m-pu-cccccccc.json ]] && echo rec || echo norec)" == "1 $want 0 norec" ]] || fails="$fails $label($r,$(mx_jcode "$o"),$(mx_writes))"
+  [[ "$r $(mx_jcode "$o") $(mx_writes) $([[ -f $MX_DRY/u/m-pu-cccccccc.json ]] && echo rec || echo norec)" == "1 $want 0 norec" ]] || ad_fails="$ad_fails $label($r,$(mx_jcode "$o"),$(mx_writes))"
 }
 ad_try other-user adopt_token_scope 'ad_tok tokOther "$AD_OK" otherminter' pu --token-id tokOther
 ad_try unknown-id adopt_token_scope 'true' pu --token-id tokNone
@@ -1514,7 +1514,7 @@ ad_try bad-name member_name_bad 'ad_tok tokR5own "$AD_OK"' P --token-id tokR5own
 ad_try admin-group adopt_token_scope 'ad_tok tokAG "[{\"effect\":\"allow\",\"resources\":{\"$AD_B\":\"*\"},\"permission_groups\":[{\"id\":\"pg-r2-admin\",\"name\":\"Workers R2 Storage Write\"}]},{\"effect\":\"allow\",\"resources\":{\"$AD_Z\":\"*\"},\"permission_groups\":[$AD_R]}]"' pu --token-id tokAG
 ad_try empty-resources adopt_token_scope 'ad_tok tokER "[{\"effect\":\"allow\",\"resources\":{},\"permission_groups\":[$AD_W]},{\"effect\":\"allow\",\"resources\":{\"$AD_B\":\"*\"},\"permission_groups\":[$AD_W]}]"' pu --token-id tokER
 ad_try token-owned 'adopt_token_scope' 'ad_tok tokR5own "$AD_OK"; mx_put_rec active m-pv-22222222 ".mode = \"cloud\" | .token = {id: \"tokR5own\"}"' pu --token-id tokR5own
-check "mm MB-17: adopt refuses another user's token, an unknown id, an account-wide token, a bucket plus account token, another bucket, a Zone Edit token, an admin-class bucket group, an empty resource, a token another member holds, a taken name and a bad name, each before any write" "" "$fails"
+check "mm MB-17: adopt refuses another user's token, an unknown id, an account-wide token, a bucket plus account token, another bucket, a Zone Edit token, an admin-class bucket group, an empty resource, a token another member holds, a taken name and a bad name, each before any write" "" "$ad_fails"
 out=$(mx_env=(SHARE_ERROR_JSON=1); mxa member adopt pu 2>&1); rc=$?
 check "mm TASK-3e: adopt without --token-id prints its usage line" "1 1" "$rc $(grep -c '^handout: usage: handout member adopt <name> --token-id <id>' <<<"$out")"
 # the journal: a die between the rename and the record; the rerun finishes on the same token
