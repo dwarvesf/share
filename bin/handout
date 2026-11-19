@@ -1105,7 +1105,11 @@ cmd_prune() { # cmd_prune [quiet|listing|--loop]: unpublish every share past its
   if [[ $backend == r2 ]]; then r2_prune "${1:-}"; return 0; fi
   if [[ $r2on == 1 && ${1:-} != quiet ]]; then   # an origin with R2 on, interactive: cloud expiry, the sweep, and the reconcile through its own reader
     local pm=soft; [[ ${1:-} != listing ]] || pm="env"
-    if r2_token_ok "$pm"; then ( r2_prune "${1:-}"; r2_reconcile ) || echo "handout: the cloud links of $host_name were not checked (see above); local links were" >&2
+    if r2_token_ok "$pm"; then
+      # a job under a TERM trap, as in prune_loop_member: serve's hourly loop runs this, and stop must not leave the pass running
+      trap 'set +u; kill $! 2>/dev/null || true; wait $! 2>/dev/null || true; exit 143' TERM INT
+      ( r2_prune "${1:-}"; r2_reconcile ) & wait $! || echo "handout: the cloud links of $host_name were not checked (see above); local links were" >&2
+      trap - TERM INT
     elif [[ -z ${1:-} ]]; then echo "handout: the cloud links and pointers of $host_name were not checked: no publisher token ($me api-token)" >&2; fi
   fi
   # quiet (serve, status): no token from any source, so neither touches Access; an expired gated share defers its
@@ -1148,7 +1152,10 @@ prune_loop_member() { # prune --loop on a member machine (TASK-2c): the publishe
   now="$(date +%s)"
   ids="$(rows | awk -F'\t' -v now="$now" '$5 > 0 && $5 < now {print $1}')"
   for id in $ids; do cmd_rm "$id" prune | sed 's/$/ (expired)/' || true; done   # each own pointer goes with its row (r2_pointer_drop)
-  ( r2_prune loop; r2_reconcile ) || echo "handout: prune --loop: the bucket was not checked (see above); local expiry ran" >&2   # the reconcile reads the own record into .health
+  # the bucket pass is a job: a TERM or INT ends it and waits for it, or it would run on orphaned after serve's stop
+  trap 'set +u; kill $! 2>/dev/null || true; wait $! 2>/dev/null || true; exit 143' TERM INT
+  ( r2_prune loop; r2_reconcile ) & wait $! || echo "handout: prune --loop: the bucket was not checked (see above); local expiry ran" >&2   # the reconcile reads the own record into .health
+  trap - TERM INT
 }
 member_record_read() { # mr_code: one GET of this member's own record. 200: the .health member key; 401/403: token.status invalid (expired past the
   # local token_expires), never removal (DEC-79); a 404 changes nothing (a deleted record is a write any publisher can forge)
@@ -1746,7 +1753,9 @@ cmd_serve() {
   # The loop unsets SHARE_EXIT_FILE: a prune that dies must never overwrite serve's own exit record (CD-05).
   # a member machine (R7) runs prune --loop with no CLOUDFLARE_API_TOKEN: its bucket work uses its own Keychain key only (TASK-2c)
   local loopv=(bash "$0" prune); [[ $role != member ]] || loopv=(env -u CLOUDFLARE_API_TOKEN bash "$0" prune --loop)
-  (unset SHARE_EXIT_FILE; while sleep "${SHARE_PRUNE_EVERY:-3600}"; do "${loopv[@]}" || true; done) >>"$root/serve.log" 2>&1 &
+  # The loop waits on its sleep and its prune as jobs, so a TERM ends the current one and reaps it before the loop exits
+  (unset SHARE_EXIT_FILE; trap 'set +u; kill $! 2>/dev/null || true; wait $! 2>/dev/null || true; exit 0' TERM
+    while sleep "${SHARE_PRUNE_EVERY:-3600}" & wait $!; do "${loopv[@]}" & wait $! || true; done) >>"$root/serve.log" 2>&1 &
   loop_pid=$!
   # The trap lands before the tunnel work and reads the pids at run time:
   # a die in the quick-URL parse must still reap caddy and the prune loop.
@@ -4972,7 +4981,10 @@ r2_dry() { # r2_dry METHOD KEY [ARG]: a directory-backed bucket for tests; one "
         mkdir -p "$d/.fx"; : >"$d/.fx/p500.done"; cf_code=500 cf_err=InternalError; return 0
       fi
       mkdir -p "${f%/*}"
-      if [[ -n $arg3 && -f $arg3 ]]; then cp "$arg3" "$f"; else : >"$f"; fi
+      # a dot-named temp, then a rename: a GET or LIST racing this PUT sees the old object or the new one, never a torn body, as on R2
+      local tmp; tmp="${f%/*}/.put.$$.$RANDOM"
+      if [[ -n $arg3 && -f $arg3 ]]; then cp "$arg3" "$tmp"; else : >"$tmp"; fi
+      mv -f "$tmp" "$f"
       [[ ${SHARE_R2_DRY_PUT:-} == lost || ( ${SHARE_R2_DRY_PUT:-} == lost-record && $key == m/* ) ]] && { cf_code=000; return 0; }
       r2_etag="$(r2_md5 "$f")" ;;
     GET) [[ ${SHARE_R2_DRY_FAIL:-} != "GET $key" ]] || { cf_code=500 cf_err=InternalError; return 0; }

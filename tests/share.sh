@@ -4368,7 +4368,8 @@ gs_cd05() { # gs_cd05 <script>: serve with an exported SHARE_EXIT_FILE and a pru
 check "CD-05 the hourly prune dies while serve runs: serve's record stays unwritten" "none" "$(gs_cd05 "$SH")"
 check "CD-05 the prune did die with its code (serve.log)" "1" "$([[ $(grep -c 'prune died' "$GS/root/serve.log") -ge 1 ]] && echo 1 || echo 0)"
 check "stop records stopped after the serve pid is gone" "stopped" "$(gs_code)"
-sed 's/(unset SHARE_EXIT_FILE; while sleep/(while sleep/' "$SH" >"$GW/share-no-unset"
+sed 's/(unset SHARE_EXIT_FILE; trap /(trap /' "$SH" >"$GW/share-no-unset"
+check "negative control: the mutation removed the loop's unset" "1" "$(cmp -s "$SH" "$GW/share-no-unset" && echo 0 || echo 1)"
 check "negative control: without the loop's unset, the prune's code lands in serve's record" "cloudflared_died" "$(gs_cd05 "$GW/share-no-unset")"
 gs_fx
 gs env SHARE_TUNNEL=1 GW_CFD_MODE=exit1s bash "$SH" serve >/dev/null 2>&1; rc=$?
