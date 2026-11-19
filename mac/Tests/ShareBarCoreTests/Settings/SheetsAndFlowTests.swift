@@ -110,7 +110,7 @@ final class SheetsAndFlowTests: XCTestCase {
         let invite = CodeSheet(member: "linh", code: "SHR-7Q4K-M2XD-9PLA-3VTB", rotate: false, ttlDays: 7)
         XCTAssertEqual(invite.title, "Invite code for linh")
         XCTAssertEqual(invite.body, "Send this to linh. It works once, for 7 days.")
-        XCTAssertEqual(invite.note, "Share Bar shows the code only now. If it is lost, send a new one.")
+        XCTAssertEqual(invite.note, "Handout Bar shows the code only now. If it is lost, send a new one.")
         XCTAssertEqual(CodeSheet(member: "linh", code: "c", rotate: false, ttlDays: 1).body, "Send this to linh. It works once, for 1 day.")
         XCTAssertEqual(CodeSheet(member: "linh", code: "c", rotate: true, ttlDays: 7).title, "New keys for linh")
     }
@@ -257,6 +257,9 @@ final class SheetsAndFlowTests: XCTestCase {
         let pasted = JoinInput.parse(codeField: "share join s.console.so SHR-7Q4K-M2XD-9PLA-3VTB\n", hostField: "")
         XCTAssertEqual(pasted.host, "s.console.so")
         XCTAssertEqual(pasted.code, "SHR-7Q4K-M2XD-9PLA-3VTB")
+        let renamed = JoinInput.parse(codeField: "handout join s.console.so SHR-7Q4K-M2XD-9PLA-3VTB\n", hostField: "")
+        XCTAssertEqual(renamed.host, "s.console.so")
+        XCTAssertEqual(renamed.code, "SHR-7Q4K-M2XD-9PLA-3VTB")
         let typed = JoinInput.parse(codeField: " SHR-1 ", hostField: " s.console.so ")
         XCTAssertEqual(typed.host, "s.console.so")
         XCTAssertEqual(typed.code, "SHR-1")

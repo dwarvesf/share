@@ -11,7 +11,7 @@ struct GeneralPane: View {
         let t = SettingsTheme(scheme)
         VStack(alignment: .leading, spacing: 12) {
             FormRow(label: "Startup") {
-                check("Open Share Bar at login", isOn: store.openAtLogin, id: "g-login", action: store.setOpenAtLogin)
+                check("Open Handout Bar at login", isOn: store.openAtLogin, id: "g-login", action: store.setOpenAtLogin)
             }
             FormRow(label: "Menu shows") {
                 SBPopup(options: [(LinkScope.mine, "My links"), (LinkScope.team, "Team links")],
@@ -26,7 +26,7 @@ struct GeneralPane: View {
             FormRow(label: "New links expire") {
                 SBPopup(options: ExpiryChoice.allCases.map { ($0, $0.label) },
                         selection: Binding(get: { store.ttl ?? .sevenDays }, set: store.setExpiry), id: "g-exp", label: "New links expire")
-                SmallText("Saved as ttl= in the share config, so the command line uses it too.")
+                SmallText("Saved as ttl= in the handout config, so the command line uses it too.")
             }
             if store.offersStorage {
                 FormRow(label: "Store new links") {

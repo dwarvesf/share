@@ -16,15 +16,15 @@ final class AppStateTests: XCTestCase {
     func testCLIMissingOffersTheInstallCommand() {
         let state = AppState.of(profiles: nil, failure: .cliNotFound)
         XCTAssertEqual(state, .cliMissing)
-        XCTAssertEqual(state.panel?.title, "Install the share command")
+        XCTAssertEqual(state.panel?.title, "Install the handout command")
         XCTAssertEqual(state.panel?.button, "Copy install command")
-        XCTAssertEqual(state.panel?.copy, "brew install dwarvesf/tools/share")
+        XCTAssertEqual(state.panel?.copy, "brew install dwarvesf/tools/handout")
     }
 
     func testCLITooOldFromAnOldHelpBannerOrCompat() {
         let banner = AppState.of(profiles: nil, failure: .oldCLI)
         XCTAssertEqual(banner, .cliTooOld(minimum: "0.10"))
-        XCTAssertEqual(banner.panel?.title, "Update share to 0.10")
+        XCTAssertEqual(banner.panel?.title, "Update handout to 0.10")
         XCTAssertEqual(banner.panel?.button, "Copy upgrade command")
         let compat = CompatInfo(cli: "0.9.0", worker: "5 abc", status: "cli_below_min", minCLI: "0.11.0")
         let below = AppState.of(profiles: makeProfiles([tenant("member", compat: compat)]), failure: nil)
@@ -84,9 +84,9 @@ final class AppStateTests: XCTestCase {
     }
 
     func testTheStatusItemLabelCarriesTheCount() {
-        XCTAssertEqual(PopoverViewModel.statusItemLabel(count: 0), "Share Bar")
-        XCTAssertEqual(PopoverViewModel.statusItemLabel(count: 1), "Share Bar, 1 need a look")
-        XCTAssertEqual(PopoverViewModel.statusItemLabel(count: 4), "Share Bar, 4 need a look")
+        XCTAssertEqual(PopoverViewModel.statusItemLabel(count: 0), "Handout Bar")
+        XCTAssertEqual(PopoverViewModel.statusItemLabel(count: 1), "Handout Bar, 1 need a look")
+        XCTAssertEqual(PopoverViewModel.statusItemLabel(count: 4), "Handout Bar, 4 need a look")
     }
 
     // MARK: TASK-4b23
@@ -102,7 +102,7 @@ final class AppStateTests: XCTestCase {
     }
 
     func testTheStopWaitingCopyForAnAdd() {
-        XCTAssertEqual(StopWaiting.addConfirmText, "The add stops where it is; share prune cleans up what it left.")
+        XCTAssertEqual(StopWaiting.addConfirmText, "The add stops where it is; handout prune cleans up what it left.")
     }
 
     func testEveryCodeTheAppMapsToASheet() {
@@ -112,8 +112,8 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(busy.action, .openMembers)
         XCTAssertEqual(busy.sentence, "pausing an is still running")
         let old = RefusalSheet.from(code: "cli_below_min", message: "", next: nil, host: "s.t")
-        XCTAssertEqual(old.title, "Update share to 0.10")
-        XCTAssertEqual(old.action, .copyCommand("brew upgrade dwarvesf/tools/share"))
+        XCTAssertEqual(old.title, "Update handout to 0.10")
+        XCTAssertEqual(old.action, .copyCommand("brew upgrade dwarvesf/tools/handout"))
         for code in ["invite_unknown_or_used", "invite_expired", "invite_tampered", "member_changed", "invite_unavailable"] {
             let sheet = RefusalSheet.from(code: code, message: "cli text", next: "share x", host: "s.t")
             XCTAssertEqual(sheet.title, "Can't join", code)

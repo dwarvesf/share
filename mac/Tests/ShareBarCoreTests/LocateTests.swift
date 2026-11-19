@@ -11,15 +11,28 @@ final class LocateTests: XCTestCase {
 
     func testOrderPrefersHomebrewOverUsrLocal() {
         let url = CLI.locate(env: [:], fileExists: { _ in true })
-        XCTAssertEqual(url?.path, "/opt/homebrew/bin/share")
+        XCTAssertEqual(url?.path, "/opt/homebrew/bin/handout")
     }
 
     func testFallsThroughToNextCandidateWhenEarlierOnesAreMissing() {
         let checked: (String) -> Bool = { path in
-            path != "/opt/homebrew/bin/share" && path != "/usr/local/bin/share"
+            path.hasSuffix("/share") && path != "/opt/homebrew/bin/share" && path != "/usr/local/bin/share"
         }
         let url = CLI.locate(env: ["HOME": "/Users/tester"], fileExists: checked)
         XCTAssertEqual(url?.path, "/Users/tester/.local/bin/share")
+    }
+
+    func testHandoutAnywhereWinsOverShareAnywhere() {
+        // handout in the last directory still beats share in the first: share is only the fallback.
+        let checked: (String) -> Bool = { $0 == "/opt/homebrew/bin/share" || $0 == "/opt/local/bin/handout" }
+        let url = CLI.locate(env: ["HOME": "/Users/tester"], fileExists: checked)
+        XCTAssertEqual(url?.path, "/opt/local/bin/handout")
+    }
+
+    func testShareIsTheFallbackWhenNoHandoutIsInstalled() {
+        let checked: (String) -> Bool = { $0 == "/opt/homebrew/bin/share" }
+        let url = CLI.locate(env: ["HOME": "/Users/tester"], fileExists: checked)
+        XCTAssertEqual(url?.path, "/opt/homebrew/bin/share")
     }
 
     func testHomeIsExpandedInSwiftNotLeftAsATilde() {

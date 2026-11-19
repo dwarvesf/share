@@ -12,7 +12,7 @@ enum StatusIcon {
             button.title = ""
         } else {
             button.image = nil
-            button.title = "Share Bar"
+            button.title = "Handout Bar"
         }
     }
 }

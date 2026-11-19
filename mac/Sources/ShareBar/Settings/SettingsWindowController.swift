@@ -36,7 +36,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         window.styleMask = [.titled, .closable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.title = "Share Bar Settings"
+        window.title = "Handout Bar Settings"
         window.isReleasedWhenClosed = false
         window.isMovableByWindowBackground = true
         window.backgroundColor = NSColor(name: nil) { appearance in

@@ -26,8 +26,8 @@ public enum AppState: Sendable, Equatable {
     }
 
     public static let defaultMinimum = "0.10"
-    public static let installCommand = "brew install dwarvesf/tools/share"
-    public static let upgradeCommand = "brew upgrade dwarvesf/tools/share"
+    public static let installCommand = "brew install dwarvesf/tools/handout"
+    public static let upgradeCommand = "brew upgrade dwarvesf/tools/handout"
 
     /// `0.10.0` reads `0.10`.
     static func minorVersion(_ version: String?) -> String? {
@@ -44,13 +44,13 @@ public enum AppState: Sendable, Equatable {
             return AppStatePanel(symbol: "ellipsis.circle", title: "Loading", body: "Reading your tenants.", button: nil, copy: nil)
         case .cliMissing:
             return AppStatePanel(
-                symbol: "terminal", title: "Install the share command",
-                body: "Share Bar runs the share command to read and publish links. Install it, then open this menu again.",
+                symbol: "terminal", title: "Install the handout command",
+                body: "Handout Bar runs the handout command to read and publish links. Install it, then open this menu again.",
                 button: "Copy install command", copy: Self.installCommand)
         case .cliTooOld(let minimum):
             return AppStatePanel(
-                symbol: "arrow.down.circle", title: "Update share to \(minimum)",
-                body: "This Share Bar needs a newer share command. Update it, then open this menu again.",
+                symbol: "arrow.down.circle", title: "Update handout to \(minimum)",
+                body: "This Handout Bar needs a newer handout command. Update it, then open this menu again.",
                 button: "Copy upgrade command", copy: Self.upgradeCommand)
         case .noTenant, .ready:
             return nil

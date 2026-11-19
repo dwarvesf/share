@@ -51,7 +51,7 @@ public enum Health: Sendable, Equatable {
         switch health {
         case .error:
             // "Error: Update Share Bar" reads oddly, so that one text stands alone.
-            if let error = entry.error, error == "Update Share Bar" { return error }
+            if let error = entry.error, error == "Update Handout Bar" { return error }
             return "Error: \(entry.error ?? "state not readable")"
         case .notSetUp: return "Not set up"
         case .elsewhere: return "Not serving on this Mac (hosts=\(entry.state?.hosts ?? ""))"
@@ -298,9 +298,9 @@ public struct MenuModel: Sendable {
     /// over all of them.
     private static func headerText(profiles: ProfilesSnapshot?, sections: [Section], failure: Failure?, isLoading: Bool) -> String {
         if isLoading { return "Loading…" }
-        if case .cliNotFound? = failure { return "share CLI not found" }
-        if case .oldCLI? = failure { return "Update share CLI" }
-        if let profiles, profiles.schema > 1 { return "Update Share Bar" }
+        if case .cliNotFound? = failure { return "handout CLI not found" }
+        if case .oldCLI? = failure { return "Update handout CLI" }
+        if let profiles, profiles.schema > 1 { return "Update Handout Bar" }
         if case .other(let message)? = failure { return message }
         if let running = sections.lazy.flatMap(\.ops).first(where: \.alive) { return running.text }
         let attention = sections.filter { $0.health.isAttention }

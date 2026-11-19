@@ -12,8 +12,8 @@ final class MenuModelHeaderTests: XCTestCase {
     func testHealthTableMatchesTheSpecRows() {
         XCTAssertEqual(Health.of(makeEntry(name: "e", error: "share: bad profile name 'Bad'")), .error)
         XCTAssertEqual(Health.statusText(of: makeEntry(name: "e", error: "share: bad profile name 'Bad'")), "Error: share: bad profile name 'Bad'")
-        XCTAssertEqual(Health.of(makeEntry(name: "u", error: "Update Share Bar")), .error)
-        XCTAssertEqual(Health.statusText(of: makeEntry(name: "u", error: "Update Share Bar")), "Update Share Bar")
+        XCTAssertEqual(Health.of(makeEntry(name: "u", error: "Update Handout Bar")), .error)
+        XCTAssertEqual(Health.statusText(of: makeEntry(name: "u", error: "Update Handout Bar")), "Update Handout Bar")
         XCTAssertEqual(Health.of(makeEntry(name: "n", state: makeSnapshot(state: "not_setup", host: nil, servesHere: false))), .notSetUp)
         XCTAssertEqual(Health.of(makeEntry(name: "x", state: makeSnapshot(state: "stopped", servesHere: false))), .elsewhere)
         XCTAssertEqual(Health.of(makeEntry(name: "s", state: makeSnapshot(state: "stopped", servesHere: true))), .stopped)
@@ -48,14 +48,14 @@ final class MenuModelHeaderTests: XCTestCase {
 
     func testCLINotFound() {
         let model = MenuModel(profiles: nil, failure: .cliNotFound, now: Date())
-        XCTAssertEqual(model.header, "share CLI not found")
+        XCTAssertEqual(model.header, "handout CLI not found")
         XCTAssertTrue(model.showCopyInstallCommand)
         XCTAssertFalse(model.showCopyUpgradeCommand)
     }
 
     func testOldCLI() {
         let model = MenuModel(profiles: nil, failure: .oldCLI, now: Date())
-        XCTAssertEqual(model.header, "Update share CLI")
+        XCTAssertEqual(model.header, "Update handout CLI")
         XCTAssertTrue(model.showCopyUpgradeCommand)
         XCTAssertFalse(model.showCopyInstallCommand)
     }
@@ -66,7 +66,7 @@ final class MenuModelHeaderTests: XCTestCase {
         ], schema: 2)
         let model = MenuModel(profiles: profiles, failure: nil, now: Date())
 
-        XCTAssertEqual(model.header, "Update Share Bar")
+        XCTAssertEqual(model.header, "Update Handout Bar")
         XCTAssertTrue(model.sections.isEmpty, "a listing this app cannot read renders like .oldCLI: no sections")
         XCTAssertEqual(model.icon, .disconnected)
         XCTAssertFalse(model.canPublish)
@@ -74,8 +74,8 @@ final class MenuModelHeaderTests: XCTestCase {
     }
 
     func testTheFailureLineWinsOverEveryProfileRuleWhenThereIsNoSnapshot() {
-        let model = MenuModel(profiles: nil, failure: .other("share: jq: command not found"), now: Date())
-        XCTAssertEqual(model.header, "share: jq: command not found")
+        let model = MenuModel(profiles: nil, failure: .other("handout: jq: command not found"), now: Date())
+        XCTAssertEqual(model.header, "handout: jq: command not found")
     }
 
     // MARK: - the Mini shape: a neutral default never slashes a healthy profile
@@ -195,7 +195,7 @@ final class MenuModelHeaderTests: XCTestCase {
          "service":false,"access_pending":0,"shares":[]}}]}
         """, stderr: "", timedOut: false)
         let oldCLI = CLIResult(status: 0, stdout: "default\tnot_setup\t-\n", stderr: "", timedOut: false)
-        let notFound = CLIResult(status: 127, stdout: "", stderr: "share: CLI not found", timedOut: false)
+        let notFound = CLIResult(status: 127, stdout: "", stderr: "handout: CLI not found", timedOut: false)
 
         let first = ProfilesSnapshot.fold(good, over: nil)
         XCTAssertEqual(MenuModel(profiles: first.profiles, failure: first.failure, now: Date()).sections.count, 1)
@@ -203,12 +203,12 @@ final class MenuModelHeaderTests: XCTestCase {
         let second = ProfilesSnapshot.fold(oldCLI, over: first.profiles)
         let old = MenuModel(profiles: second.profiles, failure: second.failure, now: Date())
         XCTAssertTrue(old.sections.isEmpty)
-        XCTAssertEqual(old.header, "Update share CLI")
+        XCTAssertEqual(old.header, "Update handout CLI")
 
         let third = ProfilesSnapshot.fold(notFound, over: first.profiles)
         let missing = MenuModel(profiles: third.profiles, failure: third.failure, now: Date())
         XCTAssertTrue(missing.sections.isEmpty)
-        XCTAssertEqual(missing.header, "share CLI not found")
+        XCTAssertEqual(missing.header, "handout CLI not found")
     }
 
     func testAnOtherFailureKeepsTheLastGoodSnapshot() {

@@ -50,8 +50,8 @@ final class PopoverViewModelTests: XCTestCase {
         let vm = model(try fullProfiles(), need: 4)
         XCTAssertEqual(vm.footer, .needLook(4))
         XCTAssertEqual(vm.footer.text, "4 need a look")
-        XCTAssertEqual(vm.statusItemLabel, "Share Bar, 4 need a look")
-        XCTAssertEqual(model(try fullProfiles()).statusItemLabel, "Share Bar")
+        XCTAssertEqual(vm.statusItemLabel, "Handout Bar, 4 need a look")
+        XCTAssertEqual(model(try fullProfiles()).statusItemLabel, "Handout Bar")
     }
 
     func testMineHidesOthers() {

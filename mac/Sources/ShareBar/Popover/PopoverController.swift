@@ -189,7 +189,7 @@ final class PopoverController: NSObject, NSPopoverDelegate {
         case "publish-failure":
             let file = "/Users/demo/Q4-plan.pdf"
             store.send(.publishStarted(file: file))
-            let stderr = "share: the bucket refused the upload\n{\"error\":{\"code\":\"upload_refused\",\"message\":\"the bucket refused the upload\",\"next\":\"share status\"}}\n"
+            let stderr = "handout: the bucket refused the upload\n{\"error\":{\"code\":\"upload_refused\",\"message\":\"the bucket refused the upload\",\"next\":\"handout status\"}}\n"
             store.send(.publishFinished(file: file, result: PublishOutcome.result(status: 1, stdout: "", stderr: stderr, fallbackURL: nil), now: Date()))
         default:
             break

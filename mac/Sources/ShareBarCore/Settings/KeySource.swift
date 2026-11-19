@@ -12,8 +12,8 @@ public enum KeyKind: String, Sendable, Equatable, CaseIterable {
 
     public var askNote: String {
         self == .admin
-            ? "Share Bar asks for the Cloudflare admin token before each admin action and forgets it right after."
-            : "Share Bar asks for the minter token before each member action and forgets it right after."
+            ? "Handout Bar asks for the Cloudflare admin token before each admin action and forgets it right after."
+            : "Handout Bar asks for the minter token before each member action and forgets it right after."
     }
 
     public var usedFor: String {
@@ -176,7 +176,7 @@ public struct KeyTestResult: Sendable, Equatable {
     public static func failureSentence(_ result: CLIResult) -> String {
         if let error = ErrorLine.last(inStderr: result.stderr) { return Redact.tokenShaped(error.message) }
         let line = result.lastErrorLine
-        return Redact.tokenShaped(line.hasPrefix("share: ") ? String(line.dropFirst(7)) : line)
+        return Redact.tokenShaped(CLIPrefix.strip(line))
     }
 }
 

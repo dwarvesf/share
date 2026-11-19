@@ -121,12 +121,12 @@ public struct ProfileView: Sendable, Equatable {
         switch state.token?.status {
         case "expired":
             return .ineligible(
-                reason: isMember ? "Your key expired; ask the admin to renew it." : "The stored key expired; run share api-token.",
+                reason: isMember ? "Your key expired; ask the admin to renew it." : "The stored key expired; run handout api-token.",
                 neutral: false
             )
         case "invalid":
             return .ineligible(
-                reason: isMember ? "Your key stopped working; ask the admin." : "Cloudflare rejected the stored key; run share api-token.",
+                reason: isMember ? "Your key stopped working; ask the admin." : "Cloudflare rejected the stored key; run handout api-token.",
                 neutral: false
             )
         default: break

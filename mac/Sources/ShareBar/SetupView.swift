@@ -10,7 +10,7 @@ struct SetupView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Set up Share Bar")
+            Text("Set up Handout Bar")
                 .font(.headline)
 
             TextField("Hostname, for example s.example.com", text: $model.hostname)
@@ -20,7 +20,7 @@ struct SetupView: View {
             Toggle("Quick link, no domain needed", isOn: $model.quickMode)
                 .disabled(model.isRunning)
 
-            Toggle("Open Share Bar at login", isOn: $model.openAtLogin)
+            Toggle("Open Handout Bar at login", isOn: $model.openAtLogin)
                 .disabled(model.isRunning)
 
             if !model.statusLine.isEmpty {

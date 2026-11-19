@@ -1,6 +1,6 @@
 #!/bin/bash
 # build.sh: build the universal ShareBar executable, assemble it into
-# "Share Bar.app", sign it (ad-hoc, or Developer ID with --sign), optionally
+# "Handout Bar.app", sign it (ad-hoc, or Developer ID with --sign), optionally
 # notarize and staple with --notarize, then zip. Last stdout line is the zip
 # path.
 #
@@ -40,7 +40,7 @@ else
 fi
 
 MAC_DIR="$(cd "$(dirname "$0")" && pwd)"
-APP_NAME="Share Bar.app"
+APP_NAME="Handout Bar.app"
 
 die() { echo "build.sh: $*" >&2; exit 1; }
 # Capture, then match: `cmd | grep -q` under pipefail fails when grep exits
@@ -137,7 +137,7 @@ fi
 
 # --- zip -----------------------------------------------------------------------
 echo "== zip"
-ZIP="$MAC_DIR/build/Share-Bar-$VERSION.zip"
+ZIP="$MAC_DIR/build/Handout-Bar-$VERSION.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 echo "$ZIP"

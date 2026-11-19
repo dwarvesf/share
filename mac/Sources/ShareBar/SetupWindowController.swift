@@ -52,7 +52,7 @@ final class SetupWindowController: NSWindowController, NSWindowDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "Set Up Share Bar"
+        window.title = "Set Up Handout Bar"
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: SetupView(model: model))
         window.center()

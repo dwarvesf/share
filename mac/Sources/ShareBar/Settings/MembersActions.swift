@@ -23,7 +23,7 @@ extension SettingsStore {
         let asks = keysNeedingAsk([.admin], profile: entry.name)
         members.askPending = !asks.isEmpty
         collectKeys(asks, asked: [:],
-                    purpose: "Share Bar uses it to read the members and forgets it right away.") { [weak self] keys in
+                    purpose: "Handout Bar uses it to read the members and forgets it right away.") { [weak self] keys in
             guard let self else { return }
             self.members.askPending = false
             Task { await self.loadMembers(profile: entry.name, keys: keys) }
@@ -80,7 +80,7 @@ extension SettingsStore {
     func runForCode(_ argv: [String], kinds: [KeyKind], profile: String, member: String, rotate: Bool) {
         let host = entry(profile)?.state?.host ?? profile
         collectKeys(keysNeedingAsk(kinds, profile: profile), asked: [:],
-                    purpose: "Share Bar uses it for this one action and forgets it right away.") { [weak self] keys in
+                    purpose: "Handout Bar uses it for this one action and forgets it right away.") { [weak self] keys in
             guard let self else { return }
             Task {
                 let result = await self.runWith(argv, keys: keys)

@@ -10,7 +10,7 @@ struct AdvancedPane: View {
     var body: some View {
         let t = SettingsTheme(scheme)
         VStack(alignment: .leading, spacing: 12) {
-            FormRow(label: "share CLI") {
+            FormRow(label: "handout CLI") {
                 Text(store.cliPath).font(t.monoFont).foregroundColor(t.label)
                     .lineLimit(1).truncationMode(.middle)
                     .padding(.horizontal, 8).padding(.vertical, 5)
@@ -41,7 +41,7 @@ struct AdvancedPane: View {
                 .accessibilityIdentifier("a-legacy")
             }
             FormRow(label: "Diagnostics") {
-                Button("Copy share state as JSON") { store.copyShareState() }.sbButton().accessibilityIdentifier("a-copy")
+                Button("Copy handout state as JSON") { store.copyShareState() }.sbButton().accessibilityIdentifier("a-copy")
                 SmallText("For bug reports and agents.")
             }
         }

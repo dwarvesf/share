@@ -139,7 +139,7 @@ public enum Impact {
     public static func turnOnMembers(host: String) -> ImpactSheet {
         ImpactSheet(
             title: "Turn on members for \(host)?",
-            body: "A share older than 0.10 still lists, adds and removes cloud links here, but never sees member links, and its orphan sweep is skipped.",
+            body: "A handout older than 0.10 still lists, adds and removes cloud links here, but never sees member links, and its orphan sweep is skipped.",
             actionTitle: "Turn on members"
         )
     }
@@ -228,7 +228,7 @@ extension RefusalSheet {
             return RefusalSheet(title: "Still working", sentence: message.isEmpty ? "Another change to this member is still running. Wait for it to finish, or press Finish in Members." : message,
                                 next: "Open Members", action: .openMembers)
         case "cli_below_min":
-            return RefusalSheet(title: "Update share to \(AppState.defaultMinimum)", sentence: message.isEmpty ? "This share command is older than the team's server allows." : message,
+            return RefusalSheet(title: "Update handout to \(AppState.defaultMinimum)", sentence: message.isEmpty ? "This handout command is older than the team's server allows." : message,
                                 next: "Copy upgrade command", action: .copyCommand(AppState.upgradeCommand))
         case "invite_unknown_or_used":
             return RefusalSheet(title: "Can't join", sentence: "This code was already used, or it does not exist. \(ask)", next: nil, action: .none)
@@ -251,7 +251,7 @@ public struct CodeSheet: Sendable, Equatable {
     public let title: String
     public let body: String
     public let code: String
-    public let note = "Share Bar shows the code only now. If it is lost, send a new one."
+    public let note = "Handout Bar shows the code only now. If it is lost, send a new one."
 
     public init(member: String, code: String, rotate: Bool, ttlDays: Int) {
         title = rotate ? "New keys for \(member)" : "Invite code for \(member)"
@@ -294,7 +294,7 @@ public struct InviteForm: Sendable, Equatable {
     public static func code(fromStdout stdout: String) -> String? {
         for line in stdout.split(separator: "\n").reversed() {
             let words = line.split(separator: " ").map(String.init)
-            if words.count >= 4, words[0] == "share", words[1] == "join" { return words[3] }
+            if words.count >= 4, (words[0] == "handout" || words[0] == "share"), words[1] == "join" { return words[3] }
         }
         return nil
     }

@@ -43,9 +43,9 @@
 #                   NOTARY_ISSUER_FIELD_RE ('issuer').
 set -euo pipefail
 
-REPO="dwarvesf/share"
+REPO="consolelabs/handout"
 TAP_REPO="dwarvesf/homebrew-tools"
-CASK_NAME="share-bar"
+CASK_NAME="handout-bar"
 CASK_CAVEATS_LINE="Menu bar app: brew install --cask dwarvesf/tools/$CASK_NAME"
 
 die() { echo "release.sh: $*" >&2; exit 1; }
@@ -56,7 +56,7 @@ VERSION="${TAG#v}"
 
 MAC_DIR="$(cd "$(dirname "$0")" && pwd)"
 DRY="${RELEASE_DRY:-0}"
-ZIP_NAME="Share-Bar-$VERSION.zip"
+ZIP_NAME="Handout-Bar-$VERSION.zip"
 
 KEYFILE=""
 ITEMFILE=""
@@ -155,8 +155,8 @@ cask "$CASK_NAME" do
   sha256 "$SHA"
 
   url "https://github.com/$REPO/releases/download/$TAG/$ZIP_NAME"
-  name "Share Bar"
-  desc "Menu bar app for share: live status, quick links, drag-to-publish"
+  name "Handout Bar"
+  desc "Menu bar app for handout: live status, quick links, drag-to-publish"
   homepage "https://github.com/$REPO"
 
   livecheck do
@@ -164,10 +164,10 @@ cask "$CASK_NAME" do
     strategy :github_latest
   end
 
-  depends_on formula: "dwarvesf/tools/share"
+  depends_on formula: "dwarvesf/tools/handout"
   depends_on macos: :ventura
 
-  app "Share Bar.app"
+  app "Handout Bar.app"
 
   uninstall quit: "foundation.d.share.bar"
 
@@ -211,9 +211,9 @@ fi
 if [[ "$DRY" == "1" ]]; then
   echo "== Casks/$CASK_NAME.rb (placeholder sha256)"
   cask_body
-  echo "== Formula/share.rb caveats addition (skipped when the line is already present)"
+  echo "== Formula/handout.rb caveats addition (skipped when the line is already present)"
   echo "      $CASK_CAVEATS_LINE"
-  echo "        Installs Share Bar, a menu bar app that shows shares and status."
+  echo "        Installs Handout Bar, a menu bar app that shows shares and status."
   exit 0
 fi
 
@@ -224,12 +224,12 @@ git clone --quiet --depth 1 "https://github.com/$TAP_REPO.git" "$WORK/tap"
 
 cask_body >"$WORK/tap/Casks/$CASK_NAME.rb"
 
-FORMULA_FILE="$WORK/tap/Formula/share.rb"
+FORMULA_FILE="$WORK/tap/Formula/handout.rb"
 if ! grep -qF "$CASK_CAVEATS_LINE" "$FORMULA_FILE"; then
   awk -v line="      $CASK_CAVEATS_LINE" '
     /Optional: brew install pandoc gh/ && !done {
       print line
-      print "        Installs Share Bar, a menu bar app that shows shares and status."
+      print "        Installs Handout Bar, a menu bar app that shows shares and status."
       print ""
       done = 1
     }
@@ -240,7 +240,7 @@ fi
 
 cd "$WORK/tap"
 git checkout -q -b "$BRANCH"
-git add "Casks/$CASK_NAME.rb" Formula/share.rb
+git add "Casks/$CASK_NAME.rb" Formula/handout.rb
 if git diff --cached --quiet; then
   echo "cask already up to date for $TAG"
   exit 0

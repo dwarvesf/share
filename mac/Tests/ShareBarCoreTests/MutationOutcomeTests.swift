@@ -17,13 +17,13 @@ final class MutationOutcomeTests: XCTestCase {
     func testFailureWithNoStderrFallsBackToShareExitedN() {
         let result = CLIResult(status: 2, stdout: "", stderr: "", timedOut: false)
         let alert = MutationOutcome.alert(for: result, warningShareID: nil, notServingHere: false)
-        XCTAssertEqual(alert, MutationAlert(kind: .failure, message: "share exited 2"))
+        XCTAssertEqual(alert, MutationAlert(kind: .failure, message: "handout exited 2"))
     }
 
     func testFailureStderrKeepsASingleSharePrefix() {
         let result = CLIResult(status: 1, stdout: "", stderr: "jq: command not found", timedOut: false)
         let alert = MutationOutcome.alert(for: result, warningShareID: nil, notServingHere: false)
-        XCTAssertEqual(alert?.message, "share: jq: command not found")
+        XCTAssertEqual(alert?.message, "handout: jq: command not found")
     }
 
     func testPrivateWarningOnExitZeroNamesTheShareToRemove() {
@@ -170,7 +170,7 @@ final class MutationOutcomeTests: XCTestCase {
         // it end to end via StateMappingTests); this guards the extraction didn't change
         // the rule the mutation alerts rely on.
         let result = CLIResult(status: 1, stdout: "", stderr: "line one\n\nline three\n", timedOut: false)
-        XCTAssertEqual(result.lastErrorLine, "share: line three")
+        XCTAssertEqual(result.lastErrorLine, "handout: line three")
     }
 
     // MARK: - CLIResult.hitsText
@@ -183,7 +183,7 @@ final class MutationOutcomeTests: XCTestCase {
 
     func testHitsTextOnFailureWithEmptyStderrIsShareExited() {
         let result = CLIResult(status: 2, stdout: "", stderr: "", timedOut: false)
-        XCTAssertEqual(result.hitsText, "share exited 2")
+        XCTAssertEqual(result.hitsText, "handout exited 2")
     }
 
     func testHitsTextOnSuccessIsTrimmedStdout() {
@@ -233,7 +233,7 @@ final class MutationErrorJSONTests: XCTestCase {
     }
 
     func testStopWaitingOnARunningAddHasTheNewCopy() {
-        XCTAssertEqual(StopWaiting.confirmText(isAdd: true), "The add stops where it is; share prune cleans up what it left.")
+        XCTAssertEqual(StopWaiting.confirmText(isAdd: true), "The add stops where it is; handout prune cleans up what it left.")
         XCTAssertEqual(StopWaiting.confirmText(isAdd: false), StopWaiting.confirmText)
     }
 }

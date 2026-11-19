@@ -137,7 +137,7 @@ public struct FlowRun: Sendable, Equatable {
             } else {
                 let error = ErrorLine.last(inStderr: stderr)
                 let line = error?.message ?? CLIResult(status: status, stdout: "", stderr: stderr, timedOut: false).lastErrorLine
-                let sentence = line.hasPrefix("share: ") ? String(line.dropFirst(7)) : line
+                let sentence = CLIPrefix.strip(line)
                 phase = .failed(sentence: Redact.tokenShaped(sentence), next: error?.next.map(Redact.tokenShaped))
             }
         default: break
@@ -196,12 +196,12 @@ public enum ProfileName {
     public static func bucket(host: String) -> String { "share-" + slug(host: host) }
 }
 
-/// What the join form's code field may hold: a code, or the whole `share join <host> <code>`
-/// line `member add` prints, which fills both fields.
+/// What the join form's code field may hold: a code, or the whole `handout join <host> <code>`
+/// line `member add` prints (`share join` from an older CLI), which fills both fields.
 public enum JoinInput {
     public static func parse(codeField: String, hostField: String) -> (host: String, code: String) {
         let words = codeField.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" }).map(String.init)
-        if words.count >= 4, words[0] == "share", words[1] == "join" { return (words[2], words[3]) }
+        if words.count >= 4, (words[0] == "handout" || words[0] == "share"), words[1] == "join" { return (words[2], words[3]) }
         if words.count == 3, words[0] == "join" { return (words[1], words[2]) }
         return (hostField.trimmingCharacters(in: .whitespaces), codeField.trimmingCharacters(in: .whitespacesAndNewlines))
     }

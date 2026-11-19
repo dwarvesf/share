@@ -138,7 +138,7 @@ final class SettingsStore: ObservableObject {
     var readCLI: ([String]) async -> CLIResult = { await CLI.run($0, timeout: 60) }
     var writeCLI: ([String]) async -> CLIResult
     var openAtLoginProvider: () -> Bool = { SMAppService.mainApp.status == .enabled }
-    var locateCLI: () -> String = { CLI.locate(env: ProcessInfo.processInfo.environment, fileExists: { FileManager.default.isExecutableFile(atPath: $0) })?.path ?? "share not found" }
+    var locateCLI: () -> String = { CLI.locate(env: ProcessInfo.processInfo.environment, fileExists: { FileManager.default.isExecutableFile(atPath: $0) })?.path ?? "handout not found" }
     var listOnePassword: () async -> Result<[OnePasswordItem], OnePasswordError> = { await OnePasswordClient.list() }
 
     private var runner: FlowRunner?
@@ -417,7 +417,7 @@ final class SettingsStore: ObservableObject {
         guard let target = configTarget else { return }
         let argv = KeyArgv.test(kind, profile: target.name)
         if case .askEachTime = panel(kind).source {
-            sheet = .askKey(AskKeyRequest(kind: kind, purpose: "Share Bar uses it for this test only and forgets it right away.") { [weak self] key in
+            sheet = .askKey(AskKeyRequest(kind: kind, purpose: "Handout Bar uses it for this test only and forgets it right away.") { [weak self] key in
                 self?.sheet = nil
                 self?.finishTest(kind, argv: argv, key: key)
             })
@@ -459,7 +459,7 @@ final class SettingsStore: ObservableObject {
             guard result.status == 0 else { showFailure(result, host: target.name); return }
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(result.stdout, forType: .string)
-            announce("Copied the share state for \(target.state?.host ?? target.name) as JSON.")
+            announce("Copied the handout state for \(target.state?.host ?? target.name) as JSON.")
         }
     }
 
@@ -514,7 +514,7 @@ final class SettingsStore: ObservableObject {
         guard let argv = inviteForm.argv(profile: profile) else { return }
         let form = inviteForm
         collectKeys(keysNeedingAsk([.admin, .minter], profile: profile), asked: [:],
-                    purpose: "Share Bar uses it to add this member and forgets it right away.") { [weak self] keys in
+                    purpose: "Handout Bar uses it to add this member and forgets it right away.") { [weak self] keys in
             guard let self else { return }
             Task {
                 let result = await self.runWith(argv, keys: keys)
@@ -559,7 +559,7 @@ final class SettingsStore: ObservableObject {
 
     func runKeyed(_ argv: [String], kinds: [KeyKind], profile: String, host: String, done: String) {
         collectKeys(keysNeedingAsk(kinds, profile: profile), asked: [:],
-                    purpose: "Share Bar uses it for this one action and forgets it right away.") { [weak self] keys in
+                    purpose: "Handout Bar uses it for this one action and forgets it right away.") { [weak self] keys in
             guard let self else { return }
             Task {
                 let result = await self.runWith(argv, keys: keys)
@@ -609,7 +609,7 @@ final class SettingsStore: ObservableObject {
             guard let op = detail.callout?.op,
                   let checked = JournalRun.argv(op: op, kind: .rollback, profile: detail.profile) else { return }
             // The sheet names the checked argv that will run, never the journal's display string.
-            let command = "share " + checked.joined(separator: " ")
+            let command = "handout " + checked.joined(separator: " ")
             let what = op.verb == "setup-r2" ? "cloud storage" : (op.verb == "join" ? "the join" : op.verb)
             sheet = .confirm(Impact.rollBack(what: what, command: command), .rollBack(op: op, profile: detail.profile))
         case .openInBrowser:
@@ -684,7 +684,7 @@ final class SettingsStore: ObservableObject {
     func showFailure(_ result: CLIResult, host: String) {
         let error = ErrorLine.last(inStderr: result.stderr)
         let line = result.lastErrorLine
-        let message = error?.message ?? (line.hasPrefix("share: ") ? String(line.dropFirst(7)) : line)
+        let message = error?.message ?? (CLIPrefix.strip(line))
         sheet = .refusal(RefusalSheet.from(code: error?.code ?? "", message: Redact.tokenShaped(message), next: error?.next, host: host))
     }
 
@@ -715,7 +715,7 @@ final class SettingsStore: ObservableObject {
     func startPlan(_ steps: [FlowStepPlan], needsKey: Bool, profile: String, done: String) {
         guard !steps.isEmpty, runner == nil || !(flow?.isActive ?? false) else { return }
         let asking = needsKey ? keysNeedingAsk([.admin], profile: profile) : []
-        collectKeys(asking, asked: [:], purpose: "Share Bar uses it for this action and forgets it when the action ends.") { [weak self] keys in
+        collectKeys(asking, asked: [:], purpose: "Handout Bar uses it for this action and forgets it when the action ends.") { [weak self] keys in
             guard let self else { return }
             self.plan = steps
             self.planKeys = keys

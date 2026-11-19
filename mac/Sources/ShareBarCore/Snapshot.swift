@@ -467,7 +467,7 @@ extension ProfileEntry: Decodable {
         }
         if schema > 1 {
             state = nil
-            error = "Update Share Bar"
+            error = "Update Handout Bar"
             return
         }
         if let decoded = try? container.decode(Snapshot.self, forKey: .state) {
@@ -516,10 +516,10 @@ extension ProfilesSnapshot {
     /// prints the TSV listing and ignores `--json`; a clean decode on exit 0; else the
     /// generic failure line.
     public static func from(_ result: CLIResult) -> Result<ProfilesSnapshot, Failure> {
-        if result.stderr == "share: CLI not found" {
+        if result.stderr == "handout: CLI not found" {
             return .failure(.cliNotFound)
         }
-        if result.status == 1 && result.stdout.hasPrefix("share: publish snapshots") {
+        if result.status == 1 && (result.stdout.hasPrefix("handout: publish snapshots") || result.stdout.hasPrefix("share: publish snapshots")) {
             return .failure(.oldCLI)
         }
         if result.status == 0 {

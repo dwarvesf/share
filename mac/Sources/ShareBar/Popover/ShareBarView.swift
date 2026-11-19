@@ -41,7 +41,7 @@ struct ShareBarView: View {
         .onDrop(of: [.fileURL], delegate: PopoverDropDelegate(store: store))
         .onPreferenceChange(MoreFramesKey.self) { moreFrames = $0 }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Share Bar")
+        .accessibilityLabel("Handout Bar")
     }
 
     /// The popover grows to hold the row menu under its More button, as the design does, so
