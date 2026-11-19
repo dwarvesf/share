@@ -35,6 +35,26 @@ Verdict: PASS (the docs checks go RED when the code says handout and the docs do
 ```
 The other three failures in that run come from the temp dir having no git history (the groundwork section reads `git show`).
 
+## Live install move (recorded run)
+The tap rename (dwarvesf/homebrew-tools#32) was applied on a machine serving three live hostnames from brew `share` 0.9.0.
+```
+Command: brew trust --formula dwarvesf/tools/handout; brew migrate share; brew reinstall handout; curl https://<host>/healthz for each profile before and after
+Exit: 0
+Output:
+==> Migrating formula share to handout
+==> Moving share versions to /opt/homebrew/Cellar/handout
+/opt/homebrew/bin/handout -> ../Cellar/handout/0.9.0/bin/handout
+/opt/homebrew/bin/share -> ../Cellar/handout/0.9.0/bin/share
+healthz before: ok ok ok; after: ok ok ok
+Verdict: PASS
+```
+Without the trust step brew refuses: `Refusing to load formula dwarvesf/tools/handout from untrusted tap dwarvesf/tools`. Trust is per name, so the docs carry it.
+
+## Rollback
+- Code: revert this PR's squash commit. `bin/share` becomes the script again; no state was renamed, so live installs need nothing.
+- Tap: revert dwarvesf/homebrew-tools#32; an installed keg moves back with `brew migrate handout` once `formula_renames.json` is gone and `share.rb` returns.
+- Repo name: `gh api -X POST repos/consolelabs/handout/transfer -f new_owner=dwarvesf -f new_name=share`; GitHub keeps redirects both ways.
+
 ## Not proven
 - An existing brew install moving to the `handout` formula (tap rename maps landed in dwarvesf/homebrew-tools#32).
 - A signed Handout Bar release: the next `bin/release` and `mac/release.sh` run produces it.
