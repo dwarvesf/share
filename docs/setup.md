@@ -210,7 +210,7 @@ handout --profile df setup f.example.com --backend r2 --bucket share-f
 
 On this machine setup writes only the config. There is no tunnel, no login service, and no Keychain tunnel item. `port=r2` in the config is a sentinel: a release older than the r2 backend dies at load on it, so it can never write to an r2 profile.
 
-`--backend r2` refuses `--quick`, `--tunnel-name`, `--login`, and `--no-service` (`usage: share setup <hostname> --backend r2 --bucket <name> [--force]`). A profile has one backend; to switch, run `handout teardown` first. `--force` replaces an existing DNS record at the hostname, or downgrades a Worker that a newer share deployed.
+`--backend r2` refuses `--quick`, `--tunnel-name`, `--login`, and `--no-service` (`usage: handout setup <hostname> --backend r2 --bucket <name> [--force]`). A profile has one backend; to switch, run `handout teardown` first. `--force` replaces an existing DNS record at the hostname, or downgrades a Worker that a newer share deployed.
 
 Rerun the same command after a release that changes the Worker. Publishers see a line when the deployed Worker differs from their CLI, in `setup` and `status`: `the Worker at <host> runs <v> <sha>; this share ships <v> <sha>; whoever holds the admin token reruns '...'`. A rerun is safe: it redeploys only when the version, source hash, or Access team differs, and prints `already deployed` otherwise.
 
