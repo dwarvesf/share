@@ -25,7 +25,7 @@ set -uo pipefail
 
 host="${SHARE_E2E_R2_HOST:?set SHARE_E2E_R2_HOST to an unused share-e2e* hostname on your Cloudflare zone}"
 admin="${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN to the admin token}"
-share="${SHARE_BIN:-share}"
+share="${SHARE_BIN:-handout}"
 bucket="${SHARE_E2E_R2_BUCKET:-share-e2e-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')}"
 [[ $bucket =~ ^share-e2e-[0-9a-f]{6}$ ]] || { echo "refused: bucket '$bucket' is not share-e2e-<6 hex>"; exit 2; }
 [[ ${host%%.*} == share-e2e* ]] || { echo "refused: the hostname's first label must start with share-e2e"; exit 2; }

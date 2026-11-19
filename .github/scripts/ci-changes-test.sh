@@ -18,9 +18,9 @@ run_case() {  # expected-bash expected-mac files...
 
 run_case false true  mac/Sources/ShareBar/App.swift docs/verification/share-bar/x.md
 run_case false true  mac/Tests/A.swift docs/implementation-notes/share-bar.md
-run_case true  false bin/share tests/members.sh
+run_case true  false bin/handout tests/members.sh
 run_case true  true  mac/Sources/ShareBarCore/CLI.swift
-run_case true  true  mac/a.swift bin/share
+run_case true  true  mac/a.swift bin/handout
 run_case true  true  .github/workflows/ci.yml
 run_case true  false docs/how-it-works.md
 run_case true  false docs/verification/members-core.md

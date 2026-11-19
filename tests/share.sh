@@ -6,7 +6,7 @@
 # SHARE_TEST_PORT_BASE overrides the port base (default 18787) so two runs can go at once.
 set -uo pipefail
 
-SH="$(cd "$(dirname "$0")/.." && pwd)/bin/share"
+SH="$(cd "$(dirname "$0")/.." && pwd)/bin/handout"
 WORK=$(mktemp -d)
 base=${SHARE_TEST_PORT_BASE:-18787}
 # The highest port the run uses is base+10009 (the live-port share), so the base tops out at 55526.
@@ -79,6 +79,11 @@ check() { # check <label> <expected> <actual>
   (( SECONDS - check_t0 >= 5 )) && printf '%s\t%s\n' $((SECONDS - check_t0)) "$1" >>"$WORK/gaps.tsv"   # a stretch of 5 s or more before this check: the timing table lists it
   check_t0=$SECONDS
   if [[ $2 == "$3" ]]; then echo "  ok    $1"; else echo "  FAIL  $1: expected '$2', got '$3'"; fails=$((fails + 1)); fi
+}
+# A binary from before the rename names itself share; the byte-identity checks against one map its command and product
+# names onto handout first (stdin to stdout), so the rename is the only difference they forgive.
+rename_norm() {
+  perl -pe 's/(^|\x27|\| |  )share: /$1handout: /g; s/\bshare (setup|teardown|service|add|import|migrate|api-token|config|admin-token|minter-token|ls|skill|refresh|rm|hits|prune|leave|member|join|start|stop|status|state|profiles|serve|version|--profile)\b/handout $1/g; s/\bthis share (ships|is older|cannot|reads)\b/this handout $1/g'
 }
 # Section groups. A section that reads state an earlier one left belongs to a group; a filter that names any member runs the whole
 # group. "# pull A -> B C" makes group A also run groups B and C. A new section that reads another's variables joins its group here.
@@ -233,6 +238,21 @@ printf 'zzzzzz\tbroken\n' >>"$SHARE_ROOT/index.tsv"   # malformed: fewer than 5 
 check "malformed row does not crash ls" "0" "$(bash "$SH" ls >/dev/null 2>&1; echo $?)"
 check "malformed row is skipped from ls" "0" "$(bash "$SH" ls | grep -c zzzzzz)"
 grep -v '^zzzzzz' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
+fi
+
+if section "compat: the share alias runs handout, silently"; then
+# Live launchd services and scripts call `share`; it is a relative symlink to handout and runs the same code
+# with no warning. Every call here inherits the suite's isolation (SHARE_ROOT, SHARE_CONFIG_DIR, stubbed services).
+ALIAS="$(dirname "$SH")/share"
+check "bin/share is a relative symlink to handout" "handout" "$(readlink "$ALIAS")"
+check "the alias and handout print the same version" "$(bash "$SH" version)" "$(bash "$ALIAS" version)"
+check "the alias run straight from its path (the shebang) prints the same version" "$(bash "$SH" version)" "$("$ALIAS" version)"
+check "the alias prints no warning on stderr" "" "$("$ALIAS" version 2>&1 >/dev/null)"
+out=$("$ALIAS" profiles --bogus 2>&1 1>/dev/null); rc=$?
+check "a usage error through the alias names handout" "1|handout: usage: handout profiles [--json]" "$rc|$out"
+check "help through the alias opens with the handout banner" "1" "$("$ALIAS" --help | head -1 | grep -c '^handout: publish snapshots')"
+check "the alias lists the same shares as handout" "$(bash "$SH" ls 2>&1)" "$("$ALIAS" ls 2>&1)"
+check "no die or echo line still prefixes its message with share: " "0" "$(grep -cE '(echo|die)[^#]*"[s]hare: ' "$SH")"
 fi
 
 if section "forged rows: a newline path is refused, untrusted rows never reach a reader"; then
@@ -431,7 +451,7 @@ check "streamed hits == slurped, empty log" "$(old_hits_jq "$WORK/hits-empty.log
 printf '{"request":{"uri":"/other000/x","host":"s.example.test","headers":{"Cf-Connecting-Ip":["1.2.3.4"]}},"status":200,"ts":1700000000}\n' >"$WORK/hits-nomatch.log"
 check "streamed hits == slurped, non-matching share" "$(old_hits_jq "$WORK/hits-nomatch.log" notpresent "")" "$(new_hits_jq "$WORK/hits-nomatch.log" notpresent "")"
 check "streamed hits == slurped, real access log" "$(old_hits_jq "$SHARE_ROOT/access.log" "$hits_id" "")" "$(new_hits_jq "$SHARE_ROOT/access.log" "$hits_id" "")"
-check "share hits (now streamed) matches the slurped reference" "$(old_hits_jq "$SHARE_ROOT/access.log" "$hits_id" "")" "$(bash "$SH" hits "$hits_id")"
+check "handout hits (now streamed) matches the slurped reference" "$(old_hits_jq "$SHARE_ROOT/access.log" "$hits_id" "")" "$(bash "$SH" hits "$hits_id")"
 
 bash "$SH" add 19991 >"$WORK/o19" 2>"$WORK/e19"; rc=$?
 dead_url=$(head -1 "$WORK/o19")
@@ -615,14 +635,14 @@ dir/sub dir/file.html
 ENCNAMES
 check "urlenc matches jq @uri for the fixed name list, bash and /bin/bash" "0" "$enc_fail"
 
-echo "--- a name with # and é serves 200 through the link share ls prints ---"
+echo "--- a name with # and é serves 200 through the link handout ls prints ---"
 hash_name="hash#café.txt"
 echo data >"$WORK/$hash_name"
 hash_out=$(bash "$SH" add "$WORK/$hash_name" 2>/dev/null)
 hash_url=$(head -1 <<<"$hash_out")
 hash_id=$(cut -d/ -f4 <<<"$hash_url")
 ls_url=$(bash "$SH" ls | grep -B1 "id=$hash_id" | head -1 | grep -o 'https://.*')
-check "share ls prints the same link share add did" "$hash_url" "$ls_url"
+check "handout ls prints the same link handout add did" "$hash_url" "$ls_url"
 check "the hash+accent link serves 200" "200" "$(wait_code 200 "$hash_url")"
 bash "$SH" rm "$hash_id" >/dev/null
 fi
@@ -679,7 +699,7 @@ awk -F'\t' -v OFS='\t' -v id="$die_id" '$1 == id {$5 = 1} {print}' "$SHARE_ROOT/
 # both shells: bash 5.3 and 3.2 differ on EXIT traps in pipeline subshells
 for b in bash /bin/bash; do
   out=$(SHARE_HOST_DRY=1 "$b" "$SH" prune 2>&1 1>/dev/null)
-  check "prune dies on the expired host row ($b)" "1" "$(grep -c 'tunnel ingress was edited outside share' <<<"$out")"
+  check "prune dies on the expired host row ($b)" "1" "$(grep -c 'tunnel ingress was edited outside handout' <<<"$out")"
   check "a die inside prune's pipeline leaves no lock ($b)" "0" "$(lock_count)"
 done
 rm -f "$SHARE_ROOT/host-fixture.json"
@@ -689,7 +709,7 @@ check "the died share removes once ingress is sane" "0" "$(grep -c 'die.example.
 mkdir "$SHARE_ROOT/.lock-host"
 out=$(SHARE_HOST_DRY=1 SHARE_HOST_LOCK_TIMEOUT=1 bash "$SH" add "$WORK/dist" --host locked.example.test 2>&1 1>/dev/null); rc=$?
 check "held lock refuses" "1" "$rc"
-check "lock message" "1" "$(grep -c 'another share command holds the host lock' <<<"$out")"
+check "lock message" "1" "$(grep -c 'another handout command holds the host lock' <<<"$out")"
 rmdir "$SHARE_ROOT/.lock-host"
 ln -s $$ "$SHARE_ROOT/.lock-host"   # a live holder: this suite's own pid
 out=$(SHARE_HOST_DRY=1 SHARE_HOST_LOCK_TIMEOUT=1 bash "$SH" add "$WORK/dist" --host locked.example.test 2>&1 1>/dev/null); rc=$?
@@ -743,7 +763,7 @@ bash "$SH" stop >/dev/null
 printf 'tunnel_id=abc123\nhostname=s.example.test\n' >"$SHARE_CONFIG_DIR/config"
 out=$(SHARE_TUNNEL=1 PATH="$QPATH" bash "$SH" setup --quick 2>&1); rc=$?
 check "quick setup refuses over a named config" "1" "$rc"
-check "names teardown" "1" "$(grep -c 'share teardown' <<<"$out")"
+check "names teardown" "1" "$(grep -c 'handout teardown' <<<"$out")"
 rm -f "$SHARE_CONFIG_DIR/config"
 
 SHARE_LIVE_CHECK=0 SHARE_TUNNEL=1 PATH="$QPATH" bash "$SH" setup --quick --no-service >/dev/null
@@ -756,7 +776,7 @@ check "status shows the quick URL" "1" "$(bash "$SH" status | grep -c 'https://f
 
 out=$(SHARE_TUNNEL=1 PATH="$QPATH" bash "$SH" setup s2.example.test 2>&1); rc=$?
 check "named setup refuses over a quick config" "1" "$rc"
-check "names teardown again" "1" "$(grep -c 'share teardown' <<<"$out")"
+check "names teardown again" "1" "$(grep -c 'handout teardown' <<<"$out")"
 SHARE_TUNNEL=1 PATH="$QPATH" bash "$SH" setup --quick s2.example.test >/dev/null 2>&1
 check "setup --quick <host> is a usage error" "1" "$?"
 
@@ -770,7 +790,7 @@ check "quick live proxies" "hello fixture" "$(curl -s "$(qurl "${q_live}hello.tx
 
 out=$(bash "$SH" add "$WORK/outside.txt" --host a.example.test 2>&1 1>/dev/null); rc=$?
 check "--host refused in quick mode" "1" "$rc"
-check "--host message names teardown" "1" "$(grep -c 'share teardown' <<<"$out")"
+check "--host message names teardown" "1" "$(grep -c 'handout teardown' <<<"$out")"
 check "no host row written" "0" "$(grep -c 'host=a\.example\.test' "$SHARE_ROOT/index.tsv")"
 
 # restart: a stale quick.url must never survive; the new URL wins
@@ -847,17 +867,17 @@ for bad in '../x' 'a b' 'A' 'x/y' '-a'; do
 done
 out=$(pp --profile 2>&1 1>/dev/null); rc=$?
 check "--profile with no name is a usage error" "1" "$rc"
-check "the usage names the flag" "1" "$(grep -c 'share --profile <name> <command>' <<<"$out")"
+check "the usage names the flag" "1" "$(grep -c 'handout --profile <name> <command>' <<<"$out")"
 out=$(pp teardown --yes --profile a 2>&1 1>/dev/null); rc=$?
 check "--profile after the verb is refused" "1" "$rc"
 check "the refusal says where the flag goes" "1" "$(grep -c 'goes before the verb' <<<"$out")"
 out=$(pp stop --profile=a 2>&1 1>/dev/null); rc=$?
 check "--profile=<name> after the verb is refused" "1" "$rc"
-check "help shows the --profile line and the profiles verb" "2" "$(bash "$SH" --help | grep -c 'share --profile <name> <command>\|^  share profiles')"
-check "help reaches teardown (the last usage line)" "1" "$(bash "$SH" --help | grep -c '^  share teardown')"
-# every hint that names a command builds it from the profile: a bare `share <verb>` outside the usage
+check "help shows the --profile line and the profiles verb" "2" "$(bash "$SH" --help | grep -c 'handout --profile <name> <command>\|^  handout profiles')"
+check "help reaches teardown (the last usage line)" "1" "$(bash "$SH" --help | grep -c '^  handout teardown')"
+# every hint that names a command builds it from the profile: a bare `handout <verb>` outside the usage
 # header, a usage: line, a comment, or the backticked skill text is a hint that points at the default install
-check "no hint names a bare share <verb>" "0" "$(grep -nE '[^`]share (setup|teardown|start|stop|rm|refresh|add|service|status)([^a-z-]|$)' "$SH" | grep -v '^[0-9]*:#' | grep -vc 'usage:')"
+check "no hint names a bare handout <verb>" "0" "$(grep -nE '[^`]handout (setup|teardown|start|stop|rm|refresh|add|service|status)([^a-z-]|$)' "$SH" | grep -v '^[0-9]*:#' | grep -vc 'usage:')"
 
 echo "--- Keychain item keyed per profile (stubbed security; the token never reaches argv) ---"
 mkdir -p "$WORK/fakesec"
@@ -931,11 +951,11 @@ check "profile b link is on its own quick host" "1" "$(grep -c '^https://prof-b\
 check "a's share answers on a's port" "200" "$(wait_code 200 "http://127.0.0.1:$pa/$pa_id/outside.txt")"
 check "a's share is absent on b's port" "404" "$(wait_code 404 "http://127.0.0.1:$pb/$pa_id/outside.txt")"
 check "b's share answers on b's port" "200" "$(wait_code 200 "http://127.0.0.1:$pb/$pb_id/outside.txt")"
-check "share ls under a shows only a" "$pa_id" "$(psh a ls | sed -n 's/.*id=\([0-9a-f]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"
-check "share ls under b shows only b" "$pb_id" "$(psh b ls | sed -n 's/.*id=\([0-9a-f]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"
+check "handout ls under a shows only a" "$pa_id" "$(psh a ls | sed -n 's/.*id=\([0-9a-f]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"
+check "handout ls under b shows only b" "$pb_id" "$(psh b ls | sed -n 's/.*id=\([0-9a-f]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"
 check "SHARE_PROFILE=b from the environment also lists b" "$pb_id" "$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME HOME="$PHOME" SHARE_TUNNEL=1 SHARE_PROFILE=b bash "$SH" ls | sed -n 's/.*id=\([0-9a-f]*\).*/\1/p')"
 
-echo "--- share profiles lists every profile with state and host ---"
+echo "--- handout profiles lists every profile with state and host ---"
 psh a profiles >"$WORK/profiles.out"
 check "profiles: three lines" "3" "$(wc -l <"$WORK/profiles.out" | tr -d ' ')"
 check "profiles: default first, not set up under this HOME" "default	not_setup	-" "$(sed -n 1p "$WORK/profiles.out")"
@@ -959,7 +979,7 @@ env -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_SERVICE_LABEL -
 check "profiles under an exported SHARE_ROOT still reads each profile's own state" "a	serving	prof-a.trycloudflare.com b	serving	prof-b.trycloudflare.com" \
   "$(grep '^[ab]	' "$WORK/profiles-override.out" | tr '\n' ' ' | sed 's/ $//')"
 
-echo "--- share profiles --json: every profile's state in one call ---"
+echo "--- handout profiles --json: every profile's state in one call ---"
 marker="$WORK/json.marker"; touch "$marker"; sleep 0.2
 psh a profiles --json >"$WORK/profiles.json"
 check "profiles --json exits 0" "0" "$?"
@@ -969,13 +989,13 @@ check "profiles --json names in listing order" "default a b" "$(jq -r '[.profile
 for p in default a b; do
   own="$(env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_HOSTS -u SHARE_SERVICE_LABEL -u XDG_CONFIG_HOME \
     HOME="$PHOME" SHARE_LIVE_CHECK=0 SHARE_TUNNEL=1 PATH="$QPATH" SHARE_PROFILE="$p" bash "$SH" state)"
-  check "profiles --json: $p's state equals its own share state" "true" \
+  check "profiles --json: $p's state equals its own handout state" "true" \
     "$(jq --arg name "$p" --argjson own "$own" -r '[.profiles[] | select(.name == $name) | .state == $own][0]' "$WORK/profiles.json")"
 done
 check "profiles --json wrote nothing under HOME" "0" "$(find "$PHOME" -newer "$marker" | wc -l | tr -d ' ')"
 out=$(psh a profiles --bogus 2>&1); rc=$?
 check "profiles --bogus exits 1" "1" "$rc"
-check "profiles --bogus prints the usage" "share: usage: share profiles [--json]" "$out"
+check "profiles --bogus prints the usage" "handout: usage: handout profiles [--json]" "$out"
 out=$(psh a profiles --json --bogus 2>&1); rc=$?
 check "profiles --json plus a second arg exits 1" "1" "$rc"
 check "plain profiles is still the TSV listing" "$(printf 'default\tnot_setup\t-\na\tserving\tprof-a.trycloudflare.com\nb\tserving\tprof-b.trycloudflare.com')" "$(psh a profiles)"
@@ -988,9 +1008,9 @@ echo "--- profiles --json: a bad slug, a quote in a name, and profiles/default a
 mkdir -p "$PHOME/.config/share/profiles/Bad" "$PHOME/.config/share/profiles/default" "$PHOME/.config/share/profiles/a\"b"
 psh a profiles --json >"$WORK/profiles-badnames.json"
 check "profiles --json with bad names exits 0 and parses" "0" "$(jq -e . "$WORK/profiles-badnames.json" >/dev/null 2>&1; echo $?)"
-check "profiles --json: Bad is an error entry" "share: bad profile name 'Bad' (a-z, 0-9, -; 32 chars max)" \
+check "profiles --json: Bad is an error entry" "handout: bad profile name 'Bad' (a-z, 0-9, -; 32 chars max)" \
   "$(jq -r '.profiles[] | select(.name == "Bad") | .error' "$WORK/profiles-badnames.json")"
-check "profiles --json: a quote in a name stays one escaped entry" "share: bad profile name 'a\"b' (a-z, 0-9, -; 32 chars max)" \
+check "profiles --json: a quote in a name stays one escaped entry" "handout: bad profile name 'a\"b' (a-z, 0-9, -; 32 chars max)" \
   "$(jq -r '.profiles[] | select(.name == "a\"b") | .error' "$WORK/profiles-badnames.json")"
 check "profiles --json: profiles/default is the reserved-name entry" "reserved name; rename or remove $PHOME/.config/share/profiles/default" \
   "$(jq -r '.profiles[] | select(.name == "profiles/default") | .error' "$WORK/profiles-badnames.json")"
@@ -1066,7 +1086,7 @@ sed -i.bak "s/^port=.*/port=$pb/" "$PHOME/.config/share/profiles/a/config" && rm
 out=$(psh a serve 2>&1 1>/dev/null); rc=$?
 check "serve on a port another profile listens on dies" "1" "$rc"
 check "the die names the port" "1" "$(grep -c "127.0.0.1:$pb is already in use" <<<"$out")"
-check "the recovery hint names this profile's own setup" "1" "$(grep -c 'rerun share --profile a setup' <<<"$out")"
+check "the recovery hint names this profile's own setup" "1" "$(grep -c 'rerun handout --profile a setup' <<<"$out")"
 check "b still answers alone on its port" "200" "$(code "http://127.0.0.1:$pb/$pb_id/outside.txt")"
 # only the metrics port collides: a's port one below b's, so a's metrics port is b's caddy port
 sed -i.bak "s/^port=.*/port=$((pb - 1))/" "$PHOME/.config/share/profiles/a/config" && rm -f "$PHOME/.config/share/profiles/a/config.bak"
@@ -1173,7 +1193,7 @@ SHARE_HOST_DRY=1 bash "$SH" rm c0c0c1 >/dev/null 2>&1
 check "cleanup: nocred1 row gone" "0" "$(grep -c '^c0c0c1' "$SHARE_ROOT/index.tsv")"
 fi
 
-if section "TASK-005: share state"; then
+if section "TASK-005: handout state"; then
 
 echo "--- not_setup: schema valid, exit 0, nothing written ---"
 mkdir -p "$WORK/state-ns-root" "$WORK/state-ns-config"
@@ -1259,7 +1279,7 @@ check "own-host row's kind is snapshot" "snapshot" "$(jq -r --arg id "$host_id" 
 for id in "$snap_id" "$live_id" "$host_id"; do
   state_url=$(jq -r --arg id "$id" '.shares[] | select(.id==$id) | .url' "$WORK/state-serving.json")
   ls_url=$(grep -B1 "id=$id" <<<"$ls_out" | head -1 | grep -o 'https://.*')
-  check "state url == share ls url for $id" "$ls_url" "$state_url"
+  check "state url == handout ls url for $id" "$ls_url" "$state_url"
 done
 
 stsh stop >/dev/null
@@ -1274,7 +1294,7 @@ TIMEFORMAT='%R'
 { time env SHARE_ROOT="$PERF_ROOT" SHARE_CONFIG_DIR="$PERF_CFG" SHARE_HOSTNAME=perf.example.test SHARE_HOSTS="${h%%.*}" SHARE_TUNNEL=0 \
     bash "$SH" state >/dev/null; } 2>>"$WORK/state-perf.time"
 perf_secs=$(sort -n "$WORK/state-perf.time" | head -1)   # min of two runs: a busy machine inflates the wall clock, never shrinks it
-echo "  share state over 500 rows took ${perf_secs}s"
+echo "  handout state over 500 rows took ${perf_secs}s"
 check "500-row index produces 500 shares" "500" "$(jq '.shares | length' "$WORK/state-perf.json")"
 check "500-row index answers under 3s" "1" "$(awk -v t="$perf_secs" 'BEGIN{print (t<3)?1:0}')"
 
@@ -1291,7 +1311,7 @@ check "v0.5.1 CLI: state exits 1 (unknown verb)" "1" "$rc"
 check "v0.5.1 CLI: state wrote nothing" "" "$(find "$OLD_ROOT" "$OLD_CFG" -newer "$old_marker" 2>/dev/null)"
 fi
 
-if section "TASK-015: docs cover every share state field"; then
+if section "TASK-015: docs cover every handout state field"; then
 # Reuses $WORK/state-serving.json from TASK-005 above: real `share state` output
 # from the suite's own isolated root, with a snapshot, a live, and an own-host
 # share, so every JSON key name in the contract is present at least once.
@@ -1303,8 +1323,8 @@ doc_covers_fields() { # doc_covers_fields <file>: 0 iff every name in $state_fie
   for f in ${state_fields[@]+"${state_fields[@]}"}; do grep -qF -- "$f" "$1" || return 1; done
   return 0
 }
-check "share state produced a real field list" "1" "$([[ ${#state_fields[@]} -ge 10 ]] && echo 1 || echo 0)"
-check "every share state field name appears in docs/how-it-works.md" "0" "$(doc_covers_fields "$doc"; echo $?)"
+check "handout state produced a real field list" "1" "$([[ ${#state_fields[@]} -ge 10 ]] && echo 1 || echo 0)"
+check "every handout state field name appears in docs/how-it-works.md" "0" "$(doc_covers_fields "$doc"; echo $?)"
 
 echo "--- negative control: a doc missing a field name fails the check ---"
 # Works on a throwaway copy; the real docs/how-it-works.md is never written.
@@ -1336,7 +1356,7 @@ check "negative control: a doc missing the storage state key fails the tenant ch
 # The member docs: every member verb, flag, config key and refusal code the docs name is a real thing in bin/share, and the docs name every one.
 # The terms are checked over the README, docs/setup.md and docs/how-it-works.md together (a verb is in the doc set, not in one file).
 member_terms=("member add" "member ls" "member sync" "member rm" "member purge" "member pause" "member resume" "member invite" "member rotate" "member renew" "member adopt"
-  "share join" "share leave" --tenant --machine --cloud --port --invite-ttl --token-ttl --token-id --by --rebind --cloud-links --members --no-members --json
+  "handout join" "handout leave" --tenant --machine --cloud --port --invite-ttl --token-ttl --token-id --by --rebind --cloud-links --members --no-members --json
   member_id member_mode admin_token_cmd minter_token_cmd SHARE_MINTER_TOKEN min_cli prev_status
   adopt_token_scope cli_below_min token_unreachable lease_held member_cloud invite_unavailable member_needs_keychain port_busy profile_not_empty)
 members_covers() { # members_covers <bin> <doc>...: 0 iff every member verb is dispatched, and every term is a whole word in bin/share and in the doc set
@@ -1417,7 +1437,7 @@ check "row 2: no POST app was logged" "0" "$(grep -c 'POST app' "$alog")"
 echo "--- row 3: quick mode and the seam with the tunnel on are refused ---"
 printf 'mode=quick\n' >"$SHARE_CONFIG_DIR/config"
 out=$(acc add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null); rc=$?
-check "quick mode refuses --access" "1" "$([[ $rc == 1 ]] && grep -c "needs a named tunnel on a Cloudflare account with Access: 'share teardown', then 'share setup <hostname>'" <<<"$out")"
+check "quick mode refuses --access" "1" "$([[ $rc == 1 ]] && grep -c "needs a named tunnel on a Cloudflare account with Access: 'handout teardown', then 'handout setup <hostname>'" <<<"$out")"
 out=$(SHARE_ACCESS_DRY=1 SHARE_TUNNEL=1 CLOUDFLARE_API_TOKEN=faketoken bash "$SH" api-token --check 2>&1 1>/dev/null); rc=$?
 check "api-token refuses quick mode too" "1" "$([[ $rc == 1 ]] && grep -c 'needs a named tunnel' <<<"$out")"
 rm -f "$SHARE_CONFIG_DIR/config"
@@ -1443,7 +1463,7 @@ chmod +x "$WORK/fakesec/security"
 : >"$WORK/sec.log"
 out=$(env -u CLOUDFLARE_API_TOKEN SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" bash "$SH" add "$WORK/gated.txt" --access group:dwarves-ops 2>&1 1>/dev/null); rc=$?
 check "no token: exit 1" "1" "$rc"
-check "no token: the block names the host and the two api-token forms" "3" "$(grep -c -e "needs a Cloudflare API token for $SHARE_HOSTNAME; none is set" -e '^  New token (opens the prefilled form, then paste):  share api-token$' -e '^  Already have a token with Access scopes:          share api-token --cmd '"'"'op read "op://<vault>/<item>/credential"'"'"'$' <<<"$out")"
+check "no token: the block names the host and the two api-token forms" "3" "$(grep -c -e "needs a Cloudflare API token for $SHARE_HOSTNAME; none is set" -e '^  New token (opens the prefilled form, then paste):  handout api-token$' -e '^  Already have a token with Access scopes:          handout api-token --cmd '"'"'op read "op://<vault>/<item>/credential"'"'"'$' <<<"$out")"
 o1_url=$(grep -o 'https://dash.cloudflare.com/[^ ]*' <<<"$out")
 check "no token: the template URL is the account-token form" "1" "$(grep -c '^https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=' <<<"$o1_url")"
 keys=$(sed -n 's/.*permissionGroupKeys=\([^&]*\).*/\1/p' <<<"$o1_url")
@@ -1451,14 +1471,14 @@ check "no token: the keys decode to exactly the three key/type pairs" '[{"key":"
 check "no token: name decodes to 'share access (default)'" "share access (default)" "$(urldec "$(sed -n 's/.*&name=\([^&]*\).*/\1/p' <<<"$o1_url")")"
 check "no token: no stage left under the root" "0" "$(find "$SHARE_ROOT" -maxdepth 1 -name '.stage.*' | grep -c .)"
 check "no token: no row, no call" "$idx_before" "$([[ ! -s $alog ]] && cksum <"$SHARE_ROOT/index.tsv")"
-check "no token: the profile form names --profile" "2" "$(env -u CLOUDFLARE_API_TOKEN SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" SHARE_PROFILE=dfoundation SHARE_HOSTNAME=s.d.foundation bash "$SH" add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null | grep -c 'share --profile dfoundation api-token')"
+check "no token: the profile form names --profile" "2" "$(env -u CLOUDFLARE_API_TOKEN SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" SHARE_PROFILE=dfoundation SHARE_HOSTNAME=s.d.foundation bash "$SH" add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null | grep -c 'handout --profile dfoundation api-token')"
 
 echo "--- row 5: group lookup by exact name over every page ---"
 areset
 jq -nc '[{id:"aaaaaaaa-2222-4333-8444-555555555555", name:"other"}]' >"$gfix"
 out=$(acc add "$WORK/gated.txt" --access group:dwarves-ops 2>&1 1>/dev/null); rc=$?
 check "missing group: exit 1 with the rule-group path" "1" "$([[ $rc == 1 ]] && grep -c "no Access group named 'dwarves-ops' on the account that owns example.test" <<<"$out")"
-check "missing group: the block names where to create it and to rerun" "3" "$(grep -c -e 'Zero Trust > Access controls > Policies > Rule groups tab > Add a group' -e '^    Name: dwarves-ops$' -e 'then rerun the same share add' <<<"$out")"
+check "missing group: the block names where to create it and to rerun" "3" "$(grep -c -e 'Zero Trust > Access controls > Policies > Rule groups tab > Add a group' -e '^    Name: dwarves-ops$' -e 'then rerun the same handout add' <<<"$out")"
 check "missing group: no POST app" "0" "$(grep -c 'POST app$' "$alog")"
 jq -nc '[{id:"a", name:"dwarves-ops"}, {id:"b", name:"dwarves-ops"}]' >"$gfix"
 out=$(acc add "$WORK/gated.txt" --access group:dwarves-ops 2>&1 1>/dev/null); rc=$?
@@ -1485,7 +1505,7 @@ rows_lc="$(wc -l <"$SHARE_ROOT/index.tsv" | tr -d ' ')"
 out=$(SHARE_ACCESS_POST_WAIT=0 SHARE_ACCESS_POST_POLL=0 acc add "$WORK/gated.txt" --access email:a@x.io 2>"$WORK/lc.err"); rc=$?
 check "link check: still 200 at the timeout: exit 1, no link on stdout" "1 0" "$rc $(grep -c '^https://' <<<"$out")"
 check "link check: the warning names the status, the edge risk, and the rm command" "1 1 1" \
-  "$(grep -c 'answered HTTP 200 instead of the Access login' "$WORK/lc.err") $(grep -c 'readable without the login' "$WORK/lc.err") $(grep -c "Unpublish it now with 'share rm [0-9a-f]\{6\}'" "$WORK/lc.err")"
+  "$(grep -c 'answered HTTP 200 instead of the Access login' "$WORK/lc.err") $(grep -c 'readable without the login' "$WORK/lc.err") $(grep -c "Unpublish it now with 'handout rm [0-9a-f]\{6\}'" "$WORK/lc.err")"
 check "link check: the link stays published for the rm the message names" "$((rows_lc + 1))" "$(wc -l <"$SHARE_ROOT/index.tsv" | tr -d ' ')"
 rm -f "$SHARE_ROOT/access-link-fixture" "$SHARE_ROOT/access-link-checks"
 acc rm "$(tail -1 "$SHARE_ROOT/index.tsv" | cut -f1)" >/dev/null 2>&1 || true
@@ -1525,7 +1545,7 @@ areset
 printf 'fail\n' >"$afix"
 idx_before=$(cksum <"$SHARE_ROOT/index.tsv")
 out=$(SHARE_ACCESS_WAIT=2 SHARE_ACCESS_POLL=1 acc add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null); rc=$?
-check "timeout: exit 1 naming the wait and the rerun" "1" "$([[ $rc == 1 ]] && grep -c "did not enforce on $SHARE_HOSTNAME/[0-9a-f]* within 2s; nothing was published; rerun the same share add (Access can take several minutes on a new app)" <<<"$out")"
+check "timeout: exit 1 naming the wait and the rerun" "1" "$([[ $rc == 1 ]] && grep -c "did not enforce on $SHARE_HOSTNAME/[0-9a-f]* within 2s; nothing was published; rerun the same handout add (Access can take several minutes on a new app)" <<<"$out")"
 check "timeout: the gate said up front how long and that Ctrl-C is safe" "1" "$(grep -c 'waiting up to 2s for Cloudflare Access to enforce on .* Ctrl-C is safe: nothing is published' <<<"$out")"
 check "timeout: DELETE app logged, no PUBLISH" "1" "$([[ $(grep -c 'DELETE app' "$alog") == 1 && $(grep -c PUBLISH "$alog") == 0 ]] && echo 1 || echo 0)"
 check "timeout: no row" "$idx_before" "$(cksum <"$SHARE_ROOT/index.tsv")"
@@ -1548,12 +1568,12 @@ d_app=$(app_of "$d_id")
 awk -F'\t' -v OFS='\t' -v id="$d_id" '$1 == id {$5 = 1} {print}' "$SHARE_ROOT/index.tsv" >"$WORK/i" && mv "$WORK/i" "$SHARE_ROOT/index.tsv"
 : >"$STUBSEC_LOG"
 out=$(env -u CLOUDFLARE_API_TOKEN SHARE_ACCESS_DRY=1 bash "$SH" prune 2>&1 1>/dev/null); rc=$?
-check "prune without a token: exit 0, names the deferred app" "1" "$([[ $rc == 0 ]] && grep -c "Access app for $d_id awaits deletion; run 'share prune' with a token (the stored one, or CLOUDFLARE_API_TOKEN)" <<<"$out")"
+check "prune without a token: exit 0, names the deferred app" "1" "$([[ $rc == 0 ]] && grep -c "Access app for $d_id awaits deletion; run 'handout prune' with a token (the stored one, or CLOUDFLARE_API_TOKEN)" <<<"$out")"
 check "prune without a token: row and bytes gone" "1" "$([[ -z $(row_of "$d_id") && ! -e $SHARE_ROOT/pub/$d_id ]] && echo 1 || echo 0)"
 check "prune without a token: the app waits in access-pending" "1" "$(grep -c "^$d_id	$d_app	" "$apending")"
 check "prune without a token: no DELETE" "0" "$(grep -c 'DELETE app' "$alog")"
 check "prune without a token: the Keychain lookup hit the stub, not the real keychain" "1" "$(grep -c "^find-generic-password share-api:$SHARE_HOSTNAME$" "$STUBSEC_LOG")"
-check "status prints the pending count" "1" "$(env -u CLOUDFLARE_API_TOKEN bash "$SH" status 2>&1 >/dev/null | grep -c "1 Access app(s) await deletion; run 'share prune' with a token (the stored one, or CLOUDFLARE_API_TOKEN)")"
+check "status prints the pending count" "1" "$(env -u CLOUDFLARE_API_TOKEN bash "$SH" status 2>&1 >/dev/null | grep -c "1 Access app(s) await deletion; run 'handout prune' with a token (the stored one, or CLOUDFLARE_API_TOKEN)")"
 check "state counts it" "1" "$(bash "$SH" state | jq .access_pending)"
 check "ls with a token for another account warns and skips, exit 0" "1" "$(SHARE_ACCESS_DRY=1 SHARE_ACCESS_DRY_ZONES=0 CLOUDFLARE_API_TOKEN=faketoken bash "$SH" ls >/dev/null 2>&1; echo "rc=$?" | grep -c 'rc=0')"
 check "ls with a token for another account names the skip" "1" "$(SHARE_ACCESS_DRY=1 SHARE_ACCESS_DRY_ZONES=0 CLOUDFLARE_API_TOKEN=faketoken bash "$SH" ls 2>&1 >/dev/null | grep -c 'skipping the Access check')"
@@ -1612,7 +1632,7 @@ check "the @encsep route precedes file_server in the adapted config" "1" "$(cadd
 echo "--- rows 23, 23b, 23c, 23d: a lost POST is found by its nonce, only after Access read is proven ---"
 areset
 out=$(SHARE_ACCESS_DRY_POST=lost acc add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null); rc=$?
-check "lost POST: the add dies naming the rerun" "1" "$([[ $rc == 1 ]] && grep -c 'did not answer the Access app create.*rerun the same share add' <<<"$out")"
+check "lost POST: the add dies naming the rerun" "1" "$([[ $rc == 1 ]] && grep -c 'did not answer the Access app create.*rerun the same handout add' <<<"$out")"
 nonce=$(awk -F'\t' '{print $2}' "$apending" | sed -n 's/^-://p')
 check "lost POST: the pending line is -:<nonce>" "1" "$(grep -cE "^[0-9a-f]{6}	-:[0-9a-f]{8}	" "$apending")"
 check "lost POST: the logged body's name ends in that nonce" "1" "$(sed -n 's/^POST app (lost) //p' "$alog" | jq -r .name | grep -c " $nonce\$")"
@@ -1687,7 +1707,7 @@ acc prune >/dev/null 2>&1
 check "the next interactive prune deletes it" "1" "$(grep -c "^DELETE app $x_app$" "$alog")"
 : >"$apending"
 
-echo "--- rows 28, 29: share api-token stores, then the read-only preflight names each scope ---"
+echo "--- rows 28, 29: handout api-token stores, then the read-only preflight names each scope ---"
 areset
 rm -f "$SHARE_CONFIG_DIR/config"
 out=$(acc api-token --cmd 'printf faketoken' 2>&1 1>/dev/null); rc=$?
@@ -1703,7 +1723,7 @@ check "stdin: the value never reached the stub's argv or log" "0" "$(grep -c 'to
 check "stdin: the preflight ran and read the keychain item" "1" "$([[ $rc == 0 ]] && grep -c "^  ok       token found (keychain share-api:$SHARE_HOSTNAME)$" <<<"$out")"
 check "the stored token wins over the environment" "1" "$(SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" SEC_ITEM=stored acc api-token --check 2>&1 1>/dev/null | grep -c 'token found (keychain')"
 out=$(acc api-token --cmd $'printf a\nprintf b' 2>&1 1>/dev/null); rc=$?
-check "row 37: api-token --cmd with a line break is refused" "1" "$([[ $rc == 1 ]] && grep -c 'usage: share api-token' <<<"$out")"
+check "row 37: api-token --cmd with a line break is refused" "1" "$([[ $rc == 1 ]] && grep -c 'usage: handout api-token' <<<"$out")"
 # shellcheck disable=SC2002 # cat keeps a missing file a count of 0; a redirect would fail instead
 check "row 37: the refused --cmd wrote no config line" "0" "$(cat "$SHARE_CONFIG_DIR/config" 2>/dev/null | grep -c '^api_token_cmd=')"
 seclines=$(wc -l <"$WORK/sec.log" | tr -d ' ')
@@ -1722,9 +1742,9 @@ out=$(pre env SHARE_ACCESS_DRY_ORGS=deny); rc=$?
 check "Groups Read denied: MISSING names the scope, exit 1" "1" "$([[ $rc == 1 ]] && grep -c '^  MISSING  Access: Organizations, Identity Providers, and Groups Read' <<<"$out")"
 out=$(pre env SHARE_ACCESS_DRY_APPS=deny); rc=$?
 check "Apps Edit denied: MISSING names the scope, exit 1" "1" "$([[ $rc == 1 ]] && grep -c '^  MISSING  Access: Apps and Policies Edit .*-> 10000$' <<<"$out")"
-check "a MISSING line ends with the fix command" "1" "$(grep -c "then run: share api-token --check$" <<<"$out")"
+check "a MISSING line ends with the fix command" "1" "$(grep -c "then run: handout api-token --check$" <<<"$out")"
 out=$(pre env SHARE_ACCESS_DRY_ORGS=off); rc=$?
-check "Access not enabled: the enable hint, exit 1" "1" "$([[ $rc == 1 ]] && grep -c 'enable Zero Trust for this account in the Cloudflare dashboard, then: share api-token --check$' <<<"$out")"
+check "Access not enabled: the enable hint, exit 1" "1" "$([[ $rc == 1 ]] && grep -c 'enable Zero Trust for this account in the Cloudflare dashboard, then: handout api-token --check$' <<<"$out")"
 out=$(pre env SHARE_ACCESS_DRY_ZONES=2); rc=$?
 check "two active zones: ambiguous, exit 1" "1" "$([[ $rc == 1 ]] && grep -c '^  MISSING  ambiguous: 2 active zones named example.test' <<<"$out")"
 out=$(pre env SHARE_ACCESS_DRY_ZONES=0); rc=$?
@@ -1733,13 +1753,13 @@ check "no zone: Zone: Read MISSING, exit 1" "1" "$([[ $rc == 1 ]] && grep -c '^ 
 echo "--- row 32: every error line names its fix (a command or a URL) ---"
 printf 'api_token_cmd=false\n' >"$SHARE_CONFIG_DIR/config"
 out=$(acc add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null)
-check "api_token_cmd failure names the exit code and the replacement" "1" "$(grep -c "api_token_cmd failed (exit 1); run it by hand to see why, or replace it: share api-token --cmd '<command>'$" <<<"$out")"
+check "api_token_cmd failure names the exit code and the replacement" "1" "$(grep -c "api_token_cmd failed (exit 1); run it by hand to see why, or replace it: handout api-token --cmd '<command>'$" <<<"$out")"
 rm -f "$SHARE_CONFIG_DIR/config"
-fix_lines() { grep -E '^share: |^  fix:' | grep -v 'checking the API token\|waiting .*for Cloudflare Access' | grep -vE '(share (api-token|add|prune|teardown|setup|rm)[^;]*|https?://[^ ]+|\(hostname\)>'"'"'|share add \(Access can take several minutes on a new app\))$' ; }
+fix_lines() { grep -E '^handout: |^  fix:' | grep -v 'checking the API token\|waiting .*for Cloudflare Access' | grep -vE '(handout (api-token|add|prune|teardown|setup|rm)[^;]*|https?://[^ ]+|\(hostname\)>'"'"'|handout add \(Access can take several minutes on a new app\))$' ; }
 check "no fix-naming line ends without a command or a URL" "" "$( { pre env SHARE_ACCESS_DRY_APPS=deny; pre env SHARE_ACCESS_DRY_ORGS=off; SHARE_ACCESS_WAIT=1 SHARE_ACCESS_POLL=1 acc add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null; printf 'mode=quick\n' >"$SHARE_CONFIG_DIR/config"; acc add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null; rm -f "$SHARE_CONFIG_DIR/config"; } | fix_lines)"
 rm -f "$afix"
 
-echo "--- row 33: share api-token with no argument opens the prefilled form and reads a hidden paste ---"
+echo "--- row 33: handout api-token with no argument opens the prefilled form and reads a hidden paste ---"
 if command -v expect >/dev/null; then
   mkdir -p "$WORK/fakeopen"
   # shellcheck disable=SC2016 # literal code for the stub, not this shell's expansion
@@ -1757,7 +1777,7 @@ expect {
 }
 expect eof
 EXP
-  tty_run() { # tty_run [VAR=value]...: share api-token under a pseudo-terminal, the token typed at the prompt
+  tty_run() { # tty_run [VAR=value]...: handout api-token under a pseudo-terminal, the token typed at the prompt
     env "$@" OPEN_LOG="$WORK/open.log" SEC_LOG="$WORK/sec.log" SEC_ITEM=tty-token PATH="$WORK/fakeopen:$WORK/fakesec:$PATH" \
       SHARE_ACCESS_DRY=1 CLOUDFLARE_API_TOKEN=faketoken expect -f "$WORK/tty.exp" "$SH" 2>&1 | tr -d '\r'
   }
@@ -1935,16 +1955,16 @@ check "row 12b: access-pending empty" "0" "$(awk 'NF' "$apending" 2>/dev/null | 
 rm -f "$SHARE_CONFIG_DIR/config"; : >"$apending"
 SHARE_LIVE_CHECK=0 bash "$SH" start >/dev/null 2>&1
 bash "$SH" rm "$(cut -d/ -f4 <<<"$pct_url")" >/dev/null 2>&1
-check "help shows the --access and api-token lines" "2" "$(bash "$SH" --help | grep -c '^  share add ... --access\|^  share api-token')"
+check "help shows the --access and api-token lines" "2" "$(bash "$SH" --help | grep -c '^  handout add ... --access\|^  handout api-token')"
 fi
 
 if section "skill"; then
-check "skill prints a SKILL.md" "1" "$(bash "$SH" skill | grep -c '^name: share')"
-check "skill teaches --access and api-token" "2" "$(bash "$SH" skill | grep -c -- '--access email:<a>,<b>\|share api-token \[--cmd')"
-check "skill teaches --profile and share profiles" "1" "$(bash "$SH" skill | grep -c -- '--profile <name> <command>.*share profiles')"
+check "skill prints a SKILL.md" "1" "$(bash "$SH" skill | grep -c '^name: handout')"
+check "skill teaches --access and api-token" "2" "$(bash "$SH" skill | grep -c -- '--access email:<a>,<b>\|handout api-token \[--cmd')"
+check "skill teaches --profile and handout profiles" "1" "$(bash "$SH" skill | grep -c -- '--profile <name> <command>.*handout profiles')"
 check "skill teaches the r2 backend" "1" "$(bash "$SH" skill | grep -c -- 'setup <hostname> --backend r2 --bucket <name>. | An R2 profile')"
 SHARE_SKILL_DIR="$WORK/skilldir" bash "$SH" skill --install >/dev/null
-check "skill --install writes SKILL.md" "share" "$(sed -n 's/^name: //p' "$WORK/skilldir/SKILL.md")"
+check "skill --install writes SKILL.md" "handout" "$(sed -n 's/^name: //p' "$WORK/skilldir/SKILL.md")"
 fi
 
 if section "r2 backend: setup argument refusals"; then
@@ -1956,7 +1976,7 @@ r2p() { # r2p <verb...>: the r2 test profile under its own HOME, no SHARE_* path
 r2conf="$R2H/.config/share/profiles/r2x/config"
 out=$(r2p setup r2x.example.test --backend r2 2>&1); rc=$?
 check "r2 setup without --bucket refuses" "1" "$rc"
-check "r2 usage line printed" "1" "$(grep -c 'usage: share setup <hostname> --backend r2 --bucket <name>' <<<"$out")"
+check "r2 usage line printed" "1" "$(grep -c 'usage: handout setup <hostname> --backend r2 --bucket <name>' <<<"$out")"
 out=$(r2p setup r2x.example.test --backend r2 --bucket Bad_Bucket 2>&1); rc=$?
 check "bad bucket name refuses" "1" "$rc"
 check "bad bucket named" "1" "$(grep -c 'bad bucket name' <<<"$out")"
@@ -1995,7 +2015,7 @@ check "r2 profile: service install refuses" "1" "$rc"
 check "install names no local server" "1" "$(grep -c 'nothing runs on this machine' <<<"$out")"
 out=$(r2p teardown --purge 2>&1 </dev/null); rc=$?
 check "r2 profile: teardown without --yes refuses" "1" "$rc"
-check "the teardown refusal names --yes --purge" "1" "$(grep -c "rerun 'share --profile r2x teardown --yes --purge' to confirm" <<<"$out")"
+check "the teardown refusal names --yes --purge" "1" "$(grep -c "rerun 'handout --profile r2x teardown --yes --purge' to confirm" <<<"$out")"
 out=$(r2p add 9999 2>&1); rc=$?
 check "r2 profile: live add refuses" "1" "$rc"
 check "live add names the tunnel profile" "1" "$(grep -c 'live shares and --host need a tunnel profile' <<<"$out")"
@@ -2017,7 +2037,7 @@ fi
 if section "r2 backend: an older share refuses an r2 profile (compat)"; then
 # v0.7.1 is the last release without the r2 backend; origin/main learned r2 once it merged
 main_bin="$WORK/share-main" old_bin="$WORK/share-v0.7.1"
-git -C "$(dirname "$SH")/.." show origin/main:bin/share >"$main_bin" 2>/dev/null || : >"$main_bin"
+git -C "$(dirname "$SH")/.." show origin/main:bin/handout >"$main_bin" 2>/dev/null || git -C "$(dirname "$SH")/.." show origin/main:bin/share >"$main_bin" 2>/dev/null || : >"$main_bin"   # bin/share is the alias symlink once the rename lands
 if git -C "$(dirname "$SH")/.." show v0.7.1:bin/share >"$old_bin" 2>/dev/null; then
   R22="$WORK/r22home"; mkdir -p "$R22/.config/share/profiles/r2x"
   printf 'backend=r2\nhostname=r2x.example.test\nzone=example.test\nbucket=ok-bucket\nport=r2\n' >"$R22/.config/share/profiles/r2x/config"
@@ -2097,6 +2117,9 @@ if [[ -s $main_bin ]]; then
   }
   for c in main new; do   # the listing additions are the one allowed difference, with the groundwork's additive state keys
     caddy_norm "$WORK/compat-$c/Caddyfile"
+    if [[ $c == main ]]; then   # main may predate the rename: its messages name share where this one names handout
+      for f in "$WORK/compat-main"/*.out "$WORK/compat-main"/*.err; do [[ -f $f ]] && rename_norm <"$f" >"$f.n" && mv -f "$f.n" "$f"; done
+    fi
     sed -i.bak -E 's/^(machine|live|cloud) +[a-z]+ +by=[a-z0-9.-]+  (https:)/\2/' "$WORK/compat-$c/ls.out"
     # size= is du of the whole pub/<id>, and that tree holds the generated index.html, which the media-aware page made larger on purpose
     sed -i.bak -E 's/ size=[0-9.]+[BKMGT]? / size=N /' "$WORK/compat-$c/ls.out"
@@ -2589,7 +2612,7 @@ check "row 13: hits takes the pasted link" "1" "$(grep -c '^3 hits, 2 visitors' 
 out=$(CLOUDFLARE_API_TOKEN=faketoken r2a hits "abc' OR '1'='1" 2>&1); rc=$?
 check "row 13: an injected id is refused before any call" "1 0" "$rc $(grep -c . "$rlog" || true)"
 printf '%s\n' '{"meta":[],"data":[{"hits":"0","visitors":"0","last":"1970-01-01 00:00:00"}],"rows":1}' >"$DRYA/.cf/sql.json"
-hnote130002="this machine counts cloud links only; if 130002 is a machine link, its stats are on the tenant's origin: share --profile r2x hits 130002 there"
+hnote130002="this machine counts cloud links only; if 130002 is a machine link, its stats are on the tenant's origin: handout --profile r2x hits 130002 there"
 check "row 13: no visits on an id another publisher added: the count plus the machine-link note" "0 hits, 0 visitors|$hnote130002" "$(CLOUDFLARE_API_TOKEN=faketoken r2a hits 130002 2>&1 | paste -sd'|' -)"
 r2a r2-own put 130002 o/130002.0badf00d/ "$WORK/x"
 check "row 13: no visits on this install's own cloud link: the bare count" "0 hits, 0 visitors" "$(CLOUDFLARE_API_TOKEN=faketoken r2a hits 130002 2>&1)"
@@ -2611,7 +2634,7 @@ check "row 14: status says gated links are off on a Worker with no TEAM" "1" "$(
 check "row 14: status prints no version line when the pair matches" "0" "$(grep -c 'whoever holds the admin token' <<<"$out" || true)"
 printf '{"bindings":[{"type":"plain_text","name":"VERSION","text":"%s"},{"type":"plain_text","name":"SHA","text":"000000000000"}]}\n' "$wv14" >"$DRYA/.cf/script.json"
 out=$(r2a status 2>&1)
-check "row 14: status names a Worker on another version" "1" "$(grep -c "runs $wv14 000000000000; this share ships $wv14 $wsha14" <<<"$out")"
+check "row 14: status names a Worker on another version" "1" "$(grep -c "runs $wv14 000000000000; this handout ships $wv14 $wsha14" <<<"$out")"
 out=$(SHARE_R2_DRY_HEALTHZ=down r2a status 2>&1)
 check "row 14: status names a Worker that is down" "1" "$(grep -c '^worker: *DOWN: 000$' <<<"$out")"
 printf 'not json\n' >"$DRYA/m/130009"
@@ -2783,7 +2806,7 @@ check "row 25b: the other publisher's record and prefix stay; the add's own pref
 echo "--- row 25d: a lost gated publish that committed; the sweep keeps the app ---"
 greset
 out=$(SHARE_TEST_IDS=ab25d1 SHARE_R2_DRY_PUT=lost-record r2g add --access email:a@x.io "$WORK/g.txt" 2>&1); rc=$?
-check "row 25d: the add dies naming the prune" "1 1" "$rc $(grep -c "answered HTTP 000; rerun the same share --profile r2x add (the next 'share --profile r2x prune' with the token settles its Access app)" <<<"$out")"
+check "row 25d: the add dies naming the prune" "1 1" "$rc $(grep -c "answered HTTP 000; rerun the same handout --profile r2x add (the next 'handout --profile r2x prune' with the token settles its Access app)" <<<"$out")"
 check "row 25d: the record landed, the trap kept its prefix, the line stays" "1 1 1" "$([[ -e $DRYA/m/ab25d1 ]] && echo 1 || echo 0) $([[ -n $(r2a r2-list "$(gpfx ab25d1)") ]] && echo 1 || echo 0) $(grep -c '^ab25d1	' "$gpend")"
 : >"$rlog"
 r2g prune >/dev/null 2>&1
@@ -2791,7 +2814,7 @@ check "row 25d: the sweep read the record fresh (after the snapshot's read), dro
 check "row 25d: the share still lists" "1" "$(r2a ls 2>/dev/null | grep -c 'id=ab25d1 ')"
 r2g rm ab25d1 >/dev/null 2>&1; r2g rm ab1101 >/dev/null 2>&1
 
-echo "--- DEC-007: share api-token on r2 refuses an admin or account-wide token ---"
+echo "--- DEC-007: handout api-token on r2 refuses an admin or account-wide token ---"
 mkdir -p "$WORK/r2sec"
 cat >"$WORK/r2sec/security" <<'EOF2'
 #!/bin/bash
@@ -2871,9 +2894,9 @@ check "row 15: plain: the bucket is unchanged and no call was logged" "$before 0
 check "row 15: plain: the stored token went, and it says what stays" "1 1" "$(grep -c '^delete-generic-password$' "$WORK/r2sec.log") $(grep -c 'bucket ok-bucket, the Worker, and every share on r2x.example.test stay for the other publishers' <<<"$out")"
 mkdir -p "${r2conf%/*}"; command cp "$WORK/r2x.config.keep" "$r2conf"
 out=$(r2a teardown 2>&1 </dev/null); rc=$?
-check "row 15: teardown without --yes and no terminal refuses" "1 1" "$rc $(grep -c "rerun 'share --profile r2x teardown --yes' to confirm" <<<"$out")"
+check "row 15: teardown without --yes and no terminal refuses" "1 1" "$rc $(grep -c "rerun 'handout --profile r2x teardown --yes' to confirm" <<<"$out")"
 out=$(r2a teardown --yes --bogus 2>&1); rc=$?
-check "row 15: an unknown teardown flag refuses" "1 1" "$rc $(grep -c 'usage: share teardown \[--yes\] \[--purge\]' <<<"$out")"
+check "row 15: an unknown teardown flag refuses" "1 1" "$rc $(grep -c 'usage: handout teardown \[--yes\] \[--purge\]' <<<"$out")"
 
 rpurge() { # rpurge <label> <message> <cmd...>: exit 1, the message, no write logged, the config and bucket untouched
   : >"$rlog"; local b; b="$(bsum)"
@@ -2886,7 +2909,7 @@ rpurge() { # rpurge <label> <message> <cmd...>: exit 1, the message, no write lo
 G_TOK="" rpurge "--purge with no admin token" "teardown --purge needs the admin token: set CLOUDFLARE_API_TOKEN, or store a command that prints it" tsec r2g teardown --yes --purge
 SHARE_R2_DRY_ROLE=deny rpurge "--purge with a publisher token" "purge needs the admin token" tsec r2g teardown --yes --purge
 pscript other.example.test
-rpurge "--purge with a foreign Worker (bindings name another host)" "is not share's Worker for r2x.example.test on bucket ok-bucket" tsec r2g teardown --yes --purge
+rpurge "--purge with a foreign Worker (bindings name another host)" "is not handout's Worker for r2x.example.test on bucket ok-bucket" tsec r2g teardown --yes --purge
 pscript r2x.example.test
 printf '{"v":1,"host":"other.example.test"}\n' >"$DRYA/share.json"
 rpurge "--purge with a marker for another host" "share.json does not name r2x.example.test" tsec r2g teardown --yes --purge
@@ -2994,7 +3017,7 @@ jq -c '(.bindings[] | select(.name == "VERSION")).text = "99"' "$DRYS/.cf/script
 : >"$slog"
 out=$(r2s 2>&1); rc=$?
 check "newer deployed version: refused" "1" "$rc"
-check "newer: names --force" "1" "$(grep -c 'newer than this share' <<<"$out")"
+check "newer: names --force" "1" "$(grep -c 'newer than this handout' <<<"$out")"
 check "newer: no write logged" "0" "$(writes)"
 : >"$slog"
 out=$(r2s --force 2>&1); rc=$?
@@ -3023,7 +3046,7 @@ s_refuse "a DNS record" "already has a DNS record"
 s_fresh; echo '{"hostname":"r2s.example.test","service":"df-memo"}' >"$DRYS/.cf/domain.json"
 s_refuse "another Worker's domain, even with --force" "custom domain of another Worker" --force
 s_fresh; echo '{"bindings":[{"type":"plain_text","name":"HOST","text":"other.example.test"},{"type":"r2_bucket","name":"BUCKET","bucket_name":"ok-bucket"},{"type":"plain_text","name":"VERSION","text":"1"}]}' >"$DRYS/.cf/script.json"
-s_refuse "a script bound to another host" "not share's Worker"
+s_refuse "a script bound to another host" "not handout's Worker"
 s_fresh
 SHARE_R2_DRY_DOMAINS=500 s_refuse "a 500 on the domains read" "custom domains answered HTTP 500"
 s_fresh; : >"$slog"
@@ -3065,7 +3088,7 @@ check "join: no DNS, domain, or Access read" "0" "$(grep -cE 'dns_records|worker
 check "join: bucket unchanged" "$before" "$(objs)"
 check "join: config written" "1" "$(grep -c '^backend=r2$' "$jconf")"
 check "join: config bucket and sentinel" "2" "$(grep -cE '^(bucket=ok-bucket|port=r2)$' "$jconf")"
-check "join: the version mismatch line" "1" "$(grep -c "runs $wv 000000000000; this share ships $wv $wsha; whoever holds the admin token reruns" <<<"$out")"
+check "join: the version mismatch line" "1" "$(grep -c "runs $wv 000000000000; this handout ships $wv $wsha; whoever holds the admin token reruns" <<<"$out")"
 check "join: next step names api-token" "1" "$(grep -c 'api-token' <<<"$out")"
 rm -f "$jconf" "$DRYS/share.json"; : >"$jlog"
 out=$(r2j 2>&1); rc=$?
@@ -3106,7 +3129,7 @@ out=$(SHARE_TEST_IDS=f00002 tn off add --local "$tf" 2>&1); rc=$?
 check "row 2: R2 off, add --local f is local" "0 1" "$rc $(trow f00002 "$toffroot" | grep -c .)"
 out=$(SHARE_TEST_IDS=f00003 tn off add --cloud "$tf" 2>&1); rc=$?
 check "row 2: R2 off, add --cloud f is refused" "1" "$rc"
-check "row 2: R2 off, the refusal names the admin's command" "1" "$(grep -c "R2 is off for off.example.test; the tenant admin enables it with 'share --profile off setup off.example.test --r2 --bucket <name>'" <<<"$out")"
+check "row 2: R2 off, the refusal names the admin's command" "1" "$(grep -c "R2 is off for off.example.test; the tenant admin enables it with 'handout --profile off setup off.example.test --r2 --bucket <name>'" <<<"$out")"
 check "row 2: R2 off, no bucket call and no new row" "0 2" "$([[ -e $toffroot/r2-calls.log ]] && echo 1 || echo 0) $(tnrows "$toffroot")"
 # R2 on, storage_default=local
 mkdir -p "$troot"; : >"$tlog"
@@ -3126,7 +3149,7 @@ check "row 2: R2 on, add --cloud <port> is refused" "1 1" "$rc $(grep -c "live l
 out=$(SHARE_TEST_IDS=a00009 tn org add --cloud --host x.example.test "$tf" 2>&1); rc=$?
 check "row 2: R2 on, add --cloud --host is refused" "1 1" "$rc $(grep -c "live links and --host stay on the origin's tunnel" <<<"$out")"
 out=$(SHARE_TEST_IDS=a00009 tn org add --cloud --local "$tf" 2>&1); rc=$?
-check "row 2: R2 on, add --cloud --local is a usage error" "1 1" "$rc $(grep -c 'usage: share add' <<<"$out")"
+check "row 2: R2 on, add --cloud --local is a usage error" "1 1" "$rc $(grep -c 'usage: handout add' <<<"$out")"
 check "row 2: the refusals log no PUT and write no row" "$nput $nrows 0" "$(tputs) $(tnrows "$troot") $([[ -e $DRYT/m/a00009 ]] && echo 1 || echo 0)"
 # R2 on, storage_default=cloud
 sed -i.bak 's/^storage_default=local$/storage_default=cloud/' "$torg" && rm -f "$torg.bak"
@@ -3212,7 +3235,7 @@ check "row 3: member refresh of a machine row is refused" "1 1 0" "$rc $(grep -c
 : >"$mlog"
 out=$(tm hits e10001 2>&1); rc=$?
 check "row 3: member hits keeps one account call and no bucket read (SPEC-007 row 13)" "0 0 1" "$rc $(grep -c '^GET' "$mlog") $(grep -c '^SQL' "$mlog")"
-check "row 3: member hits of a machine id never prints a bare 0" "0 hits, 0 visitors|this machine counts cloud links only; if e10001 is a machine link, its stats are on the tenant's origin: share --profile org hits e10001 there" "$(paste -sd'|' - <<<"$out")"
+check "row 3: member hits of a machine id never prints a bare 0" "0 hits, 0 visitors|this machine counts cloud links only; if e10001 is a machine link, its stats are on the tenant's origin: handout --profile org hits e10001 there" "$(paste -sd'|' - <<<"$out")"
 out=$(tm hits e20001 2>&1)
 check "row 3: member hits of its own cloud link is the bare count" "0 hits, 0 visitors" "$out"
 : >"$mlog"
@@ -3410,7 +3433,7 @@ out=$(tvm setup ten.example.test --backend r2 --bucket ok-bucket 2>&1); rc=$?
 check "join: a member joins a tenant; the hint names --r2 on the origin" "0 1" "$rc $(grep -c "runs '.* setup ten.example.test --r2 --bucket ok-bucket' on the tenant's origin" <<<"$out")"
 cp "$WORK/ten.script" "$DRYV/.cf/script.json"; TVM_ENV=(); : >"$TVM/share/profiles/ten/r2-calls.log"
 out=$(TVM_TOK=admintoken tvm teardown --yes --purge 2>&1); rc=$?
-check "purge: a member purge of a tenant is refused before any write" "1 1 0" "$rc $(grep -c "its origin runs 'share --profile ten setup ten.example.test --no-r2' first" <<<"$out") $(grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$TVM/share/profiles/ten/r2-calls.log" || true)"
+check "purge: a member purge of a tenant is refused before any write" "1 1 0" "$rc $(grep -c "its origin runs 'handout --profile ten setup ten.example.test --no-r2' first" <<<"$out") $(grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$TVM/share/profiles/ten/r2-calls.log" || true)"
 # row 13: --no-r2 is the rollback without an alias
 : >"$vlog"
 out=$(tv setup ten.example.test --no-r2 2>&1); rc=$?
@@ -3454,7 +3477,7 @@ check "row 12: quick mode is refused before any call" "1 1 0" "$rc $(grep -c 'is
 s_fresh; echo dwarves.cloudflareaccess.com >"$DRYS/.cf/team"; out=$(r2s 2>&1)
 jq -c '.bindings += [{"type": "plain_text", "name": "PASS", "text": "1"}, {"type": "plain_text", "name": "ALIASES", "text": ""}]' "$DRYS/.cf/script.json" >"$DRYS/.cf/s.tmp" && mv -f "$DRYS/.cf/s.tmp" "$DRYS/.cf/script.json"
 : >"$slog"; out=$(r2s --force 2>&1); rc=$?
-check "row 32: a tenant Worker (PASS) is refused with --force, before any write" "1 1 0" "$rc $(grep -c "run 'share --profile r2s setup r2s.example.test --r2 --bucket ok-bucket' on the origin" <<<"$out") $(grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$slog" || true)"
+check "row 32: a tenant Worker (PASS) is refused with --force, before any write" "1 1 0" "$rc $(grep -c "run 'handout --profile r2s setup r2s.example.test --r2 --bucket ok-bucket' on the origin" <<<"$out") $(grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$slog" || true)"
 s_fresh; out=$(r2s 2>&1)
 printf '{"v":1,"host":"r2s.example.test","aliases":["f.example.test"]}\n' >"$DRYS/share.json"
 : >"$slog"; out=$(r2s --force 2>&1); rc=$?
@@ -3559,9 +3582,9 @@ for inj in "PUT share.json" "API POST /zones/*/workers/routes" "API PUT /account
   afresh
   out=$(SHARE_R2_DRY_FAIL="$inj" afold 2>&1); rc=$?
   check "row 30 ($inj): the die prints the alias rollback list, not --no-r2 alone" "1 1 1 1 0" "$rc $(grep -c '^alias rollback for f.example.test, in this order' <<<"$out") \
-$(grep -c '^  6. share --profile ten setup ten.example.test --no-r2$' <<<"$out") $(grep -c 'roll back with the alias rollback list above' <<<"$out") $(grep -c 'roll back with: share' <<<"$out")"
+$(grep -c '^  6. handout --profile ten setup ten.example.test --no-r2$' <<<"$out") $(grep -c 'roll back with the alias rollback list above' <<<"$out") $(grep -c 'roll back with: share' <<<"$out")"
   : >"$vlog"; out=$(tv setup ten.example.test --no-r2 2>&1); rc=$?
-  check "row 30 ($inj): --no-r2 refuses with the list while the alias is set" "1 1 1 0" "$rc $(grep -c '^share: f.example.test redirects here; run the alias rollback above first' <<<"$out") $(grep -c '^alias rollback for f.example.test' <<<"$out") $(vwrites)"
+  check "row 30 ($inj): --no-r2 refuses with the list while the alias is set" "1 1 1 0" "$rc $(grep -c '^handout: f.example.test redirects here; run the alias rollback above first' <<<"$out") $(grep -c '^alias rollback for f.example.test' <<<"$out") $(vwrites)"
   [[ $inj == ALIAS-301 ]] && break
   out=$(afold 2>&1); rc=$?
   check "row 30 ($inj): a rerun converges to row 14's end state" "0 $row14end" "$rc $(aend)"
@@ -3601,7 +3624,7 @@ mv -f "$WORK/row30-aside/index.tsv" "$vroot/index.tsv"
 for ptr in "$WORK/row30-aside"/0a000?; do [[ -f $ptr ]] && mv -f "$ptr" "$DRYV/m/"; done
 # without an alias the step-15 die names --no-r2
 vfresh; out=$(SHARE_R2_DRY_HEALTHZ=down tvsetup 2>&1); rc=$?
-check "row 30: with no alias the step-15 die names --no-r2" "1 1 0" "$rc $(grep -c 'roll back with: share --profile ten setup ten.example.test --no-r2$' <<<"$out") $(grep -c 'alias rollback' <<<"$out")"
+check "row 30: with no alias the step-15 die names --no-r2" "1 1 0" "$rc $(grep -c 'roll back with: handout --profile ten setup ten.example.test --no-r2$' <<<"$out") $(grep -c 'alias rollback' <<<"$out")"
 rm -rf "$T5H/.config/share/profiles/f" "$T5H/share/profiles/f"
 fi
 
@@ -3666,7 +3689,7 @@ check "row 17: a failing listing: local rows plus cloud_error, exit 0" "0 3 1" "
 printf 'api_token_cmd=touch %s; echo tok\n' "$WORK/l6/sentinel" >>"$lconf"
 out=$(TL_TOK="" TL_CF="" tl state 2>/dev/null); rc=$?
 check "row 17: an api_token_cmd source: no command run, cloud_error names api-token" "0 0 3 1" \
-  "$rc $([[ -e $WORK/l6/sentinel ]] && echo 1 || echo 0) $(jq '.shares | length' <<<"$out") $(jq -r '.cloud_error // ""' <<<"$out" | grep -c 'the menu reads cloud links only with a stored token: share --profile lst api-token')"
+  "$rc $([[ -e $WORK/l6/sentinel ]] && echo 1 || echo 0) $(jq '.shares | length' <<<"$out") $(jq -r '.cloud_error // ""' <<<"$out" | grep -c 'the menu reads cloud links only with a stored token: handout --profile lst api-token')"
 grep -v '^api_token_cmd=' "$lconf" >"$WORK/l6/c" && cat "$WORK/l6/c" >"$lconf"
 out=$(TL_TOK="" TL_CF=faketoken tl state 2>/dev/null); rc=$?
 check "row 17: an environment token: cloud_error, no bucket read" "0 1" "$rc $(jq -r '.cloud_error // ""' <<<"$out" | grep -c 'stored token')"
@@ -3710,7 +3733,7 @@ fi
 
 if section "import: one share moved in by migrate, its tar on stdin (row 18)"; then
 IMH="$WORK/import-home"; mkdir -p "$IMH" "$WORK/imp"
-imp() { # imp <args...>: share import into the default profile of a HOME with no setup (not_setup), stdin passed through
+imp() { # imp <args...>: handout import into the default profile of a HOME with no setup (not_setup), stdin passed through
   env -u SHARE_ROOT -u SHARE_CONFIG_DIR -u SHARE_PORT -u SHARE_HOSTNAME -u XDG_CONFIG_HOME -u SHARE_PROFILE -u SHARE_BACKEND -u SHARE_HOSTS \
     HOME="$IMH" SHARE_TUNNEL=0 bash "$SH" import "$@"
 }
@@ -4268,7 +4291,7 @@ gc_guard() { # gc_guard <label> <code> <verb...>: GCE (env) and GCX (config line
   gc_fx ${GCX[@]+"${GCX[@]}"}; o="$(gc_run "$GW_OLD" "$@" 2>&1 >/dev/null)"; orc=$?
   gc_fx ${GCX[@]+"${GCX[@]}"}; n="$(gc_run "$SH" "$@" 2>&1 >/dev/null)"; nrc=$?
   gc_fx ${GCX[@]+"${GCX[@]}"}; j="$(SHARE_ERROR_JSON=1 gc_run "$SH" "$@" 2>&1 >/dev/null)"; jrc=$?
-  check "CD-01 $label: stderr and exit byte-identical to HEAD's" "$orc|$o" "$nrc|$n"
+  check "CD-01 $label: stderr and exit byte-identical to HEAD's, but the name" "$orc|$(rename_norm <<<"$o")" "$nrc|$n"
   check "CD-02 $label: exit 1, the human line, then one JSON line with the code" "1|$n|$code" "$jrc|$(sed '$d' <<<"$j")|$(tail -1 <<<"$j" | jq -r .error.code 2>/dev/null)"
 }
 GCX=("hostname=gc.example.test" "tunnel_id=tid-gc" "port=$((base + 300))")
@@ -4290,14 +4313,14 @@ check "negative control NC-G1: a JSON line printed without SHARE_ERROR_JSON brea
 bash "$SH" start >/dev/null 2>&1   # the suite's own server serves here: serve again is the already-serving guard
 rec0="$(cat "$SHARE_ROOT/.serve-exit" 2>/dev/null || echo none)"
 o="$(bash "$GW_OLD" serve 2>&1 >/dev/null)"; orc=$?; n="$(bash "$SH" serve 2>&1 >/dev/null)"; nrc=$?; j="$(SHARE_ERROR_JSON=1 bash "$SH" serve 2>&1 >/dev/null)"; jrc=$?
-check "CD-01 serve while serving: stderr and exit byte-identical to HEAD's" "$orc|$o" "$nrc|$n"
+check "CD-01 serve while serving: stderr and exit byte-identical to HEAD's, but the name" "$orc|$(rename_norm <<<"$o")" "$nrc|$n"
 check "CD-02 serve while serving: the human line, then already_serving" "1|$n|already_serving" "$jrc|$(sed '$d' <<<"$j")|$(tail -1 <<<"$j" | jq -r .error.code 2>/dev/null)"
 check "CD-01 the already-serving refusal leaves the running server's exit record alone" "$rec0" "$(cat "$SHARE_ROOT/.serve-exit" 2>/dev/null || echo none)"
 msg=$'quote " back \\ tab\tend'
 j="$(SHARE_ERROR_JSON=1 bash "$SH" state-fn die not_in_hosts "$msg" "next step" 2>&1)"; rc=$?
 check "CD-03 a message holding a quote, a backslash and a tab: exit 1, the JSON line parses to the same text" "1|$msg|next step" "$rc|$(tail -1 <<<"$j" | jq -r .error.message)|$(tail -1 <<<"$j" | jq -r .error.next)"
 out="$(bash "$SH" state-fn die no_such_code "an unknown code" 2>&1)"; rc=$?
-check "an unknown code still dies with exit 1 and its line" "1|share: an unknown code" "$rc|$out"
+check "an unknown code still dies with exit 1 and its line" "1|handout: an unknown code" "$rc|$out"
 gc_listed() { # gc_listed <script>: 0 when every literal code a die_code call names is in that script's state-fn codes
   local codes missing; codes="$(bash "$1" state-fn codes)"
   missing="$(grep -oE 'die_code [a-z_]+' "$1" | awk '{print $2}' | sort -u | while read -r c; do grep -qx "$c" <<<"$codes" || echo "$c"; done)"
@@ -4312,10 +4335,10 @@ check "state: codes_v 1, no cloud_error_code without a cloud error" "1 false" "$
 gc_fx "backend=r2" "hostname=cd6.example.test" "zone=example.test" "bucket=ok-bucket" "port=r2" "r2_endpoint=https://acct-dry.r2.cloudflarestorage.com"
 GCE=(SHARE_TUNNEL=0 SHARE_R2_DRY=1 SHARE_R2_DRY_DIR="$GC/dry")
 out="$(SHARE_ERROR_JSON=1 gc_run "$SH" state 2>/dev/null)"
-check "CD-06 SHARE_ERROR_JSON=1: cloud_error is the human text, cloud_error_code the code" "the menu reads cloud links only with a stored token: share api-token|cloud_token_missing" \
+check "CD-06 SHARE_ERROR_JSON=1: cloud_error is the human text, cloud_error_code the code" "the menu reads cloud links only with a stored token: handout api-token|cloud_token_missing" \
   "$(jq -r '"\(.cloud_error)|\(.cloud_error_code)"' <<<"$out")"
 out="$(gc_run "$SH" state 2>/dev/null)"
-check "CD-06 without it: the same cloud_error, no code" "the menu reads cloud links only with a stored token: share api-token|false" "$(jq -r '"\(.cloud_error)|\(has("cloud_error_code"))"' <<<"$out")"
+check "CD-06 without it: the same cloud_error, no code" "the menu reads cloud links only with a stored token: handout api-token|false" "$(jq -r '"\(.cloud_error)|\(has("cloud_error_code"))"' <<<"$out")"
 GCE=()
 fi
 
@@ -4372,10 +4395,10 @@ check "JN-01 a clean run exits 0 and leaves ops/ empty" "0|" "$rc|$(gw_ops "$GA_
 pid="$(ga_hold setup-r2 3 5 setup ga.example.test --r2 --bucket b -- setup ga.example.test --no-r2)"
 kill -9 "$pid" 2>/dev/null; gw_gone "$pid"
 check "JN-02 kill -9 at step 3: the file names step 3 (bucket)" "3 bucket" "$(jq -r '"\(.step) \(.name)"' "$GA_ROOT/ops/setup-r2.$pid.json" 2>/dev/null)"
-check "JN-02 state.ops[0]: the verb, step 3 of 16, not alive, rerun and rollback" "setup-r2 3 16 false share setup ga.example.test --r2 --bucket b|share setup ga.example.test --no-r2" \
+check "JN-02 state.ops[0]: the verb, step 3 of 16, not alive, rerun and rollback" "setup-r2 3 16 false handout setup ga.example.test --r2 --bucket b|handout setup ga.example.test --no-r2" \
   "$(ga state | jq -r '.ops[0] | "\(.verb) \(.step) \(.of) \(.alive) \(.rerun)|\(.rollback)"')"
 check "JN-02 status prints the dead op with its rerun and rollback" "1" \
-  "$(ga status | grep -c '^setup-r2 stopped at step 3 of 16 (bucket); rerun: share setup ga.example.test --r2 --bucket b; or roll back: share setup ga.example.test --no-r2$')"
+  "$(ga status | grep -c '^setup-r2 stopped at step 3 of 16 (bucket); rerun: handout setup ga.example.test --r2 --bucket b; or roll back: handout setup ga.example.test --no-r2$')"
 out="$(ga state-fn op-run setup-r2 5)"; rc=$?
 check "JN-03 the rerun names the dead step, continues, and ends with an empty ops/" "0|1|" "$rc|$(grep -c '^previous setup-r2 died at step 3 (bucket); continuing$' <<<"$out")|$(gw_ops "$GA_ROOT")"
 pid="$(ga_hold setup-r2 2 4)"
@@ -4411,7 +4434,7 @@ check "JN-07 the next run of that verb removes its unreadable file" "teardown.99
 rm -f "$GA_ROOT/ops/"*.json
 err="$(SHARE_PROGRESS=1 ga state-fn op-run setup-r2 3 2>&1 >/dev/null)"
 check "JN-09 SHARE_PROGRESS=1: one progress line per step, in order, none starting 'share: '" "3|1:alias:16 2:worker:16 3:bucket:16|0" \
-  "$(grep -c . <<<"$err")|$(jq -r '.progress | "\(.step):\(.name):\(.of)"' <<<"$err" | tr '\n' ' ' | sed 's/ $//')|$(grep -c '^share: ' <<<"$err")"
+  "$(grep -c . <<<"$err")|$(jq -r '.progress | "\(.step):\(.name):\(.of)"' <<<"$err" | tr '\n' ' ' | sed 's/ $//')|$(grep -c '^handout: ' <<<"$err")"
 err="$(ga state-fn op-run setup-r2 3 2>&1 >/dev/null)"
 check "JN-09 unset: stderr empty, as it is today" "" "$err"
 # JN-12: a live journal written under one locale and zone reads alive under another
@@ -4432,7 +4455,7 @@ ga_release teardown 2; gw_gone "$pid"
 nasty=$'l1\nl2'; touched="$GA/touched"
 pid="$(ga_hold setup-r2 2 3 setup 'a;b' "\$(touch $touched)" "$nasty")"
 kill -9 "$pid" 2>/dev/null; gw_gone "$pid"
-want=share; for a in setup 'a;b' "\$(touch $touched)" "$nasty"; do printf -v q '%q' "$a"; want="$want $q"; done
+want=handout; for a in setup 'a;b' "\$(touch $touched)" "$nasty"; do printf -v q '%q' "$a"; want="$want $q"; done
 check "JN-13 rerun is each argument through printf %q; rerun_argv is the exact array" "$want|[\"setup\",\"a;b\",\"\$(touch $touched)\",\"l1\\nl2\"]" \
   "$(ga state | jq -r '.ops[0] | "\(.rerun)|\(.rerun_argv | tojson)"')"
 ga status >/dev/null 2>&1
@@ -4483,7 +4506,7 @@ check "G2b die-point loop: --no-r2 killed at each of its 2 steps converges on re
 # JN-08: SIGTERM (the Share Bar's Stop) at step 9, inside the index lock
 gt_fresh; pid="$(gt_kill_at setup-r2 9 TERM setup ten.example.test --r2 --bucket ok-bucket)"
 check "JN-08 SIGTERM at step 9: the traps released every lock; the file stays at step 9" "0 9" "$(find "$GT_ROOT" -maxdepth 1 -name '.lock-*' | grep -c .) $(jq -r .step "$GT_ROOT/ops/setup-r2.$pid.json")"
-check "JN-08 state.ops[0]: not alive, with rerun and rollback" "false|share --profile ten setup ten.example.test --r2 --bucket ok-bucket|share --profile ten setup ten.example.test --no-r2" \
+check "JN-08 state.ops[0]: not alive, with rerun and rollback" "false|handout --profile ten setup ten.example.test --r2 --bucket ok-bucket|handout --profile ten setup ten.example.test --no-r2" \
   "$(gwt state 2>/dev/null | jq -r '.ops[0] | "\(.alive)|\(.rerun)|\(.rollback)"')"
 out="$(gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1)"; rc=$?
 check "JN-08 the rerun continues and converges" "0 1" "$rc $(gt_on)"
@@ -4492,7 +4515,7 @@ for n in 12 13; do
   gt_fresh; gt_kill_at setup-r2 "$n" 9 setup ten.example.test --r2 --bucket ok-bucket >/dev/null
   nm="$(gwt status 2>/dev/null | grep '^setup-r2 stopped')"
   check "DP-G-01 status names step $n and both the rerun and the --no-r2 rollback" \
-    "setup-r2 stopped at step $n of 16 ($([[ $n == 12 ]] && echo marker || echo route)); rerun: share --profile ten setup ten.example.test --r2 --bucket ok-bucket; or roll back: share --profile ten setup ten.example.test --no-r2" "$nm"
+    "setup-r2 stopped at step $n of 16 ($([[ $n == 12 ]] && echo marker || echo route)); rerun: handout --profile ten setup ten.example.test --r2 --bucket ok-bucket; or roll back: handout --profile ten setup ten.example.test --no-r2" "$nm"
 done
 out="$(gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1)"; rc=$?
 check "DP-G-01 the rerun converges" "0 1 1" "$rc $(grep -c '^previous setup-r2 died at step 13 (route); continuing$' <<<"$out") $(gt_on)"
@@ -4507,7 +4530,7 @@ for n in 11 12; do
   gt_fresh; gt_kill_at setup-r2 "$n" 9 setup ten.example.test --r2 --bucket ok-bucket >/dev/null
   out="$(SHARE_ERROR_JSON=1 gwt add --cloud "$jn16" 2>&1)"; rc=$?
   check "JN-16 add --cloud over a dead setup-r2 at step $n: refused op_interrupted, next is the rerun, nothing written, the journal stays" \
-    "1|op_interrupted|share --profile ten setup ten.example.test --r2 --bucket ok-bucket|0|setup-r2.*.json" \
+    "1|op_interrupted|handout --profile ten setup ten.example.test --r2 --bucket ok-bucket|0|setup-r2.*.json" \
     "$rc|$(tail -1 <<<"$out" | jq -r .error.code 2>/dev/null)|$(tail -1 <<<"$out" | jq -r .error.next 2>/dev/null)|$(find "$GT_DRY/o" -type f 2>/dev/null | grep -c .)|$(gw_ops "$GT_ROOT" | sed 's/setup-r2\.[0-9]*\.json/setup-r2.*.json/')"
 done
 out="$(gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1)"; rc=$?
@@ -4520,7 +4543,7 @@ check "JN-16 a dead setup-r2 past step 12 (config and marker written) does not r
 gt_fresh; o="$(SHARE_R2_DRY_FAIL='API POST /zones/*/workers/routes' GT_SH="$GW_OLD" gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1 >/dev/null)"; orc=$?
 gt_fresh; n="$(SHARE_R2_DRY_FAIL='API POST /zones/*/workers/routes' gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1 >/dev/null)"; nrc=$?
 gt_fresh; j="$(SHARE_ERROR_JSON=1 SHARE_R2_DRY_FAIL='API POST /zones/*/workers/routes' gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1 >/dev/null)"; jrc=$?
-check "CD-01 setup --r2 dying at the route: stderr and exit byte-identical to HEAD's" "$orc|$o" "$nrc|$n"
+check "CD-01 setup --r2 dying at the route: stderr and exit byte-identical to HEAD's, but the name" "$orc|$(rename_norm <<<"$o")" "$nrc|$n"
 check "CD-02 the same with SHARE_ERROR_JSON=1: the human lines, then tenant_rollback" "1|$n|tenant_rollback" "$jrc|$(sed '$d' <<<"$j")|$(tail -1 <<<"$j" | jq -r .error.code 2>/dev/null)"
 check "JN-01 on the wired verb: a clean setup --r2 leaves ops/ empty" "0|" "$(gt_fresh; gwt setup ten.example.test --r2 --bucket ok-bucket >/dev/null 2>&1; echo "$?|$(gw_ops "$GT_ROOT")")"
 awk '{ if (NR > 1 && !(prev ~ /^  op_done$/ && $0 ~ /ready:      R2 is on/)) print prev; prev = $0 } END { print prev }' "$SH" >"$GW/share-no-op-done"
@@ -4644,7 +4667,7 @@ for v in start serve "service install" "add $GW/rl-src/f.txt"; do
   d="$(gr_fx rl08 hostname=mig.example.test tunnel_id=tid-m tunnel_name=t migrated=host-b)"; touch "$GR/rl08.marker"; sleep 1.1
   # shellcheck disable=SC2086 # $v is a verb and its argument on purpose
   out="$(SHARE_ERROR_JSON=1 gr "$d" $v 2>&1)"; rc=$?
-  [[ $rc == 1 && $(tail -1 <<<"$out" | jq -r .error.code 2>/dev/null) == profile_migrated && $(tail -1 <<<"$out" | jq -r .error.next) == "share teardown --yes" &&
+  [[ $rc == 1 && $(tail -1 <<<"$out" | jq -r .error.code 2>/dev/null) == profile_migrated && $(tail -1 <<<"$out" | jq -r .error.next) == "handout teardown --yes" &&
     -z "$(find "$d" -newer "$GR/rl08.marker" ! -name .serve-exit ! -path "$d/root" 2>/dev/null)" ]] || bad="$bad [$v]"   # root's own mtime moves with serve's exit record
 done
 check "RL-08 start, serve, service install, add on a migrated profile: refused profile_migrated before any write" "" "$bad"
@@ -4739,11 +4762,11 @@ gk_missing() { # gk_missing <label> <expected next> <out> <rc>: admin_token_miss
   [[ $4 == 1 && $(tail -1 <<<"$3" | jq -r .error.code) == admin_token_missing && $(tail -1 <<<"$3" | jq -r .error.next) == "$2" ]] || bad="$bad [$1]"
 }
 gt_fresh; c0="$(cksum <"$GT_CONF")"; out="$(SHARE_ERROR_JSON=1 GT_TOK='' gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1)"; rc=$?
-gk_missing "setup --r2" "share --profile ten admin-token --cmd '<command>'" "$out" "$rc"; [[ $(gt_writes) == 0 && "$(cksum <"$GT_CONF")" == "$c0" ]] || bad="$bad [--r2 wrote]"
+gk_missing "setup --r2" "handout --profile ten admin-token --cmd '<command>'" "$out" "$rc"; [[ $(gt_writes) == 0 && "$(cksum <"$GT_CONF")" == "$c0" ]] || bad="$bad [--r2 wrote]"
 gt_restore_on; c0="$(cksum <"$GT_CONF")"; out="$(SHARE_ERROR_JSON=1 GT_TOK='' gwt setup ten.example.test --no-r2 2>&1)"; rc=$?
-gk_missing "--no-r2" "share --profile ten admin-token --cmd '<command>'" "$out" "$rc"; [[ "$(cksum <"$GT_CONF")" == "$c0" ]] || bad="$bad [--no-r2 wrote]"
+gk_missing "--no-r2" "handout --profile ten admin-token --cmd '<command>'" "$out" "$rc"; [[ "$(cksum <"$GT_CONF")" == "$c0" ]] || bad="$bad [--no-r2 wrote]"
 gp_restore; out="$(SHARE_ERROR_JSON=1 gwp teardown --yes --purge 2>&1)"; rc=$?
-gk_missing "teardown --purge" "share --profile pg admin-token --cmd '<command>'" "$out" "$rc"; [[ -f $GP_DRY/.cf/script.json && -f $GP_CONF ]] || bad="$bad [--purge deleted]"
+gk_missing "teardown --purge" "handout --profile pg admin-token --cmd '<command>'" "$out" "$rc"; [[ -f $GP_DRY/.cf/script.json && -f $GP_CONF ]] || bad="$bad [--purge deleted]"
 check "AT-04 no admin token source: setup --r2, --no-r2, teardown --purge die admin_token_missing before any write" "" "$bad"
 gt_fresh; printf 'admin_token_cmd=%s\nminter_token_cmd=%s\n' "$GK/fail" "$GK/fail" >>"$GT_CONF"; rm -f "$GK/mark"
 for v in ls "add $GW/f.txt" prune state status "profiles --json"; do
@@ -4783,7 +4806,7 @@ gt_fresh; printf 'minter_token_cmd=%s\n' "$GK/exit3" >>"$GT_CONF"
 out="$(SHARE_ERROR_JSON=1 gwt minter-token --test 2>&1)"; rc=$?; gk_keep "$out"
 check "AT-11 the command exits 3: minter_token_cmd_failed naming exit 3, neither stream shown" "1|minter_token_cmd_failed|1|0" "$rc|$(tail -1 <<<"$out" | jq -r .error.code)|$(sed '$d' <<<"$out" | grep -c 'exited 3')|$(grep -c 'OUTTEXT-gw\|ERRTEXT-gw' <<<"$out")"
 gt_fresh; out="$(SHARE_ERROR_JSON=1 gwt minter-token --test 2>&1)"; rc=$?
-check "AT-12 neither source: minter_token_missing with its next" "1|minter_token_missing|share --profile ten minter-token --cmd '<command>'" "$rc|$(tail -1 <<<"$out" | jq -r .error.code)|$(tail -1 <<<"$out" | jq -r .error.next)"
+check "AT-12 neither source: minter_token_missing with its next" "1|minter_token_missing|handout --profile ten minter-token --cmd '<command>'" "$rc|$(tail -1 <<<"$out" | jq -r .error.code)|$(tail -1 <<<"$out" | jq -r .error.next)"
 gt_fresh; printf 'minter_token_cmd=%s\n' "$GK/fail" >>"$GT_CONF"; rm -f "$GK/mark"; gwt admin-token --test >/dev/null 2>&1
 check "AT-12 admin-token --test never runs minter_token_cmd" "0" "$(gk_marks)"
 gt_fresh; printf 'ttl=7d\nadmin_token_cmd=y\n' >>"$GT_CONF"; before="$(grep -nE '^(ttl|admin_token_cmd)=' "$GT_CONF")"
@@ -4792,11 +4815,11 @@ out="$(SHARE_ERROR_JSON=1 gwt minter-token --cmd $'x\ny' 2>&1)"; rc=$?
 check "AT-13 minter-token --cmd, --clear, then a newline: lines kept, written, dropped, refused untouched" "$before|1|0|1|config_value_bad|$c0" \
   "$(grep -nE '^(ttl|admin_token_cmd)=' "$GT_CONF")|$a1|$(grep -c '^minter_token_cmd=' "$GT_CONF")|$rc|$(tail -1 <<<"$out" | jq -r .error.code)|$(cksum <"$GT_CONF")"
 check "Q-SEC-7 no fixture token value in any captured output, call log, config or journal" "0 0" "$(grep -c gwadmintok0001 "$GK/all-out") $(grep -c gwmintertok0002 "$GK/all-out")"
-check "--help lists admin-token and minter-token" "1 1" "$(bash "$SH" --help | grep -c "share admin-token --cmd '<command>' | --clear | --test") $(bash "$SH" --help | grep -c "share minter-token --cmd '<command>' | --clear | --test")"
+check "--help lists admin-token and minter-token" "1 1" "$(bash "$SH" --help | grep -c "handout admin-token --cmd '<command>' | --clear | --test") $(bash "$SH" --help | grep -c "handout minter-token --cmd '<command>' | --clear | --test")"
 fi
 
 if section "state groundwork: G5"; then
-check "skill names share state first" "\`share state\`" "$(bash "$SH" skill | awk '/^## Before anything/ {f = 1; next} f && match($0, /`share [a-z-]+`/) {print substr($0, RSTART, RLENGTH); exit}')"
+check "skill names handout state first" "\`handout state\`" "$(bash "$SH" skill | awk '/^## Before anything/ {f = 1; next} f && match($0, /`handout [a-z-]+`/) {print substr($0, RSTART, RLENGTH); exit}')"
 gk_skill_ok() { local c sk; sk="$(bash "$1" skill)"; for c in $(bash "$1" state-fn codes); do grep -qF "\`$c\`" <<<"$sk" || return 1; done; return 0; }
 check "every code in share state-fn codes appears in the skill" "0" "$(gk_skill_ok "$SH"; echo $?)"
 sed 's/^caddy_failed|/brand_new_code|added to code_text only|share status\ncaddy_failed|/' "$SH" >"$GW/share-new-code"
@@ -4840,14 +4863,14 @@ gv_fx moved "${gv_cfg[@]}" migrated=host-b; check "SS-02 migrated: not_setup, [s
 gv_fx idle "${gv_cfg[@]}"; mkdir -p "$GVD/marker"; touch "$GVD/marker/m"; sleep 1.1
 check "SS-03 set up, not running: stopped, and [state, ready] equals HEAD's" "stopped/stopped stopped false|$(gv_head)" "$(gv_phase)|$(gv_new)"
 check "SS-03 state writes nothing" "" "$(find "$GVD/root" "$GVD/config" -newer "$GVD/marker/m" 2>/dev/null)"
-out="$(gv status 2>&1)"; check "SS-03 status keeps its stopped line" "1" "$(grep -c '^not serving: share start$' <<<"$out")"
+out="$(gv status 2>&1)"; check "SS-03 status keeps its stopped line" "1" "$(grep -c '^not serving: handout start$' <<<"$out")"
 GV_HOSTS=nobody; check "SS-04 not in hosts=: elsewhere, and [state, ready] equals HEAD's" "elsewhere/elsewhere stopped false|$(GV_HOSTS=nobody gv_head)" "$(gv_phase)|$(gv_new)"
-out="$(gv status 2>&1)"; check "SS-04 status says the machine is not in hosts=, not 'share start'" "1 0" "$(grep -c '^not serving here: this machine is not in hosts=nobody; links work while a machine in hosts= serves$' <<<"$out") $(grep -c '^not serving: share start$' <<<"$out")"
+out="$(gv status 2>&1)"; check "SS-04 status says the machine is not in hosts=, not 'handout start'" "1 0" "$(grep -c '^not serving here: this machine is not in hosts=nobody; links work while a machine in hosts= serves$' <<<"$out") $(grep -c '^not serving: handout start$' <<<"$out")"
 unset GV_HOSTS
 mkdir -p "$GVD/home/Library/LaunchAgents"; : >"$GVD/home/Library/LaunchAgents/$SHARE_SERVICE_LABEL.plist"
 printf '{"code":"port_busy","at":1}\n' >"$GVD/root/.serve-exit"
 check "SS-05 a service installed and a serve exit code: failed, reason the code, [state, ready] equals HEAD's" "failed/port_busy stopped false|$(gv_head)" "$(gv_phase)|$(gv_new)"
-out="$(gv status 2>&1)"; check "SS-05 status names the exit code" "1" "$(grep -c '^not serving: the last run ended with port_busy; see .*serve.log, then: share start$' <<<"$out")"
+out="$(gv status 2>&1)"; check "SS-05 status names the exit code" "1" "$(grep -c '^not serving: the last run ended with port_busy; see .*serve.log, then: handout start$' <<<"$out")"
 printf '{"code":"stopped","at":1}\n' >"$GVD/root/.serve-exit"; check "SS-05 a stop record is not a failure" "stopped/stopped" "$(gv_phase | cut -d' ' -f1)"
 printf '{"code":"port_busy","at":1}\n' >"$GVD/root/.serve-exit"; rm -f "$GVD/home/Library/LaunchAgents/$SHARE_SERVICE_LABEL.plist"
 check "SS-05 the same record with no service installed: stopped" "stopped/stopped" "$(gv_phase | cut -d' ' -f1)"
@@ -4986,7 +5009,7 @@ pid="$(gw_wait_step "$GVD/root" add 5)"; adid="$(jq -r .id "$GVD/root/ops/add.$p
 check "AD-01 a held add journals its id at step 5 of 6, alive" "add 5 6 true|1" "$(ad_op)|$([[ $adid =~ ^[0-9a-f]{6}$ ]] && echo 1 || echo 0)"
 kill -9 "$pid"; gw_gone "$pid"
 check "AD-01 killed before the row append: the copy stands, no row, the op reads dead" "1 0 add 5 6 false" "$([[ -d $GVD/root/pub/$adid ]] && echo 1 || echo 0) $(ad_rows "$adid") $(ad_op)"
-out="$(gv status 2>&1)"; check "AD-01 status names the dead add with its rerun" "1" "$(grep -c '^add stopped at step 5 of 6 (gate); rerun: share add ' <<<"$out")"
+out="$(gv status 2>&1)"; check "AD-01 status names the dead add with its rerun" "1" "$(grep -c '^add stopped at step 5 of 6 (gate); rerun: handout add ' <<<"$out")"
 tr0="$(find "$GW/trashed" -type f -o -type d 2>/dev/null | wc -l | tr -d ' ')"
 out="$(gv prune 2>&1)"; rc=$?
 check "AD-03 bare prune after it: the copy is trashed, the journal gone, ops/ empty" "0 0 1 |" "$rc $([[ -e $GVD/root/pub/$adid ]] && echo 1 || echo 0) $([[ $(find "$GW/trashed" -mindepth 1 2>/dev/null | wc -l | tr -d ' ') -gt $tr0 ]] && echo 1 || echo 0) $(gw_ops "$GVD/root")|"
@@ -5151,10 +5174,10 @@ cp "$GU_CONF" "$GW/cg.before"
 out="$(SHARE_ERROR_JSON=1 gwu config admin_token_cmd x 2>&1)"; rc=$?
 check "CG-04 config admin_token_cmd: config_key_unknown naming the settable keys, config untouched" "1 config_key_unknown 1 1" "$rc $(tail -1 <<<"$out" | jq -r .error.code) $(head -1 <<<"$out" | grep -c 'ttl and storage_default') $(cmp -s "$GU_CONF" "$GW/cg.before" && echo 1 || echo 0)"
 out="$(SHARE_ERROR_JSON=1 gwu config port 9 2>&1)"; check "CG-04 config port 9: config_key_unknown" "config_key_unknown" "$(tail -1 <<<"$out" | jq -r .error.code)"
-out="$(gwu config 2>&1)"; check "CG config with no key prints the usage" "1" "$(grep -c 'usage: share config ttl|storage_default' <<<"$out")"
+out="$(gwu config 2>&1)"; check "CG config with no key prints the usage" "1" "$(grep -c 'usage: handout config ttl|storage_default' <<<"$out")"
 out="$(SHARE_ERROR_JSON=1 gwu config ttl $'7d\r' 2>&1)"; rc=$?
 check "CG a value with a carriage return is refused and nothing is written" "1 1" "$rc $(cmp -s "$GU_CONF" "$GW/cg.before" && echo 1 || echo 0)"
-check "G14 share --help lists config, and the skill names it" "1 1" "$(bash "$SH" --help | grep -c 'share config ttl|storage_default') $(bash "$SH" skill | grep -c 'share config ttl')"
+check "G14 share --help lists config, and the skill names it" "1 1" "$(bash "$SH" --help | grep -c 'handout config ttl|storage_default') $(bash "$SH" skill | grep -c 'handout config ttl')"
 # shellcheck disable=SC2016 # the sed program is literal source, expanded by sed
 sed 's/^  config_put "\$key" "\$key=\$val"$/  printf "%s=%s\\n" "$key" "$val" >"$config"/' "$SH" >"$GW/share-config-clobber"
 GU_SH="$GW/share-config-clobber" gwu config ttl 7d >/dev/null 2>&1
@@ -5163,8 +5186,8 @@ fi
 if section "members: phase 0 (version, listed rows, readers, carry-forward, member config keys)"; then
 # OT-19: share version is the newest CHANGELOG heading
 newest="$(sed -n 's/^## \[v\([0-9][0-9.]*\)\].*/\1/p' "$(dirname "$SH")/../CHANGELOG.md" | head -1)"
-check "mm OT-19: share version equals the newest CHANGELOG heading" "$newest" "$(bash "$SH" version)"
-check "mm OT-19: share version is X.Y.Z" "1" "$(bash "$SH" version | grep -cE '^[0-9]+\.[0-9]+\.[0-9]+$')"
+check "mm OT-19: handout version equals the newest CHANGELOG heading" "$newest" "$(bash "$SH" version)"
+check "mm OT-19: handout version is X.Y.Z" "1" "$(bash "$SH" version | grep -cE '^[0-9]+\.[0-9]+\.[0-9]+$')"
 
 # TASK-0b: Caddy serves listed rows only, on its own profile root and port
 MM="$WORK/mm"; mkdir -p "$MM/src/site" "$MM/src/files"
@@ -5328,7 +5351,7 @@ gt_restore_on; out=$(gwt setup ten.example.test --r2 --bucket ok-bucket 2>&1); r
 check "mm DY-05: with the nonce served, the same rerun converges" "0 1" "$rc $(gt_on)"
 
 # TASK-0f, TN-10: the member keys ride config_put across a setup <host> rerun and an api-token --cmd write
-gu_restore   # an origin config holds members=on; the member keys ride along unread (a member config, role=member, refuses setup: "share leave first")
+gu_restore   # an origin config holds members=on; the member keys ride along unread (a member config, role=member, refuses setup: "handout leave first")
 printf 'members=on\nmember_id=m-an-aaaaaaa1\nmember_mode=machine\n' >>"$GU_CONF"
 before="$(grep -nE '^(members|role|member_id|member_mode)=' "$GU_CONF")"
 gwu setup gu.example.test --no-service >/dev/null 2>&1; rc=$?

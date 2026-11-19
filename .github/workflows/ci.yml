@@ -55,7 +55,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - run: shellcheck bin/share install.sh tests/share.sh tests/members.sh tests/e2e.sh tests/ci/*.sh demo/render.sh mac/*.sh
+      - run: shellcheck bin/handout install.sh tests/share.sh tests/members.sh tests/e2e.sh tests/ci/*.sh demo/render.sh mac/*.sh
       # Every suite section runs in exactly one PR shard (tests/ci/shards.txt); a new section must join one.
       - run: bash tests/ci/shard-check.sh
       - run: bash tests/ci/shard-check-test.sh
@@ -104,7 +104,7 @@ jobs:
           fetch-depth: 0
 
       - name: Parse under the system bash 3.2
-        run: /bin/bash -n bin/share && /bin/bash -n install.sh
+        run: /bin/bash -n bin/handout && /bin/bash -n install.sh
 
       - name: Install caddy and pandoc
         run: brew install caddy pandoc

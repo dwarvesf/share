@@ -23,12 +23,12 @@ Type "ls -A team-guide"
 Enter
 Sleep 1.5s
 
-Type "share add team-guide"
+Type "handout add team-guide"
 Enter
 Wait@60s /^\$$/
 Sleep 1.5s
 
-Type `link=$(pbpaste)    # share add copied the link`
+Type `link=$(pbpaste)    # handout add copied the link`
 Enter
 Type `curl -s -o /dev/null -w '%{http_code}\n' $link`
 Enter
@@ -39,12 +39,12 @@ Enter
 Wait@30s /^\$$/
 Sleep 1.5s
 
-Type "share hits $link"
+Type "handout hits $link"
 Enter
 Wait@30s /^\$$/
 Sleep 1.5s
 
-Type "share rm $link"
+Type "handout rm $link"
 Enter
 Wait@30s /^\$$/
 Type `curl -s -o /dev/null -w '%{http_code}\n' $link`

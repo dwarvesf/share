@@ -103,7 +103,7 @@ printf 'mode=quick\n' >"$LIVE_HOME/.config/share/profiles/quick/config"
 printf 'tunnel_id=abc123\nhostname=s.example.test\n' >"$LIVE_HOME/.config/share/profiles/named/config"
 live_cli() {
   env -u SHARE_CONFIG_DIR -u SHARE_ROOT -u SHARE_PORT -u SHARE_HOSTNAME -u SHARE_PROFILE -u XDG_CONFIG_HOME \
-    HOME="$LIVE_HOME" bash "$REPO_DIR/bin/share" "$@"
+    HOME="$LIVE_HOME" bash "$REPO_DIR/bin/handout" "$@"
 }
 live_cli profiles --json >"$WORK/live/profiles.json" || { echo "compat-check: the CLI's profiles --json failed" >&2; exit 1; }
 live_cli state >"$WORK/live/state.json" || { echo "compat-check: the CLI's state failed" >&2; exit 1; }
