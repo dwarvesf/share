@@ -1,8 +1,8 @@
-# Quality requirements
+# Handout quality requirements
 
 One entry per measurable quality the system promises. Specs cite these IDs and never restate them.
 
-# QUALITY additions for SPEC-009 (multi-member tenants)
+# Additions for SPEC-009 (multi-member tenants)
 
 The worktree has no `docs/QUALITY.md` (checked 2026-11-13), so these are the first entries; numbering starts at 1 in each area. TASK-4c creates `docs/QUALITY.md` with them. Edge-case and negative-control ids refer to `docs/specs/SPEC-009-multi-member.md`.
 
@@ -123,14 +123,14 @@ The worktree has no `docs/QUALITY.md` (checked 2026-11-13), so these are the fir
   - Check: spec rows OC-01 to OC-04 (`tests/share.sh` and `tests/members.sh`) and OC-05 (`tests/worker.mjs`, which builds the v4 Worker from commit f28cb13 and skips when that commit is not fetched); OC-06 has no labelled test, the decode side sits in `GroundworkCompatTests` and `NewKeyDecodeTests`
 
 - ID: `Q-COMPAT-3`
-  - Quality: compatibility (the shipped Share Bar)
-  - Scenario: the released v0.9.0 Share Bar reads every profile the new CLI reports
+  - Quality: compatibility (the shipped Handout Bar)
+  - Scenario: the released v0.9.0 Handout Bar reads every profile the new CLI reports
   - Measure: `bash mac/compat-check.sh v0.9.0` exits 0; `state` stays schema 1 with no new `state.state` value
   - Check: `mac/compat-check.sh` (TASK-4b1); spec rows OC-06 and OC-08 have no labelled test; the unknown-key and unreadable-state decode rows sit in `SnapshotDecodeTests` and `NewKeyDecodeTests`
 
 - ID: `Q-COMPAT-4`
-  - Quality: compatibility (`share state` contract)
-  - Scenario: a profile of any role is read by `share state` after the groundwork change
+  - Quality: compatibility (`handout state` contract)
+  - Scenario: a profile of any role is read by `handout state` after the groundwork change
   - Measure: schema stays 1; keys are only added; every existing key keeps its value
   - Check: `tests/share.sh` row CP-01 and `state_schema_ok` (CP-02 and CP-03 are spec rows that no test names; `GroundworkCompatTests` holds the decode side)
 
@@ -156,7 +156,7 @@ The worktree has no `docs/QUALITY.md` (checked 2026-11-13), so these are the fir
   - Quality: operability (revocation latency)
   - Scenario: the admin revokes a member link with `rm <id>`
   - Measure: the Worker answers 404 on the first request after the verb exits; the owner's Caddy handle is gone within one hourly loop (at most 3,660 s) while the member's machine is up and its Keychain unlocked
-  - Check: `mm LK-11` (loop forced with `share prune --loop`); live leg ML-10
+  - Check: `mm LK-11` (loop forced with `handout prune --loop`); live leg ML-10
 
 ## Agent experience
 

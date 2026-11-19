@@ -1,4 +1,4 @@
-<title>share system design</title>
+<title>Handout system design</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@87.5,500;87.5,700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -176,9 +176,9 @@ decided:
   - "Spike O2 passed for user tokens: mint, one-time secret, expiry extended in place, found by name."
 ---
 
-# share system design
+# Handout system design
 
-`share` is one bash CLI (`bin/share`, v0.9 line) that publishes a file, folder or local port at `https://<host>/<id>/`. A tenant is one hostname with one origin machine: Caddy serves the origin's links through a named Cloudflare tunnel, and when R2 is on, a tenant Worker on the same hostname serves cloud links from a private R2 bucket and passes everything else to the tunnel. Teammates publish cloud links only, with a bucket-scoped token the admin makes by hand.
+`handout` is one bash CLI (`bin/handout`, v0.9 line) that publishes a file, folder or local port at `https://<host>/<id>/`. A tenant is one hostname with one origin machine: Caddy serves the origin's links through a named Cloudflare tunnel, and when R2 is on, a tenant Worker on the same hostname serves cloud links from a private R2 bucket and passes everything else to the tunnel. Teammates publish cloud links only, with a bucket-scoped token the admin makes by hand.
 
 Rev A was the backfill of the system as built (`docs/research/2026-11-13-current-state-machines.md`). Rev B is the multi-member design from `docs/briefs/DECISION-BRIEF-multi-member.md` (r2): members serve links from their own machines behind the same hostname, through one Workers VPC binding each, with a member registry in the bucket and tool-minted credentials redeemed once. Nothing in rev B is built.
 
@@ -191,7 +191,7 @@ id: use-cases
 type: usecase
 title: Use cases
 level: L1
-system: share tenant (one hostname)
+system: Handout tenant (one hostname)
 review:
   - Should a cloud-only publisher (R5 today) be forced through `member adopt`, or keep working unregistered behind `min_cli`?
   - "`leave --local` makes no bucket call. Is a member allowed to run it while still ACTIVE, leaving its record for the admin to rm?"
@@ -254,7 +254,7 @@ lanes:
   - {id: member, name: Member machine (machine member), tone: violet}
 nodes:
   - {id: keychain-o, name: Keychain, note: "tunnel token, publisher token", kind: store, lane: origin, at: [0, 0]}
-  - {id: cli-o, name: share CLI, note: "origin profile; admin verbs from any machine", lane: origin, at: [1, 0]}
+  - {id: cli-o, name: handout CLI, note: "origin profile; admin verbs from any machine", lane: origin, at: [1, 0]}
   - {id: index, name: pub/ + index.tsv, note: "bytes and rows", kind: store, lane: origin, at: [0, 1]}
   - {id: vault, name: 1Password, note: "admin token, minter token", kind: ext, lane: origin, at: [1, 1]}
   - {id: caddy, name: Caddy, note: "127.0.0.1:<port>, one handle per listed row", lane: origin, at: [0, 3]}
@@ -270,12 +270,12 @@ nodes:
   - {id: r2, name: R2 bucket, note: "share.json, m/, o/, u/, i/, t/, lock/admin", kind: store, lane: account, at: [4, 2]}
   - {id: hits, name: Analytics HITS, kind: store, lane: account, at: [4, 3]}
   - {id: keychain-p, name: Keychain, note: publisher token, kind: store, lane: pubm, at: [5, 0]}
-  - {id: cli-p, name: share CLI, note: "r2 profile, backend=r2", lane: pubm, at: [5, 1]}
+  - {id: cli-p, name: handout CLI, note: "r2 profile, backend=r2", lane: pubm, at: [5, 1]}
   - {id: r2own, name: r2-own + access-pending, kind: store, lane: pubm, at: [5, 2]}
   - {id: caddy-m, name: Caddy, note: "127.0.0.1:<port>, listed rows only", lane: member, at: [0, 6]}
   - {id: cloudflared-m, name: cloudflared, note: member connector, lane: member, at: [1, 6]}
   - {id: pub-m, name: pub/ + index.tsv, note: own rows only, kind: store, lane: member, at: [0, 7]}
-  - {id: cli-m, name: share CLI, note: "role=member, hourly reconcile", lane: member, at: [1, 7]}
+  - {id: cli-m, name: handout CLI, note: "role=member, hourly reconcile", lane: member, at: [1, 7]}
   - {id: keychain-m, name: Keychain, note: "publisher + connector token", kind: store, lane: member, at: [1, 8]}
 edges:
   - {from: cli-o, to: keychain-o, label: reads}
@@ -383,23 +383,23 @@ title: add on the origin (tunnel, R2 on)
 level: L3
 participants:
   - {name: Owner, tone: blue}
-  - {name: share CLI, tone: blue}
+  - {name: handout CLI, tone: blue}
   - Keychain
   - {name: R2 bucket, tone: violet}
   - {name: Caddy, tone: blue}
 messages:
-  - {from: Owner, to: share CLI, text: share add report.pdf, kind: call}
-  - {from: share CLI, to: Keychain, text: r2_token_check, kind: call}
-  - {from: Keychain, to: share CLI, text: publisher token, kind: return}
-  - {from: share CLI, to: R2 bucket, text: "rand_id: GET m/<id>, LIST o/<id>.", kind: call}
-  - {from: R2 bucket, to: share CLI, text: "404, empty", kind: return}
-  - {from: share CLI, to: share CLI, text: "stage_copy to .stage.X", kind: call}
-  - {from: share CLI, to: R2 bucket, text: "PUT m/<id> v:2, If-None-Match *", kind: call}
-  - {from: R2 bucket, to: share CLI, text: "200 (412: new id, 5 tries)", kind: return}
-  - {from: share CLI, to: share CLI, text: "stage_publish to pub/<id>", kind: call}
-  - {from: share CLI, to: share CLI, text: "index lock, append row", kind: call}
-  - {from: share CLI, to: Caddy, text: "Caddyfile, reload", kind: call}
-  - {from: share CLI, to: Owner, text: "https://<host>/<id>/", kind: return}
+  - {from: Owner, to: handout CLI, text: handout add report.pdf, kind: call}
+  - {from: handout CLI, to: Keychain, text: r2_token_check, kind: call}
+  - {from: Keychain, to: handout CLI, text: publisher token, kind: return}
+  - {from: handout CLI, to: R2 bucket, text: "rand_id: GET m/<id>, LIST o/<id>.", kind: call}
+  - {from: R2 bucket, to: handout CLI, text: "404, empty", kind: return}
+  - {from: handout CLI, to: handout CLI, text: "stage_copy to .stage.X", kind: call}
+  - {from: handout CLI, to: R2 bucket, text: "PUT m/<id> v:2, If-None-Match *", kind: call}
+  - {from: R2 bucket, to: handout CLI, text: "200 (412: new id, 5 tries)", kind: return}
+  - {from: handout CLI, to: handout CLI, text: "stage_publish to pub/<id>", kind: call}
+  - {from: handout CLI, to: handout CLI, text: "index lock, append row", kind: call}
+  - {from: handout CLI, to: Caddy, text: "Caddyfile, reload", kind: call}
+  - {from: handout CLI, to: Owner, text: "https://<host>/<id>/", kind: return}
 ```
 
 The tenant Worker answers every request on the hostname. A cloud record is served from the bucket and fails closed; a v:2 pointer or a non-id path passes to the one tunnel. Passed answers are never counted as hits.
@@ -443,24 +443,24 @@ review:
   - Should the lease expiry be fixed (for example 10 minutes) or set per verb?
 participants:
   - {name: Admin, tone: blue}
-  - {name: share CLI, tone: blue}
+  - {name: handout CLI, tone: blue}
   - {name: R2 bucket, tone: violet}
   - {name: Cloudflare API, tone: gray}
   - {name: Worker, tone: amber}
 messages:
-  - {from: Admin, to: share CLI, text: "member add an --machine", kind: call}
-  - {from: share CLI, to: R2 bucket, text: "PUT lock/admin, If-None-Match *", kind: call}
-  - {from: share CLI, to: R2 bucket, text: "PUT u/<id> status=adding, If-None-Match *", kind: call}
-  - {from: share CLI, to: Cloudflare API, text: "minter: token share <host> <member_id>", kind: call}
-  - {from: share CLI, to: Cloudflare API, text: "create tunnel (no ingress), get connector token", kind: call}
-  - {from: share CLI, to: Cloudflare API, text: "create VPC Service (tunnel, 127.0.0.1:<port>)", kind: call}
-  - {from: share CLI, to: Cloudflare API, text: "deploy Worker from registry + M_<8hex>", kind: call}
-  - {from: Cloudflare API, to: share CLI, text: deployed, kind: return}
-  - {from: share CLI, to: Worker, text: "GET /healthz (VERSION SHA pair)", kind: call}
-  - {from: share CLI, to: R2 bucket, text: "PUT i/<sha256(code)> sealed, expires", kind: call}
-  - {from: share CLI, to: R2 bucket, text: "PUT u/<id> status=invited, If-Match", kind: call}
-  - {from: share CLI, to: R2 bucket, text: DELETE lock/admin, kind: call}
-  - {from: share CLI, to: Admin, text: "code, shown once", kind: return}
+  - {from: Admin, to: handout CLI, text: "member add ana --machine", kind: call}
+  - {from: handout CLI, to: R2 bucket, text: "PUT lock/admin, If-None-Match *", kind: call}
+  - {from: handout CLI, to: R2 bucket, text: "PUT u/<id> status=adding, If-None-Match *", kind: call}
+  - {from: handout CLI, to: Cloudflare API, text: "minter: token share <host> <member_id>", kind: call}
+  - {from: handout CLI, to: Cloudflare API, text: "create tunnel (no ingress), get connector token", kind: call}
+  - {from: handout CLI, to: Cloudflare API, text: "create VPC Service (tunnel, 127.0.0.1:<port>)", kind: call}
+  - {from: handout CLI, to: Cloudflare API, text: "deploy Worker from registry + M_<8hex>", kind: call}
+  - {from: Cloudflare API, to: handout CLI, text: deployed, kind: return}
+  - {from: handout CLI, to: Worker, text: "GET /healthz (VERSION SHA pair)", kind: call}
+  - {from: handout CLI, to: R2 bucket, text: "PUT i/<sha256(code)> sealed, expires", kind: call}
+  - {from: handout CLI, to: R2 bucket, text: "PUT u/<id> status=invited, If-Match", kind: call}
+  - {from: handout CLI, to: R2 bucket, text: DELETE lock/admin, kind: call}
+  - {from: handout CLI, to: Admin, text: "code, shown once", kind: return}
 ```
 
 `join <code>` redeems through the Worker, which checks the expiry on its own clock and deletes the sealed invite: this is the Worker's one write. The record moves to `joining` before anything local exists, so a concurrent admin verb fails the join early.
@@ -475,24 +475,24 @@ review:
   - Is a probe link fetched 3x200 through the Worker enough proof that the VPC binding reaches this machine?
 participants:
   - {name: Member, tone: violet}
-  - {name: share CLI, tone: violet}
+  - {name: handout CLI, tone: violet}
   - {name: Worker, tone: amber}
   - {name: R2 bucket, tone: violet}
   - {name: Caddy + cloudflared, tone: violet}
 messages:
-  - {from: Member, to: share CLI, text: share join <code>, kind: call}
-  - {from: share CLI, to: share CLI, text: "CLI >= min_cli, port free", kind: call}
-  - {from: share CLI, to: Worker, text: "POST /_share/redeem (sha256(code))", kind: call}
+  - {from: Member, to: handout CLI, text: handout join <code>, kind: call}
+  - {from: handout CLI, to: handout CLI, text: "CLI >= min_cli, port free", kind: call}
+  - {from: handout CLI, to: Worker, text: "POST /_share/redeem (sha256(code))", kind: call}
   - {from: Worker, to: R2 bucket, text: "get i/<hash>, expiry by server time", kind: call}
   - {from: Worker, to: R2 bucket, text: "delete i/<hash>", kind: call}
-  - {from: Worker, to: share CLI, text: sealed bytes, kind: return}
-  - {from: share CLI, to: share CLI, text: "unseal: publisher + connector token", kind: call}
-  - {from: share CLI, to: R2 bucket, text: "PUT u/<id> status=joining, If-Match", kind: call}
-  - {from: share CLI, to: share CLI, text: "config role=member, tokens to Keychain", kind: call}
-  - {from: share CLI, to: Caddy + cloudflared, text: start service, kind: call}
-  - {from: share CLI, to: Worker, text: "probe link, GET 3x200", kind: call}
-  - {from: share CLI, to: R2 bucket, text: "PUT u/<id> status=active, joined", kind: call}
-  - {from: share CLI, to: Member, text: "joined as m-an-3f9a1c2d", kind: return}
+  - {from: Worker, to: handout CLI, text: sealed bytes, kind: return}
+  - {from: handout CLI, to: handout CLI, text: "unseal: publisher + connector token", kind: call}
+  - {from: handout CLI, to: R2 bucket, text: "PUT u/<id> status=joining, If-Match", kind: call}
+  - {from: handout CLI, to: handout CLI, text: "config role=member, tokens to Keychain", kind: call}
+  - {from: handout CLI, to: Caddy + cloudflared, text: start service, kind: call}
+  - {from: handout CLI, to: Worker, text: "probe link, GET 3x200", kind: call}
+  - {from: handout CLI, to: R2 bucket, text: "PUT u/<id> status=active, joined", kind: call}
+  - {from: handout CLI, to: Member, text: "joined as m-ana-3f9a1c2d", kind: return}
 ```
 
 `member rm` cuts routing first: the redeploy without `M_<8hex>` makes every machine link of that member 404 at once, before any object is deleted. Each of its v:3 links becomes a tombstone, so the bytes on its machine are never touched from outside. Cloud links stay until they expire.
@@ -507,22 +507,22 @@ review:
   - Should `member rm` refuse while the member is ONLINE and has links, or always proceed?
 participants:
   - {name: Admin, tone: blue}
-  - {name: share CLI, tone: blue}
+  - {name: handout CLI, tone: blue}
   - {name: R2 bucket, tone: violet}
   - {name: Cloudflare API, tone: gray}
 messages:
-  - {from: Admin, to: share CLI, text: member rm an, kind: call}
-  - {from: share CLI, to: R2 bucket, text: "PUT lock/admin, If-None-Match *", kind: call}
-  - {from: share CLI, to: R2 bucket, text: "PUT u/<id> status=removing, If-Match", kind: call}
-  - {from: share CLI, to: Cloudflare API, text: "deploy without M_<8hex>, id off PAUSED", kind: call}
-  - {from: share CLI, to: Cloudflare API, text: delete VPC Service, kind: call}
-  - {from: share CLI, to: Cloudflare API, text: "delete connections, then tunnel", kind: call}
-  - {from: share CLI, to: Cloudflare API, text: delete publisher token, kind: call}
-  - {from: share CLI, to: R2 bucket, text: "each v:3 of origin: PUT t/<id>, DELETE m/<id>", kind: call}
-  - {from: share CLI, to: R2 bucket, text: "cloud links: keep until expiry", kind: call}
-  - {from: share CLI, to: R2 bucket, text: "PUT u/<id> status=removed", kind: call}
-  - {from: share CLI, to: R2 bucket, text: DELETE lock/admin, kind: call}
-  - {from: share CLI, to: Admin, text: removed, kind: return}
+  - {from: Admin, to: handout CLI, text: member rm ana, kind: call}
+  - {from: handout CLI, to: R2 bucket, text: "PUT lock/admin, If-None-Match *", kind: call}
+  - {from: handout CLI, to: R2 bucket, text: "PUT u/<id> status=removing, If-Match", kind: call}
+  - {from: handout CLI, to: Cloudflare API, text: "deploy without M_<8hex>, id off PAUSED", kind: call}
+  - {from: handout CLI, to: Cloudflare API, text: delete VPC Service, kind: call}
+  - {from: handout CLI, to: Cloudflare API, text: "delete connections, then tunnel", kind: call}
+  - {from: handout CLI, to: Cloudflare API, text: delete publisher token, kind: call}
+  - {from: handout CLI, to: R2 bucket, text: "each v:3 of origin: PUT t/<id>, DELETE m/<id>", kind: call}
+  - {from: handout CLI, to: R2 bucket, text: "cloud links: keep until expiry", kind: call}
+  - {from: handout CLI, to: R2 bucket, text: "PUT u/<id> status=removed", kind: call}
+  - {from: handout CLI, to: R2 bucket, text: DELETE lock/admin, kind: call}
+  - {from: handout CLI, to: Admin, text: removed, kind: return}
 ```
 
 A member link reaches its machine through the VPC binding, never through the tenant's tunnel. Worker v5 checks expiry on every pointer, answers 503 for a paused member, and 404 when the binding is gone. Spike O1 showed request headers pass through a binding unchanged, so the Worker strips Access headers itself; the Host stays the tenant hostname, streaming works, and the hop adds 150 to 350 ms.
@@ -544,7 +544,7 @@ participants:
 messages:
   - {from: Visitor, to: Worker, text: "GET /<id>/file", kind: call}
   - {from: Worker, to: R2 bucket, text: "get m/<id>", kind: call}
-  - {from: R2 bucket, to: Worker, text: "v:3 {origin: m-an-3f9a1c2d}", kind: return}
+  - {from: R2 bucket, to: Worker, text: "v:3 {origin: m-ana-3f9a1c2d}", kind: return}
   - {from: Worker, to: Worker, text: "past expires: 404", kind: call}
   - {from: Worker, to: Worker, text: "origin in PAUSED: 503 paused", kind: call}
   - {from: Worker, to: Worker, text: "no binding M_3f9a1c2d: 404", kind: call}
@@ -568,22 +568,22 @@ review:
   - Is one hour from revoke to the handle drop acceptable, given the link already 404s at the Worker?
 participants:
   - {name: Admin, tone: blue}
-  - {name: share CLI (admin), tone: blue}
+  - {name: handout CLI (admin), tone: blue}
   - {name: R2 bucket, tone: violet}
-  - {name: share CLI (owner), tone: violet}
+  - {name: handout CLI (owner), tone: violet}
   - {name: Owner Caddy, tone: violet}
 messages:
-  - {from: Admin, to: share CLI (admin), text: "share rm <id>", kind: call}
-  - {from: share CLI (admin), to: R2 bucket, text: "GET m/<id>: v:3, other origin", kind: call}
-  - {from: share CLI (admin), to: R2 bucket, text: "PUT t/<id>, If-None-Match *", kind: call}
-  - {from: share CLI (admin), to: R2 bucket, text: "DELETE m/<id>, GET proves 404", kind: call}
-  - {from: share CLI (admin), to: Admin, text: "revoked; bytes stay on the owner", kind: return}
-  - {from: share CLI (owner), to: R2 bucket, text: "hourly reconcile: LIST m/, t/", kind: call}
-  - {from: R2 bucket, to: share CLI (owner), text: "t/<id> present, m/<id> absent", kind: return}
-  - {from: share CLI (owner), to: share CLI (owner), text: flag row revoked, kind: call}
-  - {from: share CLI (owner), to: Owner Caddy, text: "drop handle, reload", kind: call}
-  - {from: share CLI (owner), to: R2 bucket, text: "DELETE t/<id>", kind: call}
-  - {from: share CLI (owner), to: share CLI (owner), text: "ls: removed by <who>", kind: call}
+  - {from: Admin, to: handout CLI (admin), text: "handout rm <id>", kind: call}
+  - {from: handout CLI (admin), to: R2 bucket, text: "GET m/<id>: v:3, other origin", kind: call}
+  - {from: handout CLI (admin), to: R2 bucket, text: "PUT t/<id>, If-None-Match *", kind: call}
+  - {from: handout CLI (admin), to: R2 bucket, text: "DELETE m/<id>, GET proves 404", kind: call}
+  - {from: handout CLI (admin), to: Admin, text: "revoked; bytes stay on the owner", kind: return}
+  - {from: handout CLI (owner), to: R2 bucket, text: "hourly reconcile: LIST m/, t/", kind: call}
+  - {from: R2 bucket, to: handout CLI (owner), text: "t/<id> present, m/<id> absent", kind: return}
+  - {from: handout CLI (owner), to: handout CLI (owner), text: flag row revoked, kind: call}
+  - {from: handout CLI (owner), to: Owner Caddy, text: "drop handle, reload", kind: call}
+  - {from: handout CLI (owner), to: R2 bucket, text: "DELETE t/<id>", kind: call}
+  - {from: handout CLI (owner), to: handout CLI (owner), text: "ls: removed by <who>", kind: call}
 ```
 
 ## State machines
@@ -811,7 +811,7 @@ transitions:
 - Publishing is the record PUT. Bytes always go to a fresh prefix `o/<id>.<nonce8>/`; nothing overwrites bytes in place, and a refresh swaps the record with `If-Match`.
 - Refuse before the first write. Every multi-step setup checks all guards first, and a rerun converges, skipping each step already in place.
 - The Worker fails closed for cloud ids (any doubt is 404), enforces `expires` on every pointer, and passes v:2 pointers and non-id paths to the origin unchanged.
-- The admin token and the minter token live in 1Password and the environment only, never stored by share. Member tokens are minted by the tool, sealed into a one-time invite, and kept in the member's Keychain.
+- The admin token and the minter token live in 1Password and the environment only, never stored by Handout. Member tokens are minted by the tool, sealed into a one-time invite, and kept in the member's Keychain.
 
 ## Risks and technical debt
 
@@ -828,11 +828,11 @@ transitions:
 rev: A
 ---
 
-# share system design
+# Handout system design
 
-`share` is one bash CLI (`bin/share`, v0.9 line) that publishes a file, folder or local port at `https://<host>/<id>/`. A tenant is one hostname with one origin machine: Caddy serves the origin's links through a named Cloudflare tunnel, and when R2 is on, a tenant Worker on the same hostname serves cloud links from a private R2 bucket and passes everything else to the tunnel. Teammates publish cloud links only, with a bucket-scoped token the admin makes by hand.
+`handout` is one bash CLI (`bin/handout`, v0.9 line) that publishes a file, folder or local port at `https://<host>/<id>/`. A tenant is one hostname with one origin machine: Caddy serves the origin's links through a named Cloudflare tunnel, and when R2 is on, a tenant Worker on the same hostname serves cloud links from a private R2 bucket and passes everything else to the tunnel. Teammates publish cloud links only, with a bucket-scoped token the admin makes by hand.
 
-This revision is the backfill: the system as built, read from `docs/research/2026-11-13-current-state-machines.md` (line cites into `bin/share` at 4564c5c). Nothing here is new.
+This revision is the backfill: the system as built, read from `docs/research/2026-11-13-current-state-machines.md` (line cites into `bin/handout` at 4564c5c). Nothing here is new.
 
 ## Use cases
 
@@ -843,7 +843,7 @@ id: use-cases
 type: usecase
 title: Use cases
 level: L1
-system: share tenant (one hostname)
+system: Handout tenant (one hostname)
 actors:
   - {id: admin, name: Admin, kind: human, side: left, tone: blue}
   - {id: publisher, name: Publisher, kind: human, side: left, tone: green}
@@ -884,7 +884,7 @@ lanes:
   - {id: pubm, name: Publisher machine (R5), tone: green}
 nodes:
   - {id: keychain-o, name: Keychain, note: "tunnel token, publisher token", kind: store, lane: origin, at: [0, 0]}
-  - {id: cli-o, name: share CLI, note: "origin profile, bash", lane: origin, at: [1, 0]}
+  - {id: cli-o, name: handout CLI, note: "origin profile, bash", lane: origin, at: [1, 0]}
   - {id: index, name: pub/ + index.tsv, note: "bytes and rows", kind: store, lane: origin, at: [0, 1]}
   - {id: caddy, name: Caddy, note: "127.0.0.1:<port>, serves all of pub/", lane: origin, at: [0, 3]}
   - {id: cloudflared, name: cloudflared, note: named tunnel connector, lane: origin, at: [0, 4]}
@@ -896,7 +896,7 @@ nodes:
   - {id: access, name: Access apps, note: "one per gated link", lane: account, at: [3, 3]}
   - {id: r2, name: R2 bucket, note: "share.json, m/<id>, o/<id>.<nonce>/", kind: store, lane: account, at: [3, 2]}
   - {id: hits, name: Analytics HITS, kind: store, lane: account, at: [3, 4]}
-  - {id: cli-p, name: share CLI, note: "r2 profile, backend=r2", lane: pubm, at: [4, 1]}
+  - {id: cli-p, name: handout CLI, note: "r2 profile, backend=r2", lane: pubm, at: [4, 1]}
   - {id: keychain-p, name: Keychain, note: publisher token, kind: store, lane: pubm, at: [4, 0]}
   - {id: r2own, name: r2-own + access-pending, kind: store, lane: pubm, at: [4, 2]}
 edges:
@@ -975,23 +975,23 @@ title: add on the origin (tunnel, R2 on)
 level: L3
 participants:
   - {name: Owner, tone: blue}
-  - {name: share CLI, tone: blue}
+  - {name: handout CLI, tone: blue}
   - Keychain
   - {name: R2 bucket, tone: violet}
   - {name: Caddy, tone: blue}
 messages:
-  - {from: Owner, to: share CLI, text: share add report.pdf, kind: call}
-  - {from: share CLI, to: Keychain, text: r2_token_check, kind: call}
-  - {from: Keychain, to: share CLI, text: publisher token, kind: return}
-  - {from: share CLI, to: R2 bucket, text: "rand_id: GET m/<id>, LIST o/<id>.", kind: call}
-  - {from: R2 bucket, to: share CLI, text: "404, empty", kind: return}
-  - {from: share CLI, to: share CLI, text: "stage_copy to .stage.X", kind: call}
-  - {from: share CLI, to: R2 bucket, text: "PUT m/<id> v:2, If-None-Match *", kind: call}
-  - {from: R2 bucket, to: share CLI, text: "200 (412: new id, 5 tries)", kind: return}
-  - {from: share CLI, to: share CLI, text: "stage_publish to pub/<id>", kind: call}
-  - {from: share CLI, to: share CLI, text: "index lock, append row", kind: call}
-  - {from: share CLI, to: Caddy, text: "Caddyfile, reload", kind: call}
-  - {from: share CLI, to: Owner, text: "https://<host>/<id>/", kind: return}
+  - {from: Owner, to: handout CLI, text: handout add report.pdf, kind: call}
+  - {from: handout CLI, to: Keychain, text: r2_token_check, kind: call}
+  - {from: Keychain, to: handout CLI, text: publisher token, kind: return}
+  - {from: handout CLI, to: R2 bucket, text: "rand_id: GET m/<id>, LIST o/<id>.", kind: call}
+  - {from: R2 bucket, to: handout CLI, text: "404, empty", kind: return}
+  - {from: handout CLI, to: handout CLI, text: "stage_copy to .stage.X", kind: call}
+  - {from: handout CLI, to: R2 bucket, text: "PUT m/<id> v:2, If-None-Match *", kind: call}
+  - {from: R2 bucket, to: handout CLI, text: "200 (412: new id, 5 tries)", kind: return}
+  - {from: handout CLI, to: handout CLI, text: "stage_publish to pub/<id>", kind: call}
+  - {from: handout CLI, to: handout CLI, text: "index lock, append row", kind: call}
+  - {from: handout CLI, to: Caddy, text: "Caddyfile, reload", kind: call}
+  - {from: handout CLI, to: Owner, text: "https://<host>/<id>/", kind: return}
 ```
 
 The tenant Worker answers every request on the hostname. A cloud record is served from the bucket and fails closed; a v:2 pointer or a non-id path passes to the one tunnel. Passed answers are never counted as hits.

@@ -1,4 +1,4 @@
-# How share works
+# How Handout works
 
 ## Architecture
 
@@ -12,7 +12,7 @@
                                                    │
    launchd agent / systemd user unit (foundation.d.share), or `nohup` without the service
      │
-   share serve (pid in ~/share/serve.pid)          │
+   handout serve (pid in ~/share/serve.pid)        │
      ├─ cloudflared tunnel run  ────────────────────┘   (TUNNEL_TOKEN from Keychain / file / token_cmd)
      ├─ caddy on 127.0.0.1:<port>
      │     main site (s.example.com, plus 127.0.0.1 and localhost for local probes; quick
@@ -43,11 +43,11 @@
      └─ prune loop: every hour, unpublish expired shares
 ```
 
-`share setup --quick` writes `mode=quick` instead of a hostname and tunnel id. In that mode `share serve` runs `cloudflared tunnel --url http://127.0.0.1:<port>` (no token, no DNS, no account) and scrapes the random `https://<x>.trycloudflare.com` URL out of `cloudflared.log` into `quick.url`; links and `status` read the hostname from there. The URL is new on every serve start, so `--host` is refused and old links die. Caddy, `index.tsv`, live shares, and the folder index behave identically.
+`handout setup --quick` writes `mode=quick` instead of a hostname and tunnel id. In that mode `handout serve` runs `cloudflared tunnel --url http://127.0.0.1:<port>` (no token, no DNS, no account) and scrapes the random `https://<x>.trycloudflare.com` URL out of `cloudflared.log` into `quick.url`; links and `status` read the hostname from there. The URL is new on every serve start, so `--host` is refused and old links die. Caddy, `index.tsv`, live shares, and the folder index behave identically.
 
-With the service installed, launchd (macOS) or systemd (Linux) starts `share serve` at login and restarts it after a crash. `share start` and `share stop` load and unload the service. Without it, `share start` runs `share serve` under `nohup`, and `share stop` sends it SIGTERM. Either way, the exit trap stops caddy, cloudflared, and the prune loop together.
+With the service installed, launchd (macOS) or systemd (Linux) starts `handout serve` at login and restarts it after a crash. `handout start` and `handout stop` load and unload the service. Without it, `handout start` runs `handout serve` under `nohup`, and `handout stop` sends it SIGTERM. Either way, the exit trap stops caddy, cloudflared, and the prune loop together.
 
-The launchd agent's first program argument is the `share` script itself, so the macOS Login Items list shows "share" rather than a generic shell. Its `PATH` holds the directories of caddy, cloudflared, and the other tools, because launchd starts agents with a minimal `PATH`.
+The launchd agent's first program argument is the CLI script itself, so the macOS Login Items list shows the tool's own name rather than a generic shell. Its `PATH` holds the directories of caddy, cloudflared, and the other tools, because launchd starts agents with a minimal `PATH`.
 
 ## Files on disk
 
@@ -65,10 +65,10 @@ The launchd agent's first program argument is the `share` script itself, so the 
 ├── Caddyfile               re-rendered from index.tsv at serve start and on add / rm / refresh / prune
 ├── admin.sock              caddy admin API, unix socket inside the 0700 share root
 ├── .lock-host/             mkdir mutex serializing Cloudflare ingress edits
-├── access.log              caddy JSON log, read by `share hits`
+├── access.log              caddy JSON log, read by `handout hits`
 ├── serve.pid  serve.log  caddy.log  cloudflared.log
 ├── quick.url               quick mode only: the trycloudflare fqdn cloudflared printed last start
-├── ops/<verb>.<pid>.json   the step journal of a running or dead multi-step verb (see `share state`)
+├── ops/<verb>.<pid>.json   the step journal of a running or dead multi-step verb (see `handout state`)
 ├── .serve-exit             why the last serve ended: {"code", "at"}
 ├── index.migrated  migrated/   after `migrate`: the moved rows and their trees
 ├── md-links.lua            pandoc filter that rewrites .md links to .html
@@ -78,14 +78,14 @@ The launchd agent's first program argument is the `share` script itself, so the 
 ├── config                  key=value, written by setup; `api_token_cmd=`, `admin_token_cmd=`, `minter_token_cmd=`
 │                           from their verbs; `migrated=<target>` after `migrate`. A writer keeps every key it does not own
 ├── tunnel-token            Linux only, mode 600 (macOS uses the Keychain)
-├── api-token               Linux only, mode 600, from `share api-token` (macOS: Keychain item `share-api:<host>`)
+├── api-token               Linux only, mode 600, from `handout api-token` (macOS: Keychain item `share-api:<host>`)
 ├── cert.pem                browser-login path only, mode 600
 ├── cert.zone               the zone that cert.pem was issued for
 └── profiles/<name>/        a named profile's config dir, same files; its root is ~/share/profiles/<name>
 ```
 
 An r2 profile keeps far less. Its config holds `backend=r2`, `hostname`, `zone`, `bucket`,
-`port=r2` (a sentinel an older share dies on at load), `r2_endpoint`, and a kept
+`port=r2` (a sentinel an older CLI dies on at load), `r2_endpoint`, and a kept
 `api_token_cmd`. Its root holds `r2-own` (`<id>`, prefix, source path for every share this
 install added; `refresh` trusts only this file), `access-pending` for its own gated adds,
 and short-lived `.r2-index.XXXXXX` snapshots. There is no `pub/`, `index.tsv`, Caddyfile, or
@@ -93,7 +93,7 @@ tunnel token.
 
 ## Profiles
 
-`share --profile <name> <verb>` (or `SHARE_PROFILE=<name>`) runs a second, independent
+`handout --profile <name> <verb>` (or `SHARE_PROFILE=<name>`) runs a second, independent
 setup beside the default one: another Cloudflare account, another hostname, or both.
 No flag, or the name `default`, is the setup every path above describes, unchanged. A
 name is a slug (`^[a-z0-9][a-z0-9-]{0,31}$`), checked before any path is built; the flag
@@ -109,16 +109,16 @@ goes before the verb, and a `--profile` after the verb is refused rather than ig
 
 Profiles share nothing. The only cross-profile logic is two read-only scans of the
 derived locations: the other profiles' config files, for three refusals (the port pick,
-`share add <port>` of another profile's port or metrics port, and `share setup` on a
+`handout add <port>` of another profile's port or metrics port, and `handout setup` on a
 hostname or tunnel name another profile already holds), and every profile's `index.tsv`,
 so the port pick skips a port any profile live-shares. A profile moved with `SHARE_ROOT`
-or `SHARE_CONFIG_DIR` is invisible to both scans. `share serve` also refuses a port that
+or `SHARE_CONFIG_DIR` is invisible to both scans. `handout serve` also refuses a port that
 already answers (caddy binds with SO_REUSEPORT, so two
 servers on one port would split requests silently); that guard covers the default
-profile too. `share profiles` lists the default and every directory under
+profile too. `handout profiles` lists the default and every directory under
 `~/.config/share/profiles` with its state and host, read through each profile's own
-`share state`. `share teardown` on a named profile also removes its config dir when
-empty; the root with its shares stays, as for the default. Share Bar reads every
+`handout state`. `handout teardown` on a named profile also removes its config dir when
+empty; the root with its shares stays, as for the default. Handout Bar reads every
 profile in one `profiles --json` call and renders a section per profile; the status
 icon shows the worst health across sections, while `not_setup` and elsewhere
 profiles stay neutral and never darken it on their own.
@@ -127,7 +127,7 @@ Why a profile is a path prefix rather than a config key: [ADR-0005](decisions/AD
 ## Lifecycle of a share
 
 ```
-share add ./guide
+handout add ./guide
   realpath ./guide                  resolve a symlinked argument to its real path
   id = 6 random hex chars           from /dev/urandom
   stage = ~/share/.stage.XXXXXX
@@ -138,13 +138,13 @@ share add ./guide
   mv stage → pub/<id>               an atomic swap, so a refresh never serves half a copy
   append the row to index.tsv
   print + pbcopy the link, warn if the source repo is private on GitHub
-  share start if nothing is serving and this host is in `hosts`; caddy reload if it is
+  handout start if nothing is serving and this host is in `hosts`; caddy reload if it is
 ```
 
 A live share skips the copy entirely:
 
 ```
-share add 3000
+handout add 3000
   parse_target: a bare port / localhost:port / http://localhost:port is a live target
   port must be 1024..65535 and not caddy's or cloudflared's own ports
   opts = "live", src = http://127.0.0.1:3000
@@ -152,12 +152,12 @@ share add 3000
   print https://<host>/<id>/ plus the warning: the link reaches that port while the machine is awake
 ```
 
-`--host dev.example.com` wraps either kind in its own hostname. Order of writes: tunnel ingress rule (inserted before the catch-all, carrying `httpHostHeader`), then the CNAME, then the index row; `share rm` deletes the CNAME, then the ingress rule, then the row. Every Cloudflare-side edit runs under the `.lock-host` mutex and refuses a tunnel config whose invariants were changed outside share. The name must be a single label under the setup zone because Universal SSL stops at one level.
+`--host dev.example.com` wraps either kind in its own hostname. Order of writes: tunnel ingress rule (inserted before the catch-all, carrying `httpHostHeader`), then the CNAME, then the index row; `handout rm` deletes the CNAME, then the ingress rule, then the row. Every Cloudflare-side edit runs under the `.lock-host` mutex and refuses a tunnel config whose invariants were changed outside share. The name must be a single label under the setup zone because Universal SSL stops at one level.
 
 ### A gated share (`--access`)
 
 ```
-share add ./ops-report.pdf --access group:dwarves-ops        (or email:a@x,b@y; or domain:d.foundation)
+handout add ./ops-report.pdf --access group:ops-team        (or email:a@x,b@y; or domain:example.com)
   preflight        the API token (api_token_cmd, then the Keychain item share-api:<host> or the
                    600 file, then CLOUDFLARE_API_TOKEN), one read per scope, each line ok or MISSING
   sweep            access-pending: dead owners' apps deleted, orphaned bytes trashed (below)
@@ -178,12 +178,12 @@ share add ./ops-report.pdf --access group:dwarves-ops        (or email:a@x,b@y; 
   print + copy     the id is secret until this line
 ```
 
-Removal flips the order: `share rm <id>` (with the token) puts the line back, removes the
+Removal flips the order: `handout rm <id>` (with the token) puts the line back, removes the
 bytes and the row, reloads, then deletes the app (a 404 counts as done) and drops the
-line. Expiry under the login service has no token (`share serve` exports
+line. Expiry under the login service has no token (`handout serve` exports
 `SHARE_API_TOKEN_OFF=1`, which blanks every token source): the bytes and the row go, the
 app waits in `access-pending`, and `ls`, `status`, and `state` say so until an
-interactive `share prune`, `rm`, `ls` (with an exported `CLOUDFLARE_API_TOKEN`), or `add
+interactive `handout prune`, `rm`, `ls` (with an exported `CLOUDFLARE_API_TOKEN`), or `add
 --access` sweeps it. `teardown` refuses without a token while any gated row or pending
 line exists, and with one it unpublishes every gated share before the tunnel goes, so a
 later `setup` can never serve gated bytes with no app.
@@ -196,13 +196,13 @@ resolved by the app name's last word, and only after `GET access/organizations`
 answered 200 in this run: a list read without the scope is empty and proves nothing. A
 proven no-match is forgotten only when the line is older than 10 minutes.
 
-`share ls` with `CLOUDFLARE_API_TOKEN` exported (never through `api_token_cmd` or the
+`handout ls` with `CLOUDFLARE_API_TOKEN` exported (never through `api_token_cmd` or the
 Keychain, so a listing never runs `op read`) reads each gated row's app by id and prints
 `the link is PUBLIC` on a 404. A hand-edited row whose `access=` is not a lowercase uuid
 or whose `access_rule=` fails the rule grammar is skipped like any forged row; its app,
 if any, stays until removed in the dashboard.
 
-`share refresh <id>` runs the same copy from the recorded source path and swaps it in under the same id (a live share is a no-op). `share rm <id>` moves `pub/<id>` to the Trash (or `~/share/trash` without a `trash` command) and drops the row. An own-host share (`--host`) refuses to be removed without a Cloudflare credential (`CLOUDFLARE_API_TOKEN` or a `share setup --login` cert), so its DNS record and ingress rule are never orphaned. `prune` still removes an expired one and warns that they stay behind.
+`handout refresh <id>` runs the same copy from the recorded source path and swaps it in under the same id (a live share is a no-op). `handout rm <id>` moves `pub/<id>` to the Trash (or `~/share/trash` without a `trash` command) and drops the row. An own-host share (`--host`) refuses to be removed without a Cloudflare credential (`CLOUDFLARE_API_TOKEN` or a `handout setup --login` cert), so its DNS record and ingress rule are never orphaned. `prune` still removes an expired one and warns that they stay behind.
 
 ### Folder index page
 
@@ -222,7 +222,7 @@ Every publisher's CLI talks to the bucket directly.
 
 ```
  publisher A (Mini)        publisher B (laptop)                   visitor
- share --profile df add    share --profile df add                 https://f.example.com/<id>/<name>
+ handout --profile df add  handout --profile df add               https://f.example.com/<id>/<name>
         │                         │                                          │
         │ S3 API: curl --aws-sigv4, key id = token id,                       ▼
         │ secret = sha256(token) from stdin (never argv, never a file)   Cloudflare edge: TLS; an
@@ -267,15 +267,15 @@ character.
 
 `ls`, `prune`, `state`, and `rm` read a snapshot: the `m/` listing (every page), then every
 record in one parallel curl run. A record whose `id` differs from its key, whose `prefix` is
-not `o/<id>.` plus 8 hex plus `/`, whose `v` is newer than this share knows, or whose fields
+not `o/<id>.` plus 8 hex plus `/`, whose `v` is newer than this CLI knows, or whose fields
 hold a control character is dropped, like a forged `index.tsv` row. Any listing or record
-read that fails (other than a 404) stops the verb: share never prints an empty list or
+read that fails (other than a 404) stops the verb: the CLI never prints an empty list or
 picks an id on an error. The snapshot goes to a temporary `.r2-index.XXXXXX` under the root
 that `index` points at for the process, so `rows()` stays the only reader.
 
 ### The Worker
 
-The Worker holds no API token. Its source is embedded in `bin/share`, versioned by
+The Worker holds no API token. Its source is embedded in `bin/handout`, versioned by
 `WORKER_VERSION` and `WORKER_SHA`, and deployed by the admin setup with the bindings
 `BUCKET`, `HITS`, `HOST`, `TEAM` (the Access team domain, empty without one), `VERSION`,
 `SHA`, and a `SALT` secret set at the first deploy. Every request runs these checks in
@@ -311,7 +311,7 @@ token for the record's `aud`, and gets 404. Every served path starts with `/<id>
 `add --access` keeps the tunnel's order, with the record write as the publish:
 
 ```
-share --profile df add ./report.pdf --access group:ops
+handout --profile df add ./report.pdf --access group:ops
   /healthz         X-Share-Gate must be 1, else refused before any write
   preflight        the Access scopes, the sweep, the group lookup (as on a tunnel)
   upload           every file to o/<id>.<nonce>/, the listing checked against the stage
@@ -354,7 +354,7 @@ with the Access token`. `status` counts them and never deletes.
 A bare `prune` then sweeps orphan uploads: every `o/<id>.<nonce>/` that no record names and
 whose newest object is over 24 hours old is deleted (a crashed add, or a revoked token that
 could not clean up after itself). The sweep reads every `m/` record raw, not the filtered
-snapshot. One record that is not JSON, lacks a `prefix`, or has a `v` newer than this share
+snapshot. One record that is not JSON, lacks a `prefix`, or has a `v` newer than this CLI
 skips the whole sweep with a warning naming its key, so no live share's bytes are deleted
 because this CLI could not read its record. `status` prints `orphan sweep blocked by <key>`.
 
@@ -363,7 +363,7 @@ because this CLI could not read its record. `status` prints `orphan sweep blocke
 The Worker writes one Analytics Engine data point for every answer under 400 on a share
 path (not `/healthz`): index the share id, blobs the id and the first 16 hex of
 `sha256(SALT + cf-connecting-ip)`. The raw IP is never written; the salted hash
-pseudonymizes visitors, it does not anonymize them. `share hits <id>` checks the id against
+pseudonymizes visitors, it does not anonymize them. `handout hits <id>` checks the id against
 `^[0-9a-f]{6}$`, then sends one SQL query:
 `SELECT SUM(_sample_interval) AS hits, COUNT(DISTINCT blob2) AS visitors, MAX(timestamp) AS last`
 over the profile's dataset for that id. It needs a token with Account Analytics: Read,
@@ -407,13 +407,13 @@ A tenant is one hostname with one shared list. Its origin is the one machine in 
 
 ### Enabling and leaving R2
 
-`CLOUDFLARE_API_TOKEN=<admin> share setup <host> --r2 --bucket <name> [--storage-default local|cloud] [--alias <old-host>]` runs on the origin only. Every read and refusal comes before the first write, and a rerun after a die converges. The order matters: the Worker is deployed with subdomain and previews off, pointer records are written for every local row, the config keys are written, the marker moves, the route is attached, and live checks (`/healthz` three times with this CLI's version pair, a probe file through the tunnel leg) pass last.
+`CLOUDFLARE_API_TOKEN=<admin> handout setup <host> --r2 --bucket <name> [--storage-default local|cloud] [--alias <old-host>]` runs on the origin only. Every read and refusal comes before the first write, and a rerun after a die converges. The order matters: the Worker is deployed with subdomain and previews off, pointer records are written for every local row, the config keys are written, the marker moves, the route is attached, and live checks (`/healthz` three times with this CLI's version pair, a probe file through the tunnel leg) pass last.
 
 With `--alias <old-host>` the tenant Worker takes the alias's custom domain and answers 301 to the same path on the tenant host. Each gated cloud link's Access app gains the tenant destinations first (the PUT keeps the AUD), passes the gate probe, and drops the alias destinations last. A folded app keeps its name `share <id> <alias> <nonce>`, so `rm` and expiry still delete it.
 
 Every deploy (`setup --r2` and `--backend r2`) carries forward what is deployed: each `M_<8hex>` `vpc_service` binding, `MEMBERS` and `PAUSED` are read from the settings GET and sent again, with a fresh 16-hex `DEPLOY` nonce. A binding whose VPC Service answers 404 (code 5104) is dropped and named; any other answer stops before the deploy. When the settings carry any of these, their `DEPLOY` must equal the `X-Share-Deploy` that `/healthz` serves (read up to 3 times; with no Worker answering, two settings reads must agree), so a stale settings read cannot drop a binding. A deploy is live once `/healthz` answers its nonce three times; past `SHARE_R2_WAIT` the verb dies naming the rerun. `setup --force` never lowers `WORKER_VERSION` while a member binding, `MEMBERS`, a non-empty `PAUSED`, or `members: true` in `share.json` is present.
 
-`share setup <host> --no-r2` is the rollback for a tenant without an alias: the route goes, then the four config keys. The tunnel serves the hostname alone again; pointers, cloud records, the bucket, and the Worker stay. It refuses while an alias is set, because an alias whose 301 lands on a plain tunnel turns every folded cloud link into a 404. Every die after the marker moved prints the alias rollback list instead.
+`handout setup <host> --no-r2` is the rollback for a tenant without an alias: the route goes, then the four config keys. The tunnel serves the hostname alone again; pointers, cloud records, the bucket, and the Worker stay. It refuses while an alias is set, because an alias whose 301 lands on a plain tunnel turns every folded cloud link into a 404. Every die after the marker moved prints the alias rollback list instead.
 
 ### Pointer records
 
@@ -427,7 +427,7 @@ Cloud records stay `v:1` (with an optional `type`), so a v0.8.0 CLI and Worker k
 
 `ls`, `state`, and `profiles --json` read one row set per profile: the local index on an origin with R2 off, the local index plus every cloud record on an origin with R2 on, and every bucket record on a member. A record read from the bucket is display data only: it never enters `rows()`, the index, the Caddyfile, a stage path, `refresh`, or shell arithmetic, and every field is checked before it is shown. A bucket read that fails leaves the local rows and adds `cloud_error`.
 
-`state` and `profiles --json` read the bucket only with a token from the Keychain item or the mode-600 file (never an `api_token_cmd`, which may prompt during a poll) and fetch the newest 25 records; `cloud_more` counts the rest. `share ls` prints one tag before each link (`cloud`, `machine`, or `live`), then the type and `by=<machine>`.
+`state` and `profiles --json` read the bucket only with a token from the Keychain item or the mode-600 file (never an `api_token_cmd`, which may prompt during a poll) and fetch the newest 25 records; `cloud_more` counts the rest. `handout ls` prints one tag before each link (`cloud`, `machine`, or `live`), then the type and `by=<machine>`.
 
 | `type` | First match wins |
 |---|---|
@@ -474,28 +474,28 @@ Callers read the cloud leg from the `/healthz` headers, never the status alone: 
 
 A T2 tenant has members: teammates whose links stay on their own machine (machine members) or go to the bucket (cloud members), all under the one hostname. The design is SPEC-009; ADR-0009 records why.
 
-- **Turn members on and off.** On the origin, after R2 is on: `share setup <host> --r2 --bucket <name> --members --yes` (T1 to T2) and `--no-members` (back to T1). `--members` deploys `MEMBERS` and an empty `PAUSED`, then writes `members:true` and `min_cli` into `share.json` and `members=on` into the config. `--no-members` refuses while any record is not removed or any member binding is deployed; REMOVED records, `u/purged.json`, `t/` and `i/` objects stay in the bucket. On T2, `teardown`, `migrate` and `--no-r2` refuse with `members_present`, reading the marker and the deployed bindings, never the config alone.
-- **The admin verbs.** `share member add <name> [--machine|--cloud] [--port P] [--invite-ttl 7d] [--token-ttl 90d]`, `share member ls [--json]`, `share member sync [--rebind]`, `share member rm` and `share member purge`, each with `--tenant <host>` on a machine with no profile for it. They need the admin token (`CLOUDFLARE_API_TOKEN` or `admin_token_cmd`, with Cloudflare Tunnel Write and Connectivity Directory Admin); `add` also needs the minter token (`SHARE_MINTER_TOKEN` or `minter_token_cmd`, with API Tokens Read and Write). `member add` mints the member's token, makes its tunnel and VPC Service (machine), deploys the binding `M_<8hex>`, seals an invite and prints one `share join <host> <code>` line. A died add is named by `member ls` with its step and its rerun; the rerun finds every object by name and converges.
+- **Turn members on and off.** On the origin, after R2 is on: `handout setup <host> --r2 --bucket <name> --members --yes` (T1 to T2) and `--no-members` (back to T1). `--members` deploys `MEMBERS` and an empty `PAUSED`, then writes `members:true` and `min_cli` into `share.json` and `members=on` into the config. `--no-members` refuses while any record is not removed or any member binding is deployed; REMOVED records, `u/purged.json`, `t/` and `i/` objects stay in the bucket. On T2, `teardown`, `migrate` and `--no-r2` refuse with `members_present`, reading the marker and the deployed bindings, never the config alone.
+- **The admin verbs.** `handout member add <name> [--machine|--cloud] [--port P] [--invite-ttl 7d] [--token-ttl 90d]`, `handout member ls [--json]`, `handout member sync [--rebind]`, `handout member rm` and `handout member purge`, each with `--tenant <host>` on a machine with no profile for it. They need the admin token (`CLOUDFLARE_API_TOKEN` or `admin_token_cmd`, with Cloudflare Tunnel Write and Connectivity Directory Admin); `add` also needs the minter token (`SHARE_MINTER_TOKEN` or `minter_token_cmd`, with API Tokens Read and Write). `member add` mints the member's token, makes its tunnel and VPC Service (machine), deploys the binding `M_<8hex>`, seals an invite and prints one `handout join <host> <code>` line. A died add is named by `member ls` with its step and its rerun; the rerun finds every object by name and converges.
 - **The lease.** Every admin verb holds `lock/admin` in the bucket while it changes Cloudflare state. Another admin waits up to 60 s, then refuses `lease_held`; a holder dead on the same machine, or silent past 900 s by LastModified, is taken over. On T2 a `setup --r2` rerun takes the lease too and builds its deploy from a settings read made under it.
 - **Pause, resume, invite, rotate, renew, adopt** (all built). Each takes the lease, writes its `...ing` status first, and converges on rerun.
-  - `share member pause <name>` and `resume <name>` (machine members only; a cloud member is refused `member_cloud`) add or drop the member's 8-hex suffix in `PAUSED` with one deploy. A paused member's links answer 503 within the verb, its cloud links keep serving, and its own CLI refuses `add`.
-  - `share member invite <name> [--port P] [--invite-ttl 7d]` replaces a lost or expired code: it deletes the old token and connections, mints a new token, optionally moves the VPC Service to a new port, deletes the old `i/` and seals a new one. It runs from `invited`, `joining` or `left`, and keeps `prev_status`.
-  - `share member rotate <name>` (machine members only) replaces the tunnel and VPC Service with `-r<n>` ones, rebinds the same `M_<8hex>` (links and `PAUSED` stay), deletes the old objects and the old token, mints a new token and invite, and ends `invited` with `prev_status` kept. The member is offline until `share join <host> <new code>`; join's last write restores `prev_status`, so a paused member comes back paused.
-  - `share member renew <name> [--token-ttl 90d]` extends the token's `expires_on` in place, found by name in the current minter's list. A different minter user cannot see it: the verb dies `token_unreachable` naming the date and `share member rotate <name>` (`invite` for a cloud member). No re-join is needed.
-  - `share member adopt <name> --token-id <id>` registers an existing R5 publisher as a cloud member. It refuses `adopt_token_scope` unless the minter lists the token and its policy names only this bucket plus Zone Read, or when the token already belongs to a member (one token, one member). The token is renamed in place to `share <host> <member_id>`, so `member rm` finds it; `--by <label>` lists the v:1 links with that `by`, which keep their `by` and `origin`. An unregistered R5 publisher keeps working on T2; adopt is optional.
-  - A member's `hits` are cut: the Worker counts no hit for a `v:3` link, and `share hits` stays an admin and publisher verb.
+  - `handout member pause <name>` and `resume <name>` (machine members only; a cloud member is refused `member_cloud`) add or drop the member's 8-hex suffix in `PAUSED` with one deploy. A paused member's links answer 503 within the verb, its cloud links keep serving, and its own CLI refuses `add`.
+  - `handout member invite <name> [--port P] [--invite-ttl 7d]` replaces a lost or expired code: it deletes the old token and connections, mints a new token, optionally moves the VPC Service to a new port, deletes the old `i/` and seals a new one. It runs from `invited`, `joining` or `left`, and keeps `prev_status`.
+  - `handout member rotate <name>` (machine members only) replaces the tunnel and VPC Service with `-r<n>` ones, rebinds the same `M_<8hex>` (links and `PAUSED` stay), deletes the old objects and the old token, mints a new token and invite, and ends `invited` with `prev_status` kept. The member is offline until `handout join <host> <new code>`; join's last write restores `prev_status`, so a paused member comes back paused.
+  - `handout member renew <name> [--token-ttl 90d]` extends the token's `expires_on` in place, found by name in the current minter's list. A different minter user cannot see it: the verb dies `token_unreachable` naming the date and `handout member rotate <name>` (`invite` for a cloud member). No re-join is needed.
+  - `handout member adopt <name> --token-id <id>` registers an existing R5 publisher as a cloud member. It refuses `adopt_token_scope` unless the minter lists the token and its policy names only this bucket plus Zone Read, or when the token already belongs to a member (one token, one member). The token is renamed in place to `share <host> <member_id>`, so `member rm` finds it; `--by <label>` lists the v:1 links with that `by`, which keep their `by` and `origin`. An unregistered R5 publisher keeps working on T2; adopt is optional.
+  - A member's `hits` are cut: the Worker counts no hit for a `v:3` link, and `handout hits` stays an admin and publisher verb.
 - **Records.** `u/<member_id>.json` is a journal any publisher can write, so it never routes: the deploy is the routing table, and every id in a record is a hint the verb checks by name. Each status write goes through `member_can`, the transition table of the spec. `member ls` reports disagreements as drift codes (`deploy_paused_record_active`, `deploy_unbound_record_live`, `extra_connector` and the rest); `member sync` lets the deploy win for `active`, `pausing`, `resuming` and `paused`, never unpauses a paused member, and with `--rebind` re-adds bindings from the account's VPC Services.
-- **Join.** On the member's Mac, `share [--profile <name>] join <host> <code>` redeems the invite once through the Worker, stores the publisher and connector tokens in the Keychain, writes the member config (`role=member`, `member_id`, `member_mode`), marks the record joining, starts Caddy and cloudflared, proves a probe link through `https://<host>/` three times, and marks the record active. A bare `share join` resumes a join that stopped, from its journal step, once the config is written (step 6 of 9). A join cut earlier lost its unsealed invite from memory, so the bare form says `invite_unavailable` and the admin sends a new code. Each refusal is a code: `invite_unknown_or_used`, `invite_expired`, `invite_unavailable`, `invite_tampered`, `member_changed`, `port_busy`, `profile_not_empty`, `member_needs_keychain`, `cli_below_min`.
-- **On a member machine.** `share add <file>` writes a v:3 pointer with `origin=<member_id>` before the bytes and serves them from this machine; `--cloud` writes a cloud record with `origin`. Live port shares, `--host` and `--access` are refused, and so is an add while the member is paused, left or removed. The member's reap list holds only its own v:3 pointers. `setup`, `teardown` and `migrate` are refused (`share leave` is the way out). `share state` adds `member` (`id`, `name`, `mode`, `status`, `step`, `token_expires`) from the `.health` cache.
-- **Remove a member.** `share member rm <name> [--cloud-links keep|delete]` (admin and minter tokens) takes the lease, marks the record `removing`, deploys without the member's binding and its `PAUSED` entry, then deletes every VPC Service and tunnel whose name is `share-<host-dashes>-<8hex>` (any `-r<n>`), found by listing the account, never by an id in the record. It deletes the token named `share <host> <member_id>` from the current minter's list; with no match it prints `token not reachable by this minter; it expires <date>` and `member ls` shows `token_unreachable` until then. Each of the member's v:3 pointers gets a tombstone `t/<id>` and then goes; the bytes stay on that machine. Cloud links stay until they expire (`--cloud-links delete` removes them). Every `i/` naming the member goes, and the record ends `removed`. A died rm is named by `member ls` with its step; the rerun converges. A record that reads `removed` while objects of it remain is cleaned the same way. `share member purge <name>` deletes a removed member's record after adding its id to `u/purged.json`. Two records of one name are refused unless one is bound; then name the member by its id.
-- **Revoke a link.** The admin's `share rm <id>` of another member's link writes `t/<id>` (If-None-Match), deletes `m/<id>` and proves it gone; the Worker 404s at once. Without the admin token it is refused `revoke_needs_admin`; a member never removes another machine's link, and only the origin removes a `v:2` link.
-- **The member's loop and reconcile.** On a member machine, serve runs `share prune --loop` hourly under `env -u CLOUDFLARE_API_TOKEN`; it reads the publisher key from the Keychain item only (a locked Keychain logs one line and runs local expiry alone). It expires local rows and own pointers, reads its own record into `.health`, and reconciles: an own pointer with no row goes after 10 minutes; a tombstone over a live row with no pointer marks the row `revoked revoked_by=<who>` and drops its Caddy handle (the bytes stay); a tombstone older than 10 minutes beside a live pointer is deleted and reported as forged or unfinished; a live row with no pointer and no tombstone gets its pointer back. A member whose record reads removed writes nothing. The origin never reads `t/`.
-- **Leave.** `share leave` on a member stops serving, deletes this machine's pointers (each proven gone), marks the record `left`, forgets both keys and moves the profile root, links included, to the Trash. `share leave --local` makes no bucket call. `share status` on a member reads its own record once: it says removed only when the record reads `removed`; a key the bucket refuses reads "your key stopped working; ask the admin" (or "expired" past the local `token_expires`, naming `share member renew`), never removal.
-- **The members cache.** `member ls` writes the `members` key of `.health`; the admin's `share state` then reads a member's v:3 links as `link_state` `paused` or `offline` from it, with no network call, until it is 24 hours old. `state.tier_drift` is true when `share.json` and the config disagree on members.
+- **Join.** On the member's Mac, `handout [--profile <name>] join <host> <code>` redeems the invite once through the Worker, stores the publisher and connector tokens in the Keychain, writes the member config (`role=member`, `member_id`, `member_mode`), marks the record joining, starts Caddy and cloudflared, proves a probe link through `https://<host>/` three times, and marks the record active. A bare `handout join` resumes a join that stopped, from its journal step, once the config is written (step 6 of 9). A join cut earlier lost its unsealed invite from memory, so the bare form says `invite_unavailable` and the admin sends a new code. Each refusal is a code: `invite_unknown_or_used`, `invite_expired`, `invite_unavailable`, `invite_tampered`, `member_changed`, `port_busy`, `profile_not_empty`, `member_needs_keychain`, `cli_below_min`.
+- **On a member machine.** `handout add <file>` writes a v:3 pointer with `origin=<member_id>` before the bytes and serves them from this machine; `--cloud` writes a cloud record with `origin`. Live port shares, `--host` and `--access` are refused, and so is an add while the member is paused, left or removed. The member's reap list holds only its own v:3 pointers. `setup`, `teardown` and `migrate` are refused (`handout leave` is the way out). `handout state` adds `member` (`id`, `name`, `mode`, `status`, `step`, `token_expires`) from the `.health` cache.
+- **Remove a member.** `handout member rm <name> [--cloud-links keep|delete]` (admin and minter tokens) takes the lease, marks the record `removing`, deploys without the member's binding and its `PAUSED` entry, then deletes every VPC Service and tunnel whose name is `share-<host-dashes>-<8hex>` (any `-r<n>`), found by listing the account, never by an id in the record. It deletes the token named `share <host> <member_id>` from the current minter's list; with no match it prints `token not reachable by this minter; it expires <date>` and `member ls` shows `token_unreachable` until then. Each of the member's v:3 pointers gets a tombstone `t/<id>` and then goes; the bytes stay on that machine. Cloud links stay until they expire (`--cloud-links delete` removes them). Every `i/` naming the member goes, and the record ends `removed`. A died rm is named by `member ls` with its step; the rerun converges. A record that reads `removed` while objects of it remain is cleaned the same way. `handout member purge <name>` deletes a removed member's record after adding its id to `u/purged.json`. Two records of one name are refused unless one is bound; then name the member by its id.
+- **Revoke a link.** The admin's `handout rm <id>` of another member's link writes `t/<id>` (If-None-Match), deletes `m/<id>` and proves it gone; the Worker 404s at once. Without the admin token it is refused `revoke_needs_admin`; a member never removes another machine's link, and only the origin removes a `v:2` link.
+- **The member's loop and reconcile.** On a member machine, serve runs `handout prune --loop` hourly under `env -u CLOUDFLARE_API_TOKEN`; it reads the publisher key from the Keychain item only (a locked Keychain logs one line and runs local expiry alone). It expires local rows and own pointers, reads its own record into `.health`, and reconciles: an own pointer with no row goes after 10 minutes; a tombstone over a live row with no pointer marks the row `revoked revoked_by=<who>` and drops its Caddy handle (the bytes stay); a tombstone older than 10 minutes beside a live pointer is deleted and reported as forged or unfinished; a live row with no pointer and no tombstone gets its pointer back. A member whose record reads removed writes nothing. The origin never reads `t/`.
+- **Leave.** `handout leave` on a member stops serving, deletes this machine's pointers (each proven gone), marks the record `left`, forgets both keys and moves the profile root, links included, to the Trash. `handout leave --local` makes no bucket call. `handout status` on a member reads its own record once: it says removed only when the record reads `removed`; a key the bucket refuses reads "your key stopped working; ask the admin" (or "expired" past the local `token_expires`, naming `handout member renew`), never removal.
+- **The members cache.** `member ls` writes the `members` key of `.health`; the admin's `handout state` then reads a member's v:3 links as `link_state` `paused` or `offline` from it, with no network call, until it is 24 hours old. `state.tier_drift` is true when `share.json` and the config disagree on members.
 
 ### Moving an origin: `migrate` and `import`
 
-`share migrate --to <ssh-target> [--remote-profile <name>] [--remote-bin <path>] [--max-bytes <n>] [--yes]` runs on the current origin while it is online, with `CLOUDFLARE_API_TOKEN` in the environment. It moves a tenant with R2 off and refuses one with `bucket=`.
+`handout migrate --to <ssh-target> [--remote-profile <name>] [--remote-bin <path>] [--max-bytes <n>] [--yes]` runs on the current origin while it is online, with `CLOUDFLARE_API_TOKEN` in the environment. It moves a tenant with R2 off and refuses one with `bucket=`.
 
 ```
  old origin                                         new origin, over ssh
@@ -514,17 +514,17 @@ A T2 tenant has members: teammates whose links stay on their own machine (machin
 
 Files `migrate` adds on the old origin: `index.migrated` and `migrated/<id>`. A moved row's `src` becomes `<by>:<src>`, and `refresh` of such a row dies with `re-add it from a source on this machine`.
 
-## `share state`
+## `handout state`
 
-The menu bar app never reads share's files. It runs `share profiles --json`, a read-only
+The menu bar app never reads Handout's files. It runs `handout profiles --json`, a read-only
 verb that prints every profile's `state` snapshot (or a per-profile error line) and exits
-0; each `state` object is the same read-only snapshot the `share state` verb prints:
+0; each `state` object is the same read-only snapshot the `handout state` verb prints:
 not set up, stopped, or serving. Every per-profile call the app makes carries
 `--profile <name>` before the verb, `default` included, and its children drop the
 location overrides (`SHARE_ROOT`, `SHARE_CONFIG_DIR`, `SHARE_PORT`, `SHARE_HOSTNAME`,
 `SHARE_HOSTS`, `SHARE_SERVICE_LABEL`) plus `SHARE_PROFILE`, so no verb resolves a setup
 the menu did not show.
-The app changes anything only by running share's normal verbs (`add`, `rm`, `refresh`,
+The app changes anything only by running the CLI's normal verbs (`add`, `rm`, `refresh`,
 `start`, `stop`, `setup`); why that split exists: [ADR-0003](decisions/ADR-0003-menu-bar-reads-through-cli.md).
 
 ```json
@@ -533,14 +533,14 @@ The app changes anything only by running share's normal verbs (`add`, `rm`, `ref
   "state": "serving",
   "ready": true,
   "mode": "named",
-  "host": "s.han.ws",
+  "host": "s.example.com",
   "hosts": "hans-air-m4",
   "serves_here": true,
   "service": true,
   "access_pending": 0,
   "shares": [
     {"id": "3d324a", "name": "theme-check.md",
-     "url": "https://s.han.ws/3d324a/theme-check.html",
+     "url": "https://s.example.com/3d324a/theme-check.html",
      "kind": "snapshot", "own_host": null, "expires": 1759000000, "access": null}
   ]
 }
@@ -556,11 +556,11 @@ The app changes anything only by running share's normal verbs (`add`, `rm`, `ref
 | `hosts` | the `hosts=` config value, `""` when unset |
 | `serves_here` | whether this machine is in `hosts` |
 | `service` | whether the login service is installed |
-| `shares[]` | ordered newest first, same rows `share ls` prints |
+| `shares[]` | ordered newest first, same rows `handout ls` prints |
 | `shares[].kind` | `live` for a live proxy, else `snapshot` |
 | `shares[].own_host` | the share's own `--host` value, else `null` |
 | `shares[].expires` | epoch seconds; `0` means never |
-| `shares[].url` | exactly what `share ls` prints for that row |
+| `shares[].url` | exactly what `handout ls` prints for that row |
 | `shares[].access` | the `--access` rule of a gated share (`group:...`, `email:...`, `domain:...`), else `null` |
 | `shares[].storage` | `machine` (served by the tenant's origin through its tunnel) or `cloud` (served from the bucket) |
 | `shares[].type` | the file type: `pdf`, `image`, `video`, `audio`, `folder`, `site`, `markdown`, `archive`, `text`, or `other` |
@@ -574,8 +574,8 @@ The app changes anything only by running share's normal verbs (`add`, `rm`, `ref
 | `access_inflight` | count of Access apps a running `add` is still working on (a live owner); not waiting for anything, so no `prune` is due |
 | `access_bad` | count of hand-edited `access-pending` lines no sweep acts on |
 | `skipped` | count of malformed index rows; present only when greater than zero |
-| `backend` | `"r2"` on an r2 profile only, absent on a tunnel profile. There `state` is `serving` once set up, `ready` comes from one `/healthz` probe (2 s), `mode` is `named`, `hosts` is `""`, `serves_here` and `service` are `false`, every share is a `snapshot`, and `skipped` is never set. Share Bar shows neither Start nor Stop for it |
-| `codes_v` | integer, `1`: the version of the refusal code list (`share state-fn codes`); it moves only when a code is renamed or removed |
+| `backend` | `"r2"` on an r2 profile only, absent on a tunnel profile. There `state` is `serving` once set up, `ready` comes from one `/healthz` probe (2 s), `mode` is `named`, `hosts` is `""`, `serves_here` and `service` are `false`, every share is a `snapshot`, and `skipped` is never set. Handout Bar shows neither Start nor Stop for it |
+| `codes_v` | integer, `1`: the version of the refusal code list (`handout state-fn codes`); it moves only when a code is renamed or removed |
 | `cloud_error_code` | the code of `cloud_error` when the bucket read died with one (seen under `SHARE_ERROR_JSON=1`), else absent |
 | `role` | what kind of profile this is: `none`, `quick`, `origin`, `tenant_origin`, `r2_profile`, `member`, or `migrated`. A `migrated` profile moved to another machine; its `state` reads `not_setup` |
 | `tier` | on `origin` and `tenant_origin` only: `t0` no bucket, `t1` a bucket, `t2` a bucket and `members=on` |
@@ -589,32 +589,32 @@ The app changes anything only by running share's normal verbs (`add`, `rm`, `ref
 Invariants: `state` never prunes, never writes or creates a file, never needs a TTY,
 and never touches the clipboard. Removing or renaming a field bumps `schema`; adding a
 field does not, so an older app can still read a newer CLI. An index row with exactly 5
-tab fields (the shape share wrote before this version) reads with empty opts; a row is
+tab fields (the shape the CLI wrote before this version) reads with empty opts; a row is
 skipped, and counted in `skipped` instead of breaking the read, when it has fewer than 5
 or more than 6 fields, when its id is not exactly 6 lowercase hex characters, or when its
 `host=` opt is the main hostname or not a valid hostname.
 
 ### Codes, the step journal, and the serve exit record
 
-A refusal still ends with one `share: <message>` line on stderr and exit 1. With `SHARE_ERROR_JSON=1` it adds one unprefixed last line, `{"error":{"code":...,"message":...,"next":...}}`; `code` is stable and listed by `share state-fn codes` (a hidden test verb), and the skill names each one. Without the variable stderr is unchanged.
+A refusal still ends with one `share: <message>` line on stderr and exit 1. With `SHARE_ERROR_JSON=1` it adds one unprefixed last line, `{"error":{"code":...,"message":...,"next":...}}`; `code` is stable and listed by `handout state-fn codes` (a hidden test verb), and the skill names each one. Without the variable stderr is unchanged.
 
-The multi-step verbs (`setup <host>`, `setup --r2`, `--no-r2`, tunnel `teardown`, `teardown --purge`, `migrate`) each keep a journal file, `$root/ops/<verb>.<pid>.json`, at the step they reached. A clean finish removes it, and a success also removes every dead journal of the profile except a dead `add`'s. A die, a kill, or the Share Bar's Stop leaves it: `state` lists it in `ops`, `status` prints `<verb> stopped at step <n> of <of> (<name>); rerun: <command>` (plus `or roll back: <command>` for `setup --r2`), and the next run of the verb prints `previous <verb> died at step <n> (<name>); continuing`, then runs from step 1 again, each step skipping what is already in place. A second run while the first is alive is refused `op_running`; liveness is the pid, a share process, and the same start time, read with `LC_ALL=C TZ=UTC0` so a locale or zone never makes a live run read dead. `SHARE_PROGRESS=1` prints one `{"progress":{...}}` stderr line per step.
+The multi-step verbs (`setup <host>`, `setup --r2`, `--no-r2`, tunnel `teardown`, `teardown --purge`, `migrate`) each keep a journal file, `$root/ops/<verb>.<pid>.json`, at the step they reached. A clean finish removes it, and a success also removes every dead journal of the profile except a dead `add`'s. A die, a kill, or the Handout Bar's Stop leaves it: `state` lists it in `ops`, `status` prints `<verb> stopped at step <n> of <of> (<name>); rerun: <command>` (plus `or roll back: <command>` for `setup --r2`), and the next run of the verb prints `previous <verb> died at step <n> (<name>); continuing`, then runs from step 1 again, each step skipping what is already in place. A second run while the first is alive is refused `op_running`; liveness is the pid, a share process, and the same start time, read with `LC_ALL=C TZ=UTC0` so a locale or zone never makes a live run read dead. `SHARE_PROGRESS=1` prints one `{"progress":{...}}` stderr line per step.
 
-`serve` records why it ended in `$root/.serve-exit` (`{"code":...,"at":...}`): its own refusal's code, `cloudflared_died` or `caddy_failed` when a child exits, and `stopped` from `share stop`. A serve removes a stale record only once it answers, so a crash loop under launchd keeps its reason.
+`serve` records why it ended in `$root/.serve-exit` (`{"code":...,"at":...}`): its own refusal's code, `cloudflared_died` or `caddy_failed` when a child exits, and `stopped` from `handout stop`. A serve removes a stale record only once it answers, so a crash loop under launchd keeps its reason.
 
-The admin token for `setup --r2`, `--no-r2` and `teardown --purge` comes from `CLOUDFLARE_API_TOKEN`, else from `admin_token_cmd` in the profile config (`share admin-token --cmd '<command>'`): a command that prints it, run once per process and never stored or exported, so the serve daemon never holds a token that came from the command. `setup <host>`, tunnel `teardown`, `migrate` and `setup --backend r2` also run the command when it is set and the variable is not. `minter_token_cmd` (`share minter-token`) works the same for the token that mints member tokens. Config writers rewrite only the keys they own and keep every other line byte for byte, in place.
+The admin token for `setup --r2`, `--no-r2` and `teardown --purge` comes from `CLOUDFLARE_API_TOKEN`, else from `admin_token_cmd` in the profile config (`handout admin-token --cmd '<command>'`): a command that prints it, run once per process and never stored or exported, so the serve daemon never holds a token that came from the command. `setup <host>`, tunnel `teardown`, `migrate` and `setup --backend r2` also run the command when it is set and the variable is not. `minter_token_cmd` (`handout minter-token`) works the same for the token that mints member tokens. Config writers rewrite only the keys they own and keep every other line byte for byte, in place.
 
-**Serving phase.** `state.serve` is `{phase, reason}`, computed in one place for `status`, `state` and the Share Bar. A running serve is `serving` once `/ready` answers, `starting` for its first 30 seconds, and `tunnel_down` after that; a stopped profile is `stopped`, `elsewhere` when this machine is not in `hosts=` (`status` then says links work while a machine in `hosts=` serves, never "share start"), or `failed` when the login service is installed and `.serve-exit` holds a code other than `stopped`. An r2 profile is `worker_down` or `serving` by one `/healthz` probe. Every phase maps onto the same `state` and `ready` values `state` always printed.
+**Serving phase.** `state.serve` is `{phase, reason}`, computed in one place for `status`, `state` and the Handout Bar. A running serve is `serving` once `/ready` answers, `starting` for its first 30 seconds, and `tunnel_down` after that; a stopped profile is `stopped`, `elsewhere` when this machine is not in `hosts=` (`status` then says links work while a machine in `hosts=` serves, never "handout start"), or `failed` when the login service is installed and `.serve-exit` holds a code other than `stopped`. An r2 profile is `worker_down` or `serving` by one `/healthz` probe. Every phase maps onto the same `state` and `ready` values `state` always printed.
 
-**Link state.** Each `shares[]` row carries `link_state`: `live`, `expired`, `shadowed`, `gate_missing` or `revoked`, with a `reason` when it says more. Expiry and revocation come from the row; `shadowed` and `gate_missing` come from checks that need the network, so `state` reads what the last `share ls` saw, kept in `.health` for a week. `share ls` adds `state=<link_state>` to the second line of a row that is not live.
+**Link state.** Each `shares[]` row carries `link_state`: `live`, `expired`, `shadowed`, `gate_missing` or `revoked`, with a `reason` when it says more. Expiry and revocation come from the row; `shadowed` and `gate_missing` come from checks that need the network, so `state` reads what the last `handout ls` saw, kept in `.health` for a week. `handout ls` adds `state=<link_state>` to the second line of a row that is not live.
 
-**The `.health` cache.** `$config_dir/.health` (mode 600, no secret) holds what the last token check, Worker probe and listing saw: `token` (written by `share api-token`), `worker` (the Worker's version and sha, written by an r2 profile's `status` and by every setup that waits for `/healthz`), `gates` and `shadow` (written by `share ls`), and `min_cli`. Each writer replaces only its own top-level key, so a key another writer owns survives. `state` reads it and never refreshes it, so it makes no call and writes nothing; `state.token` and `state.compat` come from it. Every teardown removes the file with the config.
+**The `.health` cache.** `$config_dir/.health` (mode 600, no secret) holds what the last token check, Worker probe and listing saw: `token` (written by `handout api-token`), `worker` (the Worker's version and sha, written by an r2 profile's `status` and by every setup that waits for `/healthz`), `gates` and `shadow` (written by `handout ls`), and `min_cli`. Each writer replaces only its own top-level key, so a key another writer owns survives. `state` reads it and never refreshes it, so it makes no call and writes nothing; `state.token` and `state.compat` come from it. Every teardown removes the file with the config.
 
-**Access apps in flight.** An `add` that is still working owns an `access-pending` line. `state.access_inflight` counts those; `access_pending` counts only lines that wait for a delete (no owner, or a dead one), so the Share Bar no longer asks for a `prune` while an add runs.
+**Access apps in flight.** An `add` that is still working owns an `access-pending` line. `state.access_inflight` counts those; `access_pending` counts only lines that wait for a delete (no owner, or a dead one), so the Handout Bar no longer asks for a `prune` while an add runs.
 
 **The `add` journal.** A local `add` journals as `add` with the steps `pointer`, `publish`, `access`, `host`, `gate` and `row`. Two adds may overlap, so it never refuses with `op_running`. A dead add's journal is consumed by the next bare `prune` (also serve's hourly one): with its row in the index the add finished and only the file goes; with no row its copy goes to the Trash and its pointer is dropped, and any Access app is left to the same prune's sweep.
 
-**`share config`.** `share config ttl <duration>` and `share config storage_default local|cloud` set the two CLI defaults the Share Bar's General tab writes (`ttl` takes `12h`, `7d` or `never`; `storage_default` needs a bucket). With no value the command prints the current one, and `--unset` drops it. Any other key is refused with the code `config_key_unknown`. Writes go through the same key-keeping writer as the other verbs.
+**`handout config`.** `handout config ttl <duration>` and `handout config storage_default local|cloud` set the two CLI defaults the Handout Bar's General tab writes (`ttl` takes `12h`, `7d` or `never`; `storage_default` needs a bucket). With no value the command prints the current one, and `--unset` drops it. Any other key is refused with the code `config_key_unknown`. Writes go through the same key-keeping writer as the other verbs.
 
 ## Why each choice
 
@@ -627,15 +627,15 @@ The admin token for `setup --r2`, `--no-r2` and `teardown --purge` comes from `C
 | `httpHostHeader` pinned per ingress rule | Caddy routes by Host; a visitor-supplied Host of another share must not reach it, so cloudflared sets the origin Host to the share's own hostname. |
 | One Access app per gated share, observed before the bytes move | Measured on the live edge: a new app takes seconds to minutes to enforce, and `kid` in the login redirect is the matching app's AUD. Publishing only after three rounds of `kid == aud` means the bytes are never reachable ungated, and deleting by stored id at `rm` means no app outlives its link. Detail: [ADR-0006](decisions/ADR-0006-access-gate-per-share.md). |
 | `400` on `%2F`, `%5C`, `%2E` at Caddy, main host only | Measured: the edge matches a path app after normalizing case, `//`, and `%2e%2e`, but does not decode `%2F` or `%5C`; Caddy decodes and cleans them, so `/x/..%2F<id>/f` would reach `pub/<id>/f` past the gate. A `handle` block, because a bare `respond` sorts after `handle`. `--host` sites are gated host-wide and keep their paths. |
-| The login service never holds the API token | `share serve` exports `SHARE_API_TOKEN_OFF=1`; a daemon that runs for days would pin a claimed pending line, and a token in its environment would reach every child. Expired apps wait for an interactive `share prune`. |
-| Ports below 1024 and share's own ports refused | `share add 80` or `add $metrics_port` would publish a system service, not a dev server. There is no override flag. |
+| The login service never holds the API token | `handout serve` exports `SHARE_API_TOKEN_OFF=1`; a daemon that runs for days would pin a claimed pending line, and a token in its environment would reach every child. Expired apps wait for an interactive `handout prune`. |
+| Ports below 1024 and Handout's own ports refused | `handout add 80` or `add $metrics_port` would publish a system service, not a dev server. There is no override flag. |
 | Admin API on a unix socket | `caddy reload` applies add/rm without a restart, and a socket inside the 0700 share root listens on no TCP port. |
 | `Cache-Control: no-store` | Tested live without it: Cloudflare cached an image (`cf-cache-status: HIT`) and kept serving it with 200 after the server had stopped. With the header, every request shows `BYPASS`, and `rm` returns 404 at once. |
 | `X-Robots-Tag: noindex, nofollow` | A link pasted somewhere public should not end up in search results. |
 | Copy only regular files | A symlink inside a shared folder could point at `~/.ssh`. The copy uses `find -type f` rather than rsync: macOS ships openrsync, which accepts `--safe-links` but copies outside-pointing links anyway. |
 | One serving host (`hosts`) | Cloudflare load-balances between every connector on a tunnel. Two machines with different `~/share` folders would give random 404s. |
 | Remotely managed tunnel | The route lives in Cloudflare, so a machine needs only the tunnel's run token to serve. |
-| Quick mode reuses the same caddy and index | TryCloudflare cannot route hostnames, so quick links keep the `/<id>/` path shape and every command works unchanged. The price is a new random hostname per start; stable names stay behind `share setup <hostname>`. |
+| Quick mode reuses the same caddy and index | TryCloudflare cannot route hostnames, so quick links keep the `/<id>/` path shape and every command works unchanged. The price is a new random hostname per start; stable names stay behind `handout setup <hostname>`. |
 | Browser login by default | Nobody has to create an API token by hand. The login certificate's token may manage tunnels (tested: create, configure, read the token, delete) but gets an authorization error on DNS records, so DNS goes through `cloudflared tunnel route dns` and the hostname check goes through public DNS. The trade-off: teardown cannot delete the DNS record on this path. |
 | Login service | Links should be live whenever the machine is awake, with no command to remember after a restart. |
 | `start` waits for a public fetch | cloudflared reports ready before caddy may listen, and the Cloudflare edge keeps routing to the old connection for a few seconds after a restart. Measured: links answered 502 right after `start` returned on cloudflared's readiness alone. `start` now places a probe file and returns once it answers 200 through the public hostname (2 to 3 seconds). |
@@ -646,8 +646,8 @@ The admin token for `setup --r2`, `--no-r2` and `teardown --purge` comes from `C
 | r2: one record per share, naming its upload prefix | R2 has no rename, so a staged upload cannot move into place. The record is the only path from a link to bytes, so one conditional `PUT m/<id>` publishes, one conditional swap refreshes, and every add and rm writes its own key instead of contending on a shared index. |
 | r2: the S3 API through `curl --aws-sigv4` | Measured: a bucket-scoped token gets 403 on every REST object call, and the REST PUT ignores `If-None-Match` and `If-Match`. S3 honors both and stays outside the account API rate limit. curl's built-in flag adds no dependency. |
 | r2: expiry checked by the Worker per request | A link dies at its second. A cleanup cron in the Worker would need an Access token there; publishers' `ls` and `prune` delete the bytes instead. |
-| r2: Worker source embedded in `bin/share` | `install.sh` ships one file, and the formula stays unchanged. `WORKER_VERSION` and `WORKER_SHA` make every deploy comparable, and a deploy refuses to downgrade a newer Worker without `--force`. |
-| Bash | The tool is glue around caddy, cloudflared, and the Cloudflare API. A single binary in Go becomes the better choice if share needs Windows or a distribution without a git checkout. |
+| r2: Worker source embedded in `bin/handout` | `install.sh` ships one file, and the formula stays unchanged. `WORKER_VERSION` and `WORKER_SHA` make every deploy comparable, and a deploy refuses to downgrade a newer Worker without `--force`. |
+| Bash | The tool is glue around caddy, cloudflared, and the Cloudflare API. A single binary in Go becomes the better choice if Handout needs Windows or a distribution without a git checkout. |
 
 ## Testing
 
@@ -659,4 +659,4 @@ The admin token for `setup --r2`, `--no-r2` and `teardown --purge` comes from `C
 
 ## Releasing
 
-`bin/release` on a clean, synced `main` cuts a release in one step: it computes the next semver from the conventional-commit subjects since the last tag (`feat` -> minor, everything else -> patch, `!`/`BREAKING` -> major), regenerates `CHANGELOG.md` via `bin/changelog` and lands it on `main` before tagging, pushes the tag, and bumps the tap formula (`Formula/share.rb` url + sha256) through a merged PR in `dwarvesf/homebrew-tools`. The tag push runs `release.yml`, which publishes the GitHub release with generated notes. Releases are cut when a feature lands, not per commit. `bin/changelog` is idempotent: run it any time to rebuild `CHANGELOG.md` from tag history.
+`bin/release` on a clean, synced `main` cuts a release in one step: it computes the next semver from the conventional-commit subjects since the last tag (`feat` -> minor, everything else -> patch, `!`/`BREAKING` -> major), regenerates `CHANGELOG.md` via `bin/changelog` and lands it on `main` before tagging, pushes the tag, and bumps the tap formula (url + sha256) through a merged PR in `dwarvesf/homebrew-tools`. The tag push runs `release.yml`, which publishes the GitHub release with generated notes. Releases are cut when a feature lands, not per commit. `bin/changelog` is idempotent: run it any time to rebuild `CHANGELOG.md` from tag history.

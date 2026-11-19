@@ -2,7 +2,7 @@
 
 ## 1. Authorize: browser login or API token
 
-`share setup <hostname>` picks the path by itself.
+`handout setup <hostname>` picks the path by itself.
 
 | Path | When | What you do |
 |---|---|---|
@@ -11,7 +11,7 @@
 
 `--login` forces the browser path even when the variable is set.
 
-**Browser login** runs `cloudflared tunnel login`. Cloudflare returns a certificate (`cert.pem`) holding a token scoped to the domain you picked. share keeps it at `~/.config/share/cert.pem` (mode 600) for later setup and teardown runs. That token may manage tunnels but not DNS records, so share creates the DNS record through `cloudflared tunnel route dns`. It checks whether the hostname is already taken through public DNS (Cloudflare's resolver), before it creates anything.
+**Browser login** runs `cloudflared tunnel login`. Cloudflare returns a certificate (`cert.pem`) holding a token scoped to the domain you picked. Handout keeps it at `~/.config/share/cert.pem` (mode 600) for later setup and teardown runs. That token may manage tunnels but not DNS records, so share creates the DNS record through `cloudflared tunnel route dns`. It checks whether the hostname is already taken through public DNS (Cloudflare's resolver), before it creates anything.
 
 **API token**: in the Cloudflare dashboard, open **My Profile → API Tokens → Create Token → Create Custom Token**, then add:
 
@@ -21,16 +21,16 @@
 | Zone | DNS | Edit | Create and delete the CNAME for your hostname. |
 | Zone | Zone | Read | Find which zone owns the hostname. |
 
-Limit **Account Resources** and **Zone Resources** to your domain. share uses the token for setup and teardown only and never stores it. It sends the token through a header file, so the token never appears in `ps` output.
+Limit **Account Resources** and **Zone Resources** to your domain. Handout uses the token for setup and teardown only and never stores it. It sends the token through a header file, so the token never appears in `ps` output.
 
 ```sh
-CLOUDFLARE_API_TOKEN=... share setup s.example.com
+CLOUDFLARE_API_TOKEN=... handout setup s.example.com
 ```
 
 ## 2. What setup does
 
 ```
-share setup s.example.com
+handout setup s.example.com
    │
    ├─ find the zone that owns s.example.com, and authorize:
    │    browser path: public DNS finds the zone, then the login picks it
@@ -65,12 +65,12 @@ The TLS certificate comes from Cloudflare's universal certificate for your zone.
 |---|---|
 | `--tunnel-name NAME` | Reuse or create a tunnel with this name instead of the default. Use it to adopt a tunnel you created by hand. |
 | `--force` | Replace an existing DNS record for the hostname. Without it, setup refuses and changes nothing. |
-| `--no-service` | Skip the login service. Serve with `share start` instead. |
+| `--no-service` | Skip the login service. Serve with `handout start` instead. |
 | `--login` | Use the browser path even when `CLOUDFLARE_API_TOKEN` is set. |
 
 ## 3. The login service
 
-Setup installs a per-user service that runs `share serve`, so links come back by themselves after a restart or a login.
+Setup installs a per-user service that runs `handout serve`, so links come back by themselves after a restart or a login.
 
 | | macOS | Linux |
 |---|---|---|
@@ -78,11 +78,11 @@ Setup installs a per-user service that runs `share serve`, so links come back by
 | Restarts | after a crash (30 s throttle) | after a failure (30 s) |
 | Log | `~/share/serve.log` | the user journal: `journalctl --user -u foundation.d.share` |
 
-`share stop` stops it until the next login; `share start` brings it back now. `share service uninstall` removes it, and `share service install` adds it again. On Linux, the service runs only while you are logged in unless you enable lingering (`loginctl enable-linger`).
+`handout stop` stops it until the next login; `handout start` brings it back now. `handout service uninstall` removes it, and `handout service install` adds it again. On Linux, the service runs only while you are logged in unless you enable lingering (`loginctl enable-linger`).
 
 ## 4. Keep the tunnel token in 1Password
 
-Add a `token_cmd` line to `~/.config/share/config`. share runs it and uses its output as the tunnel token. It takes precedence over the Keychain and the token file.
+Add a `token_cmd` line to `~/.config/share/config`. Handout runs it and uses its output as the tunnel token. It takes precedence over the Keychain and the token file.
 
 ```
 token_cmd=op read "op://Private/share tunnel token/credential"
@@ -90,40 +90,40 @@ token_cmd=op read "op://Private/share tunnel token/credential"
 
 When `token_cmd` is set, setup does not store the token. Save it in 1Password yourself (the dashboard shows it in the tunnel's install command), then rerun setup to verify.
 
-## 4b. Own hostnames with `share add --host`
+## 4b. Own hostnames with `handout add --host`
 
-`share add <target> --host dev.example.com` publishes that share at `https://dev.example.com`. The name must be a single label under the zone the setup hostname belongs to (`dev.example.com` yes, `dev.s.example.com` no): Universal SSL stops at one level.
+`handout add <target> --host dev.example.com` publishes that share at `https://dev.example.com`. The name must be a single label under the zone the setup hostname belongs to (`dev.example.com` yes, `dev.s.example.com` no): Universal SSL stops at one level.
 
-Each `--host` share creates one CNAME and one tunnel ingress rule; `share rm` deletes both. This needs a credential that can edit DNS records. The browser-login certificate cannot, so on that path the DNS write fails, share puts the ingress back, and the error says to export `CLOUDFLARE_API_TOKEN` or rerun `share setup` with the token. With `CLOUDFLARE_API_TOKEN` set, both live shares (`share add 3000 --host ...`) and snapshots (`share add ./dist --host ...`) work; a snapshot on its own hostname also serves deep links from `index.html`, which is what a SPA build needs.
+Each `--host` share creates one CNAME and one tunnel ingress rule; `handout rm` deletes both. This needs a credential that can edit DNS records. The browser-login certificate cannot, so on that path the DNS write fails, Handout puts the ingress back, and the error says to export `CLOUDFLARE_API_TOKEN` or rerun `handout setup` with the token. With `CLOUDFLARE_API_TOKEN` set, both live shares (`handout add 3000 --host ...`) and snapshots (`handout add ./dist --host ...`) work; a snapshot on its own hostname also serves deep links from `index.html`, which is what a SPA build needs.
 
-## 4c. No domain: `share setup --quick`
+## 4c. No domain: `handout setup --quick`
 
 ```sh
-share setup --quick
+handout setup --quick
 ```
 
-Quick mode uses Cloudflare's TryCloudflare tunnels: no domain, no login, no API token, no DNS. Setup writes only `mode=quick`, `hosts`, and `port` to the config; `share start` runs `cloudflared tunnel --url http://127.0.0.1:<port>` and reads the random `https://<x>.trycloudflare.com` URL out of the log. `share status` and every `share add` link use that hostname.
+Quick mode uses Cloudflare's TryCloudflare tunnels: no domain, no login, no API token, no DNS. Setup writes only `mode=quick`, `hosts`, and `port` to the config; `handout start` runs `cloudflared tunnel --url http://127.0.0.1:<port>` and reads the random `https://<x>.trycloudflare.com` URL out of the log. `handout status` and every `handout add` link use that hostname.
 
 The trade-offs are real:
 
-- **The URL changes on every start.** A link handed out dies at the next `share start`, restart, or reboot (the login service starts a new tunnel too). Quick mode is for "show someone this right now", not for links that must live.
-- **No `--host` shares.** TryCloudflare cannot route a name you pick; `share add ... --host` refuses and points at named setup.
-- **Switching modes is a teardown.** `share teardown --yes` (keeps `~/share`), then `share setup <hostname>` for a stable domain, or `--quick` to go back. Each refuses to overwrite the other's config.
+- **The URL changes on every start.** A link handed out dies at the next `handout start`, restart, or reboot (the login service starts a new tunnel too). Quick mode is for "show someone this right now", not for links that must live.
+- **No `--host` shares.** TryCloudflare cannot route a name you pick; `handout add ... --host` refuses and points at named setup.
+- **Switching modes is a teardown.** `handout teardown --yes` (keeps `~/share`), then `handout setup <hostname>` for a stable domain, or `--quick` to go back. Each refuses to overwrite the other's config.
 
 ## 4d. A second setup on the same machine: profiles
 
 ```sh
-CLOUDFLARE_API_TOKEN=... share --profile work setup s.work.example   # another account or hostname
-share --profile work add ./guide                                     # https://s.work.example/<id>/guide/
-share add ./notes.pdf                                                # the default setup, unchanged
-share profiles                                                       # default and work, each with state and host
+CLOUDFLARE_API_TOKEN=... handout --profile work setup s.work.example   # another account or hostname
+handout --profile work add ./guide                                     # https://s.work.example/<id>/guide/
+handout add ./notes.pdf                                                # the default setup, unchanged
+handout profiles                                                       # default and work, each with state and host
 ```
 
-A profile is a second, independent share: its own config dir (`~/.config/share/profiles/work`), root (`~/share/profiles/work`), login service (`foundation.d.share.work`), Keychain item (`share-tunnel.work:<hostname>`), and port (picked at the first setup, then kept in its config). `SHARE_PROFILE=work` selects it from the environment; the flag goes before the verb. The default setup never moves, so an existing install needs nothing. A named profile needs its own credential at setup: an API token for that account, or the browser login (each profile keeps its own `cert.pem`). `share --profile work teardown` removes only that profile. Share Bar shows the default profile only; to watch a named profile, watch its launchd label. Detail: [how-it-works.md](how-it-works.md#profiles).
+A profile is a second, independent share: its own config dir (`~/.config/share/profiles/work`), root (`~/share/profiles/work`), login service (`foundation.d.share.work`), Keychain item (`share-tunnel.work:<hostname>`), and port (picked at the first setup, then kept in its config). `SHARE_PROFILE=work` selects it from the environment; the flag goes before the verb. The default setup never moves, so an existing install needs nothing. A named profile needs its own credential at setup: an API token for that account, or the browser login (each profile keeps its own `cert.pem`). `handout --profile work teardown` removes only that profile. Handout Bar shows the default profile only; to watch a named profile, watch its launchd label. Detail: [how-it-works.md](how-it-works.md#profiles).
 
 ## 4e. Private links: the API token for `--access`
 
-`share add ... --access <rule>` puts a Cloudflare Access application on one link. It needs a named setup on an account with Zero Trust enabled (the free plan is enough), and an API token share reads only at command time, never from the login service.
+`handout add ... --access <rule>` puts a Cloudflare Access application on one link. It needs a named setup on an account with Zero Trust enabled (the free plan is enough), and an API token Handout reads only at command time, never from the login service.
 
 | Scope (as the dashboard names it) | Needed for |
 |---|---|
@@ -136,30 +136,30 @@ Three ways to hand it over, first hit wins, per profile:
 
 | Source | How |
 |---|---|
-| `api_token_cmd=<command>` in the profile's config | `share api-token --cmd 'op read "op://<vault>/<item>/credential"'`; share runs the command and uses its output. Any existing token with the scopes above works. |
-| Keychain item `share-api[.<profile>]:<hostname>` (Linux: `<config dir>/api-token`, mode 600) | `share api-token` with no argument opens the prefilled token form (`https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=...&name=share access (<profile>)`), prompts for a hidden paste, and stores it through stdin. Over ssh or with no display it prints the URL instead of opening it. |
+| `api_token_cmd=<command>` in the profile's config | `handout api-token --cmd 'op read "op://<vault>/<item>/credential"'`; Handout runs the command and uses its output. Any existing token with the scopes above works. |
+| Keychain item `share-api[.<profile>]:<hostname>` (Linux: `<config dir>/api-token`, mode 600) | `handout api-token` with no argument opens the prefilled token form (`https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=...&name=share access (<profile>)`), prompts for a hidden paste, and stores it through stdin. Over ssh or with no display it prints the URL instead of opening it. |
 | `CLOUDFLARE_API_TOKEN` in the environment | used only when the profile stores nothing, so a broad shell token never silently replaces the profile's own |
 
-Every form ends with a read-only preflight (`share api-token --check` reruns it): one line per scope, `ok` or `MISSING` with the scope's dashboard name, and a fix line with the token page. The Apps Edit check sends an invalid body (`{}`), which the API refuses with code 12130 without creating anything.
+Every form ends with a read-only preflight (`handout api-token --check` reruns it): one line per scope, `ok` or `MISSING` with the scope's dashboard name, and a fix line with the token page. The Apps Edit check sends an invalid body (`{}`), which the API refuses with code 12130 without creating anything.
 
-A rule group for `group:<name>`: Zero Trust > Access controls > Policies > Rule groups tab > Add a group; Name as you will pass it; Include > Selector: Emails > one entry per address; Save. share never creates or edits groups.
+A rule group for `group:<name>`: Zero Trust > Access controls > Policies > Rule groups tab > Add a group; Name as you will pass it; Include > Selector: Emails > one entry per address; Save. Handout never creates or edits groups.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `--access needs a Cloudflare API token ... none is set` | no token source for this profile | the block names both `share api-token` forms and the form link |
-| `MISSING  Access: ...` in the preflight | the token lacks that scope | add it on the token page the line names, then `share api-token --check` |
+| `--access needs a Cloudflare API token ... none is set` | no token source for this profile | the block names both `handout api-token` forms and the form link |
+| `MISSING  Access: ...` in the preflight | the token lacks that scope | add it on the token page the line names, then `handout api-token --check` |
 | `Cloudflare Access is not enabled on the account` | code 9999 | enable Zero Trust for the account in the dashboard |
 | `no Access group named '<name>'` | no rule group of that exact name on the account that owns the zone | create it (above) and rerun the same add |
 | `did not enforce on <host>/<id> within 900s; nothing was published` | the edge took longer than `SHARE_ACCESS_WAIT` | rerun the same add; a new app can take several minutes |
-| `<n> Access app(s) await deletion` in `ls` or `status` | gated shares expired under the login service or a `status` run, neither of which consults a token | `share prune` (the stored token is used; none stored: `share api-token` first, or export `CLOUDFLARE_API_TOKEN`) |
-| `skipping the Access check` on `ls` | the exported `CLOUDFLARE_API_TOKEN` belongs to another account or zone | unset it, or store the right token with `share api-token` |
-| `Access app for <id> is gone; the link is PUBLIC` (`ls` with `CLOUDFLARE_API_TOKEN` exported) | the app was deleted in the dashboard | `share rm <id>` |
+| `<n> Access app(s) await deletion` in `ls` or `status` | gated shares expired under the login service or a `status` run, neither of which consults a token | `handout prune` (the stored token is used; none stored: `handout api-token` first, or export `CLOUDFLARE_API_TOKEN`) |
+| `skipping the Access check` on `ls` | the exported `CLOUDFLARE_API_TOKEN` belongs to another account or zone | unset it, or store the right token with `handout api-token` |
+| `Access app for <id> is gone; the link is PUBLIC` (`ls` with `CLOUDFLARE_API_TOKEN` exported) | the app was deleted in the dashboard | `handout rm <id>` |
 
 ## 4f. R2 backend: admin setup
 
 An r2 profile serves snapshots from a private R2 bucket through a Worker on your hostname, so links answer while every publisher's machine is off. One person, the admin, sets up the hostname once with an account-level token. Everyone else joins with a token scoped to the bucket (section 4g).
 
-The admin token is read from `CLOUDFLARE_API_TOKEN`, else from the output of the profile's `admin_token_cmd` (set it with `share admin-token --cmd 'op read "op://<vault>/<item>/credential"'`; `share admin-token --test` names what the token can do). share never stores the token itself. Create it at **My Profile → API Tokens → Create Token → Create Custom Token**:
+The admin token is read from `CLOUDFLARE_API_TOKEN`, else from the output of the profile's `admin_token_cmd` (set it with `handout admin-token --cmd 'op read "op://<vault>/<item>/credential"'`; `handout admin-token --test` names what the token can do). Handout never stores the token itself. Create it at **My Profile → API Tokens → Create Token → Create Custom Token**:
 
 | Scope | Resource | Permission | Why |
 |---|---|---|---|
@@ -173,15 +173,15 @@ The admin token is read from `CLOUDFLARE_API_TOKEN`, else from the output of the
 DNS: Edit and Workers Routes: Edit are not needed: attaching a Worker custom domain creates its DNS record.
 
 ```sh
-CLOUDFLARE_API_TOKEN=... share --profile df setup f.example.com --backend r2 --bucket share-f
+CLOUDFLARE_API_TOKEN=... handout --profile df setup f.example.com --backend r2 --bucket share-f
 ```
 
 ```
-share --profile df setup f.example.com --backend r2 --bucket share-f
+handout --profile df setup f.example.com --backend r2 --bucket share-f
    │
    ├─ reads only; every refusal happens here, so a refused run creates nothing:
    │    the zone and account that own f.example.com, and the token's own id
-   │    Worker share-f-example-com: absent or share's own -> "deploying as admin";
+   │    Worker share-f-example-com: absent or Handout's own -> "deploying as admin";
    │      401 or 403 -> "joining as publisher" (section 4g)
    │      bindings for another hostname or bucket: refused
    │      a deployed version newer than this share: refused unless --force
@@ -195,7 +195,7 @@ share --profile df setup f.example.com --backend r2 --bucket share-f
    ├─ turn off workers.dev and previews, then read it back: anything but false,false dies
    │  before the custom domain exists, so nothing is exposed
    ├─ attach f.example.com as the Worker's custom domain
-   ├─ wait for https://f.example.com/healthz: "200 ok" with this share's Worker version,
+   ├─ wait for https://f.example.com/healthz: "200 ok" with this CLI's Worker version,
    │  three times in a row, up to SHARE_R2_WAIT (300 s; a new name waits for its certificate)
    └─ write the profile config: backend, hostname, zone, bucket, port=r2, r2_endpoint
 ```
@@ -206,23 +206,23 @@ share --profile df setup f.example.com --backend r2 --bucket share-f
 | Bucket marker | object `share.json`, naming the hostname |
 | Worker | `share-<hostname with dots as dashes>`, `workers.dev` and previews off |
 | Worker custom domain | `<hostname>` |
-| Analytics Engine dataset | `share_<hostname with dots and dashes as underscores>`, filled by the Worker for `share hits` |
+| Analytics Engine dataset | `share_<hostname with dots and dashes as underscores>`, filled by the Worker for `handout hits` |
 
-On this machine setup writes only the config. There is no tunnel, no login service, and no Keychain tunnel item. `port=r2` in the config is a sentinel: a share release older than the r2 backend dies at load on it, so it can never write to an r2 profile.
+On this machine setup writes only the config. There is no tunnel, no login service, and no Keychain tunnel item. `port=r2` in the config is a sentinel: a release older than the r2 backend dies at load on it, so it can never write to an r2 profile.
 
-`--backend r2` refuses `--quick`, `--tunnel-name`, `--login`, and `--no-service` (`usage: share setup <hostname> --backend r2 --bucket <name> [--force]`). A profile has one backend; to switch, run `share teardown` first. `--force` replaces an existing DNS record at the hostname, or downgrades a Worker that a newer share deployed.
+`--backend r2` refuses `--quick`, `--tunnel-name`, `--login`, and `--no-service` (`usage: share setup <hostname> --backend r2 --bucket <name> [--force]`). A profile has one backend; to switch, run `handout teardown` first. `--force` replaces an existing DNS record at the hostname, or downgrades a Worker that a newer share deployed.
 
-Rerun the same command after a share release that changes the Worker. Publishers see a line when the deployed Worker differs from their share, in `setup` and `status`: `the Worker at <host> runs <v> <sha>; this share ships <v> <sha>; whoever holds the admin token reruns '...'`. A rerun is safe: it redeploys only when the version, source hash, or Access team differs, and prints `already deployed` otherwise.
+Rerun the same command after a release that changes the Worker. Publishers see a line when the deployed Worker differs from their CLI, in `setup` and `status`: `the Worker at <host> runs <v> <sha>; this share ships <v> <sha>; whoever holds the admin token reruns '...'`. A rerun is safe: it redeploys only when the version, source hash, or Access team differs, and prints `already deployed` otherwise.
 
-To publish yourself, store a publisher token as a teammate does (section 4g, steps 1 and 3). `share api-token` refuses the admin token.
+To publish yourself, store a publisher token as a teammate does (section 4g, steps 1 and 3). `handout api-token` refuses the admin token.
 
-For an external monitor (vps-mon or any uptime checker), watch `https://<hostname>/healthz`: it answers `200 ok` with an `X-Share-Worker: <version> <sha>` header while the Worker serves. `share status` prints the same probe (`worker: up (...)` or `worker: DOWN: <code>`) and `gated: on` or `gated: off`.
+For an external monitor (vps-mon or any uptime checker), watch `https://<hostname>/healthz`: it answers `200 ok` with an `X-Share-Worker: <version> <sha>` header while the Worker serves. `handout status` prints the same probe (`worker: up (...)` or `worker: DOWN: <code>`) and `gated: on` or `gated: off`.
 
 ## 4g. R2 backend: a teammate joins
 
 A teammate can publish to a tenant only when its R2 is on (section 4h); with R2 off the origin is the only publisher. This section is the by-hand route: the admin makes the token in the dashboard. On a tenant with members on, section 4i replaces it with one pasted line. On a tenant with R2 on, the join line below uses the tenant's own hostname, and the teammate publishes cloud links only.
 
-Every publisher gets their own token, scoped to the share bucket, with an expiry. Never hand out an account-wide R2 token: it reaches every bucket on the account. `share api-token` refuses one.
+Every publisher gets their own token, scoped to the share bucket, with an expiry. Never hand out an account-wide R2 token: it reaches every bucket on the account. `handout api-token` refuses one.
 
 1. **The admin creates the teammate's token** in the Cloudflare dashboard as a custom API token, with an expiry (TTL):
 
@@ -230,7 +230,7 @@ Every publisher gets their own token, scoped to the share bucket, with an expiry
    |---|---|---|
    | Workers R2 Storage Bucket Item Write | the share bucket only | every `add`, `ls`, `rm`, `refresh`, `prune` (read, write, list, and delete objects) |
    | Zone: Read | the hostname's zone | joining: setup finds the account through the zone |
-   | Account Analytics: Read | the account | optional: `share hits`. It reads every Analytics Engine dataset on the account. |
+   | Account Analytics: Read | the account | optional: `handout hits`. It reads every Analytics Engine dataset on the account. |
    | Access: Apps and Policies: Edit; Access: Organizations, Identity Providers, and Groups: Read | the account | only for a named gated publisher: `add --access` and removing gated shares. Apps and Policies Edit is account-wide, so give it to few people. |
 
    One token per teammate: revoking a leaver is deleting their token, and nobody else is affected.
@@ -238,7 +238,7 @@ Every publisher gets their own token, scoped to the share bucket, with an expiry
 2. **The teammate joins** with that token in the environment:
 
    ```sh
-   CLOUDFLARE_API_TOKEN=<their token> share --profile df setup f.example.com --backend r2 --bucket share-f
+   CLOUDFLARE_API_TOKEN=<their token> handout --profile df setup f.example.com --backend r2 --bucket share-f
    ```
 
    Setup prints `joining as publisher`. A publisher token cannot read the bucket's public-route settings, so it also prints `public-route check skipped (publisher token)`; the admin's setup runs that check. Join checks that the bucket holds `share.json` for this hostname (none: run the admin setup first) and waits for three `200 ok` answers from `/healthz`. It accepts any Worker version and prints the mismatch line when it differs. It writes nothing on Cloudflare and does not store the token; it writes only the local config.
@@ -246,26 +246,26 @@ Every publisher gets their own token, scoped to the share bucket, with an expiry
 3. **The teammate stores the token**, once per profile:
 
    ```sh
-   share --profile df api-token --cmd 'op read "op://<vault>/<item>/credential"'   # share runs the command on every use
-   op read "op://<vault>/<item>/credential" | share --profile df api-token          # or store it once, from stdin
+   handout --profile df api-token --cmd 'op read "op://<vault>/<item>/credential"'   # Handout runs the command on every use
+   op read "op://<vault>/<item>/credential" | handout --profile df api-token          # or store it once, from stdin
    ```
 
-   `share --profile df api-token` with no argument in a terminal also works: it prints and opens a prefilled user-token form named `share publisher (<profile>)`, with Zone: Read and the profile's account, then reads the token at a hidden prompt. A Cloudflare template link cannot preset a bucket-scoped permission, so in the form add Workers R2 Storage Bucket Item Write with the share bucket as its only resource, and set an expiry. A teammate who also needs Access scopes adds them in the same form (section 4e lists them).
+   `handout --profile df api-token` with no argument in a terminal also works: it prints and opens a prefilled user-token form named `share publisher (<profile>)`, with Zone: Read and the profile's account, then reads the token at a hidden prompt. A Cloudflare template link cannot preset a bucket-scoped permission, so in the form add Workers R2 Storage Bucket Item Write with the share bucket as its only resource, and set an expiry. A teammate who also needs Access scopes adds them in the same form (section 4e lists them).
 
-   Before storing, share refuses two kinds of token and stores nothing:
+   Before storing, Handout refuses two kinds of token and stores nothing:
 
    | Refusal | Cause |
    |---|---|
    | `that token can edit Worker share-...: it is an admin token` | the token reads the Worker's settings |
    | `that token reaches other buckets (...): an account-wide R2 token` | the token lists a bucket besides the share bucket |
 
-   On success it prints `a publisher token for bucket <bucket>: not an admin token, no other bucket in reach`, then the Access preflight lines for information. A bucket-only token shows the Access scopes as `MISSING` and still exits 0: ungated adds work. `share --profile df api-token --check` reruns the same checks.
+   On success it prints `a publisher token for bucket <bucket>: not an admin token, no other bucket in reach`, then the Access preflight lines for information. A bucket-only token shows the Access scopes as `MISSING` and still exits 0: ungated adds work. `handout --profile df api-token --check` reruns the same checks.
 
-4. **Publish**: `share --profile df add ./report.pdf`. `share --profile df ls` shows every publisher's shares, each with `by=<machine>`.
+4. **Publish**: `handout --profile df add ./report.pdf`. `handout --profile df ls` shows every publisher's shares, each with `by=<machine>`.
 
-The token lives where `share api-token` puts it for any profile: `api_token_cmd` in the config, else the Keychain item `share-api.<profile>:<hostname>` (Linux: `<config dir>/api-token`, mode 600), else `CLOUDFLARE_API_TOKEN`. share derives the R2 access key from it (the key id is the token's id, the secret its SHA-256) and never writes either.
+The token lives where `handout api-token` puts it for any profile: `api_token_cmd` in the config, else the Keychain item `share-api.<profile>:<hostname>` (Linux: `<config dir>/api-token`, mode 600), else `CLOUDFLARE_API_TOKEN`. Handout derives the R2 access key from it (the key id is the token's id, the secret its SHA-256) and never writes either.
 
-When a teammate leaves, delete their token in the dashboard. Their shares keep serving until they expire or someone runs `share rm <id>`; any publisher can remove any share. Only the install that added a share can `refresh` it, so a leaver's shares can be removed and added again, not refreshed.
+When a teammate leaves, delete their token in the dashboard. Their shares keep serving until they expire or someone runs `handout rm <id>`; any publisher can remove any share. Only the install that added a share can `refresh` it, so a leaver's shares can be removed and added again, not refreshed.
 
 ## 4h. One hostname per tenant: R2 on the origin, the alias fold, moving the origin
 
@@ -282,33 +282,33 @@ A tenant is one hostname. A tunnel profile (sections 1 to 3) serves every link f
 **Enable R2.** On the origin, with the admin token from 4f plus Workers Routes: Edit on the zone (the route on `<host>/*`), and Access: Apps and Policies: Edit when an alias folds gated links:
 
 ```sh
-CLOUDFLARE_API_TOKEN=<admin token> share --profile <p> setup s.example.com --r2 --bucket share-s [--storage-default local|cloud]
+CLOUDFLARE_API_TOKEN=<admin token> handout --profile <p> setup s.example.com --r2 --bucket share-s [--storage-default local|cloud]
 ```
 
 It refuses to run off the origin, on quick mode, or when a route on `<host>/*` names another Worker, and every refusal comes before the first write. The tunnel and its DNS record stay as they are, so `setup s.example.com --no-r2` (which deletes the route) is the whole rollback. The origin keeps its tunnel config and gains `bucket=`, `r2_endpoint=`, and `storage_default=`.
 
-Then store a publisher token on the origin so local adds can write their pointer records: mint a token scoped to the share bucket as in 4g, plus Zone: Read, plus the Access scopes for gated adds, and store it with `share --profile <p> api-token` from a login session on that machine. Until a token is stored, a local `add` fails closed with a message naming R2; that is the cost of one namespace across both storages. `api-token --check` reports it.
+Then store a publisher token on the origin so local adds can write their pointer records: mint a token scoped to the share bucket as in 4g, plus Zone: Read, plus the Access scopes for gated adds, and store it with `handout --profile <p> api-token` from a login session on that machine. Until a token is stored, a local `add` fails closed with a message naming R2; that is the cost of one namespace across both storages. `api-token --check` reports it.
 
 **Add a link.**
 
 ```sh
-share --profile <p> add ./report.pdf            # storage_default decides
-share --profile <p> add --cloud ./report.pdf    # in the bucket: answers with the origin off
-share --profile <p> add --local ./notes         # on this machine
-share --profile <p> add 3000                    # live dev server: always local
+handout --profile <p> add ./report.pdf            # storage_default decides
+handout --profile <p> add --cloud ./report.pdf    # in the bucket: answers with the origin off
+handout --profile <p> add --local ./notes         # on this machine
+handout --profile <p> add 3000                    # live dev server: always local
 ```
 
-On a member, `add` publishes to the bucket; `--local`, ports, and `--host` are refused. `share ls` marks each row `cloud`, `machine`, or `live` with its type and `by=<machine>`.
+On a member, `add` publishes to the bucket; `--local`, ports, and `--host` are refused. `handout ls` marks each row `cloud`, `machine`, or `live` with its type and `by=<machine>`.
 
 **Fold an old r2 hostname.** `--alias f.example.com` moves a former r2 hostname into the tenant. The old hostname answers 301 to the same path on the tenant, the bucket is adopted in place, and each gated link keeps its Access app and AUD. If a step fails after the marker moved, the die prints the alias rollback list (rebind the old domain to its Worker, restore the marker host and app destinations, delete the pointer records, then `--no-r2`); `--no-r2` alone refuses while an alias is set. Rerunning the same command converges.
 
 **Move the origin.** `migrate` moves a tenant with R2 off to another machine you can ssh to. On the old origin, while it is online:
 
 ```sh
-CLOUDFLARE_API_TOKEN=<token with Tunnel Edit, DNS Edit, Zone Read> share migrate --to user@new-origin [--remote-profile default] [--yes]
+CLOUDFLARE_API_TOKEN=<token with Tunnel Edit, DNS Edit, Zone Read> handout migrate --to user@new-origin [--remote-profile default] [--yes]
 ```
 
-It copies every snapshot link with its id, name, dates, expiry, and gate, switches the hostname to a new tunnel on the new machine, checks every link through the public hostname, and only then moves the old rows aside (`~/share/index.migrated` and `~/share/migrated/<id>`; nothing is deleted). Expect up to about a minute of 530 during the switch. Live links and `--host` links do not move: `migrate` lists live ones, refuses while a `--host` row exists, and refuses a tenant with R2 on. If the switch or the verify fails, it prints the rollback line, `share setup <host> --tunnel-name <old tunnel> --force`, to run on the old machine.
+It copies every snapshot link with its id, name, dates, expiry, and gate, switches the hostname to a new tunnel on the new machine, checks every link through the public hostname, and only then moves the old rows aside (`~/share/index.migrated` and `~/share/migrated/<id>`; nothing is deleted). Expect up to about a minute of 530 during the switch. Live links and `--host` links do not move: `migrate` lists live ones, refuses while a `--host` row exists, and refuses a tenant with R2 on. If the switch or the verify fails, it prints the rollback line, `handout setup <host> --tunnel-name <old tunnel> --force`, to run on the old machine.
 
 ## 4i. Members: one line to onboard a teammate's machine
 
@@ -318,46 +318,46 @@ A member is a named teammate registered in the tenant's bucket. A machine member
 
 | Need | Detail |
 |---|---|
-| A tenant with R2 on (4h) | `share setup <host> --r2 --bucket <name>` already ran |
-| The admin token | `CLOUDFLARE_API_TOKEN`, or `share admin-token --cmd '<command>'`; with Cloudflare Tunnel Write and Connectivity Directory Admin added |
-| A minter token | `SHARE_MINTER_TOKEN`, or `share minter-token --cmd '<command>'`: a user token with API Tokens Read and Write and nothing else, kept apart from the admin token. `share minter-token --test` probes it |
+| A tenant with R2 on (4h) | `handout setup <host> --r2 --bucket <name>` already ran |
+| The admin token | `CLOUDFLARE_API_TOKEN`, or `handout admin-token --cmd '<command>'`; with Cloudflare Tunnel Write and Connectivity Directory Admin added |
+| A minter token | `SHARE_MINTER_TOKEN`, or `handout minter-token --cmd '<command>'`: a user token with API Tokens Read and Write and nothing else, kept apart from the admin token. `handout minter-token --test` probes it |
 | Room for tokens | a user holds at most 50 API tokens, shared with everything they hold; `member ls` shows the free slots when `SHARE_MINTER_TOKEN` is set, and `add` refuses before the limit |
 
 Workers VPC is in beta. Members are therefore off until you turn them on, and `--no-members` turns them off again once every member is removed:
 
 ```sh
-share setup s.example.com --r2 --bucket share-s --members --yes     # T1 to T2, on the origin
+handout setup s.example.com --r2 --bucket share-s --members --yes     # T1 to T2, on the origin
 ```
 
 **Add a member (admin).** One command prints one line:
 
 ```sh
-share member add an --machine        # or --cloud; also --port, --invite-ttl 7d, --token-ttl 90d
-# share join s.example.com <20 characters>
+handout member add ana --machine        # or --cloud; also --port, --invite-ttl 7d, --token-ttl 90d
+# handout join s.example.com <20 characters>
 ```
 
-Send that line to the member once. The code is shown once and holds 100 bits; the invite expires after `--invite-ttl` (default 7 days, at most 30). A died `add` is named by `share member ls` with its step and the exact rerun line.
+Send that line to the member once. The code is shown once and holds 100 bits; the invite expires after `--invite-ttl` (default 7 days, at most 30). A died `add` is named by `handout member ls` with its step and the exact rerun line.
 
 **Join (the member).** Paste the line on the member's Mac:
 
 ```sh
-share join s.example.com <code>      # joined as m-an-<8 hex>
-share add ./report.pdf               # https://s.example.com/<id>/report.pdf, served from this machine
+handout join s.example.com <code>      # joined as m-ana-<8 hex>
+handout add ./report.pdf               # https://s.example.com/<id>/report.pdf, served from this machine
 ```
 
-Join redeems the code once, stores two tokens in the Keychain, starts Caddy and cloudflared on its own tunnel, proves a probe link three times through the tenant hostname, and marks the member active. A stopped join resumes with a bare `share join`. Use `share --profile <name> join ...` for a non-default profile. The member needs the Keychain (a machine without one is refused `member_needs_keychain`) and a free port. Trust note: an account admin with Connectivity Directory Admin can bind more services to the member's tunnel and reach what that machine reaches, so give the member a dedicated user or a host firewall. `member ls` lists every VPC Service on each member tunnel.
+Join redeems the code once, stores two tokens in the Keychain, starts Caddy and cloudflared on its own tunnel, proves a probe link three times through the tenant hostname, and marks the member active. A stopped join resumes with a bare `handout join`. Use `handout --profile <name> join ...` for a non-default profile. The member needs the Keychain (a machine without one is refused `member_needs_keychain`) and a free port. Trust note: an account admin with Connectivity Directory Admin can bind more services to the member's tunnel and reach what that machine reaches, so give the member a dedicated user or a host firewall. `member ls` lists every VPC Service on each member tunnel.
 
 | Join refusal (code) | Meaning | Fix |
 |---|---|---|
-| `invite_unknown_or_used` | the code was used or never existed | the admin runs `share member rotate <name>` for a machine member |
-| `invite_expired` | the code is past its expiry | the admin runs `share member invite <name>` |
-| `invite_unavailable` | the Worker could not release it; it may be spent | the admin runs `share member invite <name>` |
+| `invite_unknown_or_used` | the code was used or never existed | the admin runs `handout member rotate <name>` for a machine member |
+| `invite_expired` | the code is past its expiry | the admin runs `handout member invite <name>` |
+| `invite_unavailable` | the Worker could not release it; it may be spent | the admin runs `handout member invite <name>` |
 | `invite_tampered`, `member_changed` | the sealed bytes or the record changed | ask the admin for a new code |
-| `port_busy` | the invite's port is taken on this machine | the admin runs `share member invite <name> --port <free port>` |
-| `profile_not_empty` | the profile already publishes or serves | `share profiles`, then join with `--profile <new name>` |
-| `cli_below_min` | this `share` is older than the tenant's `min_cli` | upgrade `share` |
+| `port_busy` | the invite's port is taken on this machine | the admin runs `handout member invite <name> --port <free port>` |
+| `profile_not_empty` | the profile already publishes or serves | `handout profiles`, then join with `--profile <new name>` |
+| `cli_below_min` | this `handout` is older than the tenant's `min_cli` | upgrade `handout` |
 
-**Run the member lifecycle (admin).** `member ls [--json]` lists every member with status, step, token expiry, drift and the verbs allowed now. The rows below are every admin verb; `--tenant <host>` goes after any of them on a machine with no profile for the tenant. A `share` older than the marker's `min_cli` still reads, but refuses `cli_below_min` on any write; `member rm`, `purge`, `leave` and `r2-call` are exempt, and `setup --members` repairs a forged marker.
+**Run the member lifecycle (admin).** `member ls [--json]` lists every member with status, step, token expiry, drift and the verbs allowed now. The rows below are every admin verb; `--tenant <host>` goes after any of them on a machine with no profile for the tenant. A `handout` older than the marker's `min_cli` still reads, but refuses `cli_below_min` on any write; `member rm`, `purge`, `leave` and `r2-call` are exempt, and `setup --members` repairs a forged marker.
 
 | Verb | Does | Notes |
 |---|---|---|
@@ -370,21 +370,21 @@ Join redeems the code once, stores two tokens in the Keychain, starts Caddy and 
 | `member rm <name> [--cloud-links keep\|delete]` | removes the tunnel, service, binding, token, invites and pointers; the bytes stay on the member's machine | the verb for a leaver |
 | `member purge <name>` | deletes a removed member's record and keeps its id from reuse | |
 
-A verb that needs the minter token and cannot find the token by name dies `token_unreachable`, naming the expiry and the recovery. `share rm <id>` by the admin on a member's link writes a tombstone and deletes the pointer, so the link 404s at once; the owner's machine drops it within an hour.
+A verb that needs the minter token and cannot find the token by name dies `token_unreachable`, naming the expiry and the recovery. `handout rm <id>` by the admin on a member's link writes a tombstone and deletes the pointer, so the link 404s at once; the owner's machine drops it within an hour.
 
-**Leave (the member).** `share leave` stops serving, deletes this machine's pointers, marks the record `left`, forgets both keys and moves the profile root, links included, to the Trash. `share leave --local` makes no bucket call. `share status` on a member says removed only when the record reads `removed`; a key the bucket refuses reads "your key stopped working; ask the admin", and an expired token names `share member renew <name>`.
+**Leave (the member).** `handout leave` stops serving, deletes this machine's pointers, marks the record `left`, forgets both keys and moves the profile root, links included, to the Trash. `handout leave --local` makes no bucket call. `handout status` on a member says removed only when the record reads `removed`; a key the bucket refuses reads "your key stopped working; ask the admin", and an expired token names `handout member renew <name>`.
 
 ## 5. Serve from a different machine
 
 Only machines listed in `hosts` serve. Two machines on one tunnel would split requests between two different `~/share` folders, so links would fail at random.
 
-To move serving with its links, use `share migrate --to <ssh-target>` on the old machine (section 4h): it copies every snapshot link, switches the hostname to a new tunnel, verifies, and moves the old rows aside. To move without the links: install share on the new machine, run `share setup <same hostname>` there (it reuses the tunnel and stores the token locally), then run `share service uninstall` on the old machine; shares do not move that way, so add them again on the new machine.
+To move serving with its links, use `handout migrate --to <ssh-target>` on the old machine (section 4h): it copies every snapshot link, switches the hostname to a new tunnel, verifies, and moves the old rows aside. To move without the links: install Handout on the new machine, run `handout setup <same hostname>` there (it reuses the tunnel and stores the token locally), then run `handout service uninstall` on the old machine; shares do not move that way, so add them again on the new machine.
 
 ## 6. Teardown
 
 ```sh
-share teardown          # asks for confirmation
-share teardown --yes
+handout teardown          # asks for confirmation
+handout teardown --yes
 ```
 
 Teardown removes the service, stops serving, deletes the tunnel, removes the stored tokens (tunnel and API) and the login certificate, and moves the config to the Trash. Shares in `~/share` stay on disk, except gated ones (`--access`): those are unpublished first, with their Access apps deleted, and teardown refuses without an API token while any exists, so a later setup never serves them ungated.
@@ -394,8 +394,8 @@ The DNS record depends on the path. With `CLOUDFLARE_API_TOKEN` set, teardown de
 On an r2 profile, teardown has two forms:
 
 ```sh
-share --profile df teardown [--yes]                                   # this install only
-CLOUDFLARE_API_TOKEN=<admin token> share --profile df teardown --yes --purge   # everything, for everyone
+handout --profile df teardown [--yes]                                   # this install only
+CLOUDFLARE_API_TOKEN=<admin token> handout --profile df teardown --yes --purge   # everything, for everyone
 ```
 
 | | `teardown` | `teardown --yes --purge` |
@@ -403,7 +403,7 @@ CLOUDFLARE_API_TOKEN=<admin token> share --profile df teardown --yes --purge   #
 | Stored API token, `r2-own`, config | removed (config and `r2-own` to the Trash) | removed |
 | Every share on the hostname | stays for the other publishers | deleted, gated ones first with their Access apps |
 | Worker, custom domain, `share.json` | stay | deleted |
-| Bucket | stays | deleted when empty; otherwise kept, with the count of keys share did not write |
+| Bucket | stays | deleted when empty; otherwise kept, with the count of keys Handout did not write |
 | Analytics Engine dataset | stays | stays: it cannot be deleted and ages out |
 
 `--purge` reads the admin token from `CLOUDFLARE_API_TOKEN`, else from `admin_token_cmd`; with neither it stops with `admin_token_missing` before any change. Before the first delete it checks that the Worker's bindings name this hostname and bucket (a publisher token gets 403 there and is refused), that `share.json` names this hostname, that no other Worker holds the hostname, and, when any gated share or waiting Access app exists, that the token has Access: Apps and Policies Edit. Any failed check changes nothing. After the shares it deletes every Access app named for this hostname, which catches apps parked in teammates' local `access-pending` files (it skips that pass with a line when the token cannot read Access apps), then every leftover `m/` and `o/` key, including records no share release could read. The local form prints how many Access apps stay in this install's `access-pending`.
@@ -412,18 +412,18 @@ CLOUDFLARE_API_TOKEN=<admin token> share --profile df teardown --yes --purge   #
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Cloudflare error 530 / 1033 | Nothing is serving: the machine sleeps, or share is stopped. | `share start` |
+| Cloudflare error 530 / 1033 | Nothing is serving: the machine sleeps, or Handout is stopped. | `handout start` |
 | 404 on the site root | Expected: the root has no page, even while serving. | `curl https://<hostname>/healthz`: `ok` means serving, 530 means not. |
-| 404 on a link | The share was removed or expired, or the link has a typo. | `share ls` |
+| 404 on a link | The share was removed or expired, or the link has a typo. | `handout ls` |
 | `setup`: "already has a … record" / "already resolves" | The hostname is taken. | Pick another hostname, or `--force` to replace it. |
 | `setup`: "DNS route failed (did you pick … in the browser?)" | The browser login picked a different domain. | Rerun setup and pick the domain it names. |
 | `setup`: "no Cloudflare zone" / "cannot find the DNS zone" | The domain is not on Cloudflare, or the API token cannot see it. | Check the domain's nameservers, or the token's Zone Resources. |
 | `setup`: live check failed | DNS or the tunnel is not ready yet, or caddy failed to start. | Read `~/share/serve.log` and `~/share/caddy.log`, then rerun setup. |
 | "not in hosts" | This machine is not allowed to serve. | Add its short name (`uname -n` up to the first dot) to `hosts`. |
-| "no tunnel token" | The Keychain item or token file is missing. | Rerun `share setup <hostname>`. |
+| "no tunnel token" | The Keychain item or token file is missing. | Rerun `handout setup <hostname>`. |
 | "caddy failed to start" | Another process uses the port. | Free the port, or change `port` and rerun setup so the route follows. |
-| "127.0.0.1:<port> is already in use" | Another share profile, or another process, listens on this profile's port or metrics port. | `share profiles` to find it; change `port=` in the config it names and rerun setup so the route follows. |
-| Markdown served as raw text | pandoc is not installed. | `brew install pandoc`, then `share refresh <id>`. |
+| "127.0.0.1:<port> is already in use" | Another share profile, or another process, listens on this profile's port or metrics port. | `handout profiles` to find it; change `port=` in the config it names and rerun setup so the route follows. |
+| Markdown served as raw text | pandoc is not installed. | `brew install pandoc`, then `handout refresh <id>`. |
 
 R2 backend:
 
@@ -434,16 +434,16 @@ R2 backend:
 | `setup`: `did not answer 200 ok three times in a row within 300s` | A new hostname waits for its certificate, or the Worker is down. | Rerun setup; raise `SHARE_R2_WAIT` for a slow certificate. The config is written only after this check. |
 | `that token can edit Worker ...: it is an admin token` | `api-token` got the admin token. | Store a bucket-scoped token (4g, step 1). |
 | `that token reaches other buckets (...): an account-wide R2 token` | The token is not limited to the share bucket. | Create a token with Workers R2 Storage Bucket Item Write on the share bucket only. |
-| `this r2 profile needs a publisher token for <host>; none resolved` | No token stored for this profile. | `share --profile <p> api-token` (4g, step 3). |
+| `this r2 profile needs a publisher token for <host>; none resolved` | No token stored for this profile. | `handout --profile <p> api-token` (4g, step 3). |
 | `live shares and --host need a tunnel profile; this profile serves from R2` | `add <port>` or `--host` on an r2 profile. | Use a tunnel profile for those; both kinds run side by side. |
-| `an r2 profile serves from Cloudflare; nothing runs on this machine` | `start`, `stop`, `serve`, or `service` on an r2 profile. | Nothing to run. `share rm <id>` unpublishes a link. |
+| `an r2 profile serves from Cloudflare; nothing runs on this machine` | `start`, `stop`, `serve`, or `service` on an r2 profile. | Nothing to run. `handout rm <id>` unpublishes a link. |
 | `<id> was added from another install; refresh it there` | `refresh` of a teammate's share. | Refresh from that install, or `rm` and add again. |
 | `the Worker at <host> has no Access team, so a gated link would never open` | The admin token lacked Access: Organizations Read at setup (`status` shows `gated: off`). | The admin reruns setup with that scope. |
-| `the Worker at <host> runs <v> <sha>; this share ships <v> <sha>` | The Worker and your share are different releases. | The admin reruns setup with the newer share. |
-| `expired gated share <id> waits for a publisher with the Access token` | `ls` or `prune` without Access: Apps and Policies Edit. The Worker already answers 404 for it. | A gated publisher runs `share prune`. |
-| `orphan sweep skipped: m/<id> is unreadable or newer than this share` (`status`: `orphan sweep blocked by m/<id>`) | A record this share cannot read: a newer release wrote it, or it is corrupt. | Upgrade share. A corrupt record goes only through `teardown --purge` or a delete in the dashboard. |
+| `the Worker at <host> runs <v> <sha>; this share ships <v> <sha>` | The Worker and your CLI are different releases. | The admin reruns setup with the newer CLI. |
+| `expired gated share <id> waits for a publisher with the Access token` | `ls` or `prune` without Access: Apps and Policies Edit. The Worker already answers 404 for it. | A gated publisher runs `handout prune`. |
+| `orphan sweep skipped: m/<id> is unreadable or newer than this share` (`status`: `orphan sweep blocked by m/<id>`) | A record this CLI cannot read: a newer release wrote it, or it is corrupt. | Upgrade Handout. A corrupt record goes only through `teardown --purge` or a delete in the dashboard. |
 | `hits needs an API token with Account Analytics: Read` / `the Analytics Engine query answered HTTP 403` | The stored token lacks the optional analytics scope. | Add Account Analytics: Read to the token. |
-| `member add`: `members_off` | the tenant has members off | `share setup <host> --r2 --bucket <b> --members --yes` (4i) |
+| `member add`: `members_off` | the tenant has members off | `handout setup <host> --r2 --bucket <b> --members --yes` (4i) |
 | `member ...`: `token_unreachable` | the token was minted by another user than the current minter | use that user's minter token, or `rotate` (`invite` for a cloud member) |
 | `member ...`: `member_busy` | another verb of that member died mid-step | run the rerun line `member ls` prints |
 | `setup`, `teardown`, `migrate`: `members_present` | the tenant has members | `member rm` each, then `setup --no-members` |
