@@ -76,6 +76,6 @@ if [[ $# -gt 0 ]]; then
   for n in "$@"; do run_one "$n"; done
 else
   for f in "$HERE"/steps/*.steps; do run_one "$(basename "$f" .steps)"; done
-  bash "$HERE/status-item-check.sh" needs-four "Share Bar, 4 need a look"
-  bash "$HERE/status-item-check.sh" ../../scenarios/calm "Share Bar"
+  bash "$HERE/status-item-check.sh" needs-four "Handout Bar, 4 need a look"
+  bash "$HERE/status-item-check.sh" ../../scenarios/calm "Handout Bar"
 fi
