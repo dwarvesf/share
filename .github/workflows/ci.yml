@@ -112,16 +112,17 @@ jobs:
       - name: Self-test (shard members-b)
         run: bash tests/ci/run-shard.sh members-b
 
-  # A push to main runs the whole suite once per OS.
+  # A push to main runs every shard on both OSes, so its wall time is the longest shard, not the
+  # whole suite (unsharded, macOS took 23 to 30 min and hit the old 30 min limit).
   test-full:
     needs: changes
     if: needs.changes.outputs.bash == 'true' && github.event_name == 'push'
-    # the whole suite on macos-latest runs 23 to 30 min; 30 cancelled 3 of 5 main runs
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        shard: [chain, members-a, members-b]
     runs-on: ${{ matrix.os }}
     env:
       CADDY_VERSION: 2.11.4
@@ -143,8 +144,8 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install caddy pandoc
 
-      - name: Self-test
-        run: bash tests/share.sh
+      - name: Self-test (shard ${{ matrix.shard }})
+        run: bash tests/ci/run-shard.sh "${{ matrix.shard }}"
 
   mac:
     needs: changes
