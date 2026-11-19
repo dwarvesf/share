@@ -4314,7 +4314,9 @@ sed 's/^  if \[\[ \${SHARE_ERROR_JSON:-} == 1 \]\]; then$/  if true; then/' "$SH
 GCX=("hostname=gc.example.test" "tunnel_id=tid-gc"); GCE=(SHARE_HOSTS=not-this-host SHARE_TUNNEL=0)
 gc_fx "${GCX[@]}"; o="$(gc_run "$GW_OLD" start 2>&1 >/dev/null)"; gc_fx "${GCX[@]}"; n="$(gc_run "$GW/share-json-always" start 2>&1 >/dev/null)"
 check "negative control NC-G1: a JSON line printed without SHARE_ERROR_JSON breaks CD-01 (stderr differs from HEAD's)" "1 2" "$([[ $o != "$n" ]] && echo 1 || echo 0) $(grep -c . <<<"$n")"
-bash "$SH" start >/dev/null 2>&1   # the suite's own server serves here: serve again is the already-serving guard
+# the suite's own server serves here, restarted through the share alias (as live login services run it):
+# the HEAD script only knows a serve named share, so serve again is its already-serving guard too
+bash "$SH" stop >/dev/null 2>&1; bash "$(dirname "$SH")/share" start >/dev/null 2>&1
 rec0="$(cat "$SHARE_ROOT/.serve-exit" 2>/dev/null || echo none)"
 o="$(bash "$GW_OLD" serve 2>&1 >/dev/null)"; orc=$?; n="$(bash "$SH" serve 2>&1 >/dev/null)"; nrc=$?; j="$(SHARE_ERROR_JSON=1 bash "$SH" serve 2>&1 >/dev/null)"; jrc=$?
 check "CD-01 serve while serving: stderr and exit byte-identical to HEAD's, but the name" "$orc|$(rename_norm <<<"$o")" "$nrc|$n"
@@ -4857,7 +4859,8 @@ gv_up() { # gv_up: poll until serve answers on its port (10 s)
 gv_ready() { local _; for _ in $(seq 1 100); do [[ "$(gv state 2>/dev/null | jq -r .ready)" == true ]] && return 0; sleep 0.1; done; return 1; }
 gv_serve() { # gv_serve <GW_CFD_MODE>: serve in the background under the cloudflared stub's mode
   # shellcheck disable=SC2030 # the seam is meant for this one background run
-  ( export GW_CFD_MODE=$1; GV_TUNNEL=1 gv serve >/dev/null 2>&1 & )
+  # through the share alias, as live login services run it: the HEAD script only knows a serve named share
+  ( export GW_CFD_MODE=$1; GV_TUNNEL=1 GV_SH="$(dirname "$SH")/share" gv serve >/dev/null 2>&1 & )
 }
 gv_cfg=(hostname=gv.example.test tunnel_id=tid-gv "token_cmd=echo gvtok")
 # SS-01 and SS-02: nothing to serve
