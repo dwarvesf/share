@@ -35,6 +35,27 @@ Verdict: PASS (the docs checks go RED when the code says handout and the docs do
 ```
 The other three failures in that run come from the temp dir having no git history (the groundwork section reads `git show`).
 
+## Old-script comparisons from a path without "share"
+The first CI run failed 4 checks in the `chain` shard (CD-01, SS-06 to SS-08): the pinned old script finds a serve only by `share` in its command line, and the CI checkout path has none. Local runs passed because the clone path contains `share`. The fix starts those serves through the `share` alias, as live login services run it.
+```
+Command: git clone into a scratch path without "share"; SHARE_TEST_ONLY='state groundwork: G1$|state groundwork: G6$' bash tests/share.sh
+Exit: 0
+Output:
+901 checks, PASS (filtered by SHARE_TEST_ONLY: 42 sections ran, the rest skipped)
+Verdict: PASS
+```
+```
+Command: the same run at the commit before the fix
+Exit: 1
+Output:
+  FAIL  CD-01 serve while serving: stderr and exit byte-identical to HEAD's, but the name
+  FAIL  SS-06 serve runs, the tunnel does not answer, pid under 30 s
+  FAIL  SS-07 the same serve a minute on (the clock seam)
+  FAIL  SS-08 serve runs and /ready answers
+4/901 FAILED
+Verdict: PASS (negative control reproduces the CI failure)
+```
+
 ## Live install move (recorded run)
 The tap rename (dwarvesf/homebrew-tools#32) was applied on a machine serving three live hostnames from brew `share` 0.9.0.
 ```
