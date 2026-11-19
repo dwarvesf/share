@@ -1105,7 +1105,11 @@ cmd_prune() { # cmd_prune [quiet|listing|--loop]: unpublish every share past its
   if [[ $backend == r2 ]]; then r2_prune "${1:-}"; return 0; fi
   if [[ $r2on == 1 && ${1:-} != quiet ]]; then   # an origin with R2 on, interactive: cloud expiry, the sweep, and the reconcile through its own reader
     local pm=soft; [[ ${1:-} != listing ]] || pm="env"
-    if r2_token_ok "$pm"; then ( r2_prune "${1:-}"; r2_reconcile ) || echo "handout: the cloud links of $host_name were not checked (see above); local links were" >&2
+    if r2_token_ok "$pm"; then
+      # a job under a TERM trap, as in prune_loop_member: serve's hourly loop runs this, and stop must not leave the pass running
+      trap 'set +u; kill $! 2>/dev/null || true; wait $! 2>/dev/null || true; exit 143' TERM INT
+      ( r2_prune "${1:-}"; r2_reconcile ) & wait $! || echo "handout: the cloud links of $host_name were not checked (see above); local links were" >&2
+      trap - TERM INT
     elif [[ -z ${1:-} ]]; then echo "handout: the cloud links and pointers of $host_name were not checked: no publisher token ($me api-token)" >&2; fi
   fi
   # quiet (serve, status): no token from any source, so neither touches Access; an expired gated share defers its

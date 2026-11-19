@@ -78,7 +78,7 @@ Verdict: PASS (mutate -> RED -> restore -> GREEN)
 ## Not proven
 
 - CI itself: nothing is pushed, so neither shard has run the fix on the hosted macOS or Ubuntu runners.
-- The origin has the same gap, untouched here. Its hourly bare `prune` runs `( r2_prune; r2_reconcile )` as a foreground subshell (`cmd_prune`, the `r2on` branch), so an origin's `stop` can still leave that pass running. No check here covers it.
+- The origin's hourly bare `prune` (`cmd_prune`, the `r2on` branch) got the same job-and-trap form in a follow-up commit on this branch. `SHARE_TEST_ONLY='tenant|r2|prune'` passed (1326 checks, 53 sections). No check stops an origin mid-pass, so that fix has no negative control.
 - No permanent deterministic test covers the stop fix. The widened control above is the only deterministic check, and it is not committed.
 - The installed-service path: launchd and systemd reap the process group on stop anyway. This proof covers the service-less `start` and `stop` only.
 - A TERM still orphans one external command already in flight inside the pass (one `curl` or `cp`). It finishes that call; no new call starts after the trap.
