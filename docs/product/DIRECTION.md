@@ -2,6 +2,12 @@
 
 What Handout is for, what stays free, what could be paid, and what the owner still has to decide. This page is a working draft for the owner. Nothing here is a commitment. No price is set.
 
+## Name and publisher
+
+- Name: Handout (chosen). The domain and a trademark search are still to do before a public launch.
+- Publisher: Console Labs (chosen). Dwarves is credited.
+- Paid candidates, from the owner's plan: the Mac app (Handout Bar) as a one-time purchase, and a team plan per seat, with members on one hostname and links held in R2. Pricing stays undecided.
+
 ## What Handout is for
 
 Handout hands out resources: a file, a folder, a guide, a deck, a build, a running dev server. Each goes to people at a link on your own domain, with an expiry, a visitor count, an optional login, and a page for a folder. The link stays the same, so you can print it, email it or put it in a doc.
@@ -43,10 +49,10 @@ Each row starts from something that exists or is specced, so a layer is a produc
 | Layer | Grounded in | What a paid version adds | Open |
 |---|---|---|---|
 | Links that stay up | The R2 backend: a private bucket and a Worker serve snapshots while every machine is off (ADR-0007, `docs/setup.md` 4f) | We run the bucket, the Worker and the domain wiring, so a user does not need a Cloudflare account to get links that stay up | Hosted or self-hosted; price: undecided |
-| Team on one hostname | Tenants and members: one hostname, one shared list, members' links served from their own machines (ADR-0008, ADR-0009) | Seats, invites and member lifecycle managed for a team, with one bill | Per seat or per hostname; price: undecided |
+| Team on one hostname | Tenants and members: one hostname, one shared list, members' links served from their own machines, with R2 for links that stay up (ADR-0007, ADR-0008, ADR-0009) | Seats, invites and member lifecycle managed for a team, with one bill | Per seat is the candidate; price: undecided |
 | Private links at scale | Per-link Cloudflare Access login by email, domain or group (ADR-0006) | Rule groups and access lists managed in Handout, an audit of who opened what | Needs Zero Trust on the user's account today; price: undecided |
 | Visitor analytics | `handout hits` counts requests and unique IPs; the Worker already writes one Analytics Engine point per answer under 400 (`docs/how-it-works.md`) | A view over time per link and per folder, exports, a weekly digest | Retention and privacy terms; price: undecided |
-| Handout Bar | The menu bar app: state, share list, drop to publish, a members tab (ADR-0003, ADR-0009) | A team edition with the members tab and the all-links window, or the whole app as the paid entry point | Free or paid app; price: undecided |
+| Handout Bar | The menu bar app: state, share list, drop to publish, a members tab (ADR-0003, ADR-0009) | A one-time purchase for the Mac app | One-time purchase is the candidate; price: undecided |
 
 Proposed, not charged for: the ability to publish at all, the link format, and leaving. A user can always `teardown` and keep their files and their Cloudflare resources.
 
@@ -56,9 +62,9 @@ Proposed by this page. The owner confirms.
 
 ### Now
 
-- Finish the rebrand: the CLI, the Homebrew formula and cask, the docs, and the `share` alias for existing installs.
+- Finish the rebrand: the CLI, the docs and the `share` alias for existing installs are on the rename branch. The Homebrew formula and cask are merged in the tap, and a release ships them together (`docs/team/release.md`).
 - Cut the first release since v0.9.0. The members verbs, the state groundwork and the media folder page are on `main` and in no release.
-- Answer the open decisions below that block a public launch: licence, the domain and trademark check for the name, and how an existing `share` Homebrew install moves to `handout`.
+- Answer the open decisions below that block a public launch: licence, and the domain and trademark check for the name.
 
 ### Next
 
@@ -84,7 +90,7 @@ Written down so nobody builds it by accident. Move an item up with a demo.
 | Hosted or self-hosted | We run the Workers and buckets; users run their own; both | Hosted brings billing, support, abuse handling and data terms. Self-hosted keeps the "no server of ours" promise | Undecided |
 | Names of the tiers | A free tier and a team tier, with names | The README and the site need words | Undecided |
 | What the free tier includes | The whole CLI today, or a cap on links, hostnames or members | A cap is a change from what users have now | Undecided |
-| The name | Handout as the product; the domain; a trademark search | The name is on the package, the tap and the app | Undecided: check before a public launch |
-| Selling entity | Which company sells, and which bank account | Needed before any payment | Undecided |
-| Moving existing installs | A tap migration or an alias formula for `share` | Today's users must not be stranded | Undecided |
+| The name | Handout as the product; the domain; a trademark search | The name is on the package, the tap and the app | Chosen: Handout. Domain and trademark check before a public launch |
+| Selling entity | Console Labs publishes, with Dwarves credited; which entity sells and which bank account | Needed before any payment | Publisher chosen; the selling entity and account are undecided |
+| Moving existing installs | Tap renames (`share` to `handout`, `share-bar` to `handout-bar`) | Today's users must not be stranded | Settled: dwarvesf/homebrew-tools PR 32 merged; see `docs/team/release.md` |
 | Cloudflare terms | Whether a managed offer fits Cloudflare's terms for resellers | A hosted layer sits on their products | Undecided: read their terms |

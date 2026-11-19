@@ -2,7 +2,7 @@
 
 Product context, status and direction: start with [HANDOVER.md](HANDOVER.md).
 
-For a new engineer. This page gets you from a fresh clone to green tests in about an hour. Deep detail lives in the pages it links. The last two sections list what to learn and the tooling to install.
+For a new engineer. This page gets you from a fresh clone to green tests in about an hour. Deep detail lives in the pages it links. The last sections list what to learn and the tooling to install.
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@ Install these, then run each check. Every command should succeed.
 
 ## First hour
 
-Run these from the repo root on a fresh clone. Each one exits 0.
+Run these from the repo root on a fresh clone. Each one exits 0. If a port is busy, set `SHARE_TEST_PORT_BASE=<port>` before `bash tests/share.sh`.
 
 ```sh
 /bin/bash -n bin/handout && /bin/bash -n install.sh
@@ -34,10 +34,10 @@ What you should see:
 
 | Command | Output |
 |---|---|
-| `bash tests/ci/shard-check.sh` | `shard-check: 85 sections, 3 shards, each section in exactly one` (the numbers grow with the suite) |
+| `bash tests/ci/shard-check.sh` | `shard-check: <n> sections, <n> shards, each section in exactly one`, exit 0 |
 | `bin/handout version` | `0.9.0` (the number moves with each release) |
-| `bash tests/share.sh` | ends with `<n> checks, PASS` (`1954 checks, PASS` today); it took about 26 minutes on one Mac, and it starts its own server on a spare port |
-| `swift test --package-path mac` | `Executed 424 tests, with 0 failures` (the count grows with the suite) |
+| `bash tests/share.sh` | ends with `<n> checks, PASS`; the full run takes about half an hour on one Mac and starts its own server on a spare port. For a quick loop, run one filtered section: `SHARE_TEST_ONLY=docs bash tests/share.sh` ends with `<n> checks, PASS (filtered by SHARE_TEST_ONLY: <n> sections ran, the rest skipped)` |
+| `swift test --package-path mac` | a last line shaped `Executed <n> tests, with 0 failures`; the first build takes a few minutes |
 
 The suite is isolated: it sets its own root, config directory, port and service label, and stubs `launchctl`, `systemctl`, `security` and `op`. It never touches the links or the Keychain of a Handout you already run on the same machine.
 

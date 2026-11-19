@@ -36,7 +36,7 @@ Show
 
 Type "# 2. one-time setup: tunnel, DNS, login service, live check"
 Enter
-Type "handout setup share-demo.han.ws"
+Type "handout setup share-demo.s.example.com"
 Sleep 400ms
 Enter
 Wait@180s /^\$$/

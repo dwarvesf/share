@@ -69,9 +69,22 @@ A wrong release is fixed with a new patch release. Do not move or delete a tag t
 | Worker (R2 profiles and tenants) | A version and sha, shown by `/healthz` as `X-Share-Worker` | Deployed by whoever holds the admin token, with `handout setup` | After a release that changes the Worker, the admin reruns the same `setup`; publishers see a line when the deployed Worker differs from their CLI |
 | Members | `min_cli` in the bucket marker, written when the admin turns members on | `handout setup <host> --r2 --bucket <name> --members` | A CLI older than `min_cli` still reads but refuses any write with `cli_below_min`; `member rm`, `purge` and `leave` are exempt |
 
+**Rule: the formula bump and the Handout Bar cask ship in the same release.** The old Share Bar app does not read the new CLI's `handout:` prefix or the `handout join` invite line. A formula bump without the cask leaves cask users on a menu bar app that cannot read the CLI. If step 6 stops (no signing identity), finish `mac/release.sh <tag>` before you announce the release.
+
 There is no central Worker to deploy. Every tenant's admin runs the Worker in their own Cloudflare account.
+
+## Homebrew names and migration
+
+The tap `dwarvesf/homebrew-tools` is settled. It holds `Formula/handout.rb`, which installs `handout` and a `share` symlink (on the v0.9.0 tarball it installs `bin/share` as `handout`), and `Casks/handout-bar.rb`. `formula_renames.json` maps `share` to `handout` and `cask_renames.json` maps `share-bar` to `handout-bar`, so an existing install moves on `brew update`.
+
+Homebrew refuses formulae from an untrusted tap, and trust is per name. A new user runs `brew trust dwarvesf/tools`, then `brew install dwarvesf/tools/handout` (cask: `brew install --cask dwarvesf/tools/handout-bar`). A user upgrading from `share` runs:
+
+```sh
+brew trust --formula dwarvesf/tools/handout && brew trust --cask dwarvesf/tools/handout-bar && brew migrate share && brew reinstall handout
+```
+
+`brew migrate` moves the keg. The reinstall adds the `handout` command. `share` keeps working throughout and login services are unaffected.
 
 ## Open
 
-- How an existing Homebrew install of `share` moves to `handout`: a tap migration or an alias formula. The tap decides; this repo does not state it.
 - The licence is MIT today. Paid layers may need a change: [../product/DIRECTION.md](../product/DIRECTION.md), Open decisions.

@@ -23,6 +23,7 @@ It is a bash CLI that runs on your machine and on your own Cloudflare account. T
 ## Quick start
 
 ```sh
+brew trust dwarvesf/tools
 brew install dwarvesf/tools/handout
 handout setup s.example.com     # browser opens for Cloudflare login; Handout does the rest
 handout add ./team-guide        # https://s.example.com/62cb50/team-guide/  (copied to clipboard)
@@ -80,6 +81,7 @@ TLS, DNS                                 login service    no-store, noindex
 ## Install
 
 ```sh
+brew trust dwarvesf/tools                # once: current Homebrew refuses formulae from an untrusted tap
 brew install dwarvesf/tools/handout    # macOS and Linux; pulls caddy, cloudflared, jq
 ```
 
@@ -94,6 +96,12 @@ curl -fsSL https://raw.githubusercontent.com/consolelabs/handout/main/install.sh
 From a clone: `git clone https://github.com/consolelabs/handout.git && cd handout && ./install.sh` (symlinks `bin/handout`, so `git pull` updates it).
 
 The tool was called `share` before. `share` stays a working alias for existing installs, so `share add`, `share join <host> <code>` and `share leave` keep working.
+
+Upgrading a Homebrew install of `share`. Homebrew trust is per name, so trust the new names first. `brew migrate` moves the keg and the reinstall adds the `handout` command. `share` keeps working throughout and login services are unaffected.
+
+```sh
+brew trust --formula dwarvesf/tools/handout && brew trust --cask dwarvesf/tools/handout-bar && brew migrate share && brew reinstall handout
+```
 
 ## Commands
 
@@ -219,7 +227,7 @@ Admin verbs: `member add`, `ls`, `sync`, `rm`, `purge`, `pause`, `resume`, `invi
 ## Menu bar app
 
 ```sh
-brew install --cask dwarvesf/tools/handout-bar    # macOS; also pulls the handout formula
+brew install --cask dwarvesf/tools/handout-bar    # macOS; also pulls the handout formula (after `brew trust dwarvesf/tools`)
 ```
 
 Handout Bar is a menu bar icon for Handout: no terminal needed to see what's shared or to publish something new. Click the icon for the current state and the share list, each with Copy Link, Open in Browser, Refresh, and Remove. Drop a file or folder on the icon to run `handout add` on it.

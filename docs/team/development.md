@@ -64,6 +64,8 @@ The tool was `share` before it was Handout. The command, the package and the doc
 
 The `share` command stays a working alias, so `share add` and `share join <host> <code>` keep working.
 
+History of `bin/handout`: `git log --follow` and plain `git blame` stop at the rename commit. Use `git blame -C -C bin/handout` or `git log -- bin/share` to reach the older history.
+
 ## Build and release scripts
 
 | Script | Does |
@@ -105,7 +107,7 @@ The suite starts its own server on a spare port (`SHARE_TEST_PORT_BASE`, default
 |---|---|---|
 | `changes` | every run | Decides which of the jobs below a diff can affect: a `mac/` only change skips the bash suite, a CLI change skips Swift, a workflow edit runs all |
 | `lint` | every run | `shellcheck` on the CLI, the installer, the suites, the shard scripts, the demo and `mac/*.sh`; the shard check |
-| `test` | a pull request that can affect the CLI | The suite in three shards on Ubuntu (`chain`, `members-a`, `members-b`, from `tests/ci/shards.txt`) |
+| `test` | a pull request that can affect the CLI | The suite in shards on Ubuntu (the names and section filters are in `tests/ci/shards.txt`) |
 | `test-macos` | the same | The bash 3.2 parse check and one shard on macOS |
 | `test-full` | a push to `main` | The whole suite on Ubuntu and macOS |
 | `mac` | a diff that touches `mac/` | `swift test` and an unsigned build |

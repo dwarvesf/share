@@ -13,6 +13,7 @@
 | Path | What it does | Owner |
 |---|---|---|
 | `bin/handout` | The CLI: setup, add, serve, access, R2, members, state, the Worker source it deploys | Han |
+| `bin/share` | A symlink to `bin/handout`: the `share` alias that existing installs keep calling | Han |
 | `bin/release` | Cut the next release: version from commit subjects, changelog, tag, tap formula, cask | Han |
 | `bin/changelog` | Print `CHANGELOG.md` from tag history | Han |
 | `install.sh` | Install dependencies and put the CLI on `PATH` (a symlink from a clone, a download over curl) | Han |
@@ -48,6 +49,9 @@
 | `mac/Tests/fixtures/bin/` | The fake CLI the screenshot scripts answer from | Han |
 | `mac/Tests/fixtures/ax/axdrive.swift` | The Accessibility driver: real clicks and key presses | Han |
 | `mac/Tests/fixtures/popover/run-shots.sh` | The popover screenshot run: step files through `mac/shots.sh` | Han |
+| `mac/Tests/fixtures/popover/parity-sample.swift` | The color sampler for the popover design parity check | Han |
+| `mac/Tests/fixtures/popover/popover-b-sample.swift` | The color sampler for the popover B parity check | Han |
+| `mac/Tests/fixtures/settings/parity/sample.swift` | The color sampler for the Settings parity check | Han |
 | `mac/Tests/fixtures/popover/parity-shots.sh` | Render the popover through the app's debug hook for the design parity check | Han |
 | `mac/Tests/fixtures/popover/popover-b-shots.sh` | Render the popover B screens through the debug hook, light and dark | Han |
 | `mac/Tests/fixtures/popover/popover-b-parity.sh` | Compare the popover B screens with the design page, sampled in sRGB | Han |
@@ -64,7 +68,15 @@
 | `demo/render.sh` | Record a tape with vhs and build the GIF with ffmpeg | Han |
 | `demo/env.sh` | The hidden prelude of every tape: its own config, root, port and service label | Han |
 | `demo/setup.tape` | The install and setup story | Han |
-| `demo/use.tape` | The share, visit, count and take-down story | Han |
+| `demo/use.tape` | The hand out, visit, count and take-down story | Han |
+| `demo/README.md` | How to re-record the demo | Han |
+| `demo/.gitignore` | Keeps the frames that vhs captures out of git | Han |
+| `demo/setup.gif` | The recorded setup story, shown in the root README | Han |
+| `demo/use.gif` | The recorded use story, shown in the root README | Han |
+| `demo/visitor.png` | What a visitor sees on a folder link | Han |
+| `demo/team-guide/README.md` | The sample folder the use tape hands out | Han |
+| `demo/team-guide/checklist.md` | A second file in the sample folder | Han |
+| `demo/team-guide/img/flow.svg` | The image the sample folder's README shows | Han |
 
 ## Workflows and jobs
 

@@ -32,7 +32,7 @@ Run the filtered suite while iterating and the full suite once before the PR, ne
 
 ## CI shards
 
-CI splits the suite into three shards, listed in `tests/ci/shards.txt`: `chain`, `members-a`, `members-b`. `bash tests/ci/run-shard.sh <name>` runs one locally with the same filter. `chain` cannot shrink: the core, r2, groundwork and late groups share state, so its time is the floor of a pull request. A new section joins exactly one shard; `bash tests/ci/shard-check.sh` fails when a section runs in none or in two, and `bash tests/ci/shard-check-test.sh` proves it with negative controls. `bash .github/scripts/ci-changes-test.sh .github/workflows/ci.yml` checks the `changes` step against fake diffs (it needs `python3` with `yaml`).
+CI splits the suite into shards, one per line of `tests/ci/shards.txt` (a name and a section regex). `bash tests/ci/run-shard.sh <name>` runs one locally with the same filter. `chain` cannot shrink: the core, r2, groundwork and late groups share state, so its time is the floor of a pull request. A new section joins exactly one shard; `bash tests/ci/shard-check.sh` fails when a section runs in none or in two, and `bash tests/ci/shard-check-test.sh` proves it with negative controls. `bash .github/scripts/ci-changes-test.sh .github/workflows/ci.yml` checks the `changes` step against fake diffs (it needs `python3` with `yaml`).
 
 ## The Worker
 

@@ -4,7 +4,7 @@ The one entry page for a new teammate. It orders the docs, gives a status snapsh
 
 ## What this is
 
-- One product with three parts. The CLI (`bin/handout`) hands out a file, a folder or a dev server at a link on your own domain. The Worker, which the CLI deploys, serves links from a private R2 bucket when your machine is off. Handout Bar is a macOS menu bar app that sits on top of the CLI.
+- One product made of the CLI, the Worker and Handout Bar. The CLI (`bin/handout`) hands out a file, a folder or a dev server at a link on your own domain. The Worker, which the CLI deploys, serves links from a private R2 bucket when your machine is off. Handout Bar is a macOS menu bar app that sits on top of the CLI.
 - It was called `share` until recently. The command, the package and the docs are Handout now; `share` stays a working alias. A list of names did not change on purpose, because live installs depend on them: [development.md](development.md#names-kept-from-the-share-era).
 - The CLI is open source (MIT) and runs on the user's own Cloudflare account. Paid layers are being considered, none is built: [../product/DIRECTION.md](../product/DIRECTION.md).
 
@@ -20,11 +20,11 @@ The one entry page for a new teammate. It orders the docs, gives a status snapsh
 | State groundwork: codes, step journal, roles, serve phase, `.health` | `bin/handout` | built on `main`, not in a release | SPEC-010; PRs 54, 55, 56 |
 | Media-aware folder page | `bin/handout` | built on `main`, not in a release | SPEC-011; PR 79 |
 | Handout Bar | `mac/` | built; the members tab, popover, settings window and all-links window are on `main` | SPEC-003, SPEC-006; ADR-0003, ADR-0010; PRs 61, 65, 68, 76 |
-| Release and distribution | `bin/release`, `mac/release.sh` | built; newest tag v0.9.0; formula and cask in `dwarvesf/homebrew-tools` | [release.md](release.md) |
-| The Handout rebrand | docs, CLI, formula, cask | in progress | this docs pass; the code branch; the tap |
+| Release and distribution | `bin/release`, `mac/release.sh` | built; newest tag v0.9.0; formula `handout` and cask `handout-bar` in `dwarvesf/homebrew-tools`; new installs run `brew trust dwarvesf/tools` first | [release.md](release.md) |
+| The Handout rebrand | docs, CLI, formula, cask | docs and code on the rename branch; the tap is merged (`dwarvesf/homebrew-tools` PR 32) | [release.md](release.md), section Homebrew names and migration |
 | Paid layers, hosted option, accounts | none | not started | [../product/DIRECTION.md](../product/DIRECTION.md) |
 
-`main` is 30 commits ahead of v0.9.0. The first release after this page ships the members work and the folder page.
+`main` is ahead of v0.9.0 (`git log v0.9.0..main --oneline`). The first release after this page ships the members work and the folder page.
 
 ## Why: direction and use cases
 
@@ -98,9 +98,10 @@ The rules and who says yes to a one-way door: [`AGENTS.md`](../../AGENTS.md#one-
 | Item | Why it matters | Where recorded |
 |---|---|---|
 | Names kept from the share era | A renamed Keychain item, service label or Worker route strands a live install | [development.md](development.md#names-kept-from-the-share-era); one-way doors in `AGENTS.md` |
-| Existing `share` Homebrew installs | A user who runs `brew upgrade` must land on `handout`: a tap migration or an alias formula | [release.md](release.md), section Open |
+| Existing `share` Homebrew installs | Settled: the tap renames move them on `brew update`. Homebrew trust is per name, so an upgrader runs `brew trust --formula dwarvesf/tools/handout && brew trust --cask dwarvesf/tools/handout-bar && brew migrate share && brew reinstall handout` | [release.md](release.md), section Homebrew names and migration |
+| Formula and cask must ship together | The old Share Bar app does not read the `handout:` prefix or the `handout join` invite line | [release.md](release.md), section What works with what |
 | Licence and pricing undecided | MIT lets anyone resell the whole tool; no paid layer can ship before the choice | [../product/DIRECTION.md](../product/DIRECTION.md), Open decisions |
-| Unreleased work on `main` | Members and the folder page are 30 commits past v0.9.0 | `CHANGELOG.md`; [release.md](release.md) |
+| Unreleased work on `main` | Members and the folder page are past v0.9.0 | `CHANGELOG.md`; [release.md](release.md) |
 | Tunnel links die when the machine sleeps | Visitors get Cloudflare 530; the r2 backend is the answer | [../../README.md](../../README.md); [../how-it-works.md](../how-it-works.md) |
 | Members need Workers VPC | A beta Cloudflare product; members stay off until `--members` | [../setup.md](../setup.md) section 4i; ADR-0009 |
 | The bucket token cannot tell members apart | Members are named teammates only, never strangers | [../SYSTEM-DESIGN.md](../SYSTEM-DESIGN.md), risks |
@@ -108,6 +109,11 @@ The rules and who says yes to a one-way door: [`AGENTS.md`](../../AGENTS.md#one-
 | The live legs run by hand | CI has no Cloudflare zone or token, so setup, teardown and the Worker's live behavior are proved only before a release | [testing.md](testing.md) |
 | The cask needs a signing Mac | `bin/release` exits 3 with `CASK NOT RELEASED` on any other machine | [release.md](release.md) |
 | The docs are tested | The suite fails when a documented flag or `state` key goes missing, so a rename touches docs and tests together | [testing.md](testing.md) |
+
+## Known issues
+
+- Test fixtures under `mac/Tests/fixtures` and `tests/prod-snapshot.sh` still carry real hostnames.
+- The README GIFs (`demo/setup.gif`, `demo/use.gif`) still show `share`. The tapes in `demo/` are already `handout`, so a re-record fixes it.
 
 ## Working agreement
 
