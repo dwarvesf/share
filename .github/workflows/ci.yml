@@ -116,7 +116,8 @@ jobs:
   test-full:
     needs: changes
     if: needs.changes.outputs.bash == 'true' && github.event_name == 'push'
-    timeout-minutes: 30
+    # the whole suite on macos-latest runs 23 to 30 min; 30 cancelled 3 of 5 main runs
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
