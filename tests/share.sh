@@ -316,6 +316,11 @@ if command -v pandoc >/dev/null; then
   check "render carries the stylesheet" "1" "$(curl -s "$(local_url "${dir_url}notes.html")" | grep -c 'max-width:44rem')"
   check "no math, no KaTeX" "0" "$(curl -s "$(local_url "${dir_url}notes.html")" | grep -c 'katex')"
   check "math loads KaTeX" "1" "$(curl -s "$(local_url "${dir_url}math.html")" | grep -c 'katex.min.js')"
+  # shellcheck disable=SC2016 # the backticks are markdown
+  mkdir -p "$WORK/mdwarn" && printf '# W\n\n```sh\necho hi\n```\n' >"$WORK/mdwarn/w.md"
+  mdw_url="$(bash "$SH" add "$WORK/mdwarn" 2>"$WORK/mdwarn.err" | head -1)"
+  check "rendering prints no pandoc warning (pandoc 3.8 renamed --highlight-style)" "0" "$(grep -ci 'deprecated\|warning' "$WORK/mdwarn.err")"
+  bash "$SH" rm "$mdw_url" >/dev/null 2>&1 || true
 else
   echo "  skip  pandoc not installed"
   check "single .md served raw" 200 "$(code "$md_url")"
