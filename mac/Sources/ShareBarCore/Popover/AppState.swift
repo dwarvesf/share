@@ -26,8 +26,8 @@ public enum AppState: Sendable, Equatable {
     }
 
     public static let defaultMinimum = "0.10"
-    public static let installCommand = "brew install dwarvesf/tools/handout"
-    public static let upgradeCommand = "brew upgrade dwarvesf/tools/handout"
+    public static let installCommand = "brew install consolelabs/tap/handout"
+    public static let upgradeCommand = "brew upgrade consolelabs/tap/handout"
 
     /// `0.10.0` reads `0.10`.
     static func minorVersion(_ version: String?) -> String? {

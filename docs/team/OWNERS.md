@@ -89,4 +89,4 @@
 | CI job `test-full` | A job in `ci.yml` | A push to `main` | Han |
 | CI job `mac` | A job in `ci.yml` | A diff that touches `mac/` | Han |
 | Release (`.github/workflows/release.yml`) | GitHub-hosted runner | A pushed `v*` tag | Han |
-| Homebrew formula and cask | The `dwarvesf/homebrew-tools` tap, bumped by `bin/release` and `mac/release.sh` | Each release | Han |
+| Homebrew formula and cask | The `consolelabs/homebrew-tap` tap, bumped by `bin/release` and `mac/release.sh` | Each release | Han |

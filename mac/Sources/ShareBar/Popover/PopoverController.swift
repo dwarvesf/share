@@ -162,7 +162,7 @@ final class PopoverController: NSObject, NSPopoverDelegate {
             store.send(.publishStep(file: file, step: 2, of: 6))
             store.stepNames[file] = "publish"
         case "flashed":
-            store.send(.publishFinished(file: "/Users/demo/Q4-plan.pdf", result: .copied(url: "https://s.han.ws/a1b2c3/posture-routine.html"), now: Date()))
+            store.send(.publishFinished(file: "/Users/demo/Q4-plan.pdf", result: .copied(url: "https://s.home.example.com/a1b2c3/posture-routine.html"), now: Date()))
             if let first { store.flash(first) }
         case "publish-live":
             // The real path: a drop on the popover runs `add` through the queue with SHARE_PROGRESS=1 and the fake

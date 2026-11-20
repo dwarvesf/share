@@ -20,8 +20,8 @@ The one entry page for a new teammate. It orders the docs, gives a status snapsh
 | State groundwork: codes, step journal, roles, serve phase, `.health` | `bin/handout` | built on `main`, not in a release | SPEC-010; PRs 54, 55, 56 |
 | Media-aware folder page | `bin/handout` | built on `main`, not in a release | SPEC-011; PR 79 |
 | Handout Bar | `mac/` | built; the members tab, popover, settings window and all-links window are on `main` | SPEC-003, SPEC-006; ADR-0003, ADR-0010; PRs 61, 65, 68, 76 |
-| Release and distribution | `bin/release`, `mac/release.sh` | built; newest tag v0.9.0; formula `handout` and cask `handout-bar` in `dwarvesf/homebrew-tools`; new installs run `brew trust dwarvesf/tools` first | [release.md](release.md) |
-| The Handout rebrand | docs, CLI, formula, cask | docs and code on the rename branch; the tap is merged (`dwarvesf/homebrew-tools` PR 32) | [release.md](release.md), section Homebrew names and migration |
+| Release and distribution | `bin/release`, `mac/release.sh` | built; newest tag v0.9.0; formula `handout` and cask `handout-bar` in `consolelabs/homebrew-tap`; new installs run `brew trust consolelabs/tap` first | [release.md](release.md) |
+| The Handout rebrand | docs, CLI, formula, cask | docs and code on the rename branch; the tap is merged and lives in `consolelabs/homebrew-tap` | [release.md](release.md), section Homebrew names and migration |
 | Paid layers, hosted option, accounts | none | not started | [../product/DIRECTION.md](../product/DIRECTION.md) |
 
 `main` is ahead of v0.9.0 (`git log v0.9.0..main --oneline`). The first release after this page ships the members work and the folder page.
@@ -98,7 +98,7 @@ The rules and who says yes to a one-way door: [`AGENTS.md`](../../AGENTS.md#one-
 | Item | Why it matters | Where recorded |
 |---|---|---|
 | Names kept from the share era | A renamed Keychain item, service label or Worker route strands a live install | [development.md](development.md#names-kept-from-the-share-era); one-way doors in `AGENTS.md` |
-| Existing `share` Homebrew installs | Settled: the tap renames move them on `brew update`. Homebrew trust is per name, so an upgrader runs `brew trust --formula dwarvesf/tools/handout && brew trust --cask dwarvesf/tools/handout-bar && brew migrate share && brew reinstall handout` | [release.md](release.md), section Homebrew names and migration |
+| Existing `share` Homebrew installs | Settled: the tap migration moves them on `brew update`. An upgrader then runs `brew trust consolelabs/tap` | [release.md](release.md), section Homebrew names and migration |
 | Formula and cask must ship together | The old Share Bar app does not read the `handout:` prefix or the `handout join` invite line | [release.md](release.md), section What works with what |
 | Licence and pricing undecided | MIT lets anyone resell the whole tool; no paid layer can ship before the choice | [../product/DIRECTION.md](../product/DIRECTION.md), Open decisions |
 | Unreleased work on `main` | Members and the folder page are past v0.9.0 | `CHANGELOG.md`; [release.md](release.md) |
@@ -112,7 +112,6 @@ The rules and who says yes to a one-way door: [`AGENTS.md`](../../AGENTS.md#one-
 
 ## Known issues
 
-- Test fixtures under `mac/Tests/fixtures` and `tests/prod-snapshot.sh` still carry real hostnames.
 - The README GIFs (`demo/setup.gif`, `demo/use.gif`) still show `share`. The tapes in `demo/` are already `handout`, so a re-record fixes it.
 
 ## Working agreement

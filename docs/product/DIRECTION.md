@@ -5,7 +5,7 @@ What Handout is for, what stays free, what could be paid, and what the owner sti
 ## Name and publisher
 
 - Name: Handout (chosen). The domain and a trademark search are still to do before a public launch.
-- Publisher: Console Labs (chosen). Dwarves is credited.
+- Publisher: Console Labs (chosen).
 - Paid candidates, from the owner's plan: the Mac app (Handout Bar) as a one-time purchase, and a team plan per seat, with members on one hostname and links held in R2. Pricing stays undecided.
 
 ## What Handout is for
@@ -91,6 +91,6 @@ Written down so nobody builds it by accident. Move an item up with a demo.
 | Names of the tiers | A free tier and a team tier, with names | The README and the site need words | Undecided |
 | What the free tier includes | The whole CLI today, or a cap on links, hostnames or members | A cap is a change from what users have now | Undecided |
 | The name | Handout as the product; the domain; a trademark search | The name is on the package, the tap and the app | Chosen: Handout. Domain and trademark check before a public launch |
-| Selling entity | Console Labs publishes, with Dwarves credited; which entity sells and which bank account | Needed before any payment | Publisher chosen; the selling entity and account are undecided |
-| Moving existing installs | Tap renames (`share` to `handout`, `share-bar` to `handout-bar`) | Today's users must not be stranded | Settled: dwarvesf/homebrew-tools PR 32 merged; see `docs/team/release.md` |
+| Selling entity | Console Labs publishes; which entity sells and which bank account | Needed before any payment | Publisher chosen; the selling entity and account are undecided |
+| Moving existing installs | Tap renames (`share` to `handout`, `share-bar` to `handout-bar`) | Today's users must not be stranded | Settled: the tap migration is in place; see `docs/team/release.md` |
 | Cloudflare terms | Whether a managed offer fits Cloudflare's terms for resellers | A hosted layer sits on their products | Undecided: read their terms |

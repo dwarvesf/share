@@ -12,7 +12,7 @@ Docs are grouped by who reads them. Decisions, specs, proofs and notes are recor
 | [product/](product/) | Anyone who builds or sells the product | What the product is: who it is for, what stays free, what could be paid |
 | [brand/](brand/) | Anyone who draws the mark | The mark as SVG and PNG, and its contact sheet |
 | [design/](design/) | Anyone who changes Handout Bar | The menu bar app design pages and the multi-member UML sheets |
-| [decisions/](decisions/), [specs/](specs/), [implementation-notes/](implementation-notes/), [verification/](verification/), [retro/](retro/), [research/](research/), [briefs/](briefs/) | Anyone tracing a change | Dated records. They keep the name `share`, the product name when they were written. dwarves-kit tools look for these exact folders |
+| [decisions/](decisions/), [specs/](specs/), [implementation-notes/](implementation-notes/), [verification/](verification/), [retro/](retro/), [research/](research/), [briefs/](briefs/) | Anyone tracing a change | Dated records. They keep the name `share`, the product name when they were written. the agent kit's tools look for these exact folders |
 | [how-it-works.md](how-it-works.md), [setup.md](setup.md), [SYSTEM-DESIGN.md](SYSTEM-DESIGN.md), [QUALITY.md](QUALITY.md) | Everyone | The model, the admin guide, the UML design and the measurable qualities, at the top because tests and specs cite them |
 
 A new doc goes in `team/` if it tells people how to work, and in `product/` if it says what the product is or does. The rule is in [AGENTS.md](../AGENTS.md), section "Docs layout".
@@ -96,4 +96,4 @@ A new doc goes in `team/` if it tells people how to work, and in `product/` if i
 | [../.github/ISSUE_TEMPLATE/task.yml](../.github/ISSUE_TEMPLATE/task.yml) | The Task issue form: Goal, Done when, Scope, Notes |
 | [../.github/ISSUE_TEMPLATE/bug.yml](../.github/ISSUE_TEMPLATE/bug.yml) | The Bug issue form |
 | [../.github/workflows/ci.yml](../.github/workflows/ci.yml) | CI: lint, the suite in shards, the Swift job |
-| [../WORKFLOW.md](../WORKFLOW.md) | A pointer to the dwarves-kit lanes and gates |
+| [../WORKFLOW.md](../WORKFLOW.md) | A pointer to the agent kit's lanes and gates |

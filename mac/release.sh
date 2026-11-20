@@ -44,9 +44,9 @@
 set -euo pipefail
 
 REPO="consolelabs/handout"
-TAP_REPO="dwarvesf/homebrew-tools"
+TAP_REPO="consolelabs/homebrew-tap"
 CASK_NAME="handout-bar"
-CASK_CAVEATS_LINE="Menu bar app: brew install --cask dwarvesf/tools/$CASK_NAME"
+CASK_CAVEATS_LINE="Menu bar app: brew install --cask consolelabs/tap/$CASK_NAME"
 
 die() { echo "release.sh: $*" >&2; exit 1; }
 
@@ -154,7 +154,7 @@ cask "$CASK_NAME" do
   version "$VERSION"
   sha256 "$SHA"
 
-  url "https://github.com/$REPO/releases/download/$TAG/$ZIP_NAME"
+  url "https://github.com/$REPO/releases/download/v#{version}/Handout-Bar-#{version}.zip"
   name "Handout Bar"
   desc "Menu bar app for handout: live status, quick links, drag-to-publish"
   homepage "https://github.com/$REPO"
@@ -164,7 +164,7 @@ cask "$CASK_NAME" do
     strategy :github_latest
   end
 
-  depends_on formula: "dwarvesf/tools/handout"
+  depends_on formula: "consolelabs/tap/handout"
   depends_on macos: :ventura
 
   app "Handout Bar.app"

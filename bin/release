@@ -68,17 +68,17 @@ done
 [[ -s $work/t.tar.gz ]] || die "could not fetch $tarball"
 sha="$(shasum -a 256 "$work/t.tar.gz" | cut -d' ' -f1)"
 
-git clone --quiet --depth 1 https://github.com/dwarvesf/homebrew-tools.git "$work/tap"
+git clone --quiet --depth 1 https://github.com/consolelabs/homebrew-tap.git "$work/tap"
 f="$work/tap/Formula/handout.rb"
 sed -i.bak -e "s|refs/tags/v[0-9.]*\.tar\.gz|refs/tags/$next.tar.gz|" \
            -e "s|sha256 \"[0-9a-f]*\"|sha256 \"$sha\"|" "$f" && rm "$f.bak"
 (cd "$work/tap" && git checkout -q -b "chore/handout-$next" \
   && git add Formula/handout.rb && git commit -q -m "chore: handout ${next#v}" \
-  && git push -q https://github.com/dwarvesf/homebrew-tools.git "chore/handout-$next")
-pr="$(gh pr create --repo dwarvesf/homebrew-tools --title "chore: handout ${next#v}" \
+  && git push -q https://github.com/consolelabs/homebrew-tap.git "chore/handout-$next")
+pr="$(gh pr create --repo consolelabs/homebrew-tap --title "chore: handout ${next#v}" \
       --head "chore/handout-$next" --body "Bumps handout to $next." 2>&1 | tail -1)"
 echo "tap bump: $pr"
-gh pr merge --repo dwarvesf/homebrew-tools "$pr" --squash --delete-branch >/dev/null
+gh pr merge --repo consolelabs/homebrew-tap "$pr" --squash --delete-branch >/dev/null
 echo "formula bumped to $next"
 
 # menu bar app cask: needs macOS plus the Developer ID identity build.sh signs

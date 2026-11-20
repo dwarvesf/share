@@ -1100,12 +1100,12 @@ final class StatusItemController: NSObject, @unchecked Sendable {
 
     @objc private func copyInstallCommand() {
         actionLogger.log("copy-install-command")
-        setPasteboard("brew install dwarvesf/tools/handout")
+        setPasteboard("brew install consolelabs/tap/handout")
     }
 
     @objc private func copyUpgradeCommand() {
         actionLogger.log("copy-upgrade-command")
-        setPasteboard("brew upgrade dwarvesf/tools/handout")
+        setPasteboard("brew upgrade consolelabs/tap/handout")
     }
 
     @objc private func toggleOpenAtLogin() {
