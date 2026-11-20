@@ -122,13 +122,13 @@ final class DerivationTests: XCTestCase {
         let rows: [Row] = [
             Row(name: "migrated", snapshot: makeSnapshot(state: "not_setup", ready: false, servesHere: false, role: "migrated"), reason: "Moved to another machine", neutral: true),
             Row(name: "paused", snapshot: makeSnapshot(role: "member", member: MemberInfo(id: "m-an-1a2b3c4d", status: "paused")), reason: "This member is paused: ask an admin to resume you.", neutral: false),
-            Row(name: "left", snapshot: makeSnapshot(role: "member", member: MemberInfo(id: "m-an-1a2b3c4d", status: "left")), reason: "You left s.han.ws.", neutral: true),
-            Row(name: "removed", snapshot: makeSnapshot(role: "member", member: MemberInfo(id: "m-an-1a2b3c4d", status: "removed")), reason: "You were removed from s.han.ws.", neutral: false),
+            Row(name: "left", snapshot: makeSnapshot(role: "member", member: MemberInfo(id: "m-an-1a2b3c4d", status: "left")), reason: "You left s.home.example.com.", neutral: true),
+            Row(name: "removed", snapshot: makeSnapshot(role: "member", member: MemberInfo(id: "m-an-1a2b3c4d", status: "removed")), reason: "You were removed from s.home.example.com.", neutral: false),
             Row(name: "member token expired", snapshot: makeSnapshot(role: "member", token: TokenInfo(status: "expired")), reason: "Your key expired; ask the admin to renew it.", neutral: false),
             Row(name: "member token invalid", snapshot: makeSnapshot(role: "member", token: TokenInfo(status: "invalid")), reason: "Your key stopped working; ask the admin.", neutral: false),
             Row(name: "admin token expired", snapshot: makeSnapshot(role: "tenant_origin", token: TokenInfo(status: "expired")), reason: "The stored key expired; run handout api-token.", neutral: false),
             Row(name: "admin token invalid", snapshot: makeSnapshot(role: "tenant_origin", token: TokenInfo(status: "invalid")), reason: "Cloudflare rejected the stored key; run handout api-token.", neutral: false),
-            Row(name: "cli below min", snapshot: makeSnapshot(role: "tenant_origin", compat: CompatInfo(status: "cli_below_min", minCLI: "0.10.0")), reason: "Upgrade share to 0.10.0; s.han.ws requires it.", neutral: false),
+            Row(name: "cli below min", snapshot: makeSnapshot(role: "tenant_origin", compat: CompatInfo(status: "cli_below_min", minCLI: "0.10.0")), reason: "Upgrade share to 0.10.0; s.home.example.com requires it.", neutral: false),
             Row(name: "not set up (today's rule)", snapshot: makeSnapshot(state: "not_setup", ready: false, servesHere: false), reason: "Not set up", neutral: true),
         ]
         for row in rows {
@@ -220,7 +220,7 @@ final class DerivationTests: XCTestCase {
             XCTAssertTrue(row(state).canCopy, state ?? "nil")
         }
         XCTAssertEqual(row("something_new").linkState, .live)
-        let pending = Row(share: makeShare(url: "https://s.han.ws/<pending>"), profile: "p", now: now)
+        let pending = Row(share: makeShare(url: "https://s.home.example.com/<pending>"), profile: "p", now: now)
         XCTAssertFalse(pending.canCopy)
     }
 
@@ -237,7 +237,7 @@ final class DerivationTests: XCTestCase {
             "setup-r2 stopped at step 13 of 16 (route); rerun: \(rerun)",
         ], "the unreadable placeholder is skipped; a running op lists first")
         let onlyDead = MenuModel(profiles: makeProfiles([("p", makeSnapshot(ops: [dead]))]), failure: nil, now: now)
-        XCTAssertEqual(onlyDead.header, "Serving at s.han.ws", "a stopped op adds a line, not a header")
+        XCTAssertEqual(onlyDead.header, "Serving at s.home.example.com", "a stopped op adds a line, not a header")
         XCTAssertEqual(onlyDead.sections.first?.ops.count, 1)
     }
 

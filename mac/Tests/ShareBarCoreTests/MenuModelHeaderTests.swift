@@ -81,11 +81,11 @@ final class MenuModelHeaderTests: XCTestCase {
     // MARK: - the Mini shape: a neutral default never slashes a healthy profile
 
     func testMiniFixtureIsConnectedAndServingHeader() throws {
-        // default not_setup (serves_here false), dfoundation serving and ready.
+        // default not_setup (serves_here false), acme serving and ready.
         let model = MenuModel(profiles: try loadFixtureProfiles(), failure: nil, now: Date())
 
         XCTAssertEqual(model.icon, .connected)
-        XCTAssertEqual(model.header, "Serving at s.d.foundation")
+        XCTAssertEqual(model.header, "Serving at s.team.example.com")
         XCTAssertEqual(model.sections.count, 2)
         XCTAssertEqual(model.sections[0].health, .notSetUp)
         XCTAssertTrue(model.sections[0].showSetUp)
@@ -97,19 +97,19 @@ final class MenuModelHeaderTests: XCTestCase {
     func testOneAttentionProfileNamesItWithItsStatus() {
         let profiles = makeProfiles([
             makeEntry(name: "default", state: makeSnapshot(state: "not_setup", host: nil, servesHere: false)),
-            makeEntry(name: "dfoundation", state: makeSnapshot(state: "stopped", servesHere: true)),
+            makeEntry(name: "acme", state: makeSnapshot(state: "stopped", servesHere: true)),
         ])
         let model = MenuModel(profiles: profiles, failure: nil, now: Date())
 
         XCTAssertEqual(model.icon, .disconnected)
-        XCTAssertEqual(model.header, "Needs attention: dfoundation (Stopped)")
+        XCTAssertEqual(model.header, "Needs attention: acme (Stopped)")
         XCTAssertTrue(model.sections[1].showSetUp, "a stopped profile can be set up again")
-        XCTAssertEqual(model.sections[1].host, "s.han.ws")
+        XCTAssertEqual(model.sections[1].host, "s.home.example.com")
     }
 
     func testTunnelDownAndErrorBothCountAsAttention() {
-        let down = makeProfiles([makeEntry(name: "dfoundation", state: makeSnapshot(state: "serving", ready: false))])
-        XCTAssertEqual(MenuModel(profiles: down, failure: nil, now: Date()).header, "Needs attention: dfoundation (Tunnel not connected)")
+        let down = makeProfiles([makeEntry(name: "acme", state: makeSnapshot(state: "serving", ready: false))])
+        XCTAssertEqual(MenuModel(profiles: down, failure: nil, now: Date()).header, "Needs attention: acme (Tunnel not connected)")
 
         let errored = makeProfiles([makeEntry(name: "Bad", error: "share: bad profile name 'Bad'")])
         let model = MenuModel(profiles: errored, failure: nil, now: Date())
@@ -132,8 +132,8 @@ final class MenuModelHeaderTests: XCTestCase {
     // MARK: - serving / elsewhere / not set up
 
     func testServingAtHost() {
-        let profiles = makeProfiles([makeEntry(name: "default", state: makeSnapshot(state: "serving", ready: true, host: "s.han.ws"))])
-        XCTAssertEqual(MenuModel(profiles: profiles, failure: nil, now: Date()).header, "Serving at s.han.ws")
+        let profiles = makeProfiles([makeEntry(name: "default", state: makeSnapshot(state: "serving", ready: true, host: "s.home.example.com"))])
+        XCTAssertEqual(MenuModel(profiles: profiles, failure: nil, now: Date()).header, "Serving at s.home.example.com")
     }
 
     func testNotServingOnThisMacWhenEverySetUpProfileIsElsewhere() {
@@ -176,7 +176,7 @@ final class MenuModelHeaderTests: XCTestCase {
 
     func testFailedRefreshKeepsSectionsButSlashesIconAndShowsFailure() {
         let profiles = makeProfiles([
-            makeEntry(name: "dfoundation", state: makeSnapshot(state: "serving", ready: true, host: "s.d.foundation")),
+            makeEntry(name: "acme", state: makeSnapshot(state: "serving", ready: true, host: "s.team.example.com")),
         ])
         let model = MenuModel(profiles: profiles, failure: .other("share: timed out"), now: Date())
 
@@ -190,8 +190,8 @@ final class MenuModelHeaderTests: XCTestCase {
     /// `.cliNotFound`, each folded over what the previous step left.
     func testCliNotFoundAndOldCLIClearTheSections() {
         let good = CLIResult(status: 0, stdout: """
-        {"schema":1,"profiles":[{"name":"dfoundation","state":{"schema":1,"state":"serving",
-         "ready":true,"mode":"named","host":"s.d.foundation","hosts":"","serves_here":true,
+        {"schema":1,"profiles":[{"name":"acme","state":{"schema":1,"state":"serving",
+         "ready":true,"mode":"named","host":"s.team.example.com","hosts":"","serves_here":true,
          "service":false,"access_pending":0,"shares":[]}}]}
         """, stderr: "", timedOut: false)
         let oldCLI = CLIResult(status: 0, stdout: "default\tnot_setup\t-\n", stderr: "", timedOut: false)
@@ -213,7 +213,7 @@ final class MenuModelHeaderTests: XCTestCase {
 
     func testAnOtherFailureKeepsTheLastGoodSnapshot() {
         let previous = makeProfiles([
-            makeEntry(name: "dfoundation", state: makeSnapshot(state: "serving", ready: true)),
+            makeEntry(name: "acme", state: makeSnapshot(state: "serving", ready: true)),
         ])
         let timedOut = CLIResult(status: 1, stdout: "", stderr: "share: timed out", timedOut: true)
         let folded = ProfilesSnapshot.fold(timedOut, over: previous)

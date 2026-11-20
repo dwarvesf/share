@@ -2,7 +2,7 @@ import XCTest
 @testable import ShareBarCore
 
 /// Decode tests read the on-disk fixtures: `Fixtures/profiles.json`, saved from a real
-/// `share profiles --json` run on the Mini (default `not_setup`, `dfoundation` serving a
+/// `share profiles --json` run on the Mini (default `not_setup`, `acme` serving a
 /// gated share), and `Fixtures/state.json` for the single-state decode. Assertions are on
 /// shape, not hardcoded ids.
 final class SnapshotDecodeTests: XCTestCase {
@@ -10,10 +10,10 @@ final class SnapshotDecodeTests: XCTestCase {
         let snapshot = try loadFixtureProfiles()
 
         XCTAssertEqual(snapshot.schema, 1)
-        XCTAssertEqual(snapshot.profiles.map(\.name), ["default", "dfoundation"])
+        XCTAssertEqual(snapshot.profiles.map(\.name), ["default", "acme"])
         XCTAssertEqual(snapshot.profiles[0].state?.state, "not_setup")
         XCTAssertEqual(snapshot.profiles[1].state?.state, "serving")
-        XCTAssertEqual(snapshot.profiles[1].state?.host, "s.d.foundation")
+        XCTAssertEqual(snapshot.profiles[1].state?.host, "s.team.example.com")
     }
 
     func testDecodesAccessAndAccessPending() throws {
@@ -21,7 +21,7 @@ final class SnapshotDecodeTests: XCTestCase {
 
         XCTAssertEqual(snapshot.profiles[1].state?.accessPending, 0)
         let gated = snapshot.profiles[1].state?.shares.first { $0.access != nil }
-        XCTAssertEqual(gated?.access, "group:dwarves-ops", "the fixture's gated share decodes its rule")
+        XCTAssertEqual(gated?.access, "group:team-ops", "the fixture's gated share decodes its rule")
         let publicShare = try JSONDecoder().decode(
             Share.self,
             from: Data(#"{"id":"a1","name":"n","url":"u","kind":"snapshot","own_host":null,"expires":0}"#.utf8)
@@ -87,7 +87,7 @@ final class SnapshotDecodeTests: XCTestCase {
           "state": "serving",
           "ready": true,
           "mode": "named",
-          "host": "s.han.ws",
+          "host": "s.home.example.com",
           "hosts": "hans-air-m4",
           "serves_here": true,
           "service": true,
@@ -96,7 +96,7 @@ final class SnapshotDecodeTests: XCTestCase {
             {
               "id": "abc123",
               "name": "notes.txt",
-              "url": "https://s.han.ws/abc123/notes.txt",
+              "url": "https://s.home.example.com/abc123/notes.txt",
               "kind": "snapshot",
               "own_host": null,
               "expires": 0
@@ -113,7 +113,7 @@ final class SnapshotDecodeTests: XCTestCase {
     func testDecodesTheTenantFields() throws {
         let snapshot = try loadFixtureTenantProfiles()
 
-        let origin = try XCTUnwrap(snapshot.profiles.first { $0.name == "dfoundation" }?.state)
+        let origin = try XCTUnwrap(snapshot.profiles.first { $0.name == "acme" }?.state)
         XCTAssertEqual(origin.r2, true)
         XCTAssertEqual(origin.storageDefault, "local")
         XCTAssertEqual(origin.cloudMore, 3)
@@ -129,7 +129,7 @@ final class SnapshotDecodeTests: XCTestCase {
         XCTAssertEqual(gatedMachineRow.storage, "machine")
         XCTAssertEqual(gatedMachineRow.type, "pdf")
         XCTAssertEqual(gatedMachineRow.by, "mac-mini")
-        XCTAssertEqual(gatedMachineRow.access, "group:dwarves-ops")
+        XCTAssertEqual(gatedMachineRow.access, "group:team-ops")
 
         let liveRow = origin.shares[2]
         XCTAssertEqual(liveRow.storage, "machine")

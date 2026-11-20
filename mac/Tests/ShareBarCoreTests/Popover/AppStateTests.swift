@@ -18,7 +18,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(state, .cliMissing)
         XCTAssertEqual(state.panel?.title, "Install the handout command")
         XCTAssertEqual(state.panel?.button, "Copy install command")
-        XCTAssertEqual(state.panel?.copy, "brew install dwarvesf/tools/handout")
+        XCTAssertEqual(state.panel?.copy, "brew install consolelabs/tap/handout")
     }
 
     func testCLITooOldFromAnOldHelpBannerOrCompat() {
@@ -113,7 +113,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(busy.sentence, "pausing an is still running")
         let old = RefusalSheet.from(code: "cli_below_min", message: "", next: nil, host: "s.t")
         XCTAssertEqual(old.title, "Update handout to 0.10")
-        XCTAssertEqual(old.action, .copyCommand("brew upgrade dwarvesf/tools/handout"))
+        XCTAssertEqual(old.action, .copyCommand("brew upgrade consolelabs/tap/handout"))
         for code in ["invite_unknown_or_used", "invite_expired", "invite_tampered", "member_changed", "invite_unavailable"] {
             let sheet = RefusalSheet.from(code: code, message: "cli text", next: "share x", host: "s.t")
             XCTAssertEqual(sheet.title, "Can't join", code)

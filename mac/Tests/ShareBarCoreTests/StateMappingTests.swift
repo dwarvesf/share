@@ -22,7 +22,7 @@ final class StateMappingTests: XCTestCase {
     func testTSVOnExitZeroMapsToOldCLIFailure() {
         // A CLI from before this spec ignores --json and prints the TSV listing: exit 0
         // with stdout that does not start with `{`.
-        let result = CLIResult(status: 0, stdout: "default\tnot_setup\t-\ndfoundation\tserving\ts.d.foundation\n", stderr: "", timedOut: false)
+        let result = CLIResult(status: 0, stdout: "default\tnot_setup\t-\nacme\tserving\ts.team.example.com\n", stderr: "", timedOut: false)
 
         XCTAssertEqual(ProfilesSnapshot.from(result), .failure(.oldCLI))
     }

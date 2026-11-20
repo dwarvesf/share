@@ -1,23 +1,24 @@
 #!/bin/bash
 # prod-snapshot: a READ-ONLY snapshot of a live tenant's Cloudflare and machine state, taken before a production step so a
-# rollback is exact. It never writes: no PUT, POST, or DELETE, no share command that changes anything. Run it on the machine
-# that serves the tenant (the Mini for the Dwarves tenants, the Air for the personal one).
+# rollback is exact. It never writes: no PUT, POST, or DELETE, no handout command that changes anything. Run it on the machine
+# that serves the tenant.
 #
-#   tests/prod-snapshot.sh <out-file> dwarves     s.d.foundation + f.d.foundation (zone d.foundation), the Mini's profiles
-#   tests/prod-snapshot.sh <out-file> personal    s.han.ws (zone han.ws), this machine's default profile
+#   tests/prod-snapshot.sh <out-file> <zone> <host>...    e.g. tests/prod-snapshot.sh snap.txt example.com s.example.com
+#
+# <zone> is the Cloudflare zone the hosts live in. Each <host> is probed at /healthz.
 #
 # The admin token comes from CLOUDFLARE_API_TOKEN, else from op://Toolkit/cf-api-token/credential through 1Password Connect
 # (source ~/op-connect/op-connect-env.sh first). It is never printed. The file holds account ids, Access app uuids and AUDs:
 # keep it out of git. Compare two snapshots with `diff <(grep -v '^https://' a) <(grep -v '^https://' b)`.
 set -uo pipefail
 
-out="${1:?usage: prod-snapshot.sh <out-file> dwarves|personal}"
-which_tenant="${2:?usage: prod-snapshot.sh <out-file> dwarves|personal}"
-case $which_tenant in
-  dwarves) zname=d.foundation; hosts=(s.d.foundation f.d.foundation); probes=(https://s.d.foundation/healthz https://f.d.foundation/healthz https://f.d.foundation/ba6377/support-ticket-guide/ https://s.d.foundation/a68960/) ;;
-  personal) zname=han.ws; hosts=(s.han.ws); probes=(https://s.han.ws/healthz) ;;
-  *) echo "usage: prod-snapshot.sh <out-file> dwarves|personal" >&2; exit 2 ;;
-esac
+out="${1:?usage: prod-snapshot.sh <out-file> <zone> <host>...}"
+zname="${2:?usage: prod-snapshot.sh <out-file> <zone> <host>...}"
+shift 2
+(( $# )) || { echo "usage: prod-snapshot.sh <out-file> <zone> <host>..." >&2; exit 2; }
+hosts=("$@"); probes=()
+for h in "${hosts[@]}"; do probes+=("https://$h/healthz"); done
+which_tenant="$zname"
 admin="${CLOUDFLARE_API_TOKEN:-}"
 if [[ -z $admin ]]; then
   # shellcheck disable=SC1090

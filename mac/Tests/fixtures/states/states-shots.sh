@@ -30,7 +30,7 @@ APP="$WORK/Share Bar.app"
 mkdir -p "$APP/Contents/MacOS"
 command cp -f "$BIN/ShareBar" "$APP/Contents/MacOS/ShareBar"
 command cp -f "$MAC/Info.plist" "$APP/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.dwarves.sharebar.shots.states" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier so.console.handout-bar.shots.states" "$APP/Contents/Info.plist"
 codesign --force --sign - "$APP" >/dev/null 2>&1
 
 prepare() { # prepare <scenario dir> [template]

@@ -8,7 +8,7 @@
         "state": "serving",
         "ready": true,
         "mode": "named",
-        "host": "s.console.so",
+        "host": "s.example.com",
         "hosts": "Mac-mini",
         "serves_here": true,
         "service": true,
@@ -37,7 +37,7 @@
           {
             "id": "7f3a21",
             "name": "playdate-uat-run.mov",
-            "url": "https://s.console.so/7f3a21/playdate-uat-run.mov",
+            "url": "https://s.example.com/7f3a21/playdate-uat-run.mov",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -50,7 +50,7 @@
           {
             "id": "2be8d0",
             "name": "bao-cao-thang-10.pdf",
-            "url": "https://s.console.so/2be8d0/bao-cao-thang-10.pdf",
+            "url": "https://s.example.com/2be8d0/bao-cao-thang-10.pdf",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -64,7 +64,7 @@
           {
             "id": "c4c2a0",
             "name": "notes.txt",
-            "url": "https://s.console.so/c4c2a0/notes.txt",
+            "url": "https://s.example.com/c4c2a0/notes.txt",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -76,7 +76,7 @@
           {
             "id": "9d10aa",
             "name": "design-review.key",
-            "url": "https://s.console.so/9d10aa/design-review.key",
+            "url": "https://s.example.com/9d10aa/design-review.key",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -89,7 +89,7 @@
           {
             "id": "e5517c",
             "name": "old-pitch.pdf",
-            "url": "https://s.console.so/e5517c/old-pitch.pdf",
+            "url": "https://s.example.com/e5517c/old-pitch.pdf",
             "kind": "snapshot",
             "own_host": null,
             "expires": 1700000000,
@@ -101,7 +101,7 @@
           {
             "id": "30c9bb",
             "name": "q3-plan.xlsx",
-            "url": "https://s.console.so/30c9bb/q3-plan.xlsx",
+            "url": "https://s.example.com/30c9bb/q3-plan.xlsx",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -116,13 +116,13 @@
       }
     },
     {
-      "name": "dfoundation",
+      "name": "acme",
       "state": {
         "schema": 1,
         "state": "stopped",
         "ready": false,
         "mode": "named",
-        "host": "s.d.foundation",
+        "host": "s.team.example.com",
         "hosts": "Mac-mini",
         "serves_here": true,
         "service": true,
@@ -142,12 +142,12 @@
             "of": 9,
             "name": "carry",
             "alive": false,
-            "rerun": "share --profile dfoundation setup s.d.foundation --members",
+            "rerun": "share --profile acme setup s.team.example.com --members",
             "rerun_argv": [
               "--profile",
-              "dfoundation",
+              "acme",
               "setup",
-              "s.d.foundation",
+              "s.team.example.com",
               "--members"
             ]
           }
@@ -162,7 +162,7 @@
         "state": "serving",
         "ready": true,
         "mode": "named",
-        "host": "s.han.ws",
+        "host": "s.home.example.com",
         "hosts": "Mac-mini",
         "serves_here": true,
         "service": true,

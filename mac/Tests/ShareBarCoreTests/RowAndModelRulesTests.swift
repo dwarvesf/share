@@ -94,7 +94,7 @@ final class RowAndModelRulesTests: XCTestCase {
     }
 
     func testCanCopyIsTrueForAResolvedURL() {
-        let share = makeShare(url: "https://s.han.ws/abc123/notes.txt")
+        let share = makeShare(url: "https://s.home.example.com/abc123/notes.txt")
         XCTAssertTrue(rowFor(share).canCopy)
     }
 
@@ -133,8 +133,8 @@ final class RowAndModelRulesTests: XCTestCase {
     // MARK: - gated rows
 
     func testGatedRowGetsTheGateTextAndMarker() {
-        let gated = rowFor(makeShare(name: "ops-report.pdf", access: "group:dwarves-ops"))
-        XCTAssertEqual(gated.access, "group:dwarves-ops")
+        let gated = rowFor(makeShare(name: "ops-report.pdf", access: "group:team-ops"))
+        XCTAssertEqual(gated.access, "group:team-ops")
         XCTAssertEqual(gated.accessibilityTitle, "ops-report.pdf, never, file, snapshot, login required")
         XCTAssertEqual(gated.removeText, "Remove ops-report.pdf? The copy goes to the Trash and its login gate is deleted.")
 
@@ -155,7 +155,7 @@ final class RowAndModelRulesTests: XCTestCase {
 
     func testAGatedCloudPdfReadsItsTypeStorageLinkAndGate() {
         let row = rowFor(makeShare(
-            name: "ops-report.pdf", access: "group:dwarves-ops", storage: "cloud", type: "pdf"
+            name: "ops-report.pdf", access: "group:team-ops", storage: "cloud", type: "pdf"
         ))
         XCTAssertEqual(row.typeGlyph, RowGlyph(symbol: "doc.richtext", word: "PDF"))
         XCTAssertEqual(row.storageGlyph, RowGlyph(symbol: "cloud", word: "in the cloud"))
@@ -236,7 +236,7 @@ final class RowAndModelRulesTests: XCTestCase {
     func testSectionTitleFieldsAndCommand() {
         let profiles = makeProfiles([
             makeEntry(name: "default", state: makeSnapshot(state: "not_setup", host: nil, servesHere: false)),
-            makeEntry(name: "dfoundation", state: makeSnapshot(state: "serving", ready: true, host: "s.d.foundation")),
+            makeEntry(name: "acme", state: makeSnapshot(state: "serving", ready: true, host: "s.team.example.com")),
         ])
         let model = MenuModel(profiles: profiles, failure: nil, now: Date())
 
@@ -244,7 +244,7 @@ final class RowAndModelRulesTests: XCTestCase {
         XCTAssertNil(model.sections[0].host)
         XCTAssertEqual(model.sections[0].status, "Not set up")
         XCTAssertEqual(model.sections[0].command, "handout")
-        XCTAssertEqual(model.sections[1].command, "handout --profile dfoundation")
+        XCTAssertEqual(model.sections[1].command, "handout --profile acme")
     }
 
     func testShowCopyInstallCommandIsTrueOnlyWhenCLIIsNotFound() {

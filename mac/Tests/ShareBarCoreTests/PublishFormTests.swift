@@ -11,9 +11,9 @@ final class PublishFormTests: XCTestCase {
     // MARK: - AccessRule.isWellFormed
 
     func testWellFormedRules() {
-        XCTAssertTrue(AccessRule.isWellFormed("group:dwarves-ops"))
+        XCTAssertTrue(AccessRule.isWellFormed("group:team-ops"))
         XCTAssertTrue(AccessRule.isWellFormed("email:a@x.io,b@y.io"))
-        XCTAssertTrue(AccessRule.isWellFormed("domain:d.foundation"))
+        XCTAssertTrue(AccessRule.isWellFormed("domain:team.example.com"))
         XCTAssertTrue(AccessRule.isWellFormed("  group:ops  "), "surrounding whitespace trims first")
     }
 
@@ -140,12 +140,12 @@ final class PublishFormTests: XCTestCase {
 
     func testArgsBuildsTheArgv() {
         XCTAssertEqual(
-            PublishChoice.args(profile: "dfoundation", rule: nil, path: "/tmp/notes.txt"),
-            ["--profile", "dfoundation", "add", "/tmp/notes.txt"]
+            PublishChoice.args(profile: "acme", rule: nil, path: "/tmp/notes.txt"),
+            ["--profile", "acme", "add", "/tmp/notes.txt"]
         )
         XCTAssertEqual(
-            PublishChoice.args(profile: "dfoundation", rule: "group:ops", path: "/tmp/notes.txt"),
-            ["--profile", "dfoundation", "add", "--access", "group:ops", "/tmp/notes.txt"]
+            PublishChoice.args(profile: "acme", rule: "group:ops", path: "/tmp/notes.txt"),
+            ["--profile", "acme", "add", "--access", "group:ops", "/tmp/notes.txt"]
         )
         XCTAssertNil(PublishChoice.args(profile: "p", rule: nil, path: "8080"), "a relative path never becomes an argv")
         XCTAssertNil(PublishChoice.args(profile: "p", rule: nil, path: "report.pdf"), "no bare filename reaches add")
@@ -153,7 +153,7 @@ final class PublishFormTests: XCTestCase {
 
     // MARK: - storage field
 
-    private func origin(r2: Bool, storageDefault: String? = nil, servesHere: Bool = true, name: String = "dfoundation", hosts: String = "Mac-mini") -> ProfileEntry {
+    private func origin(r2: Bool, storageDefault: String? = nil, servesHere: Bool = true, name: String = "acme", hosts: String = "Mac-mini") -> ProfileEntry {
         makeEntry(name: name, state: makeSnapshot(
             state: "serving", hosts: hosts, servesHere: servesHere, r2: r2, storageDefault: storageDefault
         ))
@@ -174,13 +174,13 @@ final class PublishFormTests: XCTestCase {
         // A chosen value reaches the argv as --cloud / --local.
         form.choose(storage: .cloud)
         XCTAssertEqual(
-            PublishChoice.args(profile: "dfoundation", rule: nil, path: "/tmp/a", storage: form.storageFlag),
-            ["--profile", "dfoundation", "add", "--cloud", "/tmp/a"]
+            PublishChoice.args(profile: "acme", rule: nil, path: "/tmp/a", storage: form.storageFlag),
+            ["--profile", "acme", "add", "--cloud", "/tmp/a"]
         )
         form.choose(storage: .local)
         XCTAssertEqual(
-            PublishChoice.args(profile: "dfoundation", rule: nil, path: "/tmp/a", storage: form.storageFlag),
-            ["--profile", "dfoundation", "add", "--local", "/tmp/a"]
+            PublishChoice.args(profile: "acme", rule: nil, path: "/tmp/a", storage: form.storageFlag),
+            ["--profile", "acme", "add", "--local", "/tmp/a"]
         )
     }
 
@@ -204,7 +204,7 @@ final class PublishFormTests: XCTestCase {
 
     func testAMemberProfileShowsADisabledCloudLabelAndNoFlag() {
         let member = makeEntry(name: "files", state: makeSnapshot(
-            state: "serving", host: "s.d.foundation", hosts: "", servesHere: false, backend: "r2", r2: true
+            state: "serving", host: "s.team.example.com", hosts: "", servesHere: false, backend: "r2", r2: true
         ))
         let form = PublishForm(profiles: makeProfiles([member]), lastProfile: nil, lastRules: [:])
 
@@ -241,7 +241,7 @@ final class PublishFormTests: XCTestCase {
         XCTAssertEqual(form.storageField, .none)
         XCTAssertNil(form.storageFlag)
 
-        form.select(profile: "dfoundation")
+        form.select(profile: "acme")
         XCTAssertEqual(form.storage, .cloud, "the picker re-preselects from storage_default")
     }
 
@@ -255,7 +255,7 @@ final class PublishFormTests: XCTestCase {
 
         let oneStopped = makeProfiles([
             makeEntry(name: "default", state: makeSnapshot(state: "not_setup", host: nil, servesHere: false)),
-            makeEntry(name: "dfoundation", state: makeSnapshot(state: "stopped", servesHere: true)),
+            makeEntry(name: "acme", state: makeSnapshot(state: "stopped", servesHere: true)),
         ])
         XCTAssertTrue(MenuModel(profiles: oneStopped, failure: nil, now: Date()).canPublish)
     }

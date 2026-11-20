@@ -61,7 +61,7 @@ final class IssueListTests: XCTestCase {
     }
 
     func testFailedServeNamesTheReasonAndStarts() {
-        let state = makeSnapshot(host: "s.han.ws", role: "origin", serve: ServeInfo(phase: "failed", reason: "port_in_use"))
+        let state = makeSnapshot(host: "s.home.example.com", role: "origin", serve: ServeInfo(phase: "failed", reason: "port_in_use"))
         let line = list([("han", state)]).lines[0]
         XCTAssertEqual(line.title, "This Mac stopped serving")
         XCTAssertEqual(line.detail, "Port in use")
@@ -84,16 +84,16 @@ final class IssueListTests: XCTestCase {
 
     func testExpiringKeyPerRole() {
         let token = TokenInfo(source: "keychain", status: "expiring", expiresOn: "2026-12-01")
-        let admin = list([("console", makeSnapshot(host: "s.console.so", role: "tenant_origin", token: token))]).lines[0]
+        let admin = list([("console", makeSnapshot(host: "s.example.com", role: "tenant_origin", token: token))]).lines[0]
         XCTAssertEqual(admin.title, "Your key expires in 5 days")
         XCTAssertEqual(admin.action, .renew(argv: ["--profile", "console", "member", "renew", "console"]))
         let owner = list([("han", makeSnapshot(role: "origin", token: token))]).lines[0]
         XCTAssertEqual(owner.action, .renew(argv: ["--profile", "han", "api-token"]))
-        let member = list([("console", makeSnapshot(host: "s.console.so", role: "member", token: token,
+        let member = list([("console", makeSnapshot(host: "s.example.com", role: "member", token: token,
                                                     member: MemberInfo(id: "m-an-1a2b3c4d", name: "an", status: "active")))]).lines[0]
         XCTAssertEqual(member.action?.label, "Copy request")
         guard case .copyRequest(let text)? = member.action else { return XCTFail("a member copies a request") }
-        XCTAssertTrue(text.contains("s.console.so") && text.contains("handout member renew an"), text)
+        XCTAssertTrue(text.contains("s.example.com") && text.contains("handout member renew an"), text)
         XCTAssertNil(member.action?.argv)
     }
 
@@ -106,15 +106,15 @@ final class IssueListTests: XCTestCase {
     }
 
     func testARemovedMemberCleansUp() {
-        let state = makeSnapshot(host: "s.console.so", role: "member", member: MemberInfo(id: "m-an-1a2b3c4d", name: "an", status: "removed"))
+        let state = makeSnapshot(host: "s.example.com", role: "member", member: MemberInfo(id: "m-an-1a2b3c4d", name: "an", status: "removed"))
         let line = list([("console", state)]).lines[0]
-        XCTAssertEqual(line.title, "You were removed from s.console.so")
+        XCTAssertEqual(line.title, "You were removed from s.example.com")
         XCTAssertEqual(line.action, .cleanUp(argv: ["--profile", "console", "leave", "--local"]))
         XCTAssertEqual(line.action?.label, "Clean up")
     }
 
     func testOfflineMachineWithLinksOpensMembers() {
-        let state = makeSnapshot(host: "s.console.so",
+        let state = makeSnapshot(host: "s.example.com",
                                  shares: [link("a1", by: "An's MacBook", member: "an"), link("a2", by: "An's MacBook", member: "an")], role: "tenant_origin")
         let members = MemberList(members: [record("an", status: "active", connectors: 0, can: ["pause"])])
         let line = list([("console", state)], members: ["console": members]).lines[0]
@@ -130,7 +130,7 @@ final class IssueListTests: XCTestCase {
     }
 
     func testPausedLeftAndExpiredCodeMembers() {
-        let state = makeSnapshot(host: "s.console.so", shares: [link("d1", by: "Dung's iMac", member: "dung", linkState: "paused")], role: "tenant_origin")
+        let state = makeSnapshot(host: "s.example.com", shares: [link("d1", by: "Dung's iMac", member: "dung", linkState: "paused")], role: "tenant_origin")
         let members = MemberList(members: [
             record("dung", status: "paused", can: ["resume"]),
             record("ha", status: "left", can: ["purge"]),
@@ -146,7 +146,7 @@ final class IssueListTests: XCTestCase {
 
     func testAStoppedVerbFinishesWithItsOwnVerb() {
         let stale = MemberLease(holder: "mac:1:a", verb: "pause", step: 2, live: false)
-        let state = makeSnapshot(host: "s.console.so", role: "tenant_origin")
+        let state = makeSnapshot(host: "s.example.com", role: "tenant_origin")
         let members = MemberList(members: [record("minh", status: "pausing", lease: stale, step: 2, can: ["finish", "rm"])])
         let line = list([("console", state)], members: ["console": members]).lines[0]
         XCTAssertEqual(line.title, "Pausing Minh stopped at step 2")
@@ -171,7 +171,7 @@ final class IssueListTests: XCTestCase {
         let token = TokenInfo(status: "expiring", expiresOn: "2026-12-01")
         let stale = MemberLease(holder: "m:1:a", verb: "pause", step: 2, live: false)
         let state = makeSnapshot(
-            host: "s.console.so", shares: [link("a1", by: "An's MacBook", member: "an")], role: "tenant_origin",
+            host: "s.example.com", shares: [link("a1", by: "An's MacBook", member: "an")], role: "tenant_origin",
             serve: ServeInfo(phase: "failed", reason: "port_in_use"), ops: [op("setup-members")], token: token
         )
         let members = MemberList(members: [

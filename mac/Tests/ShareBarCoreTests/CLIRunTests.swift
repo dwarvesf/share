@@ -136,7 +136,7 @@ final class CLIRunTests: XCTestCase {
 
     /// `verb=` in the log names the verb, never `--profile`.
     func testVerbForLogSkipsTheProfilePrefix() {
-        XCTAssertEqual(CLI.verbForLog(["--profile", "dfoundation", "rm", "abc123"]), "rm")
+        XCTAssertEqual(CLI.verbForLog(["--profile", "acme", "rm", "abc123"]), "rm")
         XCTAssertEqual(CLI.verbForLog(["--profile", "default", "start"]), "start")
         XCTAssertEqual(CLI.verbForLog(["profiles", "--json"]), "profiles")
         XCTAssertEqual(CLI.verbForLog([]), "")

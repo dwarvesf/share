@@ -8,7 +8,7 @@
         "state": "serving",
         "ready": true,
         "mode": "named",
-        "host": "s.console.so",
+        "host": "s.example.com",
         "hosts": "Mac-mini",
         "serves_here": true,
         "service": true,
@@ -26,12 +26,12 @@
             "of": 9,
             "name": "carry",
             "alive": false,
-            "rerun": "share --profile console setup s.console.so --members",
+            "rerun": "share --profile console setup s.example.com --members",
             "rerun_argv": [
               "--profile",
               "console",
               "setup",
-              "s.console.so",
+              "s.example.com",
               "--members"
             ]
           }

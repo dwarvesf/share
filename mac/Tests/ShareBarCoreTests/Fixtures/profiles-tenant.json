@@ -2,13 +2,13 @@
   "schema": 1,
   "profiles": [
     {
-      "name": "dfoundation",
+      "name": "acme",
       "state": {
         "schema": 1,
         "state": "serving",
         "ready": true,
         "mode": "named",
-        "host": "s.d.foundation",
+        "host": "s.team.example.com",
         "hosts": "Mac-mini",
         "serves_here": true,
         "service": true,
@@ -20,7 +20,7 @@
           {
             "id": "ba6377",
             "name": "support-ticket-guide",
-            "url": "https://s.d.foundation/ba6377/support-ticket-guide/",
+            "url": "https://s.team.example.com/ba6377/support-ticket-guide/",
             "kind": "snapshot",
             "own_host": null,
             "expires": 0,
@@ -31,11 +31,11 @@
           {
             "id": "a68960",
             "name": "quarterly-report.pdf",
-            "url": "https://s.d.foundation/a68960/quarterly-report.pdf",
+            "url": "https://s.team.example.com/a68960/quarterly-report.pdf",
             "kind": "snapshot",
             "own_host": null,
             "expires": 1793087100,
-            "access": "group:dwarves-ops",
+            "access": "group:team-ops",
             "storage": "machine",
             "type": "pdf",
             "by": "mac-mini"
@@ -43,7 +43,7 @@
           {
             "id": "b3100a",
             "name": "localhost:3000",
-            "url": "https://s.d.foundation/b3100a/",
+            "url": "https://s.team.example.com/b3100a/",
             "kind": "live",
             "own_host": null,
             "expires": 0,
@@ -61,7 +61,7 @@
         "state": "serving",
         "ready": true,
         "mode": "named",
-        "host": "s.d.foundation",
+        "host": "s.team.example.com",
         "hosts": "",
         "serves_here": false,
         "service": false,
@@ -79,7 +79,7 @@
         "state": "serving",
         "ready": true,
         "mode": "named",
-        "host": "s.han.ws",
+        "host": "s.home.example.com",
         "hosts": "hans-air-m4",
         "serves_here": false,
         "service": true,
@@ -88,7 +88,7 @@
           {
             "id": "4f9ff2",
             "name": "notes.txt",
-            "url": "https://s.han.ws/4f9ff2/notes.txt",
+            "url": "https://s.home.example.com/4f9ff2/notes.txt",
             "kind": "snapshot",
             "own_host": null,
             "expires": 1793087100

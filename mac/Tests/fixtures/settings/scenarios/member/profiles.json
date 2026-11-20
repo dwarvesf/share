@@ -8,7 +8,7 @@
         "state": "serving",
         "ready": true,
         "mode": "named",
-        "host": "s.console.so",
+        "host": "s.example.com",
         "hosts": "Mac-mini",
         "serves_here": false,
         "service": false,
@@ -45,7 +45,7 @@
           {
             "id": "7f3a21",
             "name": "playdate-uat-run.mov",
-            "url": "https://s.console.so/7f3a21/playdate-uat-run.mov",
+            "url": "https://s.example.com/7f3a21/playdate-uat-run.mov",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -58,7 +58,7 @@
           {
             "id": "2be8d0",
             "name": "bao-cao-thang-10.pdf",
-            "url": "https://s.console.so/2be8d0/bao-cao-thang-10.pdf",
+            "url": "https://s.example.com/2be8d0/bao-cao-thang-10.pdf",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -72,7 +72,7 @@
           {
             "id": "e5517c",
             "name": "old-pitch.pdf",
-            "url": "https://s.console.so/e5517c/old-pitch.pdf",
+            "url": "https://s.example.com/e5517c/old-pitch.pdf",
             "kind": "snapshot",
             "own_host": null,
             "expires": 1700000000,

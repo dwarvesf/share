@@ -78,8 +78,8 @@ final class PublishFlowTests: XCTestCase {
     }
 
     func testTheDropOverlayNamesTheHostAndTheStorage() {
-        let machine = DropOverlayModel(host: "s.han.ws", storedOn: DropOverlayModel.storedOn(makeSnapshot()))
-        XCTAssertEqual(machine.headline, "Release to share on s.han.ws")
+        let machine = DropOverlayModel(host: "s.home.example.com", storedOn: DropOverlayModel.storedOn(makeSnapshot()))
+        XCTAssertEqual(machine.headline, "Release to share on s.home.example.com")
         XCTAssertEqual(machine.detail, "Stored on this Mac. Copies the link when done.")
         let cloud = makeSnapshot(r2: true, storageDefault: "cloud")
         XCTAssertEqual(DropOverlayModel.storedOn(cloud), "the cloud")

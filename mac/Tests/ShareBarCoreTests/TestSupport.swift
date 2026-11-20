@@ -26,7 +26,7 @@ func makeSnapshot(
     state: String = "serving",
     ready: Bool = true,
     mode: String = "named",
-    host: String? = "s.han.ws",
+    host: String? = "s.home.example.com",
     hosts: String = "hans-air-m4",
     servesHere: Bool = true,
     service: Bool = true,
@@ -60,7 +60,7 @@ func makeSnapshot(
 func makeShare(
     id: String = "abc123",
     name: String = "notes.txt",
-    url: String = "https://s.han.ws/abc123/notes.txt",
+    url: String = "https://s.home.example.com/abc123/notes.txt",
     kind: String = "snapshot",
     ownHost: String? = nil,
     expires: Int = 0,
@@ -114,7 +114,7 @@ func loadFixtureData(_ name: String) throws -> Data {
 }
 
 /// Loads the `share profiles --json` fixture, saved from a real run on the Mini (default
-/// `not_setup`, `dfoundation` serving a gated share).
+/// `not_setup`, `acme` serving a gated share).
 func loadFixtureProfiles() throws -> ProfilesSnapshot {
     guard let url = Bundle.module.url(forResource: "profiles", withExtension: "json") else {
         throw NSError(domain: "TestSupport", code: 1, userInfo: [NSLocalizedDescriptionKey: "fixture not found"])

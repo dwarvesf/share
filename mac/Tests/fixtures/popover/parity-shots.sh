@@ -25,7 +25,7 @@ APP="$WORK/Share Bar.app"
 mkdir -p "$APP/Contents/MacOS"
 cp -f "$BIN/ShareBar" "$APP/Contents/MacOS/ShareBar"
 cp -f "$MAC/Info.plist" "$APP/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.dwarves.sharebar.shots" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier so.console.handout-bar.shots" "$APP/Contents/Info.plist"
 codesign --force --sign - "$APP" >/dev/null 2>&1
 
 RUN="$WORK/run"

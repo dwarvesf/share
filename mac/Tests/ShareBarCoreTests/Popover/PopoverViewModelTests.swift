@@ -30,13 +30,13 @@ final class PopoverViewModelTests: XCTestCase {
     }
 
     private func profiles(_ shares: [Share], role: String = "tenant_origin", member: MemberInfo? = nil) -> ProfilesSnapshot {
-        makeProfiles([("console", makeSnapshot(host: "s.console.so", shares: shares, role: role, tier: "t2", member: member))])
+        makeProfiles([("console", makeSnapshot(host: "s.example.com", shares: shares, role: role, tier: "t2", member: member))])
     }
 
     func testTheViewModelListsHeaderSearchScopeListShowAllFooterInOrder() throws {
         let vm = model(try fullProfiles())
         XCTAssertEqual(vm.regions, [.header, .search, .scope, .list, .showAll, .footer])
-        XCTAssertEqual(vm.header.title, "s.console.so")
+        XCTAssertEqual(vm.header.title, "s.example.com")
         XCTAssertEqual(vm.header.manageTitle, "Manage tenants…")
         XCTAssertEqual(vm.search.placeholder, "Search links")
         XCTAssertNotNil(vm.scope)
@@ -147,15 +147,15 @@ final class PopoverViewModelTests: XCTestCase {
     }
 
     func testTheTenantMenuCarriesRoleAndCheck() {
-        let admin = makeSnapshot(host: "s.console.so", role: "tenant_origin")
-        let owner = makeSnapshot(host: "s.han.ws", role: "origin")
+        let admin = makeSnapshot(host: "s.example.com", role: "tenant_origin")
+        let owner = makeSnapshot(host: "s.home.example.com", role: "origin")
         let unset = makeSnapshot(host: nil, role: "none")
         let vm = PopoverViewModel(profiles: makeProfiles([("console", admin), ("han", owner), ("default", unset)]), current: "han", scope: .mine, query: "")
-        XCTAssertEqual(vm.header.tenants.map(\.host), ["s.console.so", "s.han.ws"], "a profile with no role is not a tenant")
+        XCTAssertEqual(vm.header.tenants.map(\.host), ["s.example.com", "s.home.example.com"], "a profile with no role is not a tenant")
         XCTAssertEqual(vm.header.tenants.map(\.roleLabel), ["Admin", "Owner"])
         XCTAssertEqual(vm.header.tenants.map(\.isCurrent), [false, true])
         XCTAssertTrue(vm.header.hasChevron)
-        XCTAssertEqual(vm.header.title, "s.han.ws")
+        XCTAssertEqual(vm.header.title, "s.home.example.com")
     }
 
     func testOneTenantHasNoChevron() {
@@ -195,6 +195,6 @@ extension PopoverViewModelTests {
     }
 
     fileprivate func profilesFor(_ shares: [Share], role: String = "tenant_origin", member: MemberInfo? = nil) -> ProfilesSnapshot {
-        makeProfiles([("console", makeSnapshot(host: "s.console.so", shares: shares, role: role, tier: "t2", member: member))])
+        makeProfiles([("console", makeSnapshot(host: "s.example.com", shares: shares, role: role, tier: "t2", member: member))])
     }
 }

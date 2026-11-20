@@ -1412,13 +1412,13 @@ check "email: app name is 'share <id> <host> <nonce>'" "1" "$(jq -r .name "$adry
 check "email: the preflight ran first (zones, orgs, the {} probe before POST app)" "1" "$([[ $(aline 'GET zones') -lt $(aline 'POST app$') && $(aline 'POST app {}') -lt $(aline 'POST app$') ]] && echo 1 || echo 0)"
 check "email: the gated file answers locally" "200" "$(wait_code 200 "$e_url")"
 check "email: ls shows access= after expires=" "1" "$(acc ls 2>/dev/null | grep -c "id=$e_id .*expires=[^ ]*  access=email:a@x.io,b@y.io")"
-d_url=$(acc add "$WORK/gated.txt" --access domain:D.Foundation 2>"$WORK/acc.err" | head -1); d_id=$(cut -d/ -f4 <<<"$d_url")
-check "domain: row carries the lowercased rule" "1" "$(row_of "$d_id" | grep -c 'access_rule=domain:d.foundation')"
-check "domain: include is email_domain" '[{"email_domain":{"domain":"d.foundation"}}]' "$(jq -c '.policies[0].include' "$adry/$(app_of "$d_id").json")"
-check "domain: warns that it admits everyone at the domain" "1" "$(grep -c 'admits every address at d.foundation, contractors included' "$WORK/acc.err")"
-jq -nc '[{id:"11111111-2222-4333-8444-555555555555", name:"dwarves-ops"}, {id:"aaaaaaaa-2222-4333-8444-555555555555", name:"other"}]' >"$gfix"
-g_url=$(acc add "$WORK/gated.txt" --access group:dwarves-ops 2>"$WORK/acc.err" | head -1); g_id=$(cut -d/ -f4 <<<"$g_url")
-check "group: row carries the rule" "1" "$(row_of "$g_id" | grep -c 'access_rule=group:dwarves-ops')"
+d_url=$(acc add "$WORK/gated.txt" --access domain:Team.Example.com 2>"$WORK/acc.err" | head -1); d_id=$(cut -d/ -f4 <<<"$d_url")
+check "domain: row carries the lowercased rule" "1" "$(row_of "$d_id" | grep -c 'access_rule=domain:team.example.com')"
+check "domain: include is email_domain" '[{"email_domain":{"domain":"team.example.com"}}]' "$(jq -c '.policies[0].include' "$adry/$(app_of "$d_id").json")"
+check "domain: warns that it admits everyone at the domain" "1" "$(grep -c 'admits every address at team.example.com, contractors included' "$WORK/acc.err")"
+jq -nc '[{id:"11111111-2222-4333-8444-555555555555", name:"team-ops"}, {id:"aaaaaaaa-2222-4333-8444-555555555555", name:"other"}]' >"$gfix"
+g_url=$(acc add "$WORK/gated.txt" --access group:team-ops 2>"$WORK/acc.err" | head -1); g_id=$(cut -d/ -f4 <<<"$g_url")
+check "group: row carries the rule" "1" "$(row_of "$g_id" | grep -c 'access_rule=group:team-ops')"
 check "group: include is the group id from the lookup" '[{"group":{"id":"11111111-2222-4333-8444-555555555555"}}]' "$(jq -c '.policies[0].include' "$adry/$(app_of "$g_id").json")"
 check "row 14: state carries the rule per share and access_pending" "email:a@x.io,b@y.io|null|0" "$(acc state | jq -r --arg e "$e_id" --arg m "$md_id" '[(.shares[] | select(.id == $e) | .access), (.shares[] | select(.id == $m) | .access), .access_pending] | map(tostring) | join("|")')"
 check "row 14: schema stays 1" "1" "$(acc state | jq .schema)"
@@ -1461,7 +1461,7 @@ exit 0
 EOF
 chmod +x "$WORK/fakesec/security"
 : >"$WORK/sec.log"
-out=$(env -u CLOUDFLARE_API_TOKEN SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" bash "$SH" add "$WORK/gated.txt" --access group:dwarves-ops 2>&1 1>/dev/null); rc=$?
+out=$(env -u CLOUDFLARE_API_TOKEN SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" bash "$SH" add "$WORK/gated.txt" --access group:team-ops 2>&1 1>/dev/null); rc=$?
 check "no token: exit 1" "1" "$rc"
 check "no token: the block names the host and the two api-token forms" "3" "$(grep -c -e "needs a Cloudflare API token for $SHARE_HOSTNAME; none is set" -e '^  New token (opens the prefilled form, then paste):  handout api-token$' -e '^  Already have a token with Access scopes:          handout api-token --cmd '"'"'op read "op://<vault>/<item>/credential"'"'"'$' <<<"$out")"
 o1_url=$(grep -o 'https://dash.cloudflare.com/[^ ]*' <<<"$out")
@@ -1471,22 +1471,22 @@ check "no token: the keys decode to exactly the three key/type pairs" '[{"key":"
 check "no token: name decodes to 'share access (default)'" "share access (default)" "$(urldec "$(sed -n 's/.*&name=\([^&]*\).*/\1/p' <<<"$o1_url")")"
 check "no token: no stage left under the root" "0" "$(find "$SHARE_ROOT" -maxdepth 1 -name '.stage.*' | grep -c .)"
 check "no token: no row, no call" "$idx_before" "$([[ ! -s $alog ]] && cksum <"$SHARE_ROOT/index.tsv")"
-check "no token: the profile form names --profile" "2" "$(env -u CLOUDFLARE_API_TOKEN SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" SHARE_PROFILE=dfoundation SHARE_HOSTNAME=s.d.foundation bash "$SH" add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null | grep -c 'handout --profile dfoundation api-token')"
+check "no token: the profile form names --profile" "2" "$(env -u CLOUDFLARE_API_TOKEN SEC_LOG="$WORK/sec.log" PATH="$WORK/fakesec:$PATH" SHARE_PROFILE=team SHARE_HOSTNAME=s.example.com bash "$SH" add "$WORK/gated.txt" --access email:a@x.io 2>&1 1>/dev/null | grep -c 'handout --profile team api-token')"
 
 echo "--- row 5: group lookup by exact name over every page ---"
 areset
 jq -nc '[{id:"aaaaaaaa-2222-4333-8444-555555555555", name:"other"}]' >"$gfix"
-out=$(acc add "$WORK/gated.txt" --access group:dwarves-ops 2>&1 1>/dev/null); rc=$?
-check "missing group: exit 1 with the rule-group path" "1" "$([[ $rc == 1 ]] && grep -c "no Access group named 'dwarves-ops' on the account that owns example.test" <<<"$out")"
-check "missing group: the block names where to create it and to rerun" "3" "$(grep -c -e 'Zero Trust > Access controls > Policies > Rule groups tab > Add a group' -e '^    Name: dwarves-ops$' -e 'then rerun the same handout add' <<<"$out")"
+out=$(acc add "$WORK/gated.txt" --access group:team-ops 2>&1 1>/dev/null); rc=$?
+check "missing group: exit 1 with the rule-group path" "1" "$([[ $rc == 1 ]] && grep -c "no Access group named 'team-ops' on the account that owns example.test" <<<"$out")"
+check "missing group: the block names where to create it and to rerun" "3" "$(grep -c -e 'Zero Trust > Access controls > Policies > Rule groups tab > Add a group' -e '^    Name: team-ops$' -e 'then rerun the same handout add' <<<"$out")"
 check "missing group: no POST app" "0" "$(grep -c 'POST app$' "$alog")"
-jq -nc '[{id:"a", name:"dwarves-ops"}, {id:"b", name:"dwarves-ops"}]' >"$gfix"
-out=$(acc add "$WORK/gated.txt" --access group:dwarves-ops 2>&1 1>/dev/null); rc=$?
-check "two groups of one name: refused by name" "1" "$([[ $rc == 1 ]] && grep -c "two Access groups are named 'dwarves-ops'; rename one" <<<"$out")"
+jq -nc '[{id:"a", name:"team-ops"}, {id:"b", name:"team-ops"}]' >"$gfix"
+out=$(acc add "$WORK/gated.txt" --access group:team-ops 2>&1 1>/dev/null); rc=$?
+check "two groups of one name: refused by name" "1" "$([[ $rc == 1 ]] && grep -c "two Access groups are named 'team-ops'; rename one" <<<"$out")"
 check "two groups: no POST app" "0" "$(grep -c 'POST app$' "$alog")"
-jq -nc '[range(0; 120) | {id: ("g" + tostring), name: ("group" + tostring)}] + [{id:"cccccccc-2222-4333-8444-555555555555", name:"dwarves-ops"}]' >"$gfix"
+jq -nc '[range(0; 120) | {id: ("g" + tostring), name: ("group" + tostring)}] + [{id:"cccccccc-2222-4333-8444-555555555555", name:"team-ops"}]' >"$gfix"
 : >"$alog"
-p_url=$(acc add "$WORK/gated.txt" --access group:dwarves-ops 2>/dev/null | head -1); p_id=$(cut -d/ -f4 <<<"$p_url")
+p_url=$(acc add "$WORK/gated.txt" --access group:team-ops 2>/dev/null | head -1); p_id=$(cut -d/ -f4 <<<"$p_url")
 check "paged group: found on page 2, two GET groups logged" "2" "$(grep -c 'GET groups' "$alog")"
 check "paged group: include carries its id" '[{"group":{"id":"cccccccc-2222-4333-8444-555555555555"}}]' "$(jq -c '.policies[0].include' "$adry/$(app_of "$p_id").json")"
 
@@ -2957,10 +2957,10 @@ objs() { (cd "$DRYS" && find . -type f ! -path './.cf/*' | LC_ALL=C sort | xargs
 bind() { jq -r --arg n "$1" '.bindings[] | select(.name == $n) | .text' "$DRYS/.cf/script.json"; }
 
 echo "--- the custom-domain add retries a Cloudflare 5xx, three tries in all ---"
-s_fresh; echo dwarves.cloudflareaccess.com >"$DRYS/.cf/team"
+s_fresh; echo acme.cloudflareaccess.com >"$DRYS/.cf/team"
 out=$(SHARE_R2_DRY_FAIL="API PUT /accounts/*/workers/domains" SHARE_R2_DRY_FAIL_TIMES=2 r2s 2>&1); rc=$?
 check "custom domain: two 500s then success: setup exits 0 after three PUTs" "0 3 2" "$rc $(grep -c '^API PUT .*/workers/domains$' "$slog") $(grep -c 'retrying in' <<<"$out")"
-s_fresh; echo dwarves.cloudflareaccess.com >"$DRYS/.cf/team"
+s_fresh; echo acme.cloudflareaccess.com >"$DRYS/.cf/team"
 out=$(SHARE_R2_DRY_FAIL="API PUT /accounts/*/workers/domains" r2s 2>&1); rc=$?
 check "custom domain: a persistent 500 fails loud after three PUTs" "1 3 1" "$rc $(grep -c '^API PUT .*/workers/domains$' "$slog") $(grep -c "custom domain answered HTTP 500 (after up to 3 tries)" <<<"$out")"
 
@@ -2972,7 +2972,7 @@ check "no token: the block names the Access scope teardown --purge needs" "1" "$
 check "no token: the block names the publisher form" "1" "$(grep -c 'Bucket Item Write on bucket ok-bucket' <<<"$out")"
 check "no token: no call logged" "0" "$(wc -l <"$slog" | tr -d ' ')"
 
-s_fresh; echo dwarves.cloudflareaccess.com >"$DRYS/.cf/team"
+s_fresh; echo acme.cloudflareaccess.com >"$DRYS/.cf/team"
 out=$(r2s 2>&1); rc=$?
 check "admin setup exits 0" "0" "$rc"
 check "admin: role printed" "1" "$(grep -c '^deploying as admin$' <<<"$out")"
@@ -2989,7 +2989,7 @@ check "admin: no tunnel keys in config" "0" "$(grep -cE '^(tunnel_id|tunnel_name
 check "admin: no service file" "0" "$(find "$R2H/Library" "$R2H/.config/systemd" -name '*share*' 2>/dev/null | wc -l | tr -d ' ')"
 check "admin: HOST binding" "r2s.example.test" "$(bind HOST)"
 check "admin: VERSION and SHA bindings are this CLI's" "$wv $wsha" "$(bind VERSION) $(bind SHA)"
-check "admin: TEAM from the Access organization" "dwarves.cloudflareaccess.com" "$(bind TEAM)"
+check "admin: TEAM from the Access organization" "acme.cloudflareaccess.com" "$(bind TEAM)"
 check "admin: dataset derived" "share_r2s_example_test" "$(jq -r '.bindings[] | select(.name == "HITS") | .dataset' "$DRYS/.cf/script.json")"
 check "admin: SALT is a secret binding with no stored value" "1" "$(jq '[.bindings[] | select(.name == "SALT" and .type == "secret_text" and (has("text") | not))] | length' "$DRYS/.cf/script.json")"
 check "admin: workers.dev read back off" "false,false" "$(jq -r '"\(.enabled),\(.previews_enabled)"' "$DRYS/.cf/subdomain.json")"
@@ -3011,11 +3011,11 @@ check "new sha: the deployed pair is this CLI's" "$wv $wsha" "$(bind VERSION) $(
 rm -f "$DRYS/.cf/team"; : >"$slog"
 out=$(r2s 2>&1); rc=$?
 check "no Access read: exit 0" "0" "$rc"
-check "no Access read: the deployed TEAM is kept, no redeploy" "dwarves.cloudflareaccess.com 0" "$(bind TEAM) $(grep -c 'API PUT .*/workers/scripts/' "$slog" || true)"
+check "no Access read: the deployed TEAM is kept, no redeploy" "acme.cloudflareaccess.com 0" "$(bind TEAM) $(grep -c 'API PUT .*/workers/scripts/' "$slog" || true)"
 echo other.cloudflareaccess.com >"$DRYS/.cf/team"; : >"$slog"
 out=$(r2s 2>&1); rc=$?
 check "TEAM drift: redeployed with the new team" "other.cloudflareaccess.com 1" "$(bind TEAM) $(grep -c 'API PUT .*/workers/scripts/' "$slog")"
-check "TEAM drift: printed" "1" "$(grep -c "Access team: 'dwarves.cloudflareaccess.com' -> 'other.cloudflareaccess.com'" <<<"$out")"
+check "TEAM drift: printed" "1" "$(grep -c "Access team: 'acme.cloudflareaccess.com' -> 'other.cloudflareaccess.com'" <<<"$out")"
 
 jq -c '(.bindings[] | select(.name == "VERSION")).text = "99"' "$DRYS/.cf/script.json" >"$DRYS/.cf/s.tmp" && mv -f "$DRYS/.cf/s.tmp" "$DRYS/.cf/script.json"
 : >"$slog"
@@ -3076,7 +3076,7 @@ r2j() { # r2j [env...]: a second HOME joins r2s.example.test with a publisher to
     SHARE_R2_DRY_ROLE=deny SHARE_R2_DRY_BUCKETDOM=deny "$@" bash "$SH" --profile r2s setup r2s.example.test --backend r2 --bucket ok-bucket
 }
 jwrites() { grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$jlog" || true; }
-s_fresh; echo dwarves.cloudflareaccess.com >"$DRYS/.cf/team"
+s_fresh; echo acme.cloudflareaccess.com >"$DRYS/.cf/team"
 out=$(r2s 2>&1); rc=$?
 check "join fixture: admin setup exits 0" "0" "$rc"
 jq -c '(.bindings[] | select(.name == "SHA")).text = "000000000000"' "$DRYS/.cf/script.json" >"$DRYS/.cf/s.tmp" && mv -f "$DRYS/.cf/s.tmp" "$DRYS/.cf/script.json"
@@ -3368,7 +3368,7 @@ for mode in tunnel-down 503-bare; do
   else
     check "row 29 (503-bare): the gated add fails before any write" "1 1 0" "$rc $(grep -c 'healthz answered 503; nothing was published' <<<"$out") $(grep -c '^PUT' "$rlog")"
   fi
-  s_fresh; echo dwarves.cloudflareaccess.com >"$DRYS/.cf/team"; out=$(r2s 2>&1)
+  s_fresh; echo acme.cloudflareaccess.com >"$DRYS/.cf/team"; out=$(r2s 2>&1)
   rm -f "$jconf"; mkdir -p "${jlog%/*}"; : >"$jlog"
   # the wait counts whole seconds, so a 1 s window can close mid-loop on a slow runner; the passing mode gets room, the failing one stays short
   out=$(r2j SHARE_R2_DRY_HEALTHZ=$mode SHARE_R2_WAIT="$([[ $mode == tunnel-down ]] && echo 8 || echo 1)" 2>&1); rc=$?
@@ -3478,7 +3478,7 @@ printf 'mode=quick\nport=%s\nhosts=nobody\n' $((base + 50)) >"$vconf"
 : >"$vlog"; out=$(tv setup ten.example.test --r2 --bucket ok-bucket 2>&1); rc=$?
 check "row 12: quick mode is refused before any call" "1 1 0" "$rc $(grep -c 'is a quick tunnel; R2 needs a named tunnel tenant' <<<"$out") $(grep -c . "$vlog" || true)"
 # row 32: SPEC-007's r2 setup refuses a tenant host, even with --force; a 403 on the routes read alone is tolerated
-s_fresh; echo dwarves.cloudflareaccess.com >"$DRYS/.cf/team"; out=$(r2s 2>&1)
+s_fresh; echo acme.cloudflareaccess.com >"$DRYS/.cf/team"; out=$(r2s 2>&1)
 jq -c '.bindings += [{"type": "plain_text", "name": "PASS", "text": "1"}, {"type": "plain_text", "name": "ALIASES", "text": ""}]' "$DRYS/.cf/script.json" >"$DRYS/.cf/s.tmp" && mv -f "$DRYS/.cf/s.tmp" "$DRYS/.cf/script.json"
 : >"$slog"; out=$(r2s --force 2>&1); rc=$?
 check "row 32: a tenant Worker (PASS) is refused with --force, before any write" "1 1 0" "$rc $(grep -c "run 'handout --profile r2s setup r2s.example.test --r2 --bucket ok-bucket' on the origin" <<<"$out") $(grep -cE '^(API (PUT|POST|DELETE) |PUT |DELETE )' "$slog" || true)"
@@ -3501,7 +3501,7 @@ afold() { tv setup ten.example.test --r2 --bucket ok-bucket --alias f.example.te
 afresh() { # vfresh, then the bucket is the alias's: its marker, its Worker on its custom domain, two gated cloud links whose apps are named for it, and the alias's own r2 profile here
   vfresh
   printf '{"v":1,"host":"f.example.test"}\n' >"$DRYV/share.json"
-  echo dwarves.cloudflareaccess.com >"$DRYV/.cf/team"
+  echo acme.cloudflareaccess.com >"$DRYV/.cf/team"
   printf '{"hostname":"f.example.test","service":"share-f-example-test"}\n' >"$DRYV/.cf/domain.json"
   jq -nc '{bindings: [{type: "r2_bucket", name: "BUCKET", bucket_name: "ok-bucket"}, {type: "plain_text", name: "HOST", text: "f.example.test"}, {type: "plain_text", name: "VERSION", text: "2"}]}' >"$DRYV/.cf/script-share-f-example-test.json"
   mkdir -p "$vroot/.access-dry" "$DRYV/o/0c0001.0000000c" "$DRYV/o/0c0002.0000000d"
@@ -3874,7 +3874,7 @@ case "\$method \$url" in
   "DELETE https://api.cloudflare.com/client/v4/accounts/acct1/cfd_tunnel/"*) body='{"success":true}' ;;
   "GET https://api.cloudflare.com/client/v4/accounts/acct1/access/apps/$GID") body='{"success":true,"result":{"aud":"$GAUD"}}' ;;
   "GET https://$MHOST/$GATEDID"*)
-    printf '302 https://dwarves.cloudflareaccess.com/cdn-cgi/access/login/$MHOST?kid='"\${GATE_KID:-$GAUD}"''; exit 0 ;;
+    printf '302 https://acme.cloudflareaccess.com/cdn-cgi/access/login/$MHOST?kid='"\${GATE_KID:-$GAUD}"''; exit 0 ;;
   "GET https://$MHOST/"*) printf '200'; exit 0 ;;
 esac
 [[ \$fmt == *http_code* ]] && printf '%s\n%s' "\$body" "\$code" || printf '%s' "\$body"
