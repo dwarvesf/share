@@ -42,7 +42,7 @@
 # Docs: https://github.com/consolelabs/handout
 set -euo pipefail
 
-SHARE_VERSION=0.9.0   # bin/release rewrites it in the release commit; the suite checks it against CHANGELOG.md's newest heading
+SHARE_VERSION=0.10.0   # bin/release rewrites it in the release commit; the suite checks it against CHANGELOG.md's newest heading
 
 die() { echo "handout: $*" >&2; exit 1; }
 

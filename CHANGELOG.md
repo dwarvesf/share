@@ -1,5 +1,62 @@
 # Changelog
 
+## [v0.10.0] - 2026-11-21
+
+### Features
+
+- rename share to Handout and add the team docs (#80)
+- **share:** media-aware generated folder index (#79)
+- **share:** member adopt, min_cli enforcement and live member shares (#77)
+- **sharebar:** members tab, all links window and app states (#76)
+- **share:** member pause, resume, invite, rotate and renew (#75)
+- **mac:** popover drop-in, drag out, Quick Look and a global hotkey (#69)
+- **mac:** share bar settings window (#68)
+- **mac:** share bar popover (#65)
+- **share:** member rm, purge, leave, admin revoke and member reconcile (#62)
+- **mac:** share bar foundations, compat check and screenshot harness (#61)
+- **share:** members core: tenant tier, lease, registry, add, join, ls (#57)
+- **mac:** open-ring mark as menu bar glyph and app icon (#53)
+- **share:** serve phase, link state, add journal and .health cache (#56)
+- **share:** serve listed rows only and ship Worker v5 (#55)
+- **share:** state groundwork: codes, step journal, roles, config writer (#54)
+
+### Fixes
+
+- stop reaps the bucket pass; dry PUT writes atomically (#84)
+- **share:** close the spec gaps the state-machine audit trace found (#74)
+- **mac:** match the popover to the revision 8 design (#66)
+- **share:** stop member add hanging where SIGPIPE is ignored (#60)
+- **share:** clear the held Access id after a finished alias fold (#47)
+
+### Performance
+
+- **ci:** run main's suite as parallel shards on both OSes (#82)
+
+### Documentation
+
+- re-check member docs against the built verbs and grep them (#78)
+- member onboarding, rev C design, glossary and quality entries (#63)
+- **members:** record the live Cloudflare samples on Console Labs (#52)
+- validated member specs and the mega-goal scaffold (#51)
+- multi-member design, specs and Share Bar redesign (#50)
+- **share:** record the early Worker delete and token revoke (#49)
+- **share:** record the direct personal move and tick its task (#48)
+- **share:** record the Dwarves go-live in Batch 9 and tick TASK-11a (#46)
+
+### Tests
+
+- **mac:** queue the second verb only after the first starts (#83)
+- **share:** add a section filter and a timing table to the suite (#64)
+- **share:** a cloudflared stand-in for join on Linux CI (#58)
+
+### Maintenance
+
+- copyright to Superbits LLC (Console Labs) (#86)
+- Console Labs branding, tap move and a re-recorded demo (#85)
+- give the macOS full suite 45 minutes (#81)
+- shard the bash suite on pull requests (#67)
+- skip the suite a change cannot affect, and time out hung jobs (#59)
+
 ## [v0.9.0] - 2026-10-06
 
 ### Features
@@ -9,6 +66,10 @@
 ### Fixes
 
 - **test:** isolate token-free tests from the host keychain (#44)
+
+### Documentation
+
+- changelog for v0.9.0
 
 ## [v0.8.0] - 2026-10-01
 
