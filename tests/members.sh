@@ -703,7 +703,7 @@ printf '#!/bin/bash\nfor a; do p=$a; done; echo "503 /_share/redeem"; echo "unav
 mxj_env=(SHARE_R2_DRY_WORKER="$MX/bin/wk503"); mxj_try "a redeem answering 503" invite_unavailable :
 mxj_try "a record no longer invited" member_changed eval 'jq -c ".status = \"removing\"" "$MX_DRY/u/m-an-aaaaaaa1.json" >"$MX/r" && mv "$MX/r" "$MX_DRY/u/m-an-aaaaaaa1.json"'
 mxj_try "a mac mismatch (FG-08: a forged envelope)" invite_tampered eval 'f="$MX_DRY/i/$(mx_h $MXC1)"; jq -c ".mac = (\"0\" * 64)" "$f" >"$MX/e" && mv "$MX/e" "$f"'
-mxj_try "a CLI below the marker's min_cli" cli_below_min eval 'mx_load t2; jq -c ".min_cli = \"99.0.0\"" "$MX_DRY/share.json" >"$MX/s" && mv "$MX/s" "$MX_DRY/share.json"; sed "s/^SHARE_VERSION=0.9.0 /SHARE_VERSION=100.0.0 /" "$SH" >"$MX/share-v100"; MX_SH="$MX/share-v100" SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 SHARE_TEST_CODE=$MXC1 mxa member add an --port "$MP" >/dev/null 2>&1'
+mxj_try "a CLI below the marker's min_cli" cli_below_min eval 'mx_load t2; jq -c ".min_cli = \"99.0.0\"" "$MX_DRY/share.json" >"$MX/s" && mv "$MX/s" "$MX_DRY/share.json"; sed "s/^SHARE_VERSION=[0-9.]* /SHARE_VERSION=100.0.0 /" "$SH" >"$MX/share-v100"; MX_SH="$MX/share-v100" SHARE_TEST_MEMBER_IDS=m-an-aaaaaaa1 SHARE_TEST_CODE=$MXC1 mxa member add an --port "$MP" >/dev/null 2>&1'
 caddy respond --listen "127.0.0.1:$MP" >/dev/null 2>&1 & cp=$!; sleep 0.5
 mxj_try "a busy invite port (OT-04)" port_busy :
 kill "$cp" 2>/dev/null; wait "$cp" 2>/dev/null
