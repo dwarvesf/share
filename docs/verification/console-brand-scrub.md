@@ -37,3 +37,25 @@ The same scan on `origin/main` (`git grep -n -i -E "dwarves|dwarvesf|d\.foundati
 - Shot scripts and `.steps` fixtures under `mac/Tests/fixtures` were updated by the same rename but not run (they drive a live macOS desktop).
 - The full suite was not run; only the sections that read changed lines.
 - `tests/prod-snapshot.sh` changed its arguments to `<out-file> <zone> <host>...`; only its usage error path ran.
+
+## Demo re-recorded (recorded run)
+Both GIFs were recorded from this branch's `bin/` (`HANDOUT_DEMO_BIN`) against `handout-demo.console.so`, with a real tunnel and DNS record, then torn down.
+```
+Command: demo/render.sh setup; demo/render.sh use; source demo/env.sh && handout teardown --yes
+Exit: 0
+Output:
+ready:      https://handout-demo.console.so/ is live. Next: handout add <file|dir>
+https://handout-demo.console.so/377b02/team-guide/
+unpublished 377b02
+dns:     deleted handout-demo.console.so
+tunnel:  deleted
+Verdict: PASS
+```
+The first `use` recording showed two pandoc 3.14 lines, `[WARNING] Deprecated: --highlight-style`. `bin/handout` now picks `--syntax-highlighting` when pandoc offers it.
+```
+Command: SHARE_TEST_ONLY='^markdown$' bash tests/share.sh, with the version check forced to the old flag
+Exit: 1
+Output:
+  FAIL  rendering prints no pandoc warning (pandoc 3.8 renamed --highlight-style): expected '0', got '1'
+Verdict: PASS (negative control: red on the old flag, ok on the fix)
+```

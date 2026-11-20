@@ -1,6 +1,6 @@
 # Demo recordings
 
-The GIFs in the main README are real recordings of the released Homebrew build against a live Cloudflare domain. Nothing is mocked.
+The GIFs in the main README are real recordings against a live Cloudflare domain. Nothing is mocked. The current ones were recorded from this repo's `bin/` at the rename to Handout, before its first release under that name.
 
 | File | Story | Reproduce |
 |---|---|---|
@@ -17,6 +17,8 @@ demo/render.sh setup
 demo/render.sh use
 source demo/env.sh && handout teardown --yes   # remove the demo tunnel, DNS record, and service
 ```
+
+To record code that is not released yet, put the checkout's `bin/` first: `export HANDOUT_DEMO_BIN="$PWD/bin"` before the three lines above.
 
 `demo/env.sh` is the hidden prelude of every tape. It gives the demo its own config, root, port, and service label, so a recording never touches a real share setup on the same machine.
 
