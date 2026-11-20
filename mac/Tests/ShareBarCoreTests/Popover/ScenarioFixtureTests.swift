@@ -36,7 +36,7 @@ final class ScenarioFixtureTests: XCTestCase {
     func testThreeTenantsGroupedCurrentFirst() throws {
         let (profiles, members) = try load("popover/scenarios/issues-three")
         let issues = IssueList(profiles: profiles, current: "console", members: members, now: now)
-        XCTAssertEqual(issues.groups.map(\.host), ["s.console.so", "s.d.foundation", "s.han.ws"])
+        XCTAssertEqual(issues.groups.map(\.host), ["s.example.com", "s.team.example.com", "s.home.example.com"])
         XCTAssertEqual(issues.groups.map(\.isCurrent), [true, false, false])
         XCTAssertEqual(issues.groups.map { $0.lines.count }, [2, 1, 2])
     }

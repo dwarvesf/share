@@ -27,7 +27,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 MAC="$(cd "$HERE/../../.." && pwd)"
 OUT_DIR="${SHOTS_OUT:-$MAC/../docs/verification/share-bar/settings-a}"
 WORK="$MAC/build/settings-shots"
-BUNDLE_ID="com.dwarves.sharebar.shots.settings"
+BUNDLE_ID="so.console.handout-bar.shots.settings"
 APP="$WORK/Share Bar.app"
 
 APP_PID=""

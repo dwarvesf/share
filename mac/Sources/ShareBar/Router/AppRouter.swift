@@ -2,7 +2,7 @@ import AppKit
 import ShareBarCore
 import os
 
-private let routerLogger = Logger(subsystem: "com.dwarves.sharebar", category: "router")
+private let routerLogger = Logger(subsystem: "so.console.handout-bar", category: "router")
 
 /// Where the popover's buttons land: the Settings window, its add sheet and the All links window.
 enum SettingsTab: String {

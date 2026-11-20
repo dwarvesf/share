@@ -8,7 +8,7 @@
         "state": "serving",
         "ready": true,
         "mode": "named",
-        "host": "s.console.so",
+        "host": "s.example.com",
         "hosts": "Mac-mini",
         "serves_here": true,
         "service": true,
@@ -32,7 +32,7 @@
           {
             "id": "c0a0b1",
             "name": "notes.txt",
-            "url": "https://s.console.so/c0a0b1/notes.txt",
+            "url": "https://s.example.com/c0a0b1/notes.txt",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -44,7 +44,7 @@
           {
             "id": "c1a0b1",
             "name": "brief-v2.pdf",
-            "url": "https://s.console.so/c1a0b1/brief-v2.pdf",
+            "url": "https://s.example.com/c1a0b1/brief-v2.pdf",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -56,7 +56,7 @@
           {
             "id": "c2a0b1",
             "name": "invoice-nov.pdf",
-            "url": "https://s.console.so/c2a0b1/invoice-nov.pdf",
+            "url": "https://s.example.com/c2a0b1/invoice-nov.pdf",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -68,7 +68,7 @@
           {
             "id": "c3a0b1",
             "name": "roadmap.key",
-            "url": "https://s.console.so/c3a0b1/roadmap.key",
+            "url": "https://s.example.com/c3a0b1/roadmap.key",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -80,7 +80,7 @@
           {
             "id": "d0b1c2",
             "name": "design-review.key",
-            "url": "https://s.console.so/d0b1c2/design-review.key",
+            "url": "https://s.example.com/d0b1c2/design-review.key",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -92,7 +92,7 @@
           {
             "id": "d1b1c2",
             "name": "press-kit.zip",
-            "url": "https://s.console.so/d1b1c2/press-kit.zip",
+            "url": "https://s.example.com/d1b1c2/press-kit.zip",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -104,7 +104,7 @@
           {
             "id": "d2b1c2",
             "name": "q3-plan.xlsx",
-            "url": "https://s.console.so/d2b1c2/q3-plan.xlsx",
+            "url": "https://s.example.com/d2b1c2/q3-plan.xlsx",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -116,7 +116,7 @@
           {
             "id": "d3b1c2",
             "name": "logo.png",
-            "url": "https://s.console.so/d3b1c2/logo.png",
+            "url": "https://s.example.com/d3b1c2/logo.png",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -135,7 +135,7 @@
         "state": "serving",
         "ready": true,
         "mode": "named",
-        "host": "s.han.ws",
+        "host": "s.home.example.com",
         "hosts": "Mac-mini",
         "serves_here": true,
         "service": true,

@@ -1,5 +1,5 @@
 scenario firstrun
-script add:join,join-host=s.console.so,code=SHR-7Q4K-M2XD-9PLA-3VTB,submit,wait:3.5
+script add:join,join-host=s.example.com,code=SHR-7Q4K-M2XD-9PLA-3VTB,submit,wait:3.5
 hold 4
-expect-argv join s.console.so SHR-7Q4K-M2XD-9PLA-3VTB
+expect-argv join s.example.com SHR-7Q4K-M2XD-9PLA-3VTB
 label progress-step-4-of-6

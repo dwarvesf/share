@@ -1,6 +1,6 @@
 # TASK-4b8 "issues view empty: Nothing needs a look." Resume runs the journal's rerun; the CLI then
 # reports the journal done (run-shots.sh plays that answer), and the open view reads empty.
-# on-argv: setup s.console.so --members => .profiles[0].state.ops = []
+# on-argv: setup s.example.com --members => .profiles[0].state.ops = []
 scenario ../popover/scenarios/issues-one
 click status-item
 click footer-issues

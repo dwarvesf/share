@@ -504,7 +504,7 @@ token_forget() {
 write_md_style() { # the reading stylesheet, shared by pandoc renders and gen_index
   cat >"$root/md-style.html" <<'CSS'
 <style>
-/* Spacedown's "paper" reading theme (dwarvesf/spacedown assets/paper-theme.css) on pandoc's default template. */
+/* Spacedown's "paper" reading theme (consolelabs/spacedown assets/paper-theme.css) on pandoc's default template. */
 :root { --paper-bg:#fbfaf7; --paper-fg:#242321; --paper-muted:#6e6c67; --paper-rule:#dcd9d2; --paper-rule-strong:#b9b5ac; --paper-link:#2b5f91; --paper-code-bg:#f0eee9; --paper-mark:#f6e7a8;
   --paper-font-sans:"iA Writer Quattro V", "iA Writer Quattro S", -apple-system, "Helvetica Neue", Arial, sans-serif;
   --paper-font-mono:"iA Writer Mono V", "iA Writer Mono S", ui-monospace, "SF Mono", Menlo, monospace; }
@@ -549,13 +549,15 @@ function Link(el)
 end
 LUA
   write_md_style
+  # pandoc 3.8 renamed --highlight-style to --syntax-highlighting and warns on the old name even under --quiet
+  local hl="--highlight-style=tango"; pandoc --help 2>/dev/null | grep -q -- '--syntax-highlighting' && hl="--syntax-highlighting=tango"
   find "$1" -type f -name '*.md' | while IFS= read -r f; do
     out="${f%.md}.html"
     [[ -e $out ]] && continue
     katex=""; grep -q '\$' "$f" && katex="--katex" # KaTeX from the CDN, only for pages with math
     # shellcheck disable=SC2086
     pandoc --quiet -s "$f" -o "$out" --lua-filter "$filter" --include-in-header "$style" \
-      --from=markdown-smart-implicit_figures --highlight-style=tango --metadata pagetitle="$(basename "$f" .md)" $katex \
+      --from=markdown-smart-implicit_figures "$hl" --metadata pagetitle="$(basename "$f" .md)" $katex \
       || echo "handout: could not render $f" >&2
   done
 }

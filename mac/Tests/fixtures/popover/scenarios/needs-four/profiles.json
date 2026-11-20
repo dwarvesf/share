@@ -8,7 +8,7 @@
         "state": "stopped",
         "ready": false,
         "mode": "named",
-        "host": "s.console.so",
+        "host": "s.example.com",
         "hosts": "Mac-mini",
         "serves_here": true,
         "service": true,
@@ -26,12 +26,12 @@
             "of": 9,
             "name": "carry",
             "alive": false,
-            "rerun": "share --profile console setup s.console.so --members",
+            "rerun": "share --profile console setup s.example.com --members",
             "rerun_argv": [
               "--profile",
               "console",
               "setup",
-              "s.console.so",
+              "s.example.com",
               "--members"
             ]
           }
@@ -40,7 +40,7 @@
           {
             "id": "4f9ff2",
             "name": "notes.txt",
-            "url": "https://s.console.so/4f9ff2/notes.txt",
+            "url": "https://s.example.com/4f9ff2/notes.txt",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -52,7 +52,7 @@
           {
             "id": "7f3a21",
             "name": "playdate-uat-run.mov",
-            "url": "https://s.console.so/7f3a21/playdate-uat-run.mov",
+            "url": "https://s.example.com/7f3a21/playdate-uat-run.mov",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -65,7 +65,7 @@
           {
             "id": "2be8d0",
             "name": "bao-cao-thang-10.pdf",
-            "url": "https://s.console.so/2be8d0/bao-cao-thang-10.pdf",
+            "url": "https://s.example.com/2be8d0/bao-cao-thang-10.pdf",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -89,7 +89,7 @@
         "state": "serving",
         "ready": true,
         "mode": "named",
-        "host": "s.han.ws",
+        "host": "s.home.example.com",
         "hosts": "Mac-mini",
         "serves_here": true,
         "service": true,

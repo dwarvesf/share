@@ -3,7 +3,7 @@
   "state": "serving",
   "ready": true,
   "mode": "named",
-  "host": "s.console.so",
+  "host": "s.example.com",
   "hosts": "Mac-mini",
   "serves_here": true,
   "service": true,
@@ -19,10 +19,10 @@
   "ops": [
     {
       "verb": "setup-r2", "step": 13, "of": 16, "name": "route", "alive": false,
-      "rerun": "share --profile console setup s.console.so --r2 --bucket console-share",
-      "rerun_argv": ["--profile", "console", "setup", "s.console.so", "--r2", "--bucket", "console-share"],
-      "rollback": "share --profile console setup s.console.so --no-r2",
-      "rollback_argv": ["--profile", "console", "setup", "s.console.so", "--no-r2"]
+      "rerun": "share --profile console setup s.example.com --r2 --bucket console-share",
+      "rerun_argv": ["--profile", "console", "setup", "s.example.com", "--r2", "--bucket", "console-share"],
+      "rollback": "share --profile console setup s.example.com --no-r2",
+      "rollback_argv": ["--profile", "console", "setup", "s.example.com", "--no-r2"]
     },
     {
       "verb": "add", "step": 2, "of": 3, "name": "upload", "alive": true,
@@ -35,40 +35,40 @@
   "member": {"id": "m-an-1a2b3c4d", "name": "an", "mode": "machine", "status": "active", "step": null, "token_expires": "2027-01-15"},
   "shares": [
     {
-      "id": "7f3a21", "name": "playdate-uat-run.mov", "url": "https://s.console.so/7f3a21/playdate-uat-run.mov",
+      "id": "7f3a21", "name": "playdate-uat-run.mov", "url": "https://s.example.com/7f3a21/playdate-uat-run.mov",
       "kind": "snapshot", "own_host": null, "expires": 4102444800,
       "storage": "machine", "type": "video", "by": "An's MacBook",
       "origin": "m-an-1a2b3c4d", "link_state": "offline"
     },
     {
-      "id": "2be8d0", "name": "bao-cao-thang-10.pdf", "url": "https://s.console.so/2be8d0/bao-cao-thang-10.pdf",
+      "id": "2be8d0", "name": "bao-cao-thang-10.pdf", "url": "https://s.example.com/2be8d0/bao-cao-thang-10.pdf",
       "kind": "snapshot", "own_host": null, "expires": 4102444800,
       "storage": "machine", "type": "pdf", "by": "An's MacBook",
       "origin": "m-an-1a2b3c4d", "link_state": "paused", "reason": "paused_by=han"
     },
     {
-      "id": "c4c2a0", "name": "notes.txt", "url": "https://s.console.so/c4c2a0/notes.txt",
+      "id": "c4c2a0", "name": "notes.txt", "url": "https://s.example.com/c4c2a0/notes.txt",
       "kind": "snapshot", "own_host": null, "expires": 0,
       "storage": "machine", "type": "text", "by": "Mac-mini", "link_state": "live"
     },
     {
-      "id": "b99924", "name": "localhost:3000", "url": "https://s.console.so/b99924/",
+      "id": "b99924", "name": "localhost:3000", "url": "https://s.example.com/b99924/",
       "kind": "live", "own_host": null, "expires": 4102444800,
       "storage": "machine", "type": "folder", "by": "Mac-mini", "link_state": "live"
     },
     {
-      "id": "9d10aa", "name": "design-review.key", "url": "https://s.console.so/9d10aa/design-review.key",
+      "id": "9d10aa", "name": "design-review.key", "url": "https://s.example.com/9d10aa/design-review.key",
       "kind": "snapshot", "own_host": null, "expires": 4102444800,
-      "access": "@console.so", "storage": "cloud", "type": "image", "by": "Mac-mini",
+      "access": "@example.com", "storage": "cloud", "type": "image", "by": "Mac-mini",
       "link_state": "live", "views": 12
     },
     {
-      "id": "e5517c", "name": "old-pitch.pdf", "url": "https://s.console.so/e5517c/old-pitch.pdf",
+      "id": "e5517c", "name": "old-pitch.pdf", "url": "https://s.example.com/e5517c/old-pitch.pdf",
       "kind": "snapshot", "own_host": null, "expires": 1700000000,
       "storage": "cloud", "type": "pdf", "by": "Mac-mini", "link_state": "expired", "views": 1
     },
     {
-      "id": "30c9bb", "name": "q3-plan.xlsx", "url": "https://s.console.so/30c9bb/q3-plan.xlsx",
+      "id": "30c9bb", "name": "q3-plan.xlsx", "url": "https://s.example.com/30c9bb/q3-plan.xlsx",
       "kind": "snapshot", "own_host": null, "expires": 4102444800,
       "storage": "machine", "type": "sheet", "by": "Nam's Mini",
       "origin": "m-nam-5e6f7a8b", "link_state": "revoked", "reason": "revoked_by=han"

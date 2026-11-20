@@ -2,9 +2,8 @@
 
 [![CI](https://github.com/consolelabs/handout/actions/workflows/ci.yml/badge.svg)](https://github.com/consolelabs/handout/actions/workflows/ci.yml)
 [![Cloudflare Tunnel](https://img.shields.io/badge/tunnel-Cloudflare-F38020?logo=cloudflare&logoColor=white)](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
-[![built by webuild](https://raw.githubusercontent.com/webuild-community/badge/master/svg/love.svg)](https://webuild.community)
 
-Hand out a file, a folder, a guide, a deck, a build or a dev server at a link on your own domain. The link expires when you say so, counts who opened it, can be private, and a folder gets a page of its own. Like ngrok, but the hostname is yours and stays the same.
+Handout is a [Console Labs](https://console.so) product. Hand out a file, a folder, a guide, a deck, a build or a dev server at a link on your own domain. The link expires when you say so, counts who opened it, can be private, and a folder gets a page of its own. Like ngrok, but the hostname is yours and stays the same.
 
 ## Who it is for
 
@@ -23,8 +22,8 @@ It is a bash CLI that runs on your machine and on your own Cloudflare account. T
 ## Quick start
 
 ```sh
-brew trust dwarvesf/tools
-brew install dwarvesf/tools/handout
+brew trust consolelabs/tap
+brew install consolelabs/tap/handout
 handout setup s.example.com     # browser opens for Cloudflare login; Handout does the rest
 handout add ./team-guide        # https://s.example.com/62cb50/team-guide/  (copied to clipboard)
 ```
@@ -81,8 +80,8 @@ TLS, DNS                                 login service    no-store, noindex
 ## Install
 
 ```sh
-brew trust dwarvesf/tools                # once: current Homebrew refuses formulae from an untrusted tap
-brew install dwarvesf/tools/handout    # macOS and Linux; pulls caddy, cloudflared, jq
+brew trust consolelabs/tap                # once: current Homebrew refuses formulae from an untrusted tap
+brew install consolelabs/tap/handout    # macOS and Linux; pulls caddy, cloudflared, jq
 ```
 
 Optional extras: `brew install pandoc gh` (markdown rendering, private-repo warning).
@@ -97,11 +96,13 @@ From a clone: `git clone https://github.com/consolelabs/handout.git && cd handou
 
 The tool was called `share` before. `share` stays a working alias for existing installs, so `share add`, `share join <host> <code>` and `share leave` keep working.
 
-Upgrading a Homebrew install of `share`. Homebrew trust is per name, so trust the new names first. `brew migrate` moves the keg and the reinstall adds the `handout` command. `share` keeps working throughout and login services are unaffected.
+Moving an existing Homebrew install of `share`: run `brew update`, which moves it to `consolelabs/tap/handout` (the old tap carries a migration), then `brew trust consolelabs/tap`. `share` keeps working throughout and login services are unaffected.
 
 ```sh
-brew trust --formula dwarvesf/tools/handout && brew trust --cask dwarvesf/tools/handout-bar && brew migrate share && brew reinstall handout
+brew update && brew trust consolelabs/tap
 ```
+
+Upgrade later with `brew upgrade consolelabs/tap/handout`.
 
 ## Commands
 
@@ -227,7 +228,7 @@ Admin verbs: `member add`, `ls`, `sync`, `rm`, `purge`, `pause`, `resume`, `invi
 ## Menu bar app
 
 ```sh
-brew install --cask dwarvesf/tools/handout-bar    # macOS; also pulls the handout formula (after `brew trust dwarvesf/tools`)
+brew install --cask consolelabs/tap/handout-bar    # macOS; also pulls the handout formula (after `brew trust consolelabs/tap`)
 ```
 
 Handout Bar is a menu bar icon for Handout: no terminal needed to see what's shared or to publish something new. Click the icon for the current state and the share list, each with Copy Link, Open in Browser, Refresh, and Remove. Drop a file or folder on the icon to run `handout add` on it.

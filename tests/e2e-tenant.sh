@@ -1,7 +1,7 @@
 #!/bin/bash
 # Live leg of the one-host-per-tenant spec against a real Cloudflare account: a tunnel origin
 # turns on R2 (L1-L3), a member and a fresh joiner publish cloud links through an outage (L4-L5),
-# the encoded-path and rollback rows (L6-L9), an admin purge plus teardown (L10), then the Dwarves
+# the encoded-path and rollback rows (L6-L9), an admin purge plus teardown (L10), then the tenant
 # alias-fold rehearsal with its rollback (R1), each with proof through the API that nothing is left.
 # Run it by hand before a release that touches setup --r2, --alias, or the tenant Worker; CI has
 # no account or token. TASK-9a of SPEC-008.
@@ -13,8 +13,7 @@
 #
 # Inputs:
 #   SHARE_E2E_TENANT_HOST, SHARE_E2E_ALIAS_HOST   unused hostnames whose first label starts with
-#                          share-e2e, on a zone the admin token edits; never s.d.foundation,
-#                          f.d.foundation, s.han.ws, or any real tenant hostname
+#                          share-e2e, on a zone the admin token edits; never a real tenant hostname
 #   CLOUDFLARE_API_TOKEN  the admin token: Tunnel Edit, DNS Edit, Zone Read, Workers Scripts Edit,
 #                         Workers Routes Edit, Workers R2 Storage Edit, Access Apps Edit, Access
 #                         Organizations Read (account), DNS Read (zone)
@@ -517,7 +516,7 @@ check "bucket gone" 404 "$(api "/accounts/$acct/r2/buckets/$bucket" -o /dev/null
 check "Worker gone" 404 "$(api "/accounts/$acct/workers/scripts/$worker/settings" -o /dev/null -w '%{http_code}')"
 
 echo
-echo "=== R1 Dwarves alias-fold rehearsal on throwaway names ==="
+echo "=== R1 tenant alias-fold rehearsal on throwaway names ==="
 track_host "$alias_host"
 C="$WORK/c"; mkdir -p "$C"
 bucket2="share-e2e-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
@@ -558,7 +557,7 @@ if [[ -n ${cgid:-} ]]; then
   check "R1 after fold: the folded gated link 302s on the tenant with kid == aud" 1 "$([[ $out == 302* && -n $gaud2 && $out == *"kid=$gaud2"* ]] && echo 1 || echo "0 ($out, aud=$gaud2)")"
 fi
 
-echo "--- R1 rollback (### Dwarves order, the admin token) ---"
+echo "--- R1 rollback (tenant order, the admin token) ---"
 r2call_admin() { HOME="$A2" CLOUDFLARE_API_TOKEN="$admin" SHARE_R2_TOKEN="$admin" "$share" r2-call "$@"; }
 if [[ -n ${cgid:-} ]]; then
   # same naming fact as the gaud2 lookup above: the app is still named for the alias

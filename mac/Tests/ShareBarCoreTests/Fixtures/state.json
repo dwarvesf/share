@@ -3,7 +3,7 @@
   "state": "serving",
   "ready": true,
   "mode": "named",
-  "host": "s.han.ws",
+  "host": "s.home.example.com",
   "hosts": "Mac-mini",
   "serves_here": true,
   "service": true,
@@ -11,15 +11,15 @@
     {
       "id": "4f9ff2",
       "name": "notes.txt",
-      "url": "https://docs.han.ws/",
+      "url": "https://docs.home.example.com/",
       "kind": "snapshot",
-      "own_host": "docs.han.ws",
+      "own_host": "docs.home.example.com",
       "expires": 1793087100
     },
     {
       "id": "b99924",
       "name": "localhost:3000",
-      "url": "https://s.han.ws/b99924/",
+      "url": "https://s.home.example.com/b99924/",
       "kind": "live",
       "own_host": null,
       "expires": 1793087100
@@ -27,7 +27,7 @@
     {
       "id": "4a8ca7",
       "name": "theme-check.md",
-      "url": "https://s.han.ws/4a8ca7/theme-check.html",
+      "url": "https://s.home.example.com/4a8ca7/theme-check.html",
       "kind": "snapshot",
       "own_host": null,
       "expires": 1793087099
@@ -35,7 +35,7 @@
     {
       "id": "c4c2a0",
       "name": "notes.txt",
-      "url": "https://s.han.ws/c4c2a0/notes.txt",
+      "url": "https://s.home.example.com/c4c2a0/notes.txt",
       "kind": "snapshot",
       "own_host": null,
       "expires": 1793087099

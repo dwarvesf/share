@@ -29,7 +29,7 @@ final class MutationOutcomeTests: XCTestCase {
     func testPrivateWarningOnExitZeroNamesTheShareToRemove() {
         let result = CLIResult(
             status: 0,
-            stdout: "https://s.han.ws/abc123/notes.txt",
+            stdout: "https://s.home.example.com/abc123/notes.txt",
             stderr: "share: WARNING: this comes from the PRIVATE repo han/notes and is now public to anyone with the link (share rm abc123 to undo)",
             timedOut: false
         )
@@ -70,20 +70,20 @@ final class MutationOutcomeTests: XCTestCase {
 
     // MARK: - verbatim detail (O1 / O3 / gate timeout)
 
-    /// The real O1 block: bin/share's access_no_token for profile dfoundation on
-    /// s.d.foundation, as `add --access` prints it to stderr before exiting 1.
+    /// The real O1 block: bin/share's access_no_token for profile acme on
+    /// s.team.example.com, as `add --access` prints it to stderr before exiting 1.
     func testO1StyleStderrCarriesTheDieLineAndTheWholeBlockVerbatim() {
         let block = """
-        share: --access needs a Cloudflare API token for s.d.foundation (profile dfoundation); none is set.
-          New token (opens the prefilled form, then paste):  share --profile dfoundation api-token
-          Already have a token with Access scopes:          share --profile dfoundation api-token --cmd 'op read "op://<vault>/<item>/credential"'
-          Form link, pick the account that owns d.foundation:
-             https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=%5B%7B%22key%22%3A%22access%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22access_acct%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22read%22%7D%5D&name=share%20access%20%28dfoundation%29
+        share: --access needs a Cloudflare API token for s.team.example.com (profile acme); none is set.
+          New token (opens the prefilled form, then paste):  share --profile acme api-token
+          Already have a token with Access scopes:          share --profile acme api-token --cmd 'op read "op://<vault>/<item>/credential"'
+          Form link, pick the account that owns team.example.com:
+             https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=%5B%7B%22key%22%3A%22access%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22access_acct%22%2C%22type%22%3A%22read%22%7D%2C%7B%22key%22%3A%22zone%22%2C%22type%22%3A%22read%22%7D%5D&name=share%20access%20%28acme%29
         """
         let result = CLIResult(status: 1, stdout: "", stderr: block + "\n", timedOut: false)
         let alert = MutationOutcome.alert(for: result, warningShareID: nil, notServingHere: false)
 
-        XCTAssertEqual(alert?.message, "share: --access needs a Cloudflare API token for s.d.foundation (profile dfoundation); none is set.")
+        XCTAssertEqual(alert?.message, "share: --access needs a Cloudflare API token for s.team.example.com (profile acme); none is set.")
         XCTAssertEqual(alert?.detail, block, "the guided block reaches the alert exactly as printed, trailing newline aside")
     }
 

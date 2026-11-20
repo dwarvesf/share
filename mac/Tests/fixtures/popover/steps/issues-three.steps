@@ -3,8 +3,8 @@ scenario ../popover/scenarios/issues-three
 click status-item
 click footer-issues
 find issues-group-console
-find issues-group-dfoundation
+find issues-group-acme
 find issues-group-han
 shot issues-three-tenants
 click issue-action-console:op0
-expect-argv setup s.console.so --members
+expect-argv setup s.example.com --members

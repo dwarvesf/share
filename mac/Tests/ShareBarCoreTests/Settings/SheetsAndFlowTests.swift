@@ -12,8 +12,8 @@ final class SheetsAndFlowTests: XCTestCase {
             makeShare(id: "5", storage: "cloud"), makeShare(id: "6", storage: "cloud"),
             makeShare(id: "7", storage: "machine", origin: "m-an-1a2b3c4d"),
         ]
-        let sheet = Impact.stopServing(host: "s.console.so", shares: rows)
-        XCTAssertEqual(sheet.title, "Stop serving s.console.so from this Mac?")
+        let sheet = Impact.stopServing(host: "s.example.com", shares: rows)
+        XCTAssertEqual(sheet.title, "Stop serving s.example.com from this Mac?")
         XCTAssertEqual(sheet.lines, [
             ImpactLine(.stops, "4 links on this Mac stop answering until you start again"),
             ImpactLine(.keeps, "3 cloud and member links keep working"),
@@ -48,8 +48,8 @@ final class SheetsAndFlowTests: XCTestCase {
         XCTAssertEqual(remove.title, "Remove An?")
         XCTAssertTrue(remove.destructive)
         XCTAssertEqual(remove.lines.first, ImpactLine(.stops, "1 link on their computer stop answering now"))
-        let roll = Impact.rollBack(what: "cloud storage", command: "share setup s.d.foundation --no-r2")
-        XCTAssertEqual(roll.body, "Runs \"share setup s.d.foundation --no-r2\". The last step is undone and the earlier ones stay as they were.")
+        let roll = Impact.rollBack(what: "cloud storage", command: "share setup s.team.example.com --no-r2")
+        XCTAssertEqual(roll.body, "Runs \"share setup s.team.example.com --no-r2\". The last step is undone and the earlier ones stay as they were.")
     }
 
     func testTheAskedKeyReachesTheChildEnvironmentOnly() {
@@ -118,7 +118,7 @@ final class SheetsAndFlowTests: XCTestCase {
     // MARK: 4b18
 
     func testProgressSheetFollowsProgressLines() throws {
-        var run = FlowRun(kind: .join, title: "Joining s.console.so")
+        var run = FlowRun(kind: .join, title: "Joining s.example.com")
         XCTAssertEqual(run.steps.count, 6)
         XCTAssertEqual(run.mark(of: 0), .now)
         var stream = ProgressStream()
@@ -149,8 +149,8 @@ final class SheetsAndFlowTests: XCTestCase {
     }
 
     func testTheMembersConfirmCarriesTheCLIsWarning() {
-        let sheet = Impact.turnOnMembers(host: "s.console.so")
-        XCTAssertEqual(sheet.title, "Turn on members for s.console.so?")
+        let sheet = Impact.turnOnMembers(host: "s.example.com")
+        XCTAssertEqual(sheet.title, "Turn on members for s.example.com?")
         XCTAssertTrue(sheet.body?.contains("older than 0.10") == true)
         XCTAssertFalse(sheet.destructive)
     }
@@ -202,7 +202,7 @@ final class SheetsAndFlowTests: XCTestCase {
         defer { unsetenv("SHARE_BIN") }
         let changed = expectation(description: "stopped")
         changed.assertForOverFulfill = false
-        let runner = FlowRunner(argv: ["--profile", "console", "join", "s.console.so", "SHR-CODE"], kind: .join, title: "Joining s.console.so") { run in
+        let runner = FlowRunner(argv: ["--profile", "console", "join", "s.example.com", "SHR-CODE"], kind: .join, title: "Joining s.example.com") { run in
             if case .stopped = run.phase { changed.fulfill() }
         }
         runner.start()
@@ -216,7 +216,7 @@ final class SheetsAndFlowTests: XCTestCase {
         // The journal keeps the step: the next `profiles` read carries the dead op, and the tenant shows the callout.
         let op = OpInfo(verb: "join", step: 4, of: 6, name: "service", alive: false, rerun: "share join", rerunArgv: ["--profile", "console", "join"],
                         rollback: "share leave --local", rollbackArgv: ["--profile", "console", "leave", "--local"])
-        let entry = makeEntry(name: "console", state: makeSnapshot(host: "s.console.so", role: "member", tier: "t2",
+        let entry = makeEntry(name: "console", state: makeSnapshot(host: "s.example.com", role: "member", tier: "t2",
                                                                  serve: ServeInfo(phase: "stopped", reason: nil), ops: [op]))
         let detail = try XCTUnwrap(TenantDetail(entry: entry))
         XCTAssertEqual(detail.callout?.title, "Joining stopped at step 4 of 6")
@@ -229,39 +229,39 @@ final class SheetsAndFlowTests: XCTestCase {
         XCTAssertEqual(JournalRun.argv(op: join, kind: .rerun, profile: "console"), ["--profile", "console", "join"])
         XCTAssertEqual(JournalRun.argv(op: join, kind: .rollback, profile: "console"), ["--profile", "console", "leave", "--local"])
         let r2 = OpInfo(verb: "setup-r2", step: 13, of: 16, name: "route", alive: false, rerun: "r",
-                        rerunArgv: ["setup", "s.d.foundation", "--r2", "--bucket", "share-s-d-foundation"], rollback: "b", rollbackArgv: ["setup", "s.d.foundation", "--no-r2"])
-        XCTAssertEqual(JournalRun.argv(op: r2, kind: .rerun, profile: "dfoundation"),
-                       ["--profile", "dfoundation", "setup", "s.d.foundation", "--r2", "--bucket", "share-s-d-foundation"])
-        XCTAssertEqual(JournalRun.argv(op: r2, kind: .rollback, profile: "dfoundation")?.suffix(2), ["s.d.foundation", "--no-r2"])
+                        rerunArgv: ["setup", "s.team.example.com", "--r2", "--bucket", "share-s-team-example-com"], rollback: "b", rollbackArgv: ["setup", "s.team.example.com", "--no-r2"])
+        XCTAssertEqual(JournalRun.argv(op: r2, kind: .rerun, profile: "acme"),
+                       ["--profile", "acme", "setup", "s.team.example.com", "--r2", "--bucket", "share-s-team-example-com"])
+        XCTAssertEqual(JournalRun.argv(op: r2, kind: .rollback, profile: "acme")?.suffix(2), ["s.team.example.com", "--no-r2"])
     }
 
     func testFlowArgvAndNaming() {
         XCTAssertEqual(ProfileName.slug(host: "s.example.com"), "s-example-com")
         XCTAssertEqual(ProfileName.bucket(host: "s.example.com"), "share-s-example-com")
-        XCTAssertEqual(FlowArgv.join(host: "s.console.so", code: "SHR-7Q4K-M2XD-9PLA-3VTB"),
-                       ["--profile", "s-console-so", "join", "s.console.so", "SHR-7Q4K-M2XD-9PLA-3VTB"])
+        XCTAssertEqual(FlowArgv.join(host: "s.example.com", code: "SHR-7Q4K-M2XD-9PLA-3VTB"),
+                       ["--profile", "s-example-com", "join", "s.example.com", "SHR-7Q4K-M2XD-9PLA-3VTB"])
         XCTAssertNil(FlowArgv.join(host: "not a host", code: "SHR-1"))
-        XCTAssertNil(FlowArgv.join(host: "s.console.so", code: "-evil"))
-        XCTAssertNil(FlowArgv.join(host: "s.console.so", code: ""))
+        XCTAssertNil(FlowArgv.join(host: "s.example.com", code: "-evil"))
+        XCTAssertNil(FlowArgv.join(host: "s.example.com", code: ""))
         XCTAssertEqual(FlowArgv.setup(host: "s.example.com"), ["--profile", "s-example-com", "setup", "s.example.com"])
         XCTAssertNil(FlowArgv.setup(host: "Bad Host"))
-        XCTAssertEqual(FlowArgv.turnOnCloud(profile: "console", host: "s.console.so"),
-                       ["--profile", "console", "setup", "s.console.so", "--r2", "--bucket", "share-s-console-so"])
-        XCTAssertEqual(FlowArgv.turnOnMembers(profile: "console", host: "s.console.so")?.suffix(2), ["--members", "--yes"], "a non-terminal run needs --yes")
+        XCTAssertEqual(FlowArgv.turnOnCloud(profile: "console", host: "s.example.com"),
+                       ["--profile", "console", "setup", "s.example.com", "--r2", "--bucket", "share-s-example-com"])
+        XCTAssertEqual(FlowArgv.turnOnMembers(profile: "console", host: "s.example.com")?.suffix(2), ["--members", "--yes"], "a non-terminal run needs --yes")
         // The profile name is always one the CLI's own pattern accepts.
         XCTAssertTrue(JournalRun.isProfileName(ProfileName.slug(host: "a-very-long-hostname-for-a-tenant.example.com")))
         XCTAssertLessThanOrEqual(ProfileName.slug(host: String(repeating: "a.", count: 40) + "com").count, 32)
     }
 
     func testAPastedJoinLineFillsBothFields() {
-        let pasted = JoinInput.parse(codeField: "share join s.console.so SHR-7Q4K-M2XD-9PLA-3VTB\n", hostField: "")
-        XCTAssertEqual(pasted.host, "s.console.so")
+        let pasted = JoinInput.parse(codeField: "share join s.example.com SHR-7Q4K-M2XD-9PLA-3VTB\n", hostField: "")
+        XCTAssertEqual(pasted.host, "s.example.com")
         XCTAssertEqual(pasted.code, "SHR-7Q4K-M2XD-9PLA-3VTB")
-        let renamed = JoinInput.parse(codeField: "handout join s.console.so SHR-7Q4K-M2XD-9PLA-3VTB\n", hostField: "")
-        XCTAssertEqual(renamed.host, "s.console.so")
+        let renamed = JoinInput.parse(codeField: "handout join s.example.com SHR-7Q4K-M2XD-9PLA-3VTB\n", hostField: "")
+        XCTAssertEqual(renamed.host, "s.example.com")
         XCTAssertEqual(renamed.code, "SHR-7Q4K-M2XD-9PLA-3VTB")
-        let typed = JoinInput.parse(codeField: " SHR-1 ", hostField: " s.console.so ")
-        XCTAssertEqual(typed.host, "s.console.so")
+        let typed = JoinInput.parse(codeField: " SHR-1 ", hostField: " s.example.com ")
+        XCTAssertEqual(typed.host, "s.example.com")
         XCTAssertEqual(typed.code, "SHR-1")
     }
 }

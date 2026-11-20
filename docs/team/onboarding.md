@@ -125,7 +125,7 @@ Pick one more skill each week and do its exercise. The exercises are for you. No
 | Tool | Purpose | Status | Setup |
 |---|---|---|---|
 | Claude Code or another coding agent | Builds the change | Install yourself | Read [`AGENTS.md`](../../AGENTS.md) first |
-| dwarves-kit plugin | Extra gates (proof of done, lane gates) that read `.kit.toml` | Optional | The repo's own rules sit in `AGENTS.md`; the kit adds checks, nothing here needs it |
+| Agent kit plugin | Extra gates (proof of done, lane gates) that read `.kit.toml` | Optional | The repo's own rules sit in `AGENTS.md`; the kit adds checks, nothing here needs it |
 | `gh` CLI | PRs, issues, merges | Install yourself | `gh auth login` with access to this repo |
 | `shellcheck` | Lint, as CI | Install yourself | [Prerequisites](#prerequisites) |
 | Swift toolchain | Handout Bar | Install yourself | [Prerequisites](#prerequisites) |

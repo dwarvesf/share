@@ -8,7 +8,7 @@
         "state": "serving",
         "ready": true,
         "mode": "named",
-        "host": "s.han.ws",
+        "host": "s.home.example.com",
         "hosts": "Mac-mini",
         "serves_here": true,
         "service": true,
@@ -35,7 +35,7 @@
           {
             "id": "4f9ff2",
             "name": "notes.txt",
-            "url": "https://s.han.ws/4f9ff2/notes.txt",
+            "url": "https://s.home.example.com/4f9ff2/notes.txt",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -47,7 +47,7 @@
           {
             "id": "b99924",
             "name": "design-review.pdf",
-            "url": "https://s.han.ws/b99924/design-review.pdf",
+            "url": "https://s.home.example.com/b99924/design-review.pdf",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,
@@ -59,7 +59,7 @@
           {
             "id": "7c1d20",
             "name": "q3-plan.xlsx",
-            "url": "https://s.han.ws/7c1d20/q3-plan.xlsx",
+            "url": "https://s.home.example.com/7c1d20/q3-plan.xlsx",
             "kind": "snapshot",
             "own_host": null,
             "expires": 4102444800,

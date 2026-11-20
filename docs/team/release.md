@@ -29,7 +29,7 @@ The version lives in `bin/handout` as `SHARE_VERSION` (the variable name is one 
 | 2. Confirm | Prints `<last tag> -> <next tag>` and the subjects; asks unless `--yes` | You answer anything but y |
 | 3. Changelog | `bin/changelog --next <tag>` regenerates `CHANGELOG.md`, `SHARE_VERSION` is set, one commit `docs: changelog for <tag>` is pushed to `main` | `SHARE_VERSION` cannot be set |
 | 4. Tag | Annotated tag on that commit, pushed. The `Release` workflow (`.github/workflows/release.yml`) publishes the GitHub release with generated notes | |
-| 5. Formula | Fetches the tag tarball, computes its sha256, edits `url` and `sha256` of the formula in `dwarvesf/homebrew-tools` through a throwaway clone, opens a PR and squash-merges it | The tarball cannot be fetched |
+| 5. Formula | Fetches the tag tarball, computes its sha256, edits `url` and `sha256` of the formula in `consolelabs/homebrew-tap` through a throwaway clone, opens a PR and squash-merges it | The tarball cannot be fetched |
 | 6. Cask | On a Mac that holds the Developer ID identity, runs `mac/release.sh <tag>`. Elsewhere it prints `CASK NOT RELEASED: run mac/release.sh <tag> on a signing Mac` and exits 3 | The identity is missing (the formula still shipped) |
 
 Step 3 is the one direct push to `main` the repo allows. Every other change goes through a pull request.
@@ -54,7 +54,7 @@ The defaults for the identity and profile belong to the maintainer. Override the
 |---|---|
 | Steps 1 and 2 | Fix the cause and run again. Nothing changed. |
 | After step 3, before the tag | The changelog commit is on `main`. Tag it by hand: `git tag -a <tag> -m <tag>` and `git push origin <tag>`, then do steps 5 and 6 by hand. |
-| After step 4 | The release exists. Fix the tap by hand: edit the formula `url` and `sha256` in a PR to `dwarvesf/homebrew-tools`, then run step 6. |
+| After step 4 | The release exists. Fix the tap by hand: edit the formula `url` and `sha256` in a PR to `consolelabs/homebrew-tap`, then run step 6. |
 | Step 6, no identity | Run `mac/release.sh <tag>` on the signing Mac. |
 | Step 6, notarization failed | Read the notary log it printed, fix, rerun `mac/release.sh <tag>`. |
 
@@ -75,15 +75,15 @@ There is no central Worker to deploy. Every tenant's admin runs the Worker in th
 
 ## Homebrew names and migration
 
-The tap `dwarvesf/homebrew-tools` is settled. It holds `Formula/handout.rb`, which installs `handout` and a `share` symlink (on the v0.9.0 tarball it installs `bin/share` as `handout`), and `Casks/handout-bar.rb`. `formula_renames.json` maps `share` to `handout` and `cask_renames.json` maps `share-bar` to `handout-bar`, so an existing install moves on `brew update`.
+The tap `consolelabs/tap` (repo `consolelabs/homebrew-tap`) is settled. It holds `Formula/handout.rb`, which installs `handout` and a `share` symlink (on the v0.9.0 tarball it installs `bin/share` as `handout`), and `Casks/handout-bar.rb`. The old tap carries `tap_migrations` for `share` and `share-bar`, so an existing install moves on `brew update`.
 
-Homebrew refuses formulae from an untrusted tap, and trust is per name. A new user runs `brew trust dwarvesf/tools`, then `brew install dwarvesf/tools/handout` (cask: `brew install --cask dwarvesf/tools/handout-bar`). A user upgrading from `share` runs:
+Homebrew refuses formulae from an untrusted tap, and trust is per name. A new user runs `brew trust consolelabs/tap`, then `brew install consolelabs/tap/handout` (cask: `brew install --cask consolelabs/tap/handout-bar`). Upgrade with `brew upgrade consolelabs/tap/handout`. A user moving from `share` runs:
 
 ```sh
-brew trust --formula dwarvesf/tools/handout && brew trust --cask dwarvesf/tools/handout-bar && brew migrate share && brew reinstall handout
+brew update && brew trust consolelabs/tap
 ```
 
-`brew migrate` moves the keg. The reinstall adds the `handout` command. `share` keeps working throughout and login services are unaffected.
+`brew update` moves the install through the migration in the old tap. `share` keeps working throughout and login services are unaffected.
 
 ## Open
 

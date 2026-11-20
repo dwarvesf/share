@@ -25,8 +25,8 @@ final class NewKeyDecodeTests: XCTestCase {
         XCTAssertEqual(ops[0].of, 16)
         XCTAssertEqual(ops[0].name, "route")
         XCTAssertFalse(ops[0].alive)
-        XCTAssertEqual(ops[0].rerunArgv, ["--profile", "console", "setup", "s.console.so", "--r2", "--bucket", "console-share"])
-        XCTAssertEqual(ops[0].rollbackArgv, ["--profile", "console", "setup", "s.console.so", "--no-r2"])
+        XCTAssertEqual(ops[0].rerunArgv, ["--profile", "console", "setup", "s.example.com", "--r2", "--bucket", "console-share"])
+        XCTAssertEqual(ops[0].rollbackArgv, ["--profile", "console", "setup", "s.example.com", "--no-r2"])
         XCTAssertTrue(ops[1].alive)
         XCTAssertNil(ops[1].rollbackArgv)
 
@@ -62,7 +62,7 @@ final class NewKeyDecodeTests: XCTestCase {
         }
         let base = try loadFixtureSnapshot()
         XCTAssertEqual(base.state, "serving")
-        XCTAssertEqual(base.host, "s.han.ws")
+        XCTAssertEqual(base.host, "s.home.example.com")
         XCTAssertEqual(base.shares.map(\.id), ["4f9ff2", "b99924", "4a8ca7", "c4c2a0"])
     }
 

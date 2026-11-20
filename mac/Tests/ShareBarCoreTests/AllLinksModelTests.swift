@@ -15,7 +15,7 @@ final class AllLinksModelTests: XCTestCase {
             makeShare(id: "old001", name: "invoice.pdf", url: "https://s.t/old001/invoice.pdf", expires: past, storage: "cloud", linkState: "expired", views: 12),
             makeShare(id: "pau001", name: "page.html", url: "https://s.t/pau001/page.html", expires: far, storage: "machine", by: "Dung's iMac", origin: "m-dung-9a8b7c6d", linkState: "paused"),
         ]
-        return makeEntry(name: "console", state: makeSnapshot(host: "s.console.so", shares: shares, role: role, tier: "t2"))
+        return makeEntry(name: "console", state: makeSnapshot(host: "s.example.com", shares: shares, role: role, tier: "t2"))
     }
 
     private func model(_ state: AllLinksState = AllLinksState(), role: String = "tenant_origin") -> AllLinksModel {

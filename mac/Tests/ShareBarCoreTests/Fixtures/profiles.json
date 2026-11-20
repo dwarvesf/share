@@ -17,13 +17,13 @@
       }
     },
     {
-      "name": "dfoundation",
+      "name": "acme",
       "state": {
         "schema": 1,
         "state": "serving",
         "ready": true,
         "mode": "named",
-        "host": "s.d.foundation",
+        "host": "s.team.example.com",
         "hosts": "Mac-mini",
         "serves_here": true,
         "service": true,
@@ -32,11 +32,11 @@
           {
             "id": "a68960",
             "name": "support-ticket-guide",
-            "url": "https://s.d.foundation/a68960/support-ticket-guide/",
+            "url": "https://s.team.example.com/a68960/support-ticket-guide/",
             "kind": "snapshot",
             "own_host": null,
             "expires": 0,
-            "access": "group:dwarves-ops"
+            "access": "group:team-ops"
           }
         ]
       }

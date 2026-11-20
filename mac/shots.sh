@@ -69,7 +69,7 @@ build_app() {
   cp "$bin/ShareBar" "$APP/Contents/MacOS/ShareBar"
   cp "$MAC_DIR/Info.plist" "$APP/Contents/Info.plist"
   # Its own bundle id: the app under test never shares defaults with an installed Share Bar.
-  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.dwarves.sharebar.shots" "$APP/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier so.console.handout-bar.shots" "$APP/Contents/Info.plist"
   codesign --force --sign - "$APP" >/dev/null 2>&1
 }
 

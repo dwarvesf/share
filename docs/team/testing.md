@@ -52,7 +52,7 @@ These create real Cloudflare resources on throwaway names, prove each step throu
 | `tests/e2e-r2.sh` | The R2 backend: admin setup, a publisher joining, the Worker's rules, hits, teardown and purge | the R2 backend |
 | `tests/e2e-tenant.sh` | One hostname per tenant: R2 on at the origin, members, outage behavior, the alias fold, rollback | `setup --r2`, `--alias`, the tenant Worker |
 | `tests/e2e-migrate.sh` | `migrate`: the rollback and a full move with the 530 gap measured | `migrate` |
-| `tests/prod-snapshot.sh <out-file> <target>` | Nothing: a read-only snapshot of a live tenant's Cloudflare and machine state, taken before a production step so a rollback is exact | a production move |
+| `tests/prod-snapshot.sh <out-file> <zone> <host>...` | Nothing: a read-only snapshot of a live tenant's Cloudflare and machine state, taken before a production step so a rollback is exact | a production move |
 
 Use hostnames on a zone you control, the token scopes each header names, and never a hostname that serves real links. A snapshot file holds account ids and Access app ids: keep it out of git.
 
