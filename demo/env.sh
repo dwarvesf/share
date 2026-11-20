@@ -5,7 +5,7 @@ export PS1='$ ' BASH_SILENCE_DEPRECATION_WARNING=1
 export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_INSTALL_CLEANUP=1
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export SHARE_CONFIG_DIR=/private/tmp/share-demo/.cfg SHARE_ROOT=/private/tmp/share-demo/.root
-export SHARE_PORT=8795 SHARE_SERVICE_LABEL=foundation.d.share-demo
+export SHARE_PORT=8795 SHARE_SERVICE_LABEL=handout-demo
 
 demo_src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p /private/tmp/share-demo

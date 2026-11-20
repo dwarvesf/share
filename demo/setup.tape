@@ -1,8 +1,9 @@
-# Story: install handout and set up a hostname, from nothing to a live link.
+# Story: set up a hostname, from nothing to a live link. The install line is in the README.
 # Record from the repo root: vhs demo/setup.tape
 # Needs a Cloudflare domain and CLOUDFLARE_API_TOKEN in the environment
-# (without it, setup opens the browser login instead). Clean up after:
-#   source demo/env.sh && handout teardown --yes && brew uninstall handout
+# (without it, setup opens the browser login instead). The recording machine
+# already has handout installed. Clean up after:
+#   source demo/env.sh && handout teardown --yes
 
 Output demo/.frames/setup/
 
@@ -20,12 +21,12 @@ Enter
 Sleep 1s
 Show
 
-Type "# 1. install: pulls in caddy, cloudflared, and jq"
+Type "# 1. handout is installed (see the README)"
 Enter
-Type "brew install dwarvesf/tools/handout"
+Type "handout version"
 Sleep 400ms
 Enter
-Wait@180s /^\$$/
+Wait@30s /^\$$/
 Sleep 2s
 
 Hide
@@ -36,7 +37,7 @@ Show
 
 Type "# 2. one-time setup: tunnel, DNS, login service, live check"
 Enter
-Type "handout setup share-demo.s.example.com"
+Type "handout setup handout-demo.console.so"
 Sleep 400ms
 Enter
 Wait@180s /^\$$/
